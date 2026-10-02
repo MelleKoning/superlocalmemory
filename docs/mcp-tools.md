@@ -72,9 +72,31 @@ Search memories by natural language query.
 
 Recall results follow [Score Contract v2](retrieval-score-contract.md):
 `relevance_score` is query relevance, `ranking_score` is diagnostic ranking
-utility, and `memory_confidence` belongs to the stored assertion. Canonical
+utility, and `memory_confidence` belongs to the stored assertion. By default,
 responses declare `calibration_status: "uncalibrated"` and
 `answer_confidence: null`; retrieval scores are not answer probabilities.
+
+When [Answer check](answer-check.md) is turned on (off until an on-device
+install has passed its check), the
+response also carries a real `answer_confidence`, `calibration_status`, and
+`calibration_id`, and `abstained`/`abstention_reason` can report
+`judged_insufficient`: results were found and are still returned, but none of
+them were judged to answer the question. The CLI and `session_init` print a
+one-line plain-text summary of this verdict when one exists; see [Answer
+Check](answer-check.md).
+
+Every response also carries `answer_check_status` (`judged`, `off`,
+`skipped`, `busy`, `warming`, or `unavailable` — see [Answer
+Check](answer-check.md) for what each means) and `reranker_status` /
+`local_reranker_status` (which step chose the final order;
+`reranker_status: "jev_listwise"` means the online check's optional reorder
+replaced the local reranker's order). This `recall` tool has no
+`answer_check` parameter of its own — calling it directly runs the full
+check — but a caller hitting the daemon's `GET /recall` HTTP endpoint
+directly can pass `?answer_check=skip` or `?answer_check=no_reorder` to
+change that for one request; any other value is refused with HTTP 400. See
+[Retrieval Score Contract](retrieval-score-contract.md) for the full field
+reference.
 
 ### `search`
 
@@ -229,6 +251,12 @@ Initialize session context from stored memories. Returns relevant memories for t
 | `query` | string | No | Override the search query (overrides `project_path` when set) |
 | `max_results` | number | No | Maximum memories to return (default: 10) |
 | `max_age_days` | number | No | Suppress memories older than N days unless relevance ≥ 0.70 (default: 30; set to 0 to disable) |
+
+When [Answer check](answer-check.md) is on, the returned `context` string is
+prefixed with one plain-text line reporting the verdict — the same line the
+CLI prints (see [Answer Check](answer-check.md)). The structured
+`abstained`/`abstention_reason`/`answer_confidence` fields are always present
+in the full response regardless of what `context` contains.
 
 ### `observe`
 

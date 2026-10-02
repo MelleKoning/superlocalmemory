@@ -12,7 +12,7 @@ Part of Qualixar | Author: Varun Pratap Bhardwaj
 from __future__ import annotations
 
 import logging
-from typing import Callable
+from typing import Any, Callable
 
 from mcp.types import ToolAnnotations
 
@@ -61,6 +61,10 @@ def register_v3_tools(server, get_engine: Callable) -> None:
                 to improve recall quality. Requires Ollama installed.
         Mode C: Uses a cloud AI provider (OpenAI, Anthropic, …) for best
                 recall quality. Queries leave this device; API key required.
+        In any mode, the optional online answer check (off unless the user
+        turns it on and agrees) sends each recall's question and top
+        memories to the chosen provider; the returned description says so
+        while it is on.
 
         Resets the engine to apply the new mode configuration.
 
@@ -83,6 +87,7 @@ def register_v3_tools(server, get_engine: Callable) -> None:
                 content_preview=mode_lower,
             )
             from superlocalmemory.core.config import SLMConfig
+            from superlocalmemory.core.egress_notice import online_check_on
             from superlocalmemory.mcp.server import reset_engine
 
             # Use switch_mode() — the correct load-then-patch path that preserves
@@ -103,7 +108,8 @@ def register_v3_tools(server, get_engine: Callable) -> None:
             return {
                 "success": True,
                 "mode": mode_lower,
-                "description": _mode_description(mode_lower),
+                "description": _mode_description(mode_lower, config.retrieval),
+                "online_answer_check": online_check_on(config.retrieval),
                 "needs_reindex": needs_reindex,
                 "message": "Embedding re-indexing will run on next recall." if needs_reindex else "",
             }
@@ -122,8 +128,11 @@ def register_v3_tools(server, get_engine: Callable) -> None:
         (LLM availability, cross-encoder, agentic retrieval).
         """
         try:
+            from superlocalmemory.core.egress_notice import online_check_on
+
             engine = get_engine()
             m = engine._config.mode.value
+            retrieval = _current_retrieval(engine)
             caps = {
                 "llm_available": engine._llm is not None,
                 "cross_encoder": engine._config.retrieval.use_cross_encoder,
@@ -133,7 +142,8 @@ def register_v3_tools(server, get_engine: Callable) -> None:
             return {
                 "success": True,
                 "mode": m,
-                "description": _mode_description(m),
+                "description": _mode_description(m, retrieval),
+                "online_answer_check": online_check_on(retrieval),
                 "capabilities": caps,
             }
         except Exception as exc:
@@ -307,6 +317,7 @@ def register_v3_tools(server, get_engine: Callable) -> None:
         try:
             import asyncio
             from superlocalmemory.mcp._daemon_proxy import choose_pool
+            from superlocalmemory.mcp._recall_metadata import forward_recall_metadata
             from superlocalmemory.retrieval.temporal_utils import (
                 normalize_as_of, normalize_strict_boundary,
             )
@@ -363,12 +374,9 @@ def register_v3_tools(server, get_engine: Callable) -> None:
                 "channel_weights": raw.get("channel_weights", {}) if isinstance(raw, dict) else {},
                 "total_candidates": raw.get("total_candidates", 0) if isinstance(raw, dict) else 0,
                 "retrieval_time_ms": round(float(raw.get("retrieval_time_ms", 0.0)) if isinstance(raw, dict) else 0.0, 1),
-                "score_contract_version": raw.get("score_contract_version", "2") if isinstance(raw, dict) else "2",
-                "calibration_status": raw.get("calibration_status", "uncalibrated") if isinstance(raw, dict) else "uncalibrated",
-                "calibration_id": raw.get("calibration_id") if isinstance(raw, dict) else None,
-                "answer_confidence": raw.get("answer_confidence") if isinstance(raw, dict) else None,
-                "abstained": bool(raw.get("abstained", False)) if isinstance(raw, dict) else False,
-                "abstention_reason": raw.get("abstention_reason") if isinstance(raw, dict) else None,
+                # M-10: the HTTP envelope's metadata in full (and any field
+                # added to it later), not a hand-picked subset.
+                **forward_recall_metadata(raw if isinstance(raw, dict) else {}),
             }
         except Exception as exc:
             logger.exception("recall_trace failed")
@@ -377,8 +385,34 @@ def register_v3_tools(server, get_engine: Callable) -> None:
 
 # -- Helpers ------------------------------------------------------------------
 
-def _mode_description(mode: str) -> str:
-    """Human-readable capability description for a mode (never a legal claim)."""
+def _current_retrieval(engine: Any) -> Any:
+    """The saved answer-check settings (what the dashboard last wrote), else
+    the engine's own copy."""
+    try:
+        from superlocalmemory.core.config import SLMConfig
+
+        return SLMConfig.load().retrieval
+    except Exception:  # noqa: BLE001 — a status call never fails on this
+        return getattr(getattr(engine, "_config", None), "retrieval", None)
+
+
+def _mode_description(mode: str, retrieval: Any = None) -> str:
+    """Human-readable capability description for a mode (never a legal claim).
+
+    While the online answer check is on, "nothing leaves this device" is not
+    true in any mode, so the description says what does leave instead.
+    """
+    from superlocalmemory.core.egress_notice import online_check_notice
+
+    notice = online_check_notice(retrieval) if retrieval is not None else ""
+    text = _base_mode_description(mode)
+    if notice and mode in ("a", "b"):
+        text = text.replace("nothing leaves this device", "nothing else leaves this device")
+        return f"{text} {notice}"
+    return f"{text} {notice}" if notice else text
+
+
+def _base_mode_description(mode: str) -> str:
     descriptions = {
         "a": (
             "Local Guardian — on-device only: no AI language model runs and "

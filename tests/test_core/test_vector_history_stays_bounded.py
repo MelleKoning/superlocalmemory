@@ -88,7 +88,8 @@ class TestTheTickBoundsTheHistory:
         class _Plain:
             pass
         orchestrated(_Plain())
-        assert ms.compact_vector_store()["ok"] is False
+        out = ms.compact_vector_store()
+        assert out["ok"] is True and out["applicable"] is False
 
     def test_a_failure_does_not_propagate(self, orchestrated) -> None:
         """A maintenance pass must not take the daemon down."""
@@ -161,3 +162,46 @@ class TestOfflineCompactRefusesALiveWriter:
             lambda: True,
         )
         assert cli_commands._cmd_db_compact(Namespace(offline=True)) == 1
+
+
+class TestLiveCompactGoesThroughTheDaemon:
+    """`slm db compact` (without --offline) used to compact inside the CLI
+    process, where the daemon's backends do not exist, so it always failed
+    with "no orchestrator". It now asks the running daemon to do it."""
+
+    def test_it_asks_the_running_daemon(self, monkeypatch, capsys) -> None:
+        from argparse import Namespace
+
+        from superlocalmemory.cli import commands as cli_commands
+
+        calls = []
+        monkeypatch.setattr("superlocalmemory.cli.daemon.is_daemon_running", lambda: True)
+        monkeypatch.setattr(
+            "superlocalmemory.cli.daemon.daemon_request",
+            lambda method, path, body=None, **kw: calls.append((method, path)) or {
+                "ok": True, "applicable": False, "reason": "not applicable"},
+        )
+        assert cli_commands._cmd_db_compact(Namespace(offline=False)) == 0
+        assert calls == [("POST", "/maintenance/compact")]
+
+    def test_with_no_daemon_it_says_what_to_do(self, monkeypatch, capsys) -> None:
+        from argparse import Namespace
+
+        from superlocalmemory.cli import commands as cli_commands
+
+        monkeypatch.setattr("superlocalmemory.cli.daemon.is_daemon_running", lambda: False)
+        assert cli_commands._cmd_db_compact(Namespace(offline=False)) == 1
+        err = capsys.readouterr().err
+        assert "not running" in err and "--offline" in err
+
+    def test_the_daemon_route_exists_and_is_gated(self) -> None:
+        import inspect
+
+        from superlocalmemory.server import unified_daemon
+
+        source = inspect.getsource(unified_daemon)
+        start = source.index('@application.post("/maintenance/compact")')
+        body = source[start:start + 1600]
+        assert "require_permission(request, Permission.WRITE" in body
+        assert "authorize_route_mutation(" in body
+        assert "compact_vector_store" in body

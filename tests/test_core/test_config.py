@@ -130,7 +130,15 @@ class TestSubConfigs:
     def test_math_defaults(self) -> None:
         mc = MathConfig()
         assert mc.fisher_temperature == 15.0
-        assert mc.sheaf_at_encoding is True
+        # 4.1.18: off by default. A measured A/B on a real store showed the
+        # sheaf check changes no recall answer, while it costs time on every
+        # store and every maintenance pass. The code is kept; True re-enables it.
+        assert mc.sheaf_at_encoding is False
+
+    def test_every_mode_inherits_the_sheaf_default(self) -> None:
+        """The mode presets build their own MathConfig; none may switch it back on."""
+        for mode in Mode:
+            assert SLMConfig.for_mode(mode).math.sheaf_at_encoding is False, mode
 
 
 # ---------------------------------------------------------------------------

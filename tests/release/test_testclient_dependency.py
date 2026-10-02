@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-HTTPX2_PIN = "httpx2==2.5.0"
+HTTPX2_PIN = "httpx2==2.12.0"
 
 
 def test_httpx2_is_pinned_in_both_developer_dependency_surfaces() -> None:

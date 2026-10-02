@@ -416,6 +416,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
         import asyncio
         try:
             from superlocalmemory.mcp._daemon_proxy import choose_pool
+            from superlocalmemory.mcp._recall_metadata import forward_recall_metadata
             from superlocalmemory.mcp.session_binding import resolve_session_id
 
             # S9-DASH-10's four-step ladder, now shared with remember() so the
@@ -504,15 +505,11 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     "retrieval_mode": result.get("retrieval_mode", ""),
                     # v3.6.6: surface evidence-floor signal to MCP clients.
                     "no_confident_match": result.get("no_confident_match", False),
-                    "score_contract_version": result.get("score_contract_version", "2"),
-                    "calibration_status": result.get("calibration_status", "uncalibrated"),
-                    "calibration_id": result.get("calibration_id"),
-                    # Quote this back to report_outcome and the report ties to
-                    # this exact answer instead of being matched by guesswork.
-                    "query_id": result.get("query_id", ""),
-                    "answer_confidence": result.get("answer_confidence"),
-                    "abstained": result.get("abstained", False),
-                    "abstention_reason": result.get("abstention_reason"),
+                    # M-10: every field of the HTTP envelope's metadata —
+                    # score contract, verdict, query_id (quote it back to
+                    # report_outcome), who chose the order, abandoned channels,
+                    # temporal frame — and any field added there later.
+                    **forward_recall_metadata(result),
                 }
             # 4.1.14 audit: structured daemon answers (unknown_profile)
             # pass through with code and retryability intact — collapsing

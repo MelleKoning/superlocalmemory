@@ -93,7 +93,12 @@ Real response shape (`--json` equivalent):
   },
   "incomplete_channels": [],
   "retrieval_time_ms": 134,
-  "no_confident_match": false
+  "no_confident_match": false,
+  "calibration_status": "uncalibrated",
+  "calibration_id": null,
+  "answer_confidence": null,
+  "abstained": false,
+  "abstention_reason": null
 }
 ```
 
@@ -124,7 +129,9 @@ rest come back empty.
 say so to the user rather than reporting "no memories found". `incomplete_channels`
 carries the same warning as a plain list.
 
-**Refine on low confidence.** `recall` returns confidence signals with every result. If `no_confident_match` is `true` (or `answer_confidence` is low / `abstained` is `true`), do NOT invent a memory — rewrite the query into 1–3 more specific sub-queries (split multi-hop questions; try entity names, synonyms, or broader phrasing) and call `recall` again before concluding nothing was found. A confident match → use it directly. SLM returns fast local results (~1–2s, no server-side LLM round on the hot path) and lets you, the calling model, drive this refinement.
+**Refine on low confidence.** `recall` returns confidence signals with every result. If `no_confident_match` is `true` (or `answer_confidence` is low / `abstained` is `true`), do NOT invent a memory — rewrite the query into 1–3 more specific sub-queries (split multi-hop questions; try entity names, synonyms, or broader phrasing) and call `recall` again before concluding nothing was found. A confident match → use it directly. SLM answers from this machine in about 1–2 s, with no server-side LLM round — unless the user turned on the online answer check, which adds one request to that service per recall — and lets you, the calling model, drive this refinement.
+
+**`abstained` means the results shown do not answer the question.** If `abstained` is `true`, say you don't have it, or ask — never present the returned memories as the answer anyway. `abstention_reason` distinguishes why: `"judged_insufficient"` means candidates were found and scored, but none of them actually answers this question; `"evidence_floor"` / `"no_candidates"` means nothing was found at all. `answer_confidence` is a measurement, not a guarantee — treat a low number the same way you'd treat `abstained: true`. `calibration_status: "uncalibrated"` means no judge is configured for this recall; in that case `abstained` only ever reflects the older "nothing found" signal.
 
 ### 2. Passing session_id
 
@@ -323,4 +330,4 @@ before recalling, then switch back. See `slm-profile` for workspace switching.
 
 ---
 
-*SuperLocalMemory v4.1.17 · Qualixar · AGPL-3.0-or-later*
+*SuperLocalMemory v4.1.18 · Qualixar · AGPL-3.0-or-later*

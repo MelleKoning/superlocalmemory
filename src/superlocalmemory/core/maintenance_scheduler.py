@@ -40,6 +40,25 @@ logger = logging.getLogger(__name__)
 _VECTOR_HISTORY_DAYS = float(os.environ.get("SLM_VECTOR_HISTORY_DAYS", "7"))
 
 
+_NOT_APPLICABLE_REPORTED: set[str] = set()
+_NOT_APPLICABLE_LOCK = threading.Lock()
+
+
+def _not_applicable(why: str) -> dict:
+    """Nothing to compact here. Not a failure: said once, at INFO, per reason.
+
+    It used to be a WARNING on every run, counted as a failed maintenance step
+    and escalated to an ERROR after three cycles -- on every store that keeps
+    its vectors in SQLite, i.e. every store whose vector index is not in use.
+    """
+    reason = f"not applicable: {why}"
+    with _NOT_APPLICABLE_LOCK:
+        first = reason not in _NOT_APPLICABLE_REPORTED
+        _NOT_APPLICABLE_REPORTED.add(reason)
+    (logger.info if first else logger.debug)("vector store compaction %s", reason)
+    return {"ok": True, "applicable": False, "reason": reason}
+
+
 def compact_vector_store() -> dict:
     """Drop vector-store versions older than the retention window.
 
@@ -58,10 +77,11 @@ def compact_vector_store() -> dict:
             logger.warning("vector store compaction skipped: no orchestrator")
             return {"ok": False, "reason": "no orchestrator"}
         backend = orchestrator.get_vector_backend()
+        if backend is None:
+            return _not_applicable("this store's vectors are kept in its database")
         compact = getattr(backend, "compact", None)
         if not callable(compact):
-            logger.warning("vector store compaction skipped: backend cannot compact")
-            return {"ok": False, "reason": "backend cannot compact"}
+            return _not_applicable("this vector store keeps no version history")
         return compact(retention=timedelta(days=_VECTOR_HISTORY_DAYS))
     except Exception as exc:  # noqa: BLE001 -- maintenance is best-effort
         logger.warning("vector store compaction skipped: %s", exc)

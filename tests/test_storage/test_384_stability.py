@@ -225,7 +225,9 @@ class TestGraphPrunerBatchedLock:
         time.sleep(0.02)
 
         from superlocalmemory.core.graph_pruner import prune_graph
+        prune_started = time.perf_counter()
         prune_graph(db, "default")
+        prune_ms = (time.perf_counter() - prune_started) * 1000
 
         stop_event.set()
         wt.join(timeout=10)
@@ -233,9 +235,16 @@ class TestGraphPrunerBatchedLock:
         assert not writer_errors, f"Writer errors during prune: {writer_errors[:3]}"
         assert write_latencies, "Writer never ran"
         max_ms = max(write_latencies) * 1000
-        # 200 ms is generous — WAL busy_timeout is 10s; actual batched hold is < 10 ms
-        assert max_ms < 200.0, (
-            f"Write stall during prune: {max_ms:.1f} ms (limit 200 ms)"
+        # The regression this guards is a prune that holds the write lock for
+        # its whole run, which stalls one write for about the whole prune. A
+        # batched prune stalls a write for one batch at most. The limit is
+        # relative so a slow disk sync on a loaded machine — which slows the
+        # prune and the write alike — cannot fail it, while an unbatched
+        # prune still does.
+        limit_ms = max(200.0, 0.5 * prune_ms)
+        assert max_ms < limit_ms, (
+            f"Write stall during prune: {max_ms:.1f} ms "
+            f"(limit {limit_ms:.1f} ms, prune took {prune_ms:.1f} ms)"
         )
 
 

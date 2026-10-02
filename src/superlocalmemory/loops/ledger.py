@@ -293,6 +293,9 @@ def open_engine_store(db_path: str | Path) -> _EngineLedgerStore:
     config.db_path = path
     config.forgetting = replace(config.forgetting, enabled=False)
     config.retrieval.use_cross_encoder = False
+    # The ledger only writes loop records; it never answers a question, so
+    # it must not load an answer-check model next to the daemon's.
+    config.retrieval.sufficiency_judge = "off"
     engine = MemoryEngine(config)
     engine.initialize()
     return _EngineLedgerStore(engine)

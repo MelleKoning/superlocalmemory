@@ -33,6 +33,7 @@ Fail-open: every tool body returns a dict; internal errors surface as
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 from typing import Any, Callable
@@ -50,6 +51,7 @@ from superlocalmemory.loops import (
     pool_backed_ledger,
     run_bounded_loop,
 )
+from superlocalmemory.retrieval.answer_check_status import REQUEST_NO_REORDER
 
 logger = logging.getLogger("slm.mcp.tools_loops")
 
@@ -68,6 +70,24 @@ _MAX_WALLCLOCK_S = 120.0
 _MIN_POLL_S = 0.25
 _MAX_NAME_CHARS = 128
 _MAX_QUERY_CHARS = 2000
+#: Results each gate lap asks for — and so the most memories its answer check
+#: ever judges.
+_GATE_LIMIT = 3
+
+
+def _gate_recall_kwargs(recall: Callable) -> dict:
+    """The gate's per-recall request, for a recall that can carry it.
+
+    The gate needs the answer check's verdict, never the opt-in reorder. A pool
+    whose transport does not forward the request yet is called as before.
+    """
+    try:
+        params = inspect.signature(recall).parameters
+    except (TypeError, ValueError):
+        return {}
+    takes_it = "answer_check" in params or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+    return {"answer_check": REQUEST_NO_REORDER} if takes_it else {}
 
 
 def register_loop_tools(
@@ -106,6 +126,12 @@ def register_loop_tools(
         Use it to wait, under strict bounds, for a verification or coordination
         condition to hold — e.g. for another agent to record a "build passed"
         memory in shared SLM.
+
+        Cost per lap: one recall of at most 3 memories. When the answer check
+        is on, each lap asks it once about those memories (never the optional
+        reordering): on this Mac that is one local judgement; with the online
+        check it is one request to the provider, which may be billed. A run
+        makes at most ``max_iterations`` laps.
 
         Args:
             name: Loop name, also the memory tag. 1–128 chars.
@@ -153,7 +179,8 @@ def register_loop_tools(
 
             def gate(lap: int) -> Verdict:
                 if pool is not None:
-                    resp = pool.recall(gate_query, limit=3, fast=True)
+                    resp = pool.recall(gate_query, limit=_GATE_LIMIT, fast=True,
+                                       **_gate_recall_kwargs(pool.recall))
                     if not isinstance(resp, dict) or resp.get("ok") is False:
                         raise RuntimeError(
                             (resp or {}).get("error", "owned SLM reader rejected recall")
@@ -162,10 +189,17 @@ def register_loop_tools(
                         )
                     all_results = resp.get("results", []) or []
                     floored = bool(resp.get("no_confident_match", False))
+                    reason = resp.get("abstention_reason")
                 else:
-                    resp = engine.recall(gate_query, limit=3, fast=True)
+                    resp = engine.recall(gate_query, limit=_GATE_LIMIT, fast=True,
+                                         answer_check=REQUEST_NO_REORDER)
                     all_results = getattr(resp, "results", None) or []
                     floored = bool(getattr(resp, "no_confident_match", False))
+                    reason = getattr(resp, "abstention_reason", None)
+                # The score says a memory is related; the answer check says
+                # whether it answers. A gate must never pass on a recall the
+                # check already called insufficient.
+                judged_out = reason == "judged_insufficient"
 
                 def _content(result: Any) -> str:
                     if isinstance(result, dict):
@@ -201,11 +235,12 @@ def register_loop_tools(
                     if LedgerEntry.from_json(_content(r)) is None
                 ]
                 best = max((_score(result) for result in results), default=0.0)
-                passed = bool(results) and not floored and best >= min_score
+                passed = (bool(results) and not floored and not judged_out
+                          and best >= min_score)
                 return Verdict(
                     passed,
                     f"recall '{gate_query[:48]}': hits={len(results)} "
-                    f"top={best:.3f} floor={floored}",
+                    f"top={best:.3f} floor={floored} judged_insufficient={judged_out}",
                 )
 
             def runner(lap: int) -> LapResult:

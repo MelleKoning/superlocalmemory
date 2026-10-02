@@ -252,6 +252,101 @@ def _download_compressor(model_name: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Laya — the local answer check (4.1.18)
+# ---------------------------------------------------------------------------
+
+#: Unattended setup installs the answer-check model only when this is "1".
+_INSTALL_LAYA_ENV = "SLM_INSTALL_LAYA"
+
+
+def _laya_opted_in() -> bool:
+    return os.environ.get(_INSTALL_LAYA_ENV) == "1"
+
+
+def _laya_summary_line_applies(*, interactive: bool = True) -> bool:
+    """True when the up-front download summary should mention Laya.
+
+    Never raises and never imports anything heavier than the platform check
+    it wraps — a broken optional import here must not break Step 3's summary.
+    Unattended setup only announces it when it was asked to install it.
+    """
+    if os.environ.get("SLM_SKIP_LAYA") == "1":
+        return False
+    if not interactive and not _laya_opted_in():
+        return False
+    try:
+        from superlocalmemory.retrieval.sufficiency import laya_supported
+
+        return laya_supported()
+    except Exception:
+        return False
+
+
+def _run_laya_step(config: Any, *, interactive: bool) -> None:
+    """Step 4d: offer to install the local answer check (Laya).
+
+    Fails open on purpose: any problem here is one plain line, and setup
+    keeps going. The same install is always offered again later in the
+    dashboard (Settings -> Answer check), so nothing here is a last chance.
+    """
+    print()
+    print("─── Step 4d/10: Answer check (Laya) ───")
+    print()
+
+    if os.environ.get("SLM_SKIP_LAYA") == "1":
+        print("  ✓ Skipped (SLM_SKIP_LAYA=1) — set it up later in the dashboard.")
+        return
+
+    try:
+        from superlocalmemory.retrieval.sufficiency import laya_supported
+
+        if not laya_supported():
+            print("  The local answer check needs Apple Silicon. On this machine, set up")
+            print("  the hosted option instead: Settings → Answer check, in the dashboard.")
+            return
+
+        print("  Lets your memory say \"I don't have that\" instead of guessing.")
+        print("  About 1.1 GB, stays on this Mac.")
+        print()
+
+        if interactive:
+            choice = _prompt("  Set it up now? [Y/n] (default: Y): ", "y").lower()
+            if choice not in ("", "y", "yes"):
+                print("  ✓ Skipped — set it up later in the dashboard: Settings → Answer check.")
+                return
+        elif not _laya_opted_in():
+            # M-13: an unattended run (--auto, CI, an agent, no terminal) never
+            # starts a ~1.1 GB download and a new environment on its own.
+            print("  ✓ Skipped (non-interactive) — set it up later in the dashboard:")
+            print(f"    Settings → Answer check, or re-run with {_INSTALL_LAYA_ENV}=1.")
+            return
+        else:
+            print(f"  Setting it up automatically ({_INSTALL_LAYA_ENV}=1).")
+
+        from superlocalmemory.core.laya_runtime import install
+
+        def _on_progress(fraction: float, step: str) -> None:
+            print(f"    [{fraction * 100:5.1f}%] {step}")
+
+        result = install(progress=_on_progress)
+
+        if result.state != "ready":
+            print(f"  ⚠ {result.error or 'The install did not finish.'}")
+            print("  You can finish this later in the dashboard: Settings → Answer check.")
+            return
+
+        config.retrieval.sufficiency_judge = "laya"
+        config.retrieval.sufficiency_python = result.python
+        config.retrieval.sufficiency_hf_home = result.hf_home
+        config.retrieval.sufficiency_model = result.model_path
+        config.save()
+        print("  ✓ Answer check installed and verified")
+    except Exception as exc:  # noqa: BLE001 — this step must never abort setup.
+        print(f"  ⚠ Answer check setup hit an unexpected error: {exc}")
+        print("  You can finish this later in the dashboard: Settings → Answer check.")
+
+
+# ---------------------------------------------------------------------------
 # Embedding-provider detection (v3.7.6 #72)
 # ---------------------------------------------------------------------------
 
@@ -301,6 +396,20 @@ _USER_OWNED_RETRIEVAL_KEYS = (
     "cross_encoder_model",
     "cross_encoder_timeout_seconds",
 )
+#: Every answer-check setting (which check, the hosted check's consents and
+#: provider, where the on-device install lives) is the person's choice, not a
+#: mode preset: re-running setup must never reset it. By prefix, so a setting
+#: added later is kept too.
+_USER_OWNED_RETRIEVAL_PREFIXES = ("sufficiency_",)
+
+
+def _user_owned_retrieval_keys(retrieval) -> tuple[str, ...]:
+    from dataclasses import fields, is_dataclass
+
+    names = [f.name for f in fields(retrieval)] if is_dataclass(retrieval) else []
+    prefixed = [n for n in names if n.startswith(_USER_OWNED_RETRIEVAL_PREFIXES)]
+    explicit = [k for k in _USER_OWNED_RETRIEVAL_KEYS if hasattr(retrieval, k)]
+    return tuple(dict.fromkeys(explicit + prefixed))
 
 
 def _build_wizard_config(mode):
@@ -316,8 +425,7 @@ def _build_wizard_config(mode):
     existing.llm = template.llm
     preserved = {
         key: getattr(existing.retrieval, key)
-        for key in _USER_OWNED_RETRIEVAL_KEYS
-        if hasattr(existing.retrieval, key)
+        for key in _user_owned_retrieval_keys(existing.retrieval)
     }
     existing.retrieval = template.retrieval
     for key, value in preserved.items():
@@ -571,6 +679,9 @@ def run_wizard(auto: bool = False) -> None:
         print("    • Embedding model   ~500 MB  — required for semantic recall")
         print("    • Reranker model    ~130 MB  — result quality")
         print("    • Compression model ~560 MB  — optional (you'll be asked)")
+        if _laya_summary_line_applies(interactive=interactive):
+            print("    • Answer-check model ~1.1 GB — optional, Apple Silicon only")
+            print("      (you'll be asked)")
 
     # -- Step 4: Download models --
     print()
@@ -635,6 +746,8 @@ def run_wizard(auto: bool = False) -> None:
             print("  ✓ Skipped — downloads automatically when you enable compression.")
     else:
         print("  ✓ Skipped (non-interactive) — downloads on first use.")
+
+    _run_laya_step(config, interactive=interactive)
 
     # -- Step 5: Daemon Configuration (v3.4.3) --
     print()

@@ -455,3 +455,61 @@ def test_get_recall_fn_noop_without_engine():
     except Exception:
         out = None
     assert out is None or isinstance(out, list)
+
+
+# ---------------------------------------------------------------------------
+# 4.1.18: a daemon is not inside a project
+# ---------------------------------------------------------------------------
+
+_PROJECT_SCOPED = {"cursor_project", "antigravity_workspace", "copilot_project"}
+
+
+def test_a_daemon_never_gets_project_scoped_adapters(tmp_path, monkeypatch, fake_recall):
+    """The background sync loop and the dashboard run inside the daemon, which
+    serves every project at once. Taking the project from its working directory
+    is meaningless there: started by launchd that directory is "/", started by
+    hand it is wherever the user happened to be standing."""
+    from superlocalmemory.cli.context_commands import build_default_adapters
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("superlocalmemory.cli.context_commands._get_recall_fn",
+                        lambda: fake_recall)
+
+    names = {a.name for a in build_default_adapters(include_project_scope=False)}
+
+    assert names.isdisjoint(_PROJECT_SCOPED)
+    assert {"cursor_global", "antigravity_global"} <= names
+
+
+def test_the_filesystem_root_is_never_treated_as_a_project(monkeypatch, fake_recall):
+    """The live daemon logged 2,904 "Read-only file system: '/.cursor'" and
+    "'/.agent'" failures: launchd starts it in "/", so the cwd default pointed
+    the project-scoped adapters at the root of the disk."""
+    from superlocalmemory.cli.context_commands import build_default_adapters
+    monkeypatch.chdir("/")
+    monkeypatch.setattr("superlocalmemory.cli.context_commands._get_recall_fn",
+                        lambda: fake_recall)
+
+    adapters = build_default_adapters()
+
+    assert {a.name for a in adapters}.isdisjoint(_PROJECT_SCOPED)
+    for a in adapters:
+        target = getattr(a, "target_path", None)
+        if target is not None:
+            assert str(target).startswith(str(Path.home())), (a.name, target)
+
+
+def test_both_daemon_call_sites_ask_for_global_adapters_only() -> None:
+    """Pinned at the source because booting the daemon is not a unit test, and
+    the cwd default is exactly the mistake a future call site would repeat."""
+    import superlocalmemory.server.routes.brain as brain
+    import superlocalmemory.server.unified_daemon as daemon
+    import inspect
+
+    for module in (daemon, brain):
+        src = inspect.getsource(module)
+        calls = [line.strip() for line in src.splitlines()
+                 if "build_default_adapters(" in line or "_build_adapters(" in line]
+        calls = [c for c in calls if not c.startswith(("def ", "#", "from ", "build_default_adapters as"))]
+        assert calls, module.__name__
+        for c in calls:
+            assert "include_project_scope=False" in c, (module.__name__, c)

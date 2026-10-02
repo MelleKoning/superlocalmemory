@@ -38,7 +38,28 @@ file" answer, but for this product it is **not** the default because:
   a hardware keystore this mostly re-implements what FileVault/LUKS already do
   at the block layer, with worse performance and more moving parts.
 * Full-disk encryption already defends the disk-theft threat, and `0600` +
-  `0700` defend the same-host threat.
+  `0700` keep other accounts out of the files themselves (for the running
+  service, see Shared Macs below).
+
+## Shared Macs and other multi-user computers
+
+File permissions keep other user accounts out of SLM's files, but the SLM
+service listens on this computer's local address and, in a personal install,
+trusts every request that comes from this computer — including requests from
+programs run by another account on the same Mac. On a computer shared by
+several people with separate accounts, another account can therefore read your
+memories through the service and change its settings. A web page on another
+site cannot: since 4.1.18 the service refuses requests that are not addressed
+to this computer.
+
+Until a check of which account each request comes from arrives (planned for
+4.1.19):
+
+- Prefer a Mac you do not share for SLM.
+- On a shared Mac, turn on company mode (**Team → Access policy**, see
+  [rbac-teams.md](rbac-teams.md#login-gate)): reading and saving memories then
+  needs a signed-in user. The machine owner's administration, including the
+  answer-check settings, stays reachable without signing in.
 
 ## Recommendation for high-security / shared-host deployments
 

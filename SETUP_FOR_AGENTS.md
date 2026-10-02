@@ -193,7 +193,7 @@ Discipline:
 - Call `recall` **before** claiming something is unknown.
 - Call `remember` after significant decisions, file paths, or blockers.
 - Do not recall every turn — `session_init` already loaded context at start.
-- Refine on low confidence: if `no_confident_match` is `true` (or `answer_confidence` is low / `abstained` is `true`), rewrite the query into 1–3 more specific sub-queries (split multi-hop questions; try entity names, synonyms, or broader phrasing) and call `recall` again before concluding nothing was found. SLM returns fast local results (~1–2s, no server-side LLM round on the hot path) — you, the calling model, drive refinement.
+- Refine on low confidence: if `no_confident_match` is `true` (or `answer_confidence` is low / `abstained` is `true`), rewrite the query into 1–3 more specific sub-queries (split multi-hop questions; try entity names, synonyms, or broader phrasing) and call `recall` again before concluding nothing was found. SLM answers from this machine in about 1–2 s, with no server-side LLM round — unless the user turned on the online answer check, which adds one request to that service per recall. You, the calling model, drive refinement.
 
 ---
 

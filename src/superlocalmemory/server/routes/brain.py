@@ -820,7 +820,7 @@ def _compute_cross_platform() -> dict:
         from superlocalmemory.cli.context_commands import (
             build_default_adapters as _build_adapters,
         )
-        _adapters = _build_adapters()
+        _adapters = _build_adapters(include_project_scope=False)
     except Exception as exc:  # pragma: no cover — defensive
         _adapters = []
         logger.debug("brain: adapter factory failed: %s", exc)

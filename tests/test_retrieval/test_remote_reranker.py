@@ -593,14 +593,21 @@ class TestFailureVisibility:
     def test_repeat_failures_are_rate_limited_but_the_first_always_logs(
         self, caplog,
     ) -> None:
+        from superlocalmemory.retrieval.remote_rerank_guard import FAILURE_THRESHOLD
+
         rr = _reranker()
         with caplog.at_level(logging.ERROR):
-            with stub_http(_raises(httpx.ConnectError("down"))):
-                for _ in range(5):
+            with stub_http(_raises(httpx.ConnectError("down"))) as rec:
+                for _ in range(10):
                     rr.rerank_with_status("q", _candidates())
         errors = [r for r in caplog.records if "Remote reranker unavailable" in r.message]
-        assert len(errors) == 1, "flooding the log is not visibility"
-        assert rr._consecutive_failures == 5
+        # The first failure, and the one that pauses the endpoint. Not ten.
+        assert len(errors) == 2, "flooding the log is not visibility"
+        assert "Pausing it" in errors[-1].message
+        # 4.1.18 called a dead endpoint on every recall; it is now paused
+        # after FAILURE_THRESHOLD failures and the later recalls never reach it.
+        assert rr._consecutive_failures == FAILURE_THRESHOLD
+        assert len(rec.requests) == FAILURE_THRESHOLD * 2  # one retry each
 
     def test_recovery_is_announced(self, caplog) -> None:
         rr = _reranker()

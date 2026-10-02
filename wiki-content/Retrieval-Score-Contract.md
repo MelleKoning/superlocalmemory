@@ -25,9 +25,17 @@ Canonical recall responses declare:
 }
 ```
 
-The current release does not claim calibrated answer confidence. Do not derive
-one by transforming or averaging retrieval scores. Empty result sets declare
-an abstention reason (`evidence_floor` or `no_candidates`).
+By default, the release does not claim calibrated answer confidence. Do not
+derive one by transforming or averaging retrieval scores. Empty result sets
+declare an abstention reason (`evidence_floor` or `no_candidates`).
+
+**[Answer Check](Answer-Check)** (4.1.18, off until an on-device install has
+passed its check) is a separate
+opt-in decision on whether the top results actually answer the question. When
+turned on, it populates `calibration_status`, `calibration_id`, and
+`answer_confidence` with real values, and adds a third abstention reason,
+`judged_insufficient`: results were found and are still returned, but none
+were judged to answer the query.
 
 Current candidate producers are dense semantic, BM25 lexical, temporal,
 Hopfield associative, and spreading activation. Entity-graph information is a

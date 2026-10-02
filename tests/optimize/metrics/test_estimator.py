@@ -54,7 +54,40 @@ def test_estimate_unknown_provider_falls_back():
     assert result["usd"] == 3.00  # anthropic fallback
 
 
-def test_is_stale():
+def _today_is(monkeypatch, day):
+    """Pin the estimator's clock: freshness is a property of a date, not of
+    whenever the suite happens to run."""
+    import datetime as _dt
+
+    from superlocalmemory.optimize.metrics import estimator as mod
+
+    class _Date(_dt.date):
+        @classmethod
+        def today(cls):
+            return day
+
+    monkeypatch.setattr(mod, "date", _Date)
+
+
+def test_is_stale_is_false_while_the_pricing_table_is_fresh(monkeypatch):
+    from datetime import date
+
+    from superlocalmemory.optimize.metrics import estimator as mod
+
     est = SavingsEstimator()
-    # Pricing date is 2026-06-07, so it's not stale yet
+    _today_is(monkeypatch, date.fromisoformat(est._PRICING_DATE))
     assert est._is_stale() is False
+    _today_is(monkeypatch, date.fromisoformat(est._PRICING_DATE)
+              + mod.timedelta(days=mod._PRICING_STALE_DAYS))
+    assert est._is_stale() is False, "the last fresh day is still fresh"
+
+
+def test_is_stale_is_true_once_the_pricing_table_ages_out(monkeypatch):
+    from datetime import date
+
+    from superlocalmemory.optimize.metrics import estimator as mod
+
+    est = SavingsEstimator()
+    _today_is(monkeypatch, date.fromisoformat(est._PRICING_DATE)
+              + mod.timedelta(days=mod._PRICING_STALE_DAYS + 1))
+    assert est._is_stale() is True

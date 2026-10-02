@@ -1,43 +1,68 @@
 {
-  "experiment": "exp12_learning_loop_ablation",
-  "ablated_factor": "session identifier namespace at recall time",
-  "seed": 20260825,
-  "arms": [
-    {
-      "arm": "defect",
-      "rounds": 120,
-      "outcome_tickets_written": 0,
-      "plays_settled": 0,
-      "arms_total": 0,
-      "arms_moved_off_prior_mean": 0,
-      "max_abs_mean_shift": 0.0,
-      "settlement_types": {
-        "unobserved": 120
-      }
+  "environment": {
+    "package": "superlocalmemory",
+    "platform": "macOS-26.4.1-arm64-arm-64bit-Mach-O",
+    "python": "3.14.5",
+    "timestamp": "2026-10-02T20:19:23.059314+00:00",
+    "version": "4.1.17"
+  },
+  "result": {
+    "extra": {
+      "ablated_factor": "session identifier namespace at recall time",
+      "arms": [
+        {
+          "arm": "defect",
+          "arms_moved_off_prior_mean": 0,
+          "arms_total": 0,
+          "max_abs_mean_shift": 0.0,
+          "outcome_tickets_written": 0,
+          "plays_settled": 0,
+          "rounds": 200,
+          "settlement_types": {
+            "unobserved": 200
+          }
+        },
+        {
+          "arm": "repaired",
+          "arms_moved_off_prior_mean": 97,
+          "arms_total": 97,
+          "max_abs_mean_shift": 0.348023,
+          "outcome_tickets_written": 200,
+          "plays_settled": 200,
+          "rounds": 200,
+          "settlement_types": {
+            "artifact_overlap": 200
+          }
+        },
+        {
+          "arm": "no-engagement",
+          "arms_moved_off_prior_mean": 0,
+          "arms_total": 0,
+          "max_abs_mean_shift": 0.0,
+          "outcome_tickets_written": 200,
+          "plays_settled": 0,
+          "rounds": 200,
+          "settlement_types": {
+            "unobserved": 200
+          }
+        }
+      ],
+      "conditions": {
+        "defect_does_not_learn": true,
+        "negative_control_does_not_learn": true,
+        "repaired_loop_closes": true
+      },
+      "rounds_per_arm": 200,
+      "seed": 20260825
     },
-    {
-      "arm": "repaired",
-      "rounds": 120,
-      "outcome_tickets_written": 120,
-      "plays_settled": 120,
-      "arms_total": 82,
-      "arms_moved_off_prior_mean": 82,
-      "max_abs_mean_shift": 0.342879,
-      "settlement_types": {
-        "artifact_overlap": 120
-      }
-    },
-    {
-      "arm": "no-engagement",
-      "rounds": 120,
-      "outcome_tickets_written": 120,
-      "plays_settled": 0,
-      "arms_total": 0,
-      "arms_moved_off_prior_mean": 0,
-      "max_abs_mean_shift": 0.0,
-      "settlement_types": {
-        "unobserved": 120
-      }
-    }
-  ]
+    "failures": [],
+    "guarantee": "only a real conversation plus observed engagement moves the posterior",
+    "held": 600,
+    "method": "single-factor three-arm session-identity ablation",
+    "metric_name": "max_abs_posterior_mean_shift",
+    "metric_value": 0.348023,
+    "name": "exp12_learning_loop_ablation",
+    "passed": true,
+    "trials": 600
+  }
 }

@@ -317,4 +317,17 @@ def recall_response_metadata(response: Any) -> dict:
         # operator looking at a thin result set, otherwise cannot tell a store
         # with nothing to say from a retrieval path that is partly down.
         "channel_status": dict(getattr(response, "channel_status", {}) or {}),
+        # Who chose the final order. "jev_listwise" when the online answer
+        # check reordered it, which is not perfectly repeatable — so, like the
+        # two fields above, it travels with the answer. ``local_reranker_status``
+        # keeps what the local reranking step did; empty when nothing replaced it.
+        "reranker_status": getattr(response, "reranker_status", "not_configured")
+        or "not_configured",
+        "local_reranker_status": getattr(response, "local_reranker_status", "") or "",
+        # What became of the answer check on this recall: judged / off /
+        # skipped / busy / warming / unavailable. A verdict that is absent
+        # because the check was busy or still loading is not "nothing
+        # answers", so — like the fields above — it travels with the answer.
+        "answer_check_status": getattr(response, "answer_check_status", "skipped")
+        or "skipped",
     }

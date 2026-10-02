@@ -567,8 +567,8 @@ def run_maintenance(
     # Gate: config.math.fisher_bayesian_update (default True).
     if config.math.fisher_bayesian_update:
         try:
-            import json as _json
             from superlocalmemory.math.fisher import FisherRaoMetric
+            from superlocalmemory.storage.embedding_codec import encode_float_vector
 
             # Inline migration — harmless no-op if column already exists.
             try:
@@ -609,11 +609,15 @@ def run_maintenance(
                 # watermark only by the number of updates ACTUALLY applied (not to
                 # acc), so accesses beyond the per-run cap are applied on subsequent
                 # runs instead of being silently dropped.
+                # The stored form is float32, like every other vector on a fact.
+                # Writing JSON text here undid the conversion one accessed fact
+                # per pass, and the next start converted it back again.
                 db.execute(
                     "UPDATE atomic_facts "
                     "SET fisher_variance = ?, fisher_last_applied_access = ? "
                     "WHERE fact_id = ?",
-                    (_json.dumps(current_var), last_applied + applied, f.fact_id),
+                    (encode_float_vector(current_var), last_applied + applied,
+                     f.fact_id),
                 )
                 # Refresh in-memory so step 1d ELC sees the updated variance.
                 f.fisher_variance = current_var

@@ -223,8 +223,8 @@ def describe(health: MemoryHealth) -> list[str]:
     if health.inconsistently_hidden:
         lines.append(
             f"{health.inconsistently_hidden:,} memories are hidden even though "
-            f"they are marked worth keeping. This is a fault and it is repaired "
-            f"automatically the next time the service starts."
+            f"they are marked worth keeping. The next forgetting pass files each "
+            f"one again from its own score; `slm decay --execute` runs it now."
         )
 
     if health.hidden_by_forgetting:

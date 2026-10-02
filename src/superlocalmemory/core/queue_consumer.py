@@ -160,8 +160,17 @@ class QueueConsumer:
             logger.debug("Queue cleanup failed: %s", exc)
 
     def _execute_recall(self, query: str, limit: int, session_id: str) -> str:
+        """Run one queued recall. Every queued recall is the per-prompt hook
+        loading context — not a question — so the answer check is skipped:
+        nothing is judged, sent or billed. The daemon's pool
+        (``EngineRecallAdapter``) runs the recall on this same thread, so the
+        marker reaches it; a pool that crossed a process would have to carry
+        the request on its message instead."""
+        from superlocalmemory.core.answer_check_scope import skip_answer_check
+
         try:
-            result = self._pool.recall(query, limit=limit, session_id=session_id)
+            with skip_answer_check():
+                result = self._pool.recall(query, limit=limit, session_id=session_id)
             return json.dumps(result, default=str)
         except Exception as exc:
             logger.warning("pool.recall failed: %s", exc)

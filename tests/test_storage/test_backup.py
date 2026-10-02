@@ -18,6 +18,7 @@ from unittest import mock
 import pytest
 
 from superlocalmemory.storage.backup import (
+    LiveStoreWriteError,
     SnapshotUnusableError,
     restore_pre_migration_snapshot,
     InsufficientDiskSpaceError,
@@ -710,6 +711,132 @@ class TestSafeSnapshotRestore:
             restore_pre_migration_snapshot(hollow, live)
 
         assert self._facts(live) == 7, "live store must be untouched on refusal"
+
+
+class TestSnapshotRestoreOverHotWal:
+    """Restoring over a WAL store whose -wal holds committed, un-checkpointed rows.
+
+    That is the normal state of a store the daemon is using. The restore used to
+    rename a copy over the live file, leaving the old -wal beside it: SQLite read
+    the old frames over the restored pages, so the restore returned normally and
+    changed nothing, and checkpointed those frames into the restored file once
+    the last connection closed.
+    """
+
+    _PAYLOAD = "x" * 300
+
+    @classmethod
+    def _wal_store(cls, path: Path, tag: str, rows: int, *, replace: bool = False) -> None:
+        """Commit rows into a WAL store and close it, which checkpoints them."""
+        conn = sqlite3.connect(path)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY, tag TEXT, body TEXT)")
+            if replace:
+                conn.execute("DELETE FROM t")
+            conn.executemany("INSERT INTO t (tag, body) VALUES (?, ?)",
+                             [(tag, cls._PAYLOAD)] * rows)
+            conn.commit()
+        finally:
+            conn.close()
+
+    @classmethod
+    def _hold_uncheckpointed(cls, path: Path, tag: str, rows: int) -> sqlite3.Connection:
+        """Commit rows that exist only in path's -wal; the caller closes the connection."""
+        conn = sqlite3.connect(path)
+        conn.execute("PRAGMA wal_autocheckpoint=0")
+        conn.executemany("INSERT INTO t (tag, body) VALUES (?, ?)",
+                         [(tag, cls._PAYLOAD)] * rows)
+        conn.commit()
+        return conn
+
+    @staticmethod
+    def _tags(conn: sqlite3.Connection) -> dict[str, int]:
+        return dict(conn.execute("SELECT tag, count(*) FROM t GROUP BY tag ORDER BY tag"))
+
+    @staticmethod
+    def _dump(path: Path, *, immutable: bool = False) -> list[str]:
+        uri = (f"{path.absolute().as_uri()}?mode=ro&immutable=1" if immutable
+               else str(path))
+        conn = sqlite3.connect(uri, uri=immutable)
+        try:
+            return list(conn.iterdump())
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _integrity(path: Path) -> str:
+        conn = sqlite3.connect(path)
+        try:
+            return "; ".join(r[0] for r in conn.execute("PRAGMA integrity_check"))
+        except sqlite3.DatabaseError as exc:
+            return f"{type(exc).__name__}: {exc}"
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _wal_bytes(path: Path) -> int:
+        wal = path.with_name(path.name + "-wal")
+        return wal.stat().st_size if wal.exists() else 0
+
+    @pytest.mark.parametrize("live_moved_on", [False, True],
+                             ids=["same-base", "live-moved-on"])
+    def test_restore_matches_snapshot_and_is_intact(self, tmp_path, live_moved_on):
+        live = tmp_path / "memory.db"
+        self._wal_store(live, "A", 400)
+        snaps = tmp_path / "pre-migration-snapshots"
+        snap = snaps / "memory-20261002-000000-000000-pre-migration.db"
+        _backup_via_sqlite_api(live, snap)
+        snapshot_dump = self._dump(snap, immutable=True)
+
+        if live_moved_on:
+            # The live store changed shape after the snapshot and was
+            # checkpointed, so the -wal frames below describe a different tree.
+            self._wal_store(live, "A2", 2000, replace=True)
+        holder = self._hold_uncheckpointed(live, "B", 800)
+        try:
+            # Guard: the B rows are committed and live only in the -wal.
+            assert self._wal_bytes(live) > 0
+            assert self._tags(holder)["B"] == 800
+
+            safety = restore_pre_migration_snapshot(snap, live)
+
+            assert self._integrity(live) == "ok"
+            assert self._dump(live) == snapshot_dump, (
+                "live store does not hold the snapshot's content")
+            # A reader that was open throughout sees the restored content too.
+            assert self._tags(holder) == {"A": 400}
+        finally:
+            holder.close()
+
+        # Once the last connection closes, nothing stale is checkpointed back in.
+        assert self._integrity(live) == "ok"
+        assert self._dump(live) == snapshot_dump
+        # The safety copy holds what was live, including the rows only in -wal.
+        expected_before = {"A2": 2000, "B": 800} if live_moved_on else {"A": 400, "B": 800}
+        conn = sqlite3.connect(f"{safety.absolute().as_uri()}?mode=ro&immutable=1", uri=True)
+        try:
+            assert self._tags(conn) == expected_before
+        finally:
+            conn.close()
+
+    def test_refuses_a_snapshot_whose_wal_holds_frames(self, tmp_path):
+        """The snapshot is read immutable, which ignores its -wal; refuse, don't drop."""
+        live = tmp_path / "memory.db"
+        self._wal_store(live, "A", 10)
+        live_before = self._dump(live)
+        snap = tmp_path / "memory-20261002-000000-000000-pre-migration.db"
+        self._wal_store(snap, "S", 5)
+        holder = self._hold_uncheckpointed(snap, "S2", 5)
+        try:
+            assert self._wal_bytes(snap) > 0
+            with pytest.raises(LiveStoreWriteError, match="write-ahead log"):
+                restore_pre_migration_snapshot(snap, live)
+        finally:
+            holder.close()
+
+        assert self._dump(live) == live_before, "live store must be untouched on refusal"
 
 
 # ---------------------------------------------------------------------------

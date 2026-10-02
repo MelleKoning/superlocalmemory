@@ -81,15 +81,21 @@ def test_healthy_recall_marks_healthy_no_heal():
 
 
 def test_warm_but_broken_triggers_heal_and_recovers():
-    # Rows returned but semantic==0 everywhere → embedder is returning None.
-    # The heal re-exercises the embedder, which now returns a vector.
-    emb = _Embedder([[0.1] * 768])
+    # Rows returned, semantic==0 everywhere, and the embedder really is
+    # returning None — then the heal brings it back.
+    #
+    # 4.1.18: this used to queue a working embedder ([[0.1] * 768]) and still
+    # expect a heal, i.e. it asserted that a working embedder with no semantic
+    # match was an outage. That is the false alarm the live daemon raised on
+    # 1,970 consecutive ticks while its real queries scored semantic 1.2. The
+    # embedder is now asked directly first, so "broken" has to mean it.
+    emb = _Embedder([None, [0.1] * 768])
     eng = _Engine(_Resp([_Result(0.0), _Result(0.0)]), embedder=emb)
     st = RecallHealth()
 
     run_health_tick(eng, st, log=LOG)
 
-    assert emb.calls == 1                 # embedder was re-exercised
+    assert emb.calls == 2                 # asked directly, then re-exercised by the heal
     assert emb._available is None         # cached-availability flag reset
     assert st.total_heals == 1
     assert st.healthy is True
@@ -97,7 +103,10 @@ def test_warm_but_broken_triggers_heal_and_recovers():
 
 
 def test_heal_fails_when_embedder_still_returns_none():
-    emb = _Embedder([None])               # embedder genuinely dead
+    # Genuinely dead means None every time it is asked. The double used to
+    # return None once and a vector after, which is "recovered", not "dead";
+    # it only passed because the old tick asked exactly once.
+    emb = _Embedder([None, None])         # embedder genuinely dead
     eng = _Engine(_Resp([_Result(0.0)]), embedder=emb)
     st = RecallHealth()
 

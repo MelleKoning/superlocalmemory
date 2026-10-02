@@ -42,6 +42,15 @@ V4 keeps the multi-channel retrieval and local-first store from the V3 research 
 
 V4 hardens the full lifecycle of a memory operation — admission, canonical commit, projection to every store, migration, backup, and erasure — so each step is authorized and verifiable against its manifest and logs. Existing V4 memories and configuration are preserved; M038 (eager) and M039 (deferred) migrations are automatically applied at startup so no manual `slm db migrate` is normally required (see [CLI Reference](CLI-Reference) — forward only, no rollback). Schema downgrade is unsupported; to revert a V4 upgrade, restore a verified pre-upgrade backup of the complete data root (stop the daemon first and include WAL/SHM). V2→V3 migration is a separate `slm migrate` command (see [Migration from V2](Migration-from-V2)).
 
+## What's new in 4.1.18
+
+**Answer check** — an opt-in step after recall that says whether the top
+results actually answer your question, not just whether they're related.
+Off by default; choose **On this Mac** (private, on-device) or **Online
+with Jev** (hosted, your own key) from **Settings → Answer check**. Nothing
+is ever hidden because of it — the signal is additive. See
+[[Answer Check]].
+
 ## The product in one view
 
 ```text
@@ -86,7 +95,7 @@ optional enrichers and retrieval channels are dependency- and mode-aware.
 
 V4 states every reliability guarantee as a falsifiable invariant with an adversarial test, negative controls, and a shipped harness that regenerates the evidence. The only verified stress figure in V4 is the following; no other durability, latency, or throughput guarantee is claimed as a measured release envelope.
 
-> **Verified source:** `benchmark/results/SUMMARY.md` (package **4.0.0**, Python **3.13.13**, `macOS-26.5.2-arm64-arm-64bit-Mach-O`, generated `2026-08-08T08:38:21Z`) and `benchmark/README.md`. Reproduce with `python benchmark/run_all.py --trials 200 --output-dir results/` — 11 experiments × 200 trials = **2,200/2,200 (100.0%)** trials upheld their guarantee. Individual trial JSON under `benchmark/results/`.
+> **Verified source:** `benchmark/results/SUMMARY.md` (one full run on the 4.1.18 release candidate: Python **3.14.5**, `macOS-26.4.1-arm64-arm-64bit-Mach-O`, generated `2026-10-02T20:19:39Z`) and `benchmark/README.md`. Reproduce with `python benchmark/run_all.py --trials 200 --output-dir results/` — 11 guarantee experiments × 200 trials = **2,200/2,200 (100.0%)** trials upheld their guarantee. All 11 guarantee experiments held 200/200 in that one run; the harness also runs two measurements (a learning-loop ablation and the governance cost), which are not guarantees and are not counted. An earlier run (2026-08-23) had exp7 at 199/200, where one fresh-epoch write was refused as temporarily unavailable. Individual trial JSON under `benchmark/results/`.
 
 | Experiment | Guarantee | Metric |
 |---|---|---|
@@ -94,7 +103,7 @@ V4 states every reliability guarantee as a falsifiable invariant with an adversa
 | exp2_transaction_atomicity | Committed → COMPLETE; faulted → DEGRADED with `compensate()` removing successful projection (ledger states verified) | manifest-correct rate |
 | exp2b_real_owner_manifest | Happy path → COMPLETE with all three tables present; Bm25 fault → DEGRADED with zero residue and `compensate('temporal')` verified | manifest-correct rate |
 | exp3_migration_downgrade | Newer-stamped DB refused on deferred pass with zero mutation | refuse-and-preserve rate |
-| exp4_backup_restore_atomicity | Partial-restore failure rolls live data back to pre-restore bytes | rollback+clean rate |
+| exp4_backup_restore_atomicity | A restore that fails after writing the first store rolls live data back to its pre-restore content (re-measured 2026-10-02: 200/200) | rollback+clean rate |
 | exp5_multitenant_isolation | Personal rows never leak across tenants (positive control: requester still sees own data) | zero-leak rate |
 | exp6a/b/c | Superseded demotion, Ebbinghaus decay monotonicity, time-window inference | correct-demotion / monotonic-decay / correct-window |
 | exp7_generation_fence | Stale-epoch ADMISSION rejected; fresh-epoch admitted | fence-correct rate |

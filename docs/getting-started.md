@@ -85,6 +85,12 @@ The wizard walks you through three choices:
 
 3. **Verify installation** — A quick self-test confirms everything works.
 
+On a Mac with Apple Silicon, the wizard also offers to set up [Answer
+check](answer-check.md) — a feature that lets recall say "I don't have
+that" instead of guessing. It defaults to yes; say no and set it up later
+from **Settings → Answer check** in the dashboard. On other platforms, the
+wizard points you to that same settings page for the online option instead.
+
 > **Tip:** Start with Mode A. You can switch to B or C anytime with `slm mode b` or `slm mode c`.
 
 ## Store Your First Memory
@@ -115,9 +121,12 @@ Output:
     Relevance: 0.94 | Stored: 2 minutes ago | Profile: default
 ```
 
-The value is query-relative relevance, not answer confidence. V3.7 declares
-`calibration_status: "uncalibrated"` and `answer_confidence: null`; see the
-[retrieval score contract](retrieval-score-contract.md).
+The value is query-relative relevance, not answer confidence. By default,
+SLM declares `calibration_status: "uncalibrated"` and `answer_confidence:
+null`; see the [retrieval score contract](retrieval-score-contract.md). Turn
+on [Answer check](answer-check.md) and recall additionally tells you whether
+the top result actually answers your question, not just whether it's
+related.
 
 ## Check System Status
 
@@ -177,6 +186,7 @@ For the full parameter set, see [CLI Reference → Bounded Loops](cli-reference.
 
 | What you want to do | Guide |
 |---------------------|-------|
+| Let recall say "I don't have that" instead of guessing | [Answer Check](answer-check.md) |
 | Set up a specific IDE | [IDE Setup](ide-setup.md) |
 | Switch modes or providers | [Configuration](configuration.md) |
 | Learn all CLI commands | [CLI Reference](cli-reference.md) |

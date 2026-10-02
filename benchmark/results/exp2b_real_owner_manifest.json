@@ -3,14 +3,14 @@
     "package": "superlocalmemory",
     "platform": "macOS-26.4.1-arm64-arm-64bit-Mach-O",
     "python": "3.14.5",
-    "timestamp": "2026-08-23T17:55:09.913987+00:00",
-    "version": "4.1.3"
+    "timestamp": "2026-10-02T20:19:23.056018+00:00",
+    "version": "4.1.17"
   },
   "result": {
     "extra": {
       "ann_scope": "VectorOwner operates with vector_store=None. sqlite-vec ANN index is NOT loadable in this harness. VectorOwner coverage is limited to embedding_metadata SQL table (SQL DELETE branch in _remove()). ANN index compensation is out of scope; paper must state this.",
       "bm25_fault_mechanism": "Bm25Owner fails structurally (retrieval=None \u2192 _heal() returns False without writing rows). This faithfully represents the isolated harness but NOT production (where a live BM25 retrieval engine heals missing tokens). Paper must state: 'fault scenario uses isolated Bm25Owner without retrieval engine.'",
-      "slm_module_file": "superlocalmemory/__init__.py",
+      "slm_module_file": "src/superlocalmemory/__init__.py",
       "trial_distribution": "100 type-A (even index) + 100 type-B (odd index)"
     },
     "failures": [],

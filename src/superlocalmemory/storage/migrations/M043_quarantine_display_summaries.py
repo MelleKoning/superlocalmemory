@@ -12,6 +12,11 @@ Runs unattended on upgrade. Three steps, in this order, all idempotent:
   3. RESTORE — un-hide genuine memories whose retention row says they are
      maximally retained but whose zone says 'archive'.
 
+The restore runs when the migration is applied, and never again: once this
+store's log records it complete, the standing guard (``repair()``) preserves and
+withholds only, because every memory archived after that was archived on
+purpose by the running product.
+
 WHY THIS IS A MIGRATION AND NOT A ONE-OFF SCRIPT
 ------------------------------------------------
 About three quarters of this product's users are not engineers. A repair that
@@ -100,18 +105,20 @@ DDL = "-- M043: see apply(); preserve, withhold, restore"
 #: Retention thresholds, mirroring ``math/ebbinghaus.py::lifecycle_zone`` and
 #: ``ForgettingConfig`` defaults (archive_threshold 0.2, forget_threshold 0.05).
 #: A migration is SQL and cannot read the user's config, so these are the
-#: shipped defaults. That is safe here because this expression is only ever
-#: applied to rows whose score is already above 0.8 — the top branch — where no
-#: threshold below it can change the answer.
-_ZONE_FROM_SCORE = """
+#: shipped defaults.
+def _zone_from_score(score: str) -> str:
+    return f"""
     CASE
-        WHEN retention_score > 0.8  THEN 'active'
-        WHEN retention_score > 0.5  THEN 'warm'
-        WHEN retention_score > 0.2  THEN 'cold'
-        WHEN retention_score > 0.05 THEN 'archive'
+        WHEN {score} > 0.8  THEN 'active'
+        WHEN {score} > 0.5  THEN 'warm'
+        WHEN {score} > 0.2  THEN 'cold'
+        WHEN {score} > 0.05 THEN 'archive'
         ELSE 'forgotten'
     END
 """
+
+
+_ZONE_FROM_SCORE = _zone_from_score("retention_score")
 
 #: Rows the fact consolidator wrote directly into the retrieval corpus.
 _CONSOLIDATOR_ROWS = """
@@ -146,9 +153,12 @@ _CONSOLIDATOR_ROWS = """
 #: that something else was free to change afterwards.
 #:
 #: Self-correcting rather than indiscriminate: the zone is RECOMPUTED from the
-#: score, so a source that has genuinely faded maps straight back to
-#: archive/forgotten and nothing moves. Only a row whose own score says it
-#: should be reachable becomes reachable.
+#: score, and only a row whose recomputed zone is reachable is selected. A
+#: source that has genuinely faded is not selected at all -- so it is neither
+#: counted as "restored" while it stays where it is, nor left looking like a
+#: repair that never finishes. (Selecting it, as an earlier version did, made
+#: ``verify()`` false for ever on any store holding one, and every start then
+#: re-ran the repair and reported the migration failed.)
 _WRONGLY_HIDDEN_BASE = """
     SELECT r.fact_id
       FROM fact_retention r
@@ -156,6 +166,8 @@ _WRONGLY_HIDDEN_BASE = """
      WHERE r.lifecycle_zone IN ('archive', 'forgotten')
        AND af.memory_id <> ''
        AND ({extra})
+       AND (""" + _zone_from_score("r.retention_score") + """)
+           NOT IN ('archive', 'forgotten')
 """
 
 #: The provenance half. Only usable when the ledger exists, which is why this
@@ -163,11 +175,18 @@ _WRONGLY_HIDDEN_BASE = """
 #: baked the subquery in and ``verify()`` then raised "no such table:
 #: fact_consolidations" on a store without a ledger -- caught by the test for
 #: exactly that store shape.
+#:
+#: Only the OLD path's ledger rows count. That path wrote summaries into recall
+#: and archived their sources; today's consolidator writes display-only
+#: summaries, records them as ``display_summary``, and archives nothing
+#: (``core/fact_consolidator.py``). A memory such a summary lists was hidden, if
+#: at all, by something else -- the tier manager, the forgetting curve, the
+#: owner -- and is not this repair's to undo.
 _ARCHIVED_BY_CONSOLIDATION = """
     af.fact_id IN (
         SELECT je.value
           FROM fact_consolidations fc, json_each(fc.source_fact_ids) je
-         WHERE json_valid(fc.source_fact_ids)
+         WHERE json_valid(fc.source_fact_ids){only_old_path}
     )
 """
 
@@ -178,14 +197,23 @@ _SCORED_TO_KEEP = "r.retention_score > 0.8"
 def _wrongly_hidden(conn: sqlite3.Connection) -> str:
     """The restore predicate, using whichever halves this store supports."""
     if _table_exists(conn, "fact_consolidations"):
+        only_old_path = (
+            " AND COALESCE(fc.strategy, 'entity_cluster') <> 'display_summary'"
+            if _has_column(conn, "fact_consolidations", "strategy") else ""
+        )
+        provenance = _ARCHIVED_BY_CONSOLIDATION.format(only_old_path=only_old_path)
         return _WRONGLY_HIDDEN_BASE.format(
-            extra=f"{_SCORED_TO_KEEP} OR {_ARCHIVED_BY_CONSOLIDATION}"
+            extra=f"{_SCORED_TO_KEEP} OR {provenance}"
         )
     return _WRONGLY_HIDDEN_BASE.format(extra=_SCORED_TO_KEEP)
 
 
 def apply(conn: sqlite3.Connection) -> None:
     """Preserve, withhold, restore. Atomic, and safe to run again."""
+    _run(conn, restore=True)
+
+
+def _run(conn: sqlite3.Connection, *, restore: bool) -> None:
     if not _table_exists(conn, "atomic_facts"):
         # Nothing to repair on a store whose corpus does not exist yet. Not an
         # error: a fresh install reaches this migration with the table created
@@ -207,8 +235,8 @@ def apply(conn: sqlite3.Connection) -> None:
         # A first draft created it only inside _preserve, which is skipped when
         # there is no provenance ledger. On a store with no ledger the migration
         # therefore applied, recorded 'complete', and then failed verify() on
-        # the NEXT start -- and since repair() is apply(), it failed again and
-        # was reported as a failed migration forever. Two existing
+        # the NEXT start -- and since repair() then re-ran apply(), it failed
+        # again and was reported as a failed migration forever. Two existing
         # idempotency tests caught it. The lesson generalises: everything
         # verify() asserts has to be produced on every path through apply(),
         # not only on the path that happens to need it.
@@ -235,7 +263,7 @@ def apply(conn: sqlite3.Connection) -> None:
     try:
         preserved = _preserve(conn) if has_ledger else 0
         withheld = _withhold(conn) if has_ledger else 0
-        restored = _restore(conn)
+        restored = _restore(conn) if restore else 0
         conn.execute("COMMIT")
     except sqlite3.Error:
         try:
@@ -445,11 +473,26 @@ def unmet(conn: sqlite3.Connection) -> str:
         """)
         if n:
             return f"{n} withheld summaries have no display copy"
-    if _table_exists(conn, "fact_retention"):
+    # Once this store's own log records the repair complete, which memories are
+    # hidden is decided by the running product -- consolidation archiving the
+    # sources of a gist, the tier manager, the forgetting curve, the owner. It
+    # is no longer a check on this migration, or every start would undo those
+    # decisions (see repair()).
+    if _table_exists(conn, "fact_retention") and not _recorded_complete(conn):
         n = _count(conn, "SELECT COUNT(*) FROM (" + _wrongly_hidden(conn) + ")")
         if n:
             return f"{n} real memories are hidden from recall and should not be"
     return ""
+
+
+def _recorded_complete(conn: sqlite3.Connection) -> bool:
+    """Whether this database's own migration_log records M043 complete."""
+    if not _table_exists(conn, "migration_log"):
+        return False
+    row = conn.execute(
+        "SELECT status FROM migration_log WHERE name = ?", (NAME,),
+    ).fetchone()
+    return row is not None and row[0] == "complete"
 
 
 def blocks_serving(conn: sqlite3.Connection) -> bool:
@@ -491,8 +534,19 @@ def verify(conn: sqlite3.Connection) -> bool:
 
 
 def repair(conn: sqlite3.Connection) -> None:
-    """Re-run the repair. It is idempotent, so this is simply apply()."""
-    apply(conn)
+    """The standing guard for a completed store: preserve and withhold only.
+
+    The runner calls this only when this store's log already records M043
+    complete. It must not restore. That step un-hides archived memories, and
+    on a completed store every archived memory was put there by the running
+    product after the upgrade: re-running it on every start un-archived the
+    sources of each consolidation gist and each memory the tier manager had
+    retired -- 3,452 of them on one real store, on one start -- and counted a
+    memory the owner had forgotten as "restored" while leaving it where it was.
+    The restore ran once, when the migration was first applied, which is what
+    it is for. Whether learning.db exists has no bearing on any of this.
+    """
+    _run(conn, restore=False)
 
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:

@@ -43,7 +43,7 @@ The login gate controls whether the dashboard and API require authenticated sess
 | Setting | Behavior | Recommended for |
 |---------|----------|-----------------|
 | `require_login = false` | Loopback caller is trusted as owner. No authentication enforced. | Personal single-user installs |
-| `require_login = true` | Every dashboard and API request requires a valid session. | Team and enterprise deployments |
+| `require_login = true` | Reading and saving memories needs a signed-in user. The machine owner can still manage users and settings without signing in. | Team and enterprise deployments, and Macs shared by several user accounts |
 
 Personal installs ship with `require_login = false`. No default credentials are
 included. Enterprise installs (set via the installer or `slm reconfigure`) ship
@@ -59,12 +59,8 @@ the machine.
 
 ### Enabling login
 
-```bash
-slm config set security.require_login true
-slm restart
-```
-
-After restart, the dashboard prompts for credentials. Session cookies are
+In the dashboard, open **Team → Access policy** and turn on company mode. It
+takes effect at once; the dashboard then prompts for credentials. Session cookies are
 `HttpOnly`. Set `SLM_DASHBOARD_HTTPS=1` to add the `Secure` flag.
 
 ---
@@ -107,6 +103,13 @@ All routes are under `/api/rbac/*` and require machine auth (`require_http_mutat
 | `POST /api/rbac/policy` `{require_login}` | Toggle login gate |
 
 Workspace membership commands require `MANAGE` on the **target** profile, and modifying a user other than yourself requires authority over that user (owner or an admin who shares a `MANAGE` workspace).
+
+Settings → [Answer check](answer-check.md) follows the same rule as every
+other dashboard setting: viewing the current status is open to anyone who
+can reach the dashboard, but changing it — switching modes, saving or
+removing a key, setting up or removing the on-device model, or changing
+consent — requires `MANAGE`. A member without it sees the controls but
+cannot use them.
 
 ---
 
@@ -162,6 +165,10 @@ slm diagnostics export /tmp/audit-report.json
 - Install token: the install token (used by the dashboard and IDE configs)
   is stored in memory only and scoped to loopback addresses in company mode.
   Rotate it with `slm rotate-token`.
+- Shared Macs: in a personal install the local service trusts every program on
+  the computer, including programs run by another user account. On a Mac shared
+  by several accounts, turn on company mode. See
+  [Shared Macs](SECURITY-encryption-at-rest.md#shared-macs-and-other-multi-user-computers).
 
 ---
 

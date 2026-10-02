@@ -300,6 +300,14 @@ def _hook_codex_start() -> None:
             f"({session.get('memory_count', 0)} memories, "
             f"{session.get('retrieval_mode', 'unknown')})"
         )
+        # session_init already carries the answer-check judge's verdict
+        # (abstained / abstention_reason) — this summary must not drop it
+        # just because it only quotes 3 of the dict's fields. "" when no
+        # judge is configured, or when the judge found a confident answer.
+        if session.get("abstention_reason") == "judged_insufficient":
+            session_msg += (
+                " — answer check: none of these memories answers the query."
+            )
     print(json.dumps({
         "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": (
             f"{session_msg}\n\n" + (context or "(SLM context unavailable.)")

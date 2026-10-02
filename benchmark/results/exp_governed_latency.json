@@ -1,55 +1,64 @@
 {
-  "experiment": "exp_governed_latency",
-  "slm_module_file": "superlocalmemory/__init__.py",
-  "method": "Method B (in-process governed envelope). Entrypoint: CanonicalRememberRuntime.remember() \u2014 the same code path the HTTP /remember handler calls after request parsing. Governed chain includes: AdmissionJournal.prepare() (AES-256-GCM encrypt + fsync journal row), journal.mark_dispatched(), WriteCoordinator.submit() (queue \u2192 background worker thread wake), _handle_admission() \u2192 IngestionCommand.submit() \u2192 write_queryable() \u2192 db.store_memory() + db.store_fact() (SQLite writer thread), _record_projection_obligations() (obligation ledger M033 INSERT), journal.mark_committed() (terminal journal update). Excluded: HTTP transport, request parsing, trust hook, daemon lifecycle. Warmup: 30 calls (discarded). Measurement: 1000 calls, each with unique idempotency_key (journal never short-circuits). Timing: time.monotonic() wall-clock per call. Bypass comparison: IngestionCommand.submit() directly on same throwaway DB, skipping journal/coordinator/obligations. Machine: arm arm64, macOS 26.4.1, Python 3.14.5. DB files reside in APFS temporary directory (OS may use in-memory buffers after warmup \u2014 actual daemon runs on persistent APFS, so p50/p95/p99 may be higher in production due to fsync latency on first journal write).",
-  "governed": {
-    "label": "governed_write_envelope",
-    "n": 1000,
-    "p50_ms": 17.248,
-    "p95_ms": 48.991,
-    "p99_ms": 130.154,
-    "mean_ms": 21.894,
-    "min_ms": 8.706,
-    "max_ms": 418.526,
-    "stdev_ms": 25.028
-  },
-  "bypass": {
-    "label": "ungoverned_wrapped_ingestion_command",
-    "n": 1000,
-    "p50_ms": 51.135,
-    "p95_ms": 85.959,
-    "p99_ms": 99.75,
-    "mean_ms": 51.369,
-    "min_ms": 8.159,
-    "max_ms": 117.553,
-    "stdev_ms": 22.677
-  },
-  "ungoverned_bare": {
-    "label": "ungoverned_bare_writer_no_transaction",
-    "n": 1000,
-    "p50_ms": 173.717,
-    "p95_ms": 311.64,
-    "p99_ms": 343.502,
-    "mean_ms": 178.077,
-    "min_ms": 25.521,
-    "max_ms": 366.389,
-    "stdev_ms": 86.717
-  },
-  "governance_overhead_delta_p50_ms": -33.887,
-  "governance_overhead_delta_p99_ms": 30.404,
-  "bare_delta_p50_ms": -156.469,
-  "bare_delta_p99_ms": -213.348,
-  "overhead_well_defined": false,
-  "overhead_interpretation": "A governance envelope can only add work, so a valid overhead is >= 0. Both candidate comparands give a negative p50 delta, which is a fact about the comparison and not about the code: neither is nested inside the governed path. IngestionCommand.submit performs operation creation, the queryable write and a receipt transition in one transaction, where the governed writer performs the queryable write alone. The bare callback is built to run inside a caller-managed transaction and pays an unbatched fsync per call when it does not. The three arms are reported; the difference between them is NOT a governance overhead and must not be quoted as one. Isolating that cost needs the same pipeline measured with the envelope enabled and disabled.",
-  "interleave_seed": 20260823,
-  "caveats": [
-    "WARMUP ADEQUACY: 30 warmup calls may leave APFS page-cache partially cold for very early measured calls. Mitigated by holding the same TempWorkspace open across warmup and measure phases.",
-    "GIL CONTENTION: WriteCoordinator worker thread competes with the calling thread for the GIL on Python bookkeeping between SQLite I/O releases. This adds variance; p99 captures the tail accurately but absolute values are CPython-specific.",
-    "BYPASS COMPARISON SCOPE: The bypass path (IngestionCommand.submit) includes the DB transaction and FTS indexing but omits the journal, coordinator queue/wake, obligation ledger, and manifest. The governance delta = governed p50 - bypass p50. A direct store_fast() comparison would also exclude operation-repository bookkeeping, making the true store_fast delta slightly smaller than shown."
-  ],
-  "platform": {
-    "python": "3.14.5",
+  "environment": {
+    "package": "superlocalmemory",
     "platform": "macOS-26.4.1-arm64-arm-64bit-Mach-O",
-    "processor": "arm"
+    "python": "3.14.5",
+    "timestamp": "2026-10-02T20:19:39.923006+00:00",
+    "version": "4.1.17"
+  },
+  "result": {
+    "bare_delta_p50_ms": -39.215,
+    "bare_delta_p99_ms": -79.997,
+    "bypass": {
+      "label": "ungoverned_wrapped_ingestion_command",
+      "max_ms": 136.551,
+      "mean_ms": 16.13,
+      "min_ms": 8.5,
+      "n": 200,
+      "p50_ms": 15.791,
+      "p95_ms": 23.948,
+      "p99_ms": 44.927,
+      "stdev_ms": 9.704
+    },
+    "caveats": [
+      "WARMUP ADEQUACY: 30 warmup calls may leave APFS page-cache partially cold for very early measured calls. Mitigated by holding the same TempWorkspace open across warmup and measure phases.",
+      "GIL CONTENTION: WriteCoordinator worker thread competes with the calling thread for the GIL on Python bookkeeping between SQLite I/O releases. This adds variance; p99 captures the tail accurately but absolute values are CPython-specific.",
+      "BYPASS COMPARISON SCOPE: The bypass path (IngestionCommand.submit) includes the DB transaction and FTS indexing but omits the journal, coordinator queue/wake, obligation ledger, and manifest. The governance delta = governed p50 - bypass p50. A direct store_fast() comparison would also exclude operation-repository bookkeeping, making the true store_fast delta slightly smaller than shown."
+    ],
+    "experiment": "exp_governed_latency",
+    "governance_overhead_delta_p50_ms": -5.283,
+    "governance_overhead_delta_p99_ms": -25.115,
+    "governed": {
+      "label": "governed_write_envelope",
+      "max_ms": 51.287,
+      "mean_ms": 10.626,
+      "min_ms": 7.075,
+      "n": 200,
+      "p50_ms": 10.508,
+      "p95_ms": 13.438,
+      "p99_ms": 19.812,
+      "stdev_ms": 3.492
+    },
+    "interleave_seed": 20260823,
+    "method": "Method B (in-process governed envelope). Entrypoint: CanonicalRememberRuntime.remember() \u2014 the same code path the HTTP /remember handler calls after request parsing. Governed chain includes: AdmissionJournal.prepare() (AES-256-GCM encrypt + fsync journal row), journal.mark_dispatched(), WriteCoordinator.submit() (queue \u2192 background worker thread wake), _handle_admission() \u2192 IngestionCommand.submit() \u2192 write_queryable() \u2192 db.store_memory() + db.store_fact() (SQLite writer thread), _record_projection_obligations() (obligation ledger M033 INSERT), journal.mark_committed() (terminal journal update). Excluded: HTTP transport, request parsing, trust hook, daemon lifecycle. Warmup: 30 calls (discarded). Measurement: 200 calls, each with unique idempotency_key (journal never short-circuits). Timing: time.monotonic() wall-clock per call. Bypass comparison: IngestionCommand.submit() directly on same throwaway DB, skipping journal/coordinator/obligations. Machine: arm arm64, macOS 26.4.1, Python 3.14.5. DB files reside in APFS temporary directory (OS may use in-memory buffers after warmup \u2014 actual daemon runs on persistent APFS, so p50/p95/p99 may be higher in production due to fsync latency on first journal write).",
+    "overhead_interpretation": "A governance envelope can only add work, so a valid overhead is >= 0. Both candidate comparands give a negative p50 delta, which is a fact about the comparison and not about the code: neither is nested inside the governed path. IngestionCommand.submit performs operation creation, the queryable write and a receipt transition in one transaction, where the governed writer performs the queryable write alone. The bare callback is built to run inside a caller-managed transaction and pays an unbatched fsync per call when it does not. The three arms are reported; the difference between them is NOT a governance overhead and must not be quoted as one. Isolating that cost needs the same pipeline measured with the envelope enabled and disabled.",
+    "overhead_well_defined": false,
+    "platform": {
+      "platform": "macOS-26.4.1-arm64-arm-64bit-Mach-O",
+      "processor": "arm",
+      "python": "3.14.5"
+    },
+    "slm_module_file": "src/superlocalmemory/__init__.py",
+    "ungoverned_bare": {
+      "label": "ungoverned_bare_writer_no_transaction",
+      "max_ms": 114.858,
+      "mean_ms": 48.836,
+      "min_ms": 25.891,
+      "n": 200,
+      "p50_ms": 49.723,
+      "p95_ms": 71.804,
+      "p99_ms": 99.809,
+      "stdev_ms": 15.885
+    }
   }
 }

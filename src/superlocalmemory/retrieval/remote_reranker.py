@@ -48,25 +48,23 @@ Part of Qualixar | Author: Varun Pratap Bhardwaj
 from __future__ import annotations
 
 import json
-import ipaddress
 import logging
 import math
 import os
 import threading
 import time
 from typing import Any
-from urllib.parse import urlparse, urlunparse
 
+from superlocalmemory.retrieval.remote_rerank_guard import (
+    MAX_IN_FLIGHT,
+    CircuitBreaker,
+    DeadlineExceeded,
+    TooManyInFlight,
+    call_within,
+)
 from superlocalmemory.storage.models import AtomicFact
 
 logger = logging.getLogger(__name__)
-
-# Backend tokens that select the remote path. "openai" is what issue #105
-# asked for and matches ``embedding.provider == "openai"``, the established
-# repo token for "any OpenAI-compatible HTTP endpoint". It is a slight misnomer
-# — OpenAI has no rerank API and these endpoints are usually llama-server or
-# TEI — so "remote" is accepted as a truthful alias.
-REMOTE_CROSS_ENCODER_BACKENDS = ("openai", "remote")
 
 # Environment override for the bearer token. Preferred over the config field:
 # ``config.json`` is world-readable in many installs and is copied around.
@@ -84,10 +82,22 @@ _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 # This cap only guards against a pathological pool inflating one HTTP body.
 _MAX_DOCUMENTS = 512
 
-# Only transport faults and 5xx are retried, and only once: recall is
-# interactive, so a second failure must surface fast rather than pay a
-# backoff sleep on the user's latency budget.
+# Only fast transport faults (refused, reset, a stale pooled connection) and
+# 5xx are retried, once, and only while the call's deadline has time left. A
+# TIMEOUT is never retried: it has already spent the budget, and in 4.1.18 the
+# retry is what turned one 15 s wait into two (30.5 s per recall, measured).
 _MAX_ATTEMPTS = 2
+
+# The most one rerank call may add to a recall, retries included, enforced as a
+# wall clock (remote_rerank_guard.call_within). The recall ceiling is 2.0 s for
+# the WHOLE answer; this leaves the other half for retrieval itself.
+# ``cross_encoder_timeout_seconds`` (15 s by default) can only make it tighter.
+# Quality cost, stated: an endpoint that needs longer than this per batch never
+# reranks -- its recalls return fusion order, reported as remote_unavailable.
+# Someone who knowingly accepts slower recalls can raise it with the env var.
+_RECALL_DEADLINE_S = 1.0
+RECALL_DEADLINE_ENV = "SLM_REMOTE_RERANK_DEADLINE_S"
+_MIN_DEADLINE_S = 0.05
 
 # Consecutive failures re-log at most this often. The first failure always
 # logs; the operator must never have to guess whether reranking is running.
@@ -97,233 +107,55 @@ class RemoteRerankerError(RuntimeError):
     """A remote rerank request failed (transport, status, or schema)."""
 
 
+class RemoteRerankerTimeout(RemoteRerankerError):
+    """The endpoint did not answer inside the call's deadline."""
+
+
+class _RemoteRerankerBusy(RemoteRerankerError):
+    """Every request slot is still held; the endpoint was not called."""
+
+
+def _positive_seconds(value: Any, fallback: float) -> float:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return seconds if math.isfinite(seconds) and seconds > 0 else fallback
+
+
+def _recall_deadline_s(configured_timeout_s: float) -> float:
+    """The per-call wall-clock budget: the recall budget, or tighter."""
+    budget = _RECALL_DEADLINE_S
+    raw = os.environ.get(RECALL_DEADLINE_ENV, "").strip()
+    if raw:
+        try:
+            value = float(raw)
+            if math.isfinite(value) and value > 0:
+                budget = value
+        except ValueError:
+            logger.warning(
+                "%s=%r is not a number of seconds; using %.1fs",
+                RECALL_DEADLINE_ENV, raw, budget,
+            )
+    return max(_MIN_DEADLINE_S, min(budget, configured_timeout_s))
+
+
 class RemoteRerankerConfigError(ValueError):
     """The remote reranker configuration is unusable as written."""
 
 
-# ---------------------------------------------------------------------------
-# Configuration (pure functions — no I/O, directly testable)
-# ---------------------------------------------------------------------------
-
-def is_remote_cross_encoder_backend(backend: str) -> bool:
-    """True when ``backend`` selects the remote reranker."""
-    return (backend or "").strip().lower() in REMOTE_CROSS_ENCODER_BACKENDS
-
-
-def validate_remote_reranker_config(
-    backend: str,
-    endpoint: str,
-    trust_plain_http_lan: bool = True,
-) -> str | None:
-    """Return an actionable error string, or None when the pair is coherent.
-
-    Covers the issue-#103 leftover directly: an endpoint configured against a
-    LOCAL backend used to be dropped on the floor by ``SLMConfig.load``. It now
-    produces a named error naming both keys and the exact edit to make.
-
-    Args:
-        backend:            Value of ``retrieval.cross_encoder_backend``.
-        endpoint:           Value of ``retrieval.cross_encoder_endpoint``.
-        trust_plain_http_lan: When True (the default), numeric RFC1918/ULA/
-            link-local addresses may use plain HTTP — the same security posture
-            as the local reranker, where memory text only crosses loopback.
-            Set to False in hardened deployments (zero-trust networks, shared
-            colocation) to require HTTPS for all non-loopback hosts.
-
-    Threat model note: trusting a private-LAN address does NOT prevent a
-    MITM attack by an adversary on the same physical LAN (e.g. via ARP
-    spoofing). This flag means "the LAN is under my control and I accept that
-    risk." It is not a claim that RFC1918 traffic is cryptographically secure.
-    """
-    backend = (backend or "").strip()
-    endpoint = (endpoint or "").strip()
-    remote = is_remote_cross_encoder_backend(backend)
-
-    if remote and not endpoint:
-        return (
-            f"retrieval.cross_encoder_backend={backend!r} selects the remote "
-            f"reranker but retrieval.cross_encoder_endpoint is empty. Set the "
-            f"endpoint (e.g. \"http://127.0.0.1:8041/v1/rerank\"), or set "
-            f"cross_encoder_backend to \"\" (PyTorch) / \"onnx\" to rerank "
-            f"locally."
-        )
-    if endpoint and not remote:
-        return (
-            f"retrieval.cross_encoder_endpoint is set to {endpoint!r} but "
-            f"retrieval.cross_encoder_backend={backend!r} is a LOCAL backend, "
-            f"so the endpoint would be ignored. Set cross_encoder_backend to "
-            f"\"openai\" to use the endpoint, or remove cross_encoder_endpoint "
-            f"to rerank locally."
-        )
-    if not remote:
-        return None
-    return _validate_endpoint_url(endpoint, trust_plain_http_lan=trust_plain_http_lan)
-
-
-def _validate_endpoint_url(
-    endpoint: str,
-    trust_plain_http_lan: bool = True,
-) -> str | None:
-    """Scheme/host allow-listing for the operator-supplied rerank URL.
-
-    Plain-HTTP allowances (most-to-least trusted):
-      1. Loopback (127.x, ::1, localhost) — always allowed.
-      2. Numeric RFC1918/ULA/link-local addresses — allowed when
-         ``trust_plain_http_lan`` is True (the default).  Only numeric
-         addresses qualify; bare hostnames are never trusted because DNS is
-         mutable and not a trust boundary.
-      3. Everything else (public IPs, bare hostnames) — always requires HTTPS.
-    """
-    try:
-        parsed = urlparse(endpoint)
-    except ValueError as exc:
-        return f"retrieval.cross_encoder_endpoint is not a valid URL: {exc}"
-    if parsed.scheme not in ("http", "https"):
-        return (
-            f"retrieval.cross_encoder_endpoint must use http or https, got "
-            f"{parsed.scheme or '(none)'!r}. SuperLocalMemory will not open "
-            f"file/ftp/other schemes for reranking."
-        )
-    if not parsed.hostname:
-        return (
-            "retrieval.cross_encoder_endpoint has no host; expected something "
-            "like \"http://127.0.0.1:8041/v1/rerank\"."
-        )
-    if parsed.query or parsed.fragment:
-        return (
-            "retrieval.cross_encoder_endpoint must not include a query string "
-            "or fragment. Put bearer credentials in "
-            "SLM_CROSS_ENCODER_API_KEY and configure a clean endpoint URL."
-        )
-    if parsed.username or parsed.password:
-        # httpx logs "HTTP Request: POST <url>" at INFO using str(url), which
-        # renders an embedded password in full. This module never logs the raw
-        # URL, but it does not own the httpx logger — so credentials are
-        # refused at the door instead of being trusted to stay redacted.
-        return (
-            "retrieval.cross_encoder_endpoint must not embed credentials "
-            "(user:password@host) — the HTTP client logs request URLs in "
-            "full. Put the token in SLM_CROSS_ENCODER_API_KEY (preferred) or "
-            "retrieval.cross_encoder_api_key; it is sent as a Bearer header "
-            "and never logged."
-        )
-    if parsed.scheme == "http":
-        hostname = parsed.hostname
-        if _is_loopback_host(hostname):
-            return None  # loopback always allowed regardless of trust flag
-        if trust_plain_http_lan and _is_private_lan_host(hostname):
-            # Numeric private address on an operator-trusted LAN. Threat model:
-            # an attacker on the same physical LAN can still MITM plain HTTP
-            # (ARP spoofing). This is allowed because the LAN is assumed to be
-            # under the operator's control. Set trust_plain_http_lan=False in
-            # hardened/zero-trust environments.
-            return None
-        if not _is_private_lan_host(hostname):
-            # Public IP, CGNAT, or a bare hostname (DNS not trusted as a
-            # proof of locality). Bare hostnames that happen to resolve to
-            # private IPs are NOT trusted: DNS can be poisoned or changed,
-            # so only provably-private numeric addresses are accepted.
-            return (
-                "retrieval.cross_encoder_endpoint must use HTTPS for this "
-                "host. Plain HTTP is allowed only for loopback "
-                "(127.x/::1/localhost) and numeric private-LAN addresses "
-                "(RFC1918: 10.x, 172.16-31.x, 192.168.x; IPv6 ULA fc00::/7; "
-                "link-local 169.254.x/fe80::). "
-                "Bare hostnames are not trusted even if they resolve to a "
-                "private IP — use a numeric address or configure HTTPS."
-            )
-        # Private-LAN address but trust_plain_http_lan is False (hardened mode)
-        return (
-            "retrieval.cross_encoder_endpoint uses plain HTTP to a "
-            "private-LAN address. HTTPS is required because "
-            "retrieval.trust_plain_http_lan is set to false. "
-            "Either configure a TLS-terminating proxy on the reranker, or "
-            "set retrieval.trust_plain_http_lan=true to permit plain HTTP "
-            "within your private network (default for new installs)."
-        )
-    return None
-
-
-def _is_loopback_host(hostname: str) -> bool:
-    """Return True only for literal loopback names/addresses (no DNS trust)."""
-    host = (hostname or "").rstrip(".").lower()
-    if host == "localhost" or host.endswith(".localhost"):
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
-def _is_private_lan_host(hostname: str) -> bool:
-    """True only for numeric private-range addresses (RFC1918, ULA, link-local).
-
-    Deliberate non-DNS: bare hostnames (e.g. ``my-reranker.lan``) return False
-    even if they currently resolve to a private IP. DNS is mutable and not a
-    trust boundary — an adversary who can influence DNS resolution can redirect
-    the endpoint to a public host, defeating the locality check. Only numeric
-    addresses are provably bound to a private range at configuration time.
-
-    Accepted ranges (Python 3.11+ ``ipaddress.is_private``):
-      IPv4  RFC1918: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
-      IPv4  link-local: 169.254.0.0/16
-      IPv6  ULA: fc00::/7 (includes fd00::/8)
-      IPv6  link-local: fe80::/10
-
-    Excluded ranges (not accepted for plain HTTP):
-      CGNAT 100.64.0.0/10 — ISP-shared address space, not operator-controlled
-      172.15.0.0/8 and 172.32.0.0/8 — outside the 172.16.0.0/12 boundary
-      Public unicast addresses
-
-    IPv4-mapped IPv6 addresses (``::ffff:192.168.1.1``) are unwrapped to their
-    IPv4 equivalent before the range check, so they are handled consistently.
-    """
-    host = (hostname or "").rstrip(".").lower()
-    try:
-        addr = ipaddress.ip_address(host)
-    except ValueError:
-        # Not a numeric address — bare hostname, not provably private
-        return False
-    # Unwrap IPv4-mapped IPv6 (::ffff:192.168.1.1 → 192.168.1.1) so the
-    # RFC1918 check applies to the IPv4 portion.
-    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
-        addr = addr.ipv4_mapped
-    return addr.is_private
-
-
-def normalize_rerank_endpoint(endpoint: str) -> str:
-    """Append ``/rerank`` when the URL stops at the API root.
-
-    Mirrors the embedding path's ``/embeddings`` suffixing so a user can paste
-    either ``http://host:8041/v1`` or ``http://host:8041/v1/rerank``.
-    """
-    url = (endpoint or "").strip().rstrip("/")
-    parsed = urlparse(url)
-    if parsed.path.endswith("/rerank"):
-        return url
-    return f"{url}/rerank"
-
-
-def redact_endpoint(endpoint: str) -> str:
-    """Drop any ``user:password@`` userinfo before an endpoint reaches a log.
-
-    Defence in depth. ``_validate_endpoint_url`` already refuses credentialed
-    URLs, so this should never have anything to strip in a configured install
-    — it exists so that any future caller constructing a reranker directly
-    still cannot put a password in the log.
-    """
-    try:
-        parsed = urlparse(endpoint)
-    except ValueError:
-        return "<unparseable endpoint>"
-    if not parsed.hostname:
-        return endpoint
-    netloc = parsed.hostname
-    if parsed.port:
-        netloc = f"{netloc}:{parsed.port}"
-    if parsed.username or parsed.password:
-        netloc = f"***@{netloc}"
-    return urlunparse(parsed._replace(netloc=netloc, query="", fragment=""))
+# Configuration (pure functions) lives in remote_reranker_config; re-exported
+# here because callers and tests have always imported it from this module.
+from superlocalmemory.retrieval.remote_reranker_config import (  # noqa: E402,F401
+    REMOTE_CROSS_ENCODER_BACKENDS,
+    _is_loopback_host,
+    _is_private_lan_host,
+    _validate_endpoint_url,
+    is_remote_cross_encoder_backend,
+    normalize_rerank_endpoint,
+    redact_endpoint,
+    validate_remote_reranker_config,
+)
 
 
 def _redact_remote_text(text: str) -> str:
@@ -465,6 +297,8 @@ class RemoteReranker:
         backend: str = "openai",
         timeout_seconds: float = _DEFAULT_READ_TIMEOUT_S,
         trust_plain_http_lan: bool = True,
+        deadline_seconds: float | None = None,
+        breaker: CircuitBreaker | None = None,
     ) -> None:
         error = validate_remote_reranker_config(
             backend, endpoint, trust_plain_http_lan=trust_plain_http_lan,
@@ -481,6 +315,14 @@ class RemoteReranker:
             self._read_timeout = max(1.0, float(timeout_seconds))
         except (TypeError, ValueError):
             self._read_timeout = _DEFAULT_READ_TIMEOUT_S
+        if deadline_seconds is not None:
+            self.deadline_seconds = max(_MIN_DEADLINE_S, float(deadline_seconds))
+        else:
+            self.deadline_seconds = _recall_deadline_s(
+                _positive_seconds(timeout_seconds, self._read_timeout),
+            )
+        self._breaker = breaker or CircuitBreaker()
+        self._slots = threading.BoundedSemaphore(MAX_IN_FLIGHT)
 
         self._client: Any = None
         self._client_lock = threading.Lock()
@@ -583,15 +425,10 @@ class RemoteReranker:
             )
             ranked = ranked[:_MAX_DOCUMENTS]
 
-        try:
-            scores = self._request_scores(
-                query, [fact.content for fact, _ in ranked],
-            )
-        except RemoteRerankerError as exc:
-            self._note_failure(exc)
+        scores = self._guarded_scores(query, [fact.content for fact, _ in ranked])
+        if scores is None:
             return ranked[:top_k], False, "remote_unavailable"
 
-        self._note_success()
         scored = [
             (fact, float(score))
             for (fact, _), score in zip(ranked, scores)
@@ -603,11 +440,61 @@ class RemoteReranker:
         """Score one (query, document) pair; 0.0 when the endpoint fails."""
         if self._shutdown.is_set():
             return 0.0
+        scores = self._guarded_scores(query, [document])
+        return scores[0] if scores else 0.0
+
+    # -- the guard: breaker + one deadline per call ------------------------
+
+    def _guarded_scores(self, query: str, documents: list[str]) -> list[float] | None:
+        """Scores, or None when the endpoint was skipped or failed (logged).
+
+        A paused endpoint is not called at all; when its pause has run out,
+        this starts the single background probe and still answers at once.
+        """
+        decision = self._breaker.decide()
+        if decision.start_probe:
+            self._start_probe()
+        if not decision.call:
+            return None
         try:
-            return self._request_scores(query, [document])[0]
+            scores = self._request_scores(query, documents)
+        except _RemoteRerankerBusy as exc:
+            # Not the endpoint's fault yet: the calls holding the slots will
+            # each succeed or fail on their own, inside their deadline.
+            logger.debug("Remote reranker skipped for this recall: %s", exc)
+            return None
         except RemoteRerankerError as exc:
             self._note_failure(exc)
-            return 0.0
+            return None
+        self._note_success()
+        return scores
+
+    def _start_probe(self) -> None:
+        """Check a paused endpoint off the recall path; one probe at a time."""
+        def _probe() -> None:
+            ok = False
+            try:
+                if not self._shutdown.is_set():
+                    self._request_scores("ping", ["SuperLocalMemory reranker probe"])
+                    ok = True
+            except RemoteRerankerError as exc:
+                logger.debug("Remote reranker probe: still unavailable: %s", exc)
+            except Exception as exc:  # noqa: BLE001 -- a probe must always finish
+                logger.debug("Remote reranker probe raised: %s", exc)
+            finally:
+                self._breaker.probe_finished(ok)
+            if ok:
+                logger.info(
+                    "Remote reranker %s answers again; the next recall tries it",
+                    self.safe_endpoint,
+                )
+
+        try:
+            threading.Thread(target=_probe, name="remote-rerank-probe",
+                             daemon=True).start()
+        except Exception as exc:  # noqa: BLE001 -- e.g. no threads at shutdown
+            self._breaker.probe_finished(False)
+            logger.debug("Remote reranker probe not started: %s", exc)
 
     # -- HTTP --------------------------------------------------------------
 
@@ -623,31 +510,66 @@ class RemoteReranker:
             "documents": [_redact_remote_text(document) for document in documents],
         }
 
+        expected = len(documents)
+        try:
+            return call_within(
+                lambda deadline_at: self._attempts(headers, body, expected, deadline_at),
+                self.deadline_seconds,
+                self._slots,
+            )
+        except DeadlineExceeded as exc:
+            raise RemoteRerankerTimeout(
+                f"remote reranker at {self.safe_endpoint} did not answer within "
+                f"{self.deadline_seconds:g}s"
+            ) from exc
+        except TooManyInFlight as exc:
+            raise _RemoteRerankerBusy(str(exc)) from exc
+
+    def _attempts(
+        self, headers: dict[str, str], body: dict[str, Any], expected: int,
+        deadline_at: float,
+    ) -> list[float]:
+        """The request and its one permitted retry, inside ``deadline_at``."""
         last_error: RemoteRerankerError | None = None
-        for attempt in range(_MAX_ATTEMPTS):
+        attempts = 0
+        while attempts < _MAX_ATTEMPTS:
+            if deadline_at - time.monotonic() <= 0:
+                break
+            attempts += 1
             try:
-                payload = self._post(headers, body)
+                payload = self._post(headers, body, deadline_at)
+            except RemoteRerankerTimeout:
+                raise  # never retried: it already spent the budget
             except _RetryableRemoteError as exc:
                 last_error = RemoteRerankerError(str(exc))
-                if attempt < _MAX_ATTEMPTS - 1:
-                    continue
-                break
-            return parse_rerank_response(payload, len(documents))
+                continue
+            return parse_rerank_response(payload, expected)
         raise RemoteRerankerError(
             f"remote reranker at {self.safe_endpoint} failed after "
-            f"{_MAX_ATTEMPTS} attempts: {last_error}"
+            f"{attempts} attempt(s): {last_error}"
         )
 
-    def _post(self, headers: dict[str, str], body: dict[str, Any]) -> Any:
-        """Send the request and return parsed JSON, with a bounded body read."""
+    def _post(
+        self, headers: dict[str, str], body: dict[str, Any], deadline_at: float,
+    ) -> Any:
+        """Send the request and return parsed JSON, with a bounded body read.
+
+        Every transport phase is bounded by the time left, so the thread doing
+        this ends soon after the deadline even when nobody waits for it.
+        """
         import httpx
 
         client = self._get_client()
+        left = max(_MIN_DEADLINE_S, deadline_at - time.monotonic())
+        timeout = httpx.Timeout(
+            connect=min(_CONNECT_TIMEOUT_S, left), read=left, write=left, pool=left,
+        )
         try:
             with client.stream(
                 "POST", self._endpoint, headers=headers, json=body,
+                timeout=timeout,
             ) as resp:
-                raw = _read_bounded(resp)
+                raw = _read_bounded(resp, deadline_at)
                 if 300 <= resp.status_code < 400:
                     # Redirects are not followed: a rerank endpoint that
                     # bounces us elsewhere is either misconfigured or an
@@ -666,6 +588,10 @@ class RemoteReranker:
                     if resp.status_code >= 500:
                         raise _RetryableRemoteError(message)
                     raise RemoteRerankerError(message)
+        except httpx.TimeoutException as exc:
+            raise RemoteRerankerTimeout(
+                f"{self.safe_endpoint} timed out: {type(exc).__name__}"
+            ) from exc
         except httpx.TransportError as exc:
             raise _RetryableRemoteError(
                 f"cannot reach {self.safe_endpoint}: "
@@ -684,12 +610,13 @@ class RemoteReranker:
 
         with self._client_lock:
             if self._client is None:
+                # Per-request timeouts (see _post) override these; they are
+                # only the ceiling for a request that somehow sets none.
+                bound = self.deadline_seconds
                 self._client = httpx.Client(
                     timeout=httpx.Timeout(
-                        connect=_CONNECT_TIMEOUT_S,
-                        read=self._read_timeout,
-                        write=10.0,
-                        pool=5.0,
+                        connect=min(_CONNECT_TIMEOUT_S, bound),
+                        read=bound, write=bound, pool=bound,
                     ),
                     follow_redirects=False,
                 )
@@ -709,6 +636,20 @@ class RemoteReranker:
     def _note_failure(self, exc: Exception) -> None:
         """Make a degraded reranker impossible to miss, without log flooding."""
         self._consecutive_failures += 1
+        if self._breaker.record_failure(
+            timed_out=isinstance(exc, RemoteRerankerTimeout),
+        ):
+            logger.error(
+                "Remote reranker unavailable (%d consecutive failures): %s. "
+                "Pausing it for %.0fs: recall no longer waits on it and returns "
+                "fusion-ranked results with NO reranking until a background "
+                "check finds it answering again. SuperLocalMemory will not "
+                "silently substitute the local English cross-encoder for your "
+                "configured model.",
+                self._consecutive_failures, exc, self._breaker.cooldown_s,
+            )
+            self._last_failure_log = time.time()
+            return
         now = time.time()
         if (
             self._consecutive_failures == 1
@@ -724,6 +665,7 @@ class RemoteReranker:
             self._last_failure_log = now
 
     def _note_success(self) -> None:
+        self._breaker.record_success()
         if self._consecutive_failures:
             logger.info(
                 "Remote reranker recovered after %d consecutive failures (%s)",
@@ -742,11 +684,19 @@ class _RetryableRemoteError(RemoteRerankerError):
     """Internal marker: this failure is worth exactly one more attempt."""
 
 
-def _read_bounded(resp: Any) -> bytes:
-    """Read a streaming response body, refusing to buffer past the cap."""
+def _read_bounded(resp: Any, deadline_at: float | None = None) -> bytes:
+    """Read a streaming response body, refusing to buffer past the cap.
+
+    ``deadline_at`` also ends a reply that trickles in: each chunk arriving
+    inside the read timeout would otherwise keep the read going for ever.
+    """
     chunks: list[bytes] = []
     total = 0
     for chunk in resp.iter_bytes():
+        if deadline_at is not None and time.monotonic() > deadline_at:
+            raise RemoteRerankerTimeout(
+                "rerank response was still arriving at the deadline"
+            )
         total += len(chunk)
         if total > _MAX_RESPONSE_BYTES:
             raise RemoteRerankerError(

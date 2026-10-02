@@ -15,6 +15,7 @@ Part of Qualixar | Author: Varun Pratap Bhardwaj
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 from typing import TYPE_CHECKING
@@ -113,32 +114,10 @@ class TypeRouter:
         result = []
         for fact in facts:
             classified_type = self.classify(fact)
-            # Create new fact with updated type (immutability pattern)
-            updated = AtomicFact(
-                fact_id=fact.fact_id,
-                memory_id=fact.memory_id,
-                profile_id=fact.profile_id,
-                content=fact.content,
-                fact_type=classified_type,
-                entities=fact.entities,
-                canonical_entities=fact.canonical_entities,
-                observation_date=fact.observation_date,
-                referenced_date=fact.referenced_date,
-                interval_start=fact.interval_start,
-                interval_end=fact.interval_end,
-                confidence=fact.confidence,
-                importance=fact.importance,
-                evidence_count=fact.evidence_count,
-                source_turn_ids=fact.source_turn_ids,
-                session_id=fact.session_id,
-                embedding=fact.embedding,
-                fisher_mean=fact.fisher_mean,
-                fisher_variance=fact.fisher_variance,
-                emotional_valence=fact.emotional_valence,
-                emotional_arousal=fact.emotional_arousal,
-                signal_type=fact.signal_type,
-                created_at=fact.created_at,
-            )
+            # A new fact with only the type changed. Rebuilding it field by
+            # field silently reset every field the list forgot — sharing,
+            # pinning, lifecycle — whenever the dataclass grew.
+            updated = dataclasses.replace(fact, fact_type=classified_type)
             result.append(updated)
         return result
 

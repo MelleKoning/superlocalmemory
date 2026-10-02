@@ -358,7 +358,11 @@ def expire_stale_mesh_locks(db_path: Path) -> int:
 
     now = datetime.now(timezone.utc).isoformat()
     try:
-        conn = sqlite3.connect(str(db_path), timeout=2.0)
+        # mode=rw: a store that does not exist is not created by clearing its
+        # leases (a plain connect would leave an empty database behind).
+        conn = sqlite3.connect(
+            f"{Path(db_path).absolute().as_uri()}?mode=rw", uri=True, timeout=2.0,
+        )
         try:
             # G-07: BEGIN IMMEDIATE prevents a concurrent write from seeing our
             # DELETE mid-flight.  On OperationalError (DB locked by another

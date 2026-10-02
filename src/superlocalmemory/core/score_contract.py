@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 
+from superlocalmemory.retrieval.sufficiency import SufficiencyVerdict
 from superlocalmemory.storage.models import RecallResponse
 
 
@@ -26,7 +27,9 @@ def _bounded(value: object, default: float = 0.0) -> float:
     return min(1.0, max(0.0, number))
 
 
-def finalize_score_contract(response: RecallResponse) -> RecallResponse:
+def finalize_score_contract(
+    response: RecallResponse, verdict: SufficiencyVerdict | None = None,
+) -> RecallResponse:
     """Finalize aliases, rank positions, and response abstention metadata.
 
     ``score`` IS NOT THE ORDERING KEY, and a caller that sorts by it will get a
@@ -66,14 +69,28 @@ def finalize_score_contract(response: RecallResponse) -> RecallResponse:
         result.rank_position = position
 
     response.score_contract_version = "2"
-    response.calibration_status = "uncalibrated"
-    response.calibration_id = None
-    response.answer_confidence = None
-    response.abstained = not bool(response.results)
+    if verdict is None or not response.results:
+        response.calibration_status = "uncalibrated"
+        response.calibration_id = None
+        response.answer_confidence = None
+        response.abstained = not bool(response.results)
+    else:
+        # 4.1.18: a separate decision on whether the results answer the
+        # question. The ranking score cannot make it — measured on a real store
+        # it was the same for right answers, wrong ones and questions with no
+        # answer in memory. Results are never removed: abstention is a signal
+        # for the caller, and a caller that ignores it sees what it saw before.
+        response.calibration_status = verdict.calibration_status
+        response.calibration_id = verdict.calibration_id
+        response.answer_confidence = round(verdict.answer_confidence, 4)
+        response.abstained = verdict.insufficient
     if response.abstained:
-        response.abstention_reason = (
-            "evidence_floor" if response.no_confident_match else "no_candidates"
-        )
+        if response.results:
+            response.abstention_reason = "judged_insufficient"
+        else:
+            response.abstention_reason = (
+                "evidence_floor" if response.no_confident_match else "no_candidates"
+            )
     else:
         response.abstention_reason = None
     return response

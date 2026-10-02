@@ -51,3 +51,13 @@ Recall and remember never launch Bounded Loops or open this evidence store;
 they never enter its recall or ranking logic. Observation writes use the
 bounded learning-db receipt gate and can return a retryable refusal under
 contention rather than delaying a memory answer.
+
+## Answer check and loop gates (4.1.18)
+
+This bridge is unaffected by [Answer check](answer-check.md) — it observes
+Bounded Loops' own graph receipts, not SLM recall. The `slm_loop_run` MCP
+tool is different: its gate is an ordinary SLM recall against `gate_query`,
+so when Answer check is turned on, a recall the check judges
+`judged_insufficient` can never pass that gate, even if its relevance score
+alone would have looked like a match. With the check off (the default),
+gate behavior is unchanged.

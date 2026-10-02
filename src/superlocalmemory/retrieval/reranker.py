@@ -29,6 +29,10 @@ from pathlib import Path
 from typing import Any
 
 from superlocalmemory.infra.data_root import state_path
+from superlocalmemory.retrieval._worker_process import (
+    readline_with_timeout,
+    stop_process,
+)
 from superlocalmemory.storage.models import AtomicFact
 
 _RERANKER_PID_FILE = None  # test-only override
@@ -130,6 +134,16 @@ class CrossEncoderReranker:
         self._warmup_thread: threading.Thread | None = None
         self._idle_timer: threading.Timer | None = None
         self._request_count: int = 0
+        # Makes "is a warm-up already running?" and "start one" one step, so
+        # two cold recalls cannot each start a warm-up thread.
+        self._warmup_guard = threading.Lock()
+        # Recycling (see _begin_replacement). _generation changes whenever the
+        # serving worker is dropped or replaced, so a replacement that finishes
+        # warming after that is discarded instead of swapped in.
+        self._replacing = False
+        self._generation = 0
+        self._recycle_thread: threading.Thread | None = None
+        self._replacement_proc: subprocess.Popen | None = None
 
         # Register for atexit cleanup (prevent orphaned workers)
         ref = weakref.ref(self, _live_rerankers.discard)
@@ -159,23 +173,33 @@ class CrossEncoderReranker:
         lock, creating a race where the warmup's readline thread could
         steal responses meant for _send_request → deadlock → timeout.
         """
-        if self._shutdown_event.is_set() or self._worker_loading or self._model_loaded:
-            return
-        self._worker_loading = True
+        guard = getattr(self, "_warmup_guard", None) or threading.Lock()
+        with guard:
+            if (self._shutdown_event.is_set() or self._worker_loading
+                    or self._model_loaded):
+                return
+            self._worker_loading = True
 
         def _warmup() -> None:
             try:
                 for attempt in range(1, _WARMUP_MAX_ATTEMPTS + 1):
                     if self._shutdown_event.is_set() or self._model_loaded:
                         return
+                    # Spawn under the same lock the request path holds when IT
+                    # spawns (_send_request). Without it both could pass the
+                    # "no live worker" check at once and each start one; the
+                    # second assignment then dropped the first worker, which
+                    # kept running -- a model-sized process nobody owned.
                     try:
-                        self._ensure_worker()
+                        with self._lock:
+                            self._ensure_worker()
                     except Exception as exc:
                         logger.warning(
                             "Reranker warmup attempt %d/%d: worker spawn "
                             "raised: %s", attempt, _WARMUP_MAX_ATTEMPTS, exc,
                         )
-                        self._worker_proc = None
+                        with self._lock:
+                            self._worker_proc = None
 
                     if self._worker_proc is None:
                         # Either the spawn failed, or another process already
@@ -316,34 +340,8 @@ class CrossEncoderReranker:
             logger.debug("Reranker worker already alive (PID file), skipping spawn")
             return
 
-        worker_module = "superlocalmemory.core.reranker_worker"
         try:
-            env = {
-                **os.environ,
-                "CUDA_VISIBLE_DEVICES": "",
-                "PYTORCH_MPS_HIGH_WATERMARK_RATIO": "0.0",
-                "PYTORCH_MPS_MEM_LIMIT": "0",
-                "PYTORCH_ENABLE_MPS_FALLBACK": "1",
-                "TOKENIZERS_PARALLELISM": "false",
-                "TORCH_DEVICE": "cpu",
-                "ORT_DISABLE_COREML": "1",
-                # Restore parallel OpenMP. The package caps OMP_NUM_THREADS
-                # globally to avoid a torch+lightgbm libomp SIGSEGV in the
-                # main process. This worker loads torch but never lightgbm,
-                # so there is no collision risk and full parallelism is safe.
-                "OMP_NUM_THREADS": str(os.cpu_count() or 4),
-            }
-            from superlocalmemory.core.platform_utils import popen_platform_kwargs
-            self._worker_proc = subprocess.Popen(
-                [sys.executable, "-m", worker_module],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                bufsize=1,
-                env=env,
-                **popen_platform_kwargs(),
-            )
+            self._worker_proc = self._spawn_process()
             # v3.4.13: Register PID for machine-wide singleton
             pid_file = _reranker_pid_file()
             pid_file.parent.mkdir(parents=True, exist_ok=True)
@@ -371,6 +369,39 @@ class CrossEncoderReranker:
             logger.warning("Failed to spawn reranker worker: %s", exc)
             self._worker_proc = None
 
+    def _worker_argv(self) -> list[str]:
+        """The command that starts one worker process."""
+        return [sys.executable, "-m", "superlocalmemory.core.reranker_worker"]
+
+    def _spawn_process(self) -> subprocess.Popen:
+        """Start a worker process. No bookkeeping: callers own what it means."""
+        env = {
+            **os.environ,
+            "CUDA_VISIBLE_DEVICES": "",
+            "PYTORCH_MPS_HIGH_WATERMARK_RATIO": "0.0",
+            "PYTORCH_MPS_MEM_LIMIT": "0",
+            "PYTORCH_ENABLE_MPS_FALLBACK": "1",
+            "TOKENIZERS_PARALLELISM": "false",
+            "TORCH_DEVICE": "cpu",
+            "ORT_DISABLE_COREML": "1",
+            # Restore parallel OpenMP. The package caps OMP_NUM_THREADS
+            # globally to avoid a torch+lightgbm libomp SIGSEGV in the
+            # main process. This worker loads torch but never lightgbm,
+            # so there is no collision risk and full parallelism is safe.
+            "OMP_NUM_THREADS": str(os.cpu_count() or 4),
+        }
+        from superlocalmemory.core.platform_utils import popen_platform_kwargs
+        return subprocess.Popen(
+            self._worker_argv(),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+            env=env,
+            **popen_platform_kwargs(),
+        )
+
     def _send_request(self, req: dict, timeout: float | None = None,
                       block: bool = True) -> dict | None:
         """Send JSON request to worker, get response. Thread-safe.
@@ -393,11 +424,15 @@ class CrossEncoderReranker:
         if not acquired:
             return None  # another request is using the subprocess
         try:
-            if self._request_count >= _WORKER_RECYCLE_AFTER and self._worker_proc is not None:
-                logger.info("Recycling reranker worker after %d requests", self._request_count)
-                self._kill_worker()
-                self._model_loaded = False
-                self._request_count = 0
+            if (self._request_count >= _WORKER_RECYCLE_AFTER
+                    and self._worker_proc is not None and self._model_loaded):
+                # Blue/green: the replacement warms in the background while
+                # this worker keeps answering, and is swapped in only once it
+                # is ready. Killing first (4.1.18) left recall unranked for a
+                # whole cold load -- 22 to 63 s in the daemon logs -- every 500
+                # requests. The cost is memory, not quality: two workers exist
+                # for the length of one load.
+                self._begin_replacement()
 
             # Ensure worker is alive (re-spawn if crashed)
             if self._worker_proc is None or self._worker_proc.poll() is not None:
@@ -431,58 +466,9 @@ class CrossEncoderReranker:
         finally:
             self._lock.release()
 
-    @staticmethod
-    def _readline_with_timeout(stream: Any, timeout_seconds: float) -> str:
-        """Read a line from stream with timeout. Returns '' on timeout.
-
-        Prefer a deadline-driven selector poll of the stream's file descriptor
-        (POSIX pipes). That path never spawns a helper thread, so a hung
-        worker cannot leak reader threads or pin the pipe FD across timeouts.
-        A thread fallback remains only for streams without a usable fileno
-        (unit-test mocks) and for Windows, where selectors cannot wait on
-        pipes.
-        """
-        import selectors
-
-        timeout_seconds = max(0.0, float(timeout_seconds))
-        fd: int | None
-        try:
-            raw_fd = stream.fileno()
-            fd = raw_fd if isinstance(raw_fd, int) else None
-        except (AttributeError, OSError, ValueError, TypeError):
-            fd = None
-
-        # Windows select()/selectors only accept sockets, not subprocess pipes.
-        if fd is not None and sys.platform != "win32":
-            try:
-                with selectors.DefaultSelector() as sel:
-                    sel.register(fd, selectors.EVENT_READ)
-                    events = sel.select(timeout=timeout_seconds)
-                if not events:
-                    return ""
-                line = stream.readline()
-                return line if line else ""
-            except (OSError, ValueError):
-                return ""
-
-        result_container: list[str] = []
-        error_container: list[Exception] = []
-
-        def _read() -> None:
-            try:
-                result_container.append(stream.readline())
-            except Exception as exc:
-                error_container.append(exc)
-
-        reader = threading.Thread(target=_read, daemon=True)
-        reader.start()
-        reader.join(timeout=timeout_seconds)
-
-        if reader.is_alive():
-            return ""
-        if error_container:
-            raise error_container[0]
-        return result_container[0] if result_container else ""
+    # Pipe I/O lives in _worker_process; kept as methods so tests can patch them.
+    _readline_with_timeout = staticmethod(readline_with_timeout)
+    _stop_process = staticmethod(stop_process)
 
     def _kill_worker(self, timeout: float = 3.0) -> None:
         """Terminate the worker and close every owned pipe exactly once."""
@@ -495,37 +481,104 @@ class CrossEncoderReranker:
             # Detach first so re-entrant/finalizer cleanup is idempotent.
             self._worker_proc = None
             self._worker_ready = False
+            self._generation = getattr(self, "_generation", 0) + 1
             # Invariant: a dead worker has no loaded model. Enforcing this in
             # ONE place (not just the recycle/timeout callers) means the idle
             # timer's kill also clears the flag, so the recall path sees the
             # gap and triggers a background re-warmup instead of sending a
             # rerank to a cold worker and risking a 15s-timeout churn.
             self._model_loaded = False
-            try:
-                proc.stdin.write('{"cmd":"quit"}\n')
-                proc.stdin.flush()
-                proc.wait(timeout=max(0.0, timeout))
-            except Exception:
-                try:
-                    returncode = proc.poll()
-                except Exception:
-                    returncode = None
-                if returncode is None or not isinstance(returncode, int):
-                    try:
-                        proc.kill()
-                        proc.wait(timeout=max(0.0, timeout))
-                    except Exception:
-                        pass
-            finally:
-                # Explicit close prevents TextIOWrapper from flushing a dead
-                # child's stdin later from an unraisable object finalizer.
-                for stream_name in ("stdin", "stdout", "stderr"):
-                    stream = getattr(proc, stream_name, None)
-                    if stream is not None:
-                        try:
-                            stream.close()
-                        except (BrokenPipeError, OSError, ValueError):
-                            pass
+            self._stop_process(proc, timeout)
+
+    # ------------------------------------------------------------------
+    # Recycling: warm the replacement first, then swap (blue/green)
+    # ------------------------------------------------------------------
+
+    def _begin_replacement(self) -> None:
+        """Start warming a replacement worker. Caller holds ``self._lock``."""
+        if getattr(self, "_replacing", False) or self._shutdown_event.is_set():
+            return
+        self._replacing = True
+        logger.info(
+            "Recycling reranker worker after %d requests: warming its "
+            "replacement first; the current worker keeps answering",
+            self._request_count,
+        )
+        thread = threading.Thread(
+            target=self._replace_worker, args=(self._generation,),
+            daemon=True, name="ce-recycle",
+        )
+        self._recycle_thread = thread
+        try:
+            thread.start()
+        except Exception as exc:  # noqa: BLE001 -- recycling is best-effort
+            self._replacing = False
+            logger.warning("Reranker recycle not started: %s", exc)
+
+    def _replace_worker(self, generation: int) -> None:
+        """Spawn and load a new worker; swap it in only if it is ready."""
+        new = None
+        try:
+            new = self._spawn_process()
+            self._replacement_proc = new
+            if not self._load_into(new):
+                logger.warning(
+                    "Reranker recycle: the replacement did not load; the "
+                    "current worker keeps serving and recycling is retried "
+                    "after another %d requests", _WORKER_RECYCLE_AFTER,
+                )
+                with self._lock:
+                    self._request_count = 0
+                return
+            with self._lock:
+                if (self._shutdown_event.is_set() or self._worker_proc is None
+                        or self._generation != generation):
+                    return  # the worker it was meant to replace is gone
+                old, self._worker_proc = self._worker_proc, new
+                new = None
+                self._replacement_proc = None
+                self._generation += 1
+                self._request_count = 0
+                self._model_loaded = True
+                self._worker_ready = True
+                self._record_worker_pid(self._worker_proc.pid)
+                self._reset_idle_timer()
+            logger.info(
+                "Reranker worker recycled (PID %d -> %d) with no unranked window",
+                old.pid, self._worker_proc.pid if self._worker_proc else -1,
+            )
+            self._stop_process(old)
+        except Exception as exc:  # noqa: BLE001 -- the old worker still serves
+            logger.warning("Reranker recycle failed: %s", exc)
+        finally:
+            self._replacement_proc = None
+            if new is not None:
+                self._stop_process(new, timeout=1.0)
+            self._replacing = False
+
+    def _load_into(self, proc: Any) -> bool:
+        """Load the model into a worker nobody else is using yet."""
+        try:
+            proc.stdin.write(json.dumps({
+                "cmd": "load", "model_name": self._model_name,
+                "backend": self._backend,
+            }) + "\n")
+            proc.stdin.flush()
+            line = self._readline_with_timeout(proc.stdout, _WARMUP_LOAD_TIMEOUT)
+            resp = json.loads(line) if line else None
+        except (BrokenPipeError, OSError, ValueError) as exc:
+            logger.debug("Reranker replacement load failed: %s", exc)
+            return False
+        return bool(resp and resp.get("ok"))
+
+    @staticmethod
+    def _record_worker_pid(pid: int) -> None:
+        try:
+            pid_file = _reranker_pid_file()
+            pid_file.parent.mkdir(parents=True, exist_ok=True)
+            pid_file.write_text(str(pid))
+        except OSError as exc:
+            logger.debug("Reranker PID file not updated: %s", exc)
 
     def _reset_idle_timer(self) -> None:
         """Reset idle timer — kills worker after 2 min inactivity."""
@@ -551,9 +604,14 @@ class CrossEncoderReranker:
         if shutdown_event is not None:
             shutdown_event.set()
         self._kill_worker(timeout=min(max(0.0, timeout), 1.0))
-        warmup_thread = getattr(self, "_warmup_thread", None)
-        if warmup_thread is not None and warmup_thread is not threading.current_thread():
-            warmup_thread.join(timeout=timeout)
+        replacement = getattr(self, "_replacement_proc", None)
+        if replacement is not None:
+            # Ending it also ends the recycle thread's wait for its load.
+            self._stop_process(replacement, timeout=min(max(0.0, timeout), 1.0))
+        for name in ("_warmup_thread", "_recycle_thread"):
+            thread = getattr(self, name, None)
+            if thread is not None and thread is not threading.current_thread():
+                thread.join(timeout=timeout)
 
     # ------------------------------------------------------------------
     # Public API

@@ -14,6 +14,12 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from superlocalmemory.core import judge_selection
+# Re-exported: stop an engine's answer check, and "what would run" (starts nothing).
+from superlocalmemory.core.judge_selection import (  # noqa: F401
+    release_sufficiency_judge, resolve_judge_mode,
+)
+
 if TYPE_CHECKING:
     from superlocalmemory.core.config import SLMConfig
     from superlocalmemory.core.hooks import HookRegistry
@@ -331,9 +337,9 @@ def _init_vector_store(config: SLMConfig) -> Any | None:
         if vs.available:
             logger.info("VectorStore initialized (sqlite-vec KNN enabled)")
             return vs
-        logger.debug("VectorStore unavailable; using ANNIndex fallback")
+        logger.warning("VectorStore unavailable; using ANNIndex fallback")
     except Exception as exc:
-        logger.debug("VectorStore init failed: %s", exc)
+        logger.warning("VectorStore init failed: %s", exc)
     return None
 
 
@@ -603,6 +609,21 @@ def _init_quantization_aware_search(
         return None
 
 
+def init_sufficiency_judge(retrieval_config: Any) -> Any:
+    """The answer check the config asks for, or None. Rules: judge_selection.
+    Stays here because tests/conftest.py patches it, so no engine a test
+    builds — or switches — starts a real model."""
+    return judge_selection.build_sufficiency_judge(retrieval_config)
+
+
+def attach_sufficiency_judge(retrieval_engine: Any, retrieval_config: Any) -> str:
+    """Switch the engine's answer check now; returns "laya", "jev" or "off".
+    The old judge comes off the engine and stops before the new one is built;
+    the builder is looked up through this module, so the conftest guard holds."""
+    return judge_selection.swap_sufficiency_judge(
+        retrieval_engine, lambda: init_sufficiency_judge(retrieval_config))
+
+
 def init_retrieval(
     config: SLMConfig,
     db: DatabaseManager,
@@ -663,8 +684,9 @@ def init_retrieval(
         profile_channel=profile_ch,
         bridge_discovery=bridge,
         trust_scorer=trust_scorer,
+        sufficiency_judge=init_sufficiency_judge(config.retrieval),
     )
-
+    judge_selection.register_engine(engine)  # so a switch reaches this engine too
     # V3.3.13: Ensure reranker warmup is in progress.
     # The CrossEncoderReranker constructor starts background warmup, but
     # callers can also call warmup_sync() to block until ready.

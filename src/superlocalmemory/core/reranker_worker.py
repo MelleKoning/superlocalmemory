@@ -25,6 +25,7 @@ Part of Qualixar | Author: Varun Pratap Bhardwaj
 
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import platform
@@ -144,6 +145,7 @@ def _worker_main() -> None:
                     warmup_ok = True
                 except Exception:
                     pass
+                _release_gpu_cache(model, rebase=True)
             _respond({
                 "ok": model is not None,
                 "backend": active_backend,
@@ -188,6 +190,7 @@ def _worker_main() -> None:
                 })
             except Exception as exc:
                 _respond({"ok": False, "error": str(exc)})
+            _release_gpu_cache(model)
 
             # V3.3.16: RSS watchdog — V3.4.24: cross-platform via platform_utils.
             rss_mb = get_rss_mb()
@@ -224,6 +227,7 @@ def _worker_main() -> None:
                 _respond({"ok": True, "score": float(scores[0])})
             except Exception as exc:
                 _respond({"ok": False, "error": str(exc)})
+            _release_gpu_cache(model)
             continue
 
         _respond({"ok": False, "error": f"Unknown command: {cmd}"})
@@ -321,6 +325,113 @@ def _load_model(
             f"could not load cross-encoder model {name!r} "
             f"(backend={backend or 'pytorch'}): " + "; ".join(tier_errors)
         )
+
+
+#: How far the worker may grow above what it held right after loading before
+#: the GPU allocator's cache is handed back. Below this, keeping the cache costs
+#: little and reusing it is what keeps requests fast.
+GPU_CACHE_HEADROOM_MB = 256      # graphics memory the driver holds
+FOOTPRINT_HEADROOM_MB = 512      # the whole process, as Activity Monitor counts it
+
+# Post-load (or post-release) levels, bytes: {"driver": ..., "footprint": ...}.
+_baseline: dict[str, int] = {}
+
+
+class _RusageInfoV0(ctypes.Structure):
+    """``struct rusage_info_v0`` from <sys/resource.h> (macOS)."""
+
+    _fields_ = [
+        ("ri_uuid", ctypes.c_uint8 * 16),
+        ("ri_user_time", ctypes.c_uint64),
+        ("ri_system_time", ctypes.c_uint64),
+        ("ri_pkg_idle_wkups", ctypes.c_uint64),
+        ("ri_interrupt_wkups", ctypes.c_uint64),
+        ("ri_pageins", ctypes.c_uint64),
+        ("ri_wired_size", ctypes.c_uint64),
+        ("ri_resident_size", ctypes.c_uint64),
+        ("ri_phys_footprint", ctypes.c_uint64),
+        ("ri_proc_start_abstime", ctypes.c_uint64),
+        ("ri_proc_exit_abstime", ctypes.c_uint64),
+    ]
+
+
+def _phys_footprint() -> int | None:
+    """This process's physical footprint in bytes (macOS), else None.
+
+    The figure ``/usr/bin/footprint`` and Activity Monitor report, which -- unlike
+    RSS -- includes the GPU memory a process holds on Apple Silicon.
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        info = _RusageInfoV0()
+        lib = ctypes.CDLL("/usr/lib/libproc.dylib")
+        if lib.proc_pid_rusage(os.getpid(), 0, ctypes.byref(info)) != 0:
+            return None
+        return int(info.ri_phys_footprint)
+    except Exception:
+        return None
+
+
+def _levels(held) -> dict[str, int]:
+    levels = {"driver": int(held())}
+    footprint = _phys_footprint()
+    if footprint is not None:
+        levels["footprint"] = footprint
+    return levels
+
+
+def _release_gpu_cache(model, *, rebase: bool = False) -> None:
+    """Hand back the GPU memory the allocator kept, once it has grown.
+
+    The cross-encoder runs on Apple's GPU (the library picks it; the variables
+    set above do not stop it). Its allocator keeps freed buffers for reuse and,
+    with ``PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0``, never gives any back.
+    Measured with the real model and public text (250 requests of mixed
+    length): graphics memory 1,126 -> 2,201 MB and the process 1.6 -> 3.6 GB.
+
+    Releasing after EVERY request held it at about 1.6 GB but made short
+    requests about 1.7x slower: each then had to reallocate. So the cache is
+    released only when the process has grown past a headroom above what it
+    held after loading (``rebase=True``) or after the last release -- whichever
+    is higher, so memory that a release cannot return is never chased on every
+    request. Scores are untouched: this moves memory, not arithmetic.
+
+    ``torch.mps.empty_cache()`` and ``torch.mps.driver_allocated_memory()`` are
+    the library's own controls ("releases all unoccupied cached memory currently
+    held by the caching allocator"; "total GPU memory allocated by Metal driver
+    for the process ... includes cached allocations"). The block holding the
+    weights stays: it is in use. Nothing here can fail a request.
+    """
+    device = getattr(getattr(model, "device", None), "type", "")
+    if device != "mps":
+        return
+    try:
+        import torch
+
+        mps = getattr(torch, "mps", None)
+        empty_cache = getattr(mps, "empty_cache", None)
+        if not callable(empty_cache):
+            return
+        held = getattr(mps, "driver_allocated_memory", None)
+        if not callable(held):
+            empty_cache()  # growth cannot be measured: memory first
+            return
+        if rebase or not _baseline:
+            empty_cache()
+            _baseline.clear()
+            _baseline.update(_levels(held))
+            return
+        now = _levels(held)
+        limits = {"driver": GPU_CACHE_HEADROOM_MB, "footprint": FOOTPRINT_HEADROOM_MB}
+        if not any(now[k] > _baseline[k] + limits[k] * 1024 * 1024
+                   for k in now if k in _baseline):
+            return
+        empty_cache()
+        for key, value in _levels(held).items():
+            _baseline[key] = max(_baseline.get(key, 0), value)
+    except Exception:
+        pass
 
 
 def _respond(data: dict) -> None:

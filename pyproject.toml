@@ -1,6 +1,6 @@
 [project]
 name = "superlocalmemory"
-version = "4.1.17"
+version = "4.1.18"
 description = "Local-first agent memory with auditable hybrid retrieval"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
@@ -68,12 +68,18 @@ dependencies = [
     # sentence-transformers[onnx] — its extras pull optimum which
     # overrides the sentence-transformers pin via transitive deps.
     # Pin all three explicitly instead.
-    "sentence-transformers==5.3.0",
+    # 4.1.18: moved to the oldest release lines that carry the published
+    # security fixes (latest patch of each). Benchmarked against the previous
+    # pins on the same cached models: embeddings are bit-identical (existing
+    # stores keep matching), reranker orderings are unchanged, and worker peak
+    # memory is lower. transformers 5.17+ removes get_extended_attention_mask,
+    # which nomic-embed's remote modeling code calls: re-test before moving.
+    "sentence-transformers==5.6.1",
     "optimum==2.1.0",
     "onnxruntime==1.24.4",
-    "transformers==5.5.4",
+    "transformers==5.10.4",
     "huggingface_hub==1.5.0",
-    "torch==2.11.0",
+    "torch==2.13.0",
     "scikit-learn==1.8.0",
     # Vector KNN extension for the semantic channel.
     "sqlite-vec==0.1.9",
@@ -92,8 +98,19 @@ dependencies = [
     # pin does NOT disturb the transformers/torch/numpy pins above.
     "llmlingua==0.2.2",
     # LLMLingua pulls NLTK transitively. Pin above the disclosed traversal
-    # advisories so clean installs cannot resolve to the vulnerable 3.9.x line.
-    "nltk==3.10.0",
+    # advisories so clean installs cannot resolve to a vulnerable release.
+    "nltk==3.10.3",
+    # Security floors for packages SuperLocalMemory does not import directly.
+    # `pip install --upgrade` keeps an already-installed transitive version
+    # when it still satisfies the dependents' ranges, so without these floors
+    # an existing install would keep the vulnerable release. Floors, not
+    # exact pins, so they never conflict with the packages that pull them in.
+    "accelerate>=1.15.0",   # via llmlingua
+    "anyio>=4.14.2",        # via mcp, httpx, starlette
+    "httpx2>=2.12.0",       # via mcp; carries the patched httpcore2
+    "pyjwt>=2.15.0",        # via mcp
+    "setuptools>=83.0.0",   # via torch
+    "urllib3>=2.8.0",       # via requests, lancedb
 ]
 
 [project.optional-dependencies]
@@ -102,10 +119,10 @@ dependencies = [
 # works but installs nothing extra.
 search = [
     # Same hard pin as core deps — no [onnx] extra.
-    "sentence-transformers==5.3.0",
+    "sentence-transformers==5.6.1",
     "optimum==2.1.0",
     "einops==0.8.2",
-    "torch==2.11.0",
+    "torch==2.13.0",
     "scikit-learn==1.8.0",
     "onnxruntime==1.24.4",
 ]
@@ -141,8 +158,14 @@ ingestion = [
     "google-api-python-client>=2.100.0",
     "icalendar>=6.0.0",
 ]
+# 4.1.18: lets recall say "nothing here answers that". Apple Silicon only —
+# laya-mlx ships no other wheels, so the markers make this a no-op elsewhere.
+# Pinned to the release that was measured; newer releases need re-measuring.
+laya = [
+    "laya-mlx>=0.2.0,<0.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
 full = [
-    "superlocalmemory[search,ui,learning,performance,ingestion,injection,scale]",
+    "superlocalmemory[search,ui,learning,performance,ingestion,injection,scale,laya]",
 ]
 dev = [
     "pytest>=8.0",
@@ -151,7 +174,7 @@ dev = [
     "sqlite-vec>=0.1.6",
     # Starlette TestClient's maintained synchronous backend. Test-only: the
     # product runtime continues to use the separately pinned httpx client.
-    "httpx2==2.5.0",
+    "httpx2==2.12.0",
 ]
 
 [project.urls]
@@ -242,7 +265,7 @@ select = ["E", "F", "I", "W"]
 [dependency-groups]
 dev = [
     "build>=1.4.0",
-    "httpx2==2.5.0",
+    "httpx2==2.12.0",
     "pytest>=9.0.2",
     "pytest-asyncio>=0.21",
     "twine>=6.2.0",

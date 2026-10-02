@@ -1005,9 +1005,19 @@ class EntityGraphChannel:
         activation: dict[str, float],
         profile_id: str,
     ) -> None:
-        """P3: Penalize older fact in contradiction pairs, heavy-penalize superseded.
+        """P3: Penalize the older fact in a contradiction pair.
 
-        Uses graph_edges (edge_type CHECK includes 'contradiction', 'supersedes').
+        4.1.18: ``supersedes`` edges no longer lower activation. The penalty
+        multiplied the edge's SOURCE by 0.3 as "the replaced fact", but the
+        source is the NEWER fact everywhere else (``EdgeType.SUPERSEDES`` is
+        documented "Newer fact replaces older"; the sheaf check writes source
+        = the fact being stored) — so the current memory was the one
+        suppressed, on 4,481 of 4,786 edges in a real store. The edges
+        themselves come only from the sheaf consistency check, which flags
+        geometric disagreement between facts that share an entity rather than
+        one fact making another untrue: 0 of 34 sampled were supersessions.
+        Reversing the direction would just suppress the older facts instead.
+        The edges stay in the graph; they are not a ranking signal.
         """
         candidate_ids = list(activation.keys())
         if not candidate_ids:
@@ -1016,7 +1026,7 @@ class EntityGraphChannel:
             placeholders = ",".join("?" * len(candidate_ids))
             sql = (
                 "SELECT source_id, target_id, edge_type FROM graph_edges "
-                "WHERE profile_id = ? AND edge_type IN ('contradiction', 'supersedes') "
+                "WHERE profile_id = ? AND edge_type = 'contradiction' "
                 "AND (source_id IN (" + placeholders + ") "
                 "OR target_id IN (" + placeholders + "))"
             )
@@ -1043,9 +1053,7 @@ class EntityGraphChannel:
 
             for e in edges:
                 src, tgt, etype = e["source_id"], e["target_id"], e["edge_type"]
-                if etype == "supersedes" and src in activation:
-                    activation[src] *= 0.3  # Heavy penalty: this fact was replaced
-                elif etype == "contradiction":
+                if etype == "contradiction":
                     src_ts = ts_map.get(src, "")
                     tgt_ts = ts_map.get(tgt, "")
                     if src_ts and tgt_ts:

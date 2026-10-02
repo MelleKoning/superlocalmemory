@@ -97,8 +97,32 @@ def _try_socket_first(prompt: str, session_id: str) -> dict | None:
         return None
 
 
+class _Results(list):
+    """The result list, carrying the whole response it came from.
+
+    A plain ``list`` for every caller and test that treats it as one; the
+    envelope reads ``.response`` for the answer-check verdict, if any.
+    """
+
+    response: dict | None = None
+
+
 def _do_recall(query: str, limit: int = _DEFAULT_LIMIT, session_id: str = "") -> list[dict] | None:
     """Enqueue recall to queue, poll for result. Returns list of dicts or None."""
+    response = _do_recall_response(query, limit=limit, session_id=session_id)
+    if response is None:
+        return None
+    results = response.get("results", [])
+    if not isinstance(results, list):
+        return None
+    carried = _Results(results)
+    carried.response = response
+    return carried
+
+
+def _do_recall_response(query: str, limit: int = _DEFAULT_LIMIT,
+                        session_id: str = "") -> dict | None:
+    """Like ``_do_recall`` but the whole response, so a verdict can travel."""
     try:
         from superlocalmemory.core.recall_queue import RecallQueue
 
@@ -124,39 +148,59 @@ def _do_recall(query: str, limit: int = _DEFAULT_LIMIT, session_id: str = "") ->
             if isinstance(result, dict):
                 if result.get("ok") is False:
                     return None
-                results = result.get("results", [])
-                if isinstance(results, list):
-                    return results
+                if isinstance(result.get("results", []), list):
+                    return result
             return None
         finally:
             queue.close()
 
     except Exception:
-        return _fallback_recall(query, limit, session_id)
+        results = _fallback_recall(query, limit, session_id)
+        return {"results": results} if results is not None else None
 
 
 def _fallback_recall(query: str, limit: int, session_id: str) -> list[dict] | None:
-    """Fallback: call daemon HTTP /recall if queue path fails."""
+    """Fallback: ask the daemon's /recall directly if the queue path fails.
+
+    Only through the identity-checked daemon client: the prompt the user just
+    typed must never go to whatever happens to listen on the default port
+    (on a shared Mac, another account), and nothing such a stranger answers
+    may be injected into the agent's context as "memories".
+
+    S-M2: this recall injects context for a prompt typed to the agent, not a
+    question to memory, so the daemon is asked to skip the answer check
+    (nothing judged, nothing sent off the machine).
+    """
     try:
         import urllib.parse
-        import urllib.request
 
-        params = urllib.parse.urlencode({"q": query, "limit": limit})
-        url = f"http://127.0.0.1:47152/recall?{params}"
+        from superlocalmemory.cli.daemon import daemon_request
+        from superlocalmemory.core.answer_check_scope import (
+            ANSWER_CHECK_PARAM,
+            ANSWER_CHECK_SKIP,
+        )
 
-        req = urllib.request.Request(url, method="GET")
-        req.add_header("X-SLM-Session-Id", session_id)
-
-        with urllib.request.urlopen(req, timeout=5.0) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return data.get("results", [])
+        params = urllib.parse.urlencode({
+            "q": query, "limit": limit, "session_id": session_id or "",
+            ANSWER_CHECK_PARAM: ANSWER_CHECK_SKIP,
+        })
+        data = daemon_request("GET", f"/recall?{params}", timeout_seconds=5.0)
+        if not isinstance(data, dict):
+            return None
+        results = data.get("results", [])
+        return results if isinstance(results, list) else None
     except Exception:
         return None
 
 
-def _format_envelope(results: list[dict]) -> dict:
+def _format_envelope(results: list[dict], response: dict | None = None) -> dict:
     """Format recall results as Claude Code envelope. Uses shared formatter
-    (v3.4.65). Fail closed if the mandatory renderer is unavailable."""
+    (v3.4.65). Fail closed if the mandatory renderer is unavailable.
+
+    ``response`` is the whole recall response when the caller has it: if it
+    carries an answer-check verdict, the same one line every surface uses is
+    put above the memories — never in their place (H-3).
+    """
     try:
         from superlocalmemory.core.config import SLMConfig
         from superlocalmemory.core.injection import InjectableMemory, render_context
@@ -175,6 +219,12 @@ def _format_envelope(results: list[dict]) -> dict:
             for r in results
         ]
         wrapped = render_context(inj, mode=mode, cfg=cfg, wrap=True)
+        if isinstance(response, dict):
+            from superlocalmemory.core.answer_check_notice import answer_check_line
+
+            verdict_line = answer_check_line(response)
+            if verdict_line:
+                wrapped = f"{verdict_line}\n\n{wrapped}" if wrapped else verdict_line
         return {
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",
@@ -239,7 +289,7 @@ def main() -> int:
         return 0
 
     try:
-        envelope = _format_envelope(results)
+        envelope = _format_envelope(results, response=getattr(results, "response", None))
         sys.stdout.write(json.dumps(envelope))
     except Exception:
         sys.stdout.write("{}")

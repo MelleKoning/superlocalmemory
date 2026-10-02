@@ -32,10 +32,10 @@ if "OMP_NUM_THREADS" not in os.environ:
     os.environ["OMP_NUM_THREADS"] = "2"
 # ---------------------------------------------------------------------------
 
-__version__ = "4.1.17"
+__version__ = "4.1.18"
 
 _REQUIRED_VERSIONS = {
-    "sentence_transformers": "5.3.0",
+    "sentence_transformers": "5.6.1",
     "onnxruntime": "1.24.4",
 }
 
@@ -63,10 +63,10 @@ def _check_critical_deps() -> None:
         except metadata.PackageNotFoundError:
             continue
         if actual != expected:
+            dist = _DIST_NAMES[mod_name]
             warnings.warn(
-                f"SuperLocalMemory requires {mod_name}=={expected} but "
-                f"{actual} is installed. This causes memory blow-up on "
-                f"Apple Silicon. Fix: pip install {mod_name}=={expected}",
+                f"SuperLocalMemory is tested with {dist}=={expected}, but "
+                f"{actual} is installed. Run: pip install {dist}=={expected}",
                 stacklevel=2,
             )
 

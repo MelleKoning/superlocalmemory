@@ -472,3 +472,64 @@ class TestIsAvailable:
             reranker, "_send_request", return_value={"ok": False},
         ):
             assert reranker.is_available is False
+
+
+# ---------------------------------------------------------------------------
+# Worker recycling (4.1.18)
+# ---------------------------------------------------------------------------
+
+class TestWorkerRecycle:
+    """The module docstring has always claimed recycling was covered; no test
+    existed, and the path was broken.
+
+    After 500 requests the worker is recycled. The old code then sent the live
+    request straight to the freshly spawned worker under the 15 s request
+    timeout. A fresh worker has to import torch and load the model first —
+    22 to 63 s in the daemon logs — so it always timed out. Both recycles in
+    the live daemon's history died exactly that way, and reranking stayed off
+    until the daemon was restarted.
+    """
+
+    def _recycle_ready(self):
+        from superlocalmemory.retrieval import reranker as mod
+
+        reranker = _make_reranker(model_name="fake-model")
+        old = MagicMock()
+        old.poll.return_value = None
+        reranker._worker_proc = old
+        reranker._model_loaded = True
+        reranker._request_count = mod._WORKER_RECYCLE_AFTER
+        return reranker
+
+    def test_recycle_never_sends_a_live_request_to_a_cold_worker(self) -> None:
+        """M-12: the request at the threshold is answered by the warm worker;
+        the replacement is warmed separately and only ever receives a load."""
+        reranker = self._recycle_ready()
+        old = reranker._worker_proc
+
+        with patch.object(reranker, "_ensure_worker") as spawn, \
+                patch.object(reranker, "_readline_with_timeout",
+                             return_value='{"ok": true, "scores": [1.0]}') as read, \
+                patch.object(reranker, "_begin_replacement") as replace:
+            resp = reranker._send_request(
+                {"cmd": "rerank", "query": "q", "documents": ["d"]},
+                timeout=15.0, block=False,
+            )
+
+        assert resp == {"ok": True, "scores": [1.0]}
+        spawn.assert_not_called()
+        old.stdin.write.assert_called_once()
+        read.assert_called_once()
+        replace.assert_called_once()
+
+    def test_recycle_keeps_the_warm_worker_until_its_replacement_is_ready(self) -> None:
+        """4.1.18 dropped the worker here and set the model unloaded, which
+        left every recall unranked for a whole cold load."""
+        reranker = self._recycle_ready()
+        old = reranker._worker_proc
+        with patch.object(reranker, "_begin_replacement"), \
+                patch.object(reranker, "_readline_with_timeout",
+                             return_value='{"ok": true}'):
+            reranker._send_request({"cmd": "ping"})
+        assert reranker._worker_proc is old
+        assert reranker._model_loaded is True

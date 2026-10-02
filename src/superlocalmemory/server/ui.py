@@ -305,6 +305,10 @@ def create_app() -> FastAPI:
         except Exception:
             pass
 
+    # Outermost: refuse a request not addressed to this machine (DNS rebinding).
+    from superlocalmemory.server.host_guard import HostGuardMiddleware
+    application.add_middleware(HostGuardMiddleware)
+
     return application
 
 

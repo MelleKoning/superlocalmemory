@@ -59,6 +59,12 @@ Options:
 - `--limit N` — Number of results (default: 20)
 - `--json` — Output structured JSON
 
+With [Answer Check](Answer-Check) turned on (off until an on-device install
+has passed its check), output gets
+one extra line reporting whether the top results answer the question, e.g.
+`Answer check: likely answered (confidence 0.91).` Results are unchanged
+either way — it's an added line, not a filter.
+
 ### List
 
 ```bash

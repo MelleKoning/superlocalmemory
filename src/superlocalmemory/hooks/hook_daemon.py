@@ -21,10 +21,12 @@ crashes, auto_recall_hook.py falls back to subprocess (v3.4.35 path).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import socket
+import stat
 import sys
 import threading
 import time
@@ -43,8 +45,78 @@ _DEFAULT_SOCK_NAME = "hook_daemon.sock"
 _AF_UNIX = getattr(socket, "AF_UNIX", None)
 
 
+#: Longest socket path the OS accepts (``sun_path`` minus its terminator).
+_SUN_PATH_MAX = 107 if sys.platform.startswith("linux") else 103
+
+
 def _default_sock_path() -> Path:
     return state_path(_DEFAULT_SOCK_NAME)
+
+
+def _short_socket_base() -> Path:
+    """A short, per-user folder for socket paths that do not fit.
+
+    Fixed, not taken from the environment, so the daemon (often started by
+    the OS service manager) and the hook (started by an editor) agree on it.
+    """
+    uid = os.getuid() if hasattr(os, "getuid") else 0
+    return Path("/tmp") / f"slm-{uid}"
+
+
+def _private_dir(base: Path, *, create: bool) -> Path | None:
+    """``base`` if it is a real folder owned by this user and closed to others.
+
+    None for a symlink, a file, or a folder another account owns — someone
+    who pre-created it could swap our socket for theirs, read prompts and
+    answer with their own "memories". Our own folder is tightened to 0700.
+    """
+    if create:
+        try:
+            os.mkdir(base, 0o700)
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            logger.warning("HookDaemon: cannot create %s: %s", base, type(exc).__name__)
+            return None
+    try:
+        st = os.lstat(base)
+    except OSError:
+        return None
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        return None
+    if hasattr(os, "getuid") and st.st_uid != os.getuid():
+        return None
+    if stat.S_IMODE(st.st_mode) & 0o077:
+        if not create:
+            return None
+        os.chmod(base, 0o700)
+    return base
+
+
+def resolve_sock_path(path: Path, *, create: bool = False) -> Path | None:
+    """Where the socket for ``path`` actually lives.
+
+    ``path`` itself when it fits the OS limit — unchanged for most installs.
+    Otherwise a name derived from ``path`` inside the short per-user folder,
+    so two data folders never share a socket and the hook computes the same
+    place the daemon bound. None when that folder is not safe to use (the
+    hook then takes its slower, socket-free path).
+    """
+    if len(os.fsencode(str(path))) <= _SUN_PATH_MAX:
+        return path
+    folder = _private_dir(_short_socket_base(), create=create)
+    if folder is None:
+        return None
+    digest = hashlib.sha256(os.fsencode(str(path))).hexdigest()[:16]
+    return folder / f"hook-{digest}.sock"
+
+
+def _owned_by_me(path: Path) -> bool:
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return not hasattr(os, "getuid") or st.st_uid == os.getuid()
 
 
 def _default_queue_db_path() -> Path:
@@ -70,6 +142,8 @@ class HookDaemon:
         self._thread: threading.Thread | None = None
         self._server_sock: socket.socket | None = None
         self._queue = None
+        #: Where the socket was actually bound (see ``resolve_sock_path``).
+        self._bound_path: Path | None = None
 
     @property
     def running(self) -> bool:
@@ -78,22 +152,31 @@ class HookDaemon:
     def start(self) -> None:
         if self._running:
             return
-        if self._sock_path.exists():
-            self._sock_path.unlink()
-
-        from superlocalmemory.core.recall_queue import RecallQueue
-        self._queue = RecallQueue(self._queue_db_path)
-
         if _AF_UNIX is None:
             logger.info(
                 "HookDaemon: AF_UNIX unavailable on %s; hook recall uses the "
                 "subprocess fallback", sys.platform,
             )
             raise RuntimeError("AF_UNIX unavailable on this platform")
+        bind_path = resolve_sock_path(self._sock_path, create=True)
+        if bind_path is None:
+            raise RuntimeError(
+                "no private short folder for the hook socket; hook recall uses "
+                "the subprocess fallback"
+            )
+        if bind_path.exists() or bind_path.is_symlink():
+            bind_path.unlink()
+
+        from superlocalmemory.core.recall_queue import RecallQueue
+        self._queue = RecallQueue(self._queue_db_path)
+
         self._server_sock = socket.socket(_AF_UNIX, socket.SOCK_STREAM)
-        self._server_sock.bind(str(self._sock_path))
+        self._server_sock.bind(str(bind_path))
+        # Owner-only: the socket answers with memories.
+        os.chmod(bind_path, 0o600)
         self._server_sock.listen(8)
         self._server_sock.settimeout(1.0)
+        self._bound_path = bind_path
 
         self._stop_event.clear()
         self._running = True
@@ -103,7 +186,7 @@ class HookDaemon:
             name="slm-hook-daemon",
         )
         self._thread.start()
-        logger.info("HookDaemon started on %s", self._sock_path)
+        logger.info("HookDaemon started on %s", bind_path)
 
     def stop(self) -> None:
         if not self._running:
@@ -119,11 +202,13 @@ class HookDaemon:
         if self._thread is not None:
             self._thread.join(timeout=3.0)
             self._thread = None
-        if self._sock_path.exists():
+        bound = self._bound_path or self._sock_path
+        if bound.exists():
             try:
-                self._sock_path.unlink()
+                bound.unlink()
             except Exception:
                 pass
+        self._bound_path = None
         if self._queue is not None:
             try:
                 self._queue.close()
@@ -219,7 +304,7 @@ class HookDaemon:
             if isinstance(result, dict) and result.get("ok") is not False:
                 results = result.get("results", [])
                 if results:
-                    return _format_envelope(results)
+                    return _format_envelope(results, response=result)
             return {}
         except (QueueTimeoutError, Exception):
             return {}
@@ -236,10 +321,10 @@ def try_socket_recall(
     Returns the hook envelope dict on success, or None if the daemon
     is unavailable (triggers subprocess fallback in auto_recall_hook).
     """
-    path = sock_path or _default_sock_path()
-    if not path.exists():
-        return None
     if _AF_UNIX is None:
+        return None
+    path = resolve_sock_path(sock_path or _default_sock_path())
+    if path is None or not path.exists() or not _owned_by_me(path):
         return None
 
     try:
@@ -277,11 +362,12 @@ def ensure_hook_daemon(
     if _AF_UNIX is None:
         return None
 
-    if path.exists():
+    bound = resolve_sock_path(path)
+    if bound is not None and bound.exists():
         try:
             test = socket.socket(_AF_UNIX, socket.SOCK_STREAM)
             test.settimeout(1.0)
-            test.connect(str(path))
+            test.connect(str(bound))
             test.close()
             return None
         except Exception:

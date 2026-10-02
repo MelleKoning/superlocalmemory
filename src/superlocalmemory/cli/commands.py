@@ -119,14 +119,24 @@ def _cmd_db_compact(args: Namespace) -> int:
     from datetime import timedelta
 
     from superlocalmemory.cli.daemon import owned_daemon_process_alive
-    from superlocalmemory.core.maintenance_scheduler import compact_vector_store
     from superlocalmemory.infra.data_root import canonical_data_root
 
     offline = bool(getattr(args, "offline", False))
     if not offline:
-        out = compact_vector_store()
+        # The vector backends live in the daemon; compacting here, in the CLI
+        # process, found none and always failed. Ask the daemon instead.
+        from superlocalmemory.cli import daemon as _daemon
+
+        if not _daemon.is_daemon_running():
+            print(
+                "slm db compact: the daemon is not running. Start it (`slm serve`), "
+                "or, with SLM stopped, use `slm db compact --offline`.",
+                file=sys.stderr,
+            )
+            return 1
+        out = _daemon.daemon_request("POST", "/maintenance/compact", {})
         print(out)
-        return 0 if out.get("ok") else 1
+        return 0 if isinstance(out, dict) and out.get("ok") else 1
 
     if owned_daemon_process_alive():
         print(
@@ -298,7 +308,7 @@ def _cmd_db_reembed(args: Namespace) -> None:
 
     try:
         config = SLMConfig.load()
-        engine = MemoryEngine(config)
+        engine = MemoryEngine(_without_answer_check(config))
         engine.initialize()
     except Exception as exc:
         if use_json:
@@ -1535,6 +1545,22 @@ def cmd_connect(args: Namespace) -> None:
             print(f"  {ide_id}: {ide_status}")
 
 
+def _without_answer_check(config):
+    """The config for a command that never recalls: it builds no answer check.
+
+    Nothing will be judged, so detecting the on-device install, probing its
+    interpreter or preparing the hosted client would be work for nothing.
+    """
+    from dataclasses import is_dataclass, replace
+
+    retrieval = getattr(config, "retrieval", None)
+    if is_dataclass(retrieval) and not isinstance(retrieval, type):
+        config.retrieval = replace(retrieval, sufficiency_judge="off")
+    elif retrieval is not None:  # a stand-in config (tests, plugins)
+        retrieval.sufficiency_judge = "off"
+    return config
+
+
 def cmd_migrate(args: Namespace) -> None:
     """Run V2 to V3 migration."""
     from superlocalmemory.cli.migrate_cmd import cmd_migrate as _migrate
@@ -1553,7 +1579,7 @@ def cmd_list(args: Namespace) -> None:
     use_json = getattr(args, 'json', False)
     try:
         config = SLMConfig.load()
-        engine = MemoryEngine(config)
+        engine = MemoryEngine(_without_answer_check(config))
         engine.initialize()
 
         limit = getattr(args, "limit", CANONICAL_LIST_LIMIT)
@@ -1662,6 +1688,32 @@ def cmd_remember(args: Namespace) -> None:
     _daemon_unavailable("remember", use_json)
 
 
+def _answer_check_line(result: dict) -> str:
+    """One plain text line summarizing the answer-check judge verdict.
+
+    Returns "" when no judge is configured (``calibration_status ==
+    "uncalibrated"``) so plain-text output is byte-identical to before this
+    existed — that is the overwhelming majority of installs today.
+
+    Results are never removed from the printed list; this is an additional
+    line, not a filter. Abstention is a signal for the reader, not a reason
+    to hide what was actually retrieved.
+    """
+    if result.get("calibration_status", "uncalibrated") == "uncalibrated":
+        return ""
+    confidence = result.get("answer_confidence")
+    confidence = float(confidence) if confidence is not None else 0.0
+    if result.get("abstention_reason") == "judged_insufficient":
+        return (
+            "Answer check: none of these memories answers the question "
+            f"(confidence {confidence:.2f}). Say you don't have it, or ask "
+            "— don't present these as the answer."
+        )
+    if not result.get("abstained", False):
+        return f"Answer check: likely answered (confidence {confidence:.2f})."
+    return ""
+
+
 def cmd_recall(args: Namespace) -> None:
     """Search memories through the owned daemon without a local engine."""
     use_json = getattr(args, 'json', False)
@@ -1757,6 +1809,9 @@ def cmd_recall(args: Namespace) -> None:
                 for i, r in enumerate(result["results"], 1):
                     score = r.get('score') or 0
                     print(f"  {i}. [{score:.2f}] {r['content']}")
+                answer_check = _answer_check_line(result)
+                if answer_check:
+                    print(f"\n{answer_check}")
                 return
     except Exception as _exc:  # noqa: BLE001
         logger.warning(
@@ -2270,7 +2325,7 @@ def cmd_health(args: Namespace) -> None:
             langevin_count = int(langevin_count or 0)
         else:
             from superlocalmemory.core.engine import MemoryEngine
-            engine = MemoryEngine(config)
+            engine = MemoryEngine(_without_answer_check(config))
             engine.initialize()
             facts = engine._db.get_all_facts(engine.profile_id)
             fisher_count = sum(1 for f in facts if f.fisher_mean is not None)
@@ -2616,9 +2671,10 @@ def _migration_error_logs() -> list:
             cfg = SLMConfig.for_mode(Mode.A)
             db = getattr(cfg, "memory_db_path", None) or getattr(cfg, "db_path", None)
             if db:
-                roots.add(pathlib.Path(db).parent)
-        except Exception:
-            pass
+                roots.add(Path(db).parent)
+        except Exception as exc:  # noqa: BLE001 — the canonical root is still searched
+            logger.debug("doctor: configured database folder not searched: %s",
+                         type(exc).__name__)
 
         found: list = []
         for root in roots:
@@ -3386,9 +3442,12 @@ def cmd_doctor(args: Namespace) -> None:
         if _h.healthy:
             _check("Memory answer-ability", "PASS", _detail)
         elif _h.inconsistently_hidden or _h.reachability < 0.9:
+            # A start no longer re-files hidden memories once the store's own
+            # log records that repair complete; the forgetting pass does.
             _check(
                 "Memory answer-ability", "FAIL", _detail,
-                fix="slm restart",
+                fix=("slm decay --execute" if _h.inconsistently_hidden
+                     else "slm restart"),
             )
         else:
             _check("Memory answer-ability", "WARN", _detail,
@@ -3486,6 +3545,9 @@ def cmd_trace(args: Namespace) -> None:
                         )
                     for channel, score in (item.get("channel_scores") or {}).items():
                         print(f"       {channel}: {float(score):.3f}")
+                answer_check = _answer_check_line(result)
+                if answer_check:
+                    print(f"\n{answer_check}")
                 return
     except Exception:
         # The direct path remains the offline escape hatch when a daemon is
@@ -3540,6 +3602,10 @@ def cmd_trace(args: Namespace) -> None:
         if hasattr(r, "channel_scores") and r.channel_scores:
             for ch, sc in r.channel_scores.items():
                 print(f"       {ch}: {sc:.3f}")
+    from superlocalmemory.server.recall_serializer import recall_response_metadata
+    answer_check = _answer_check_line(recall_response_metadata(response))
+    if answer_check:
+        print(f"\n{answer_check}")
 
 
 # -- Services (no --json — these start long-running processes) -------------
@@ -4189,9 +4255,12 @@ def cmd_session_context(args: Namespace) -> None:
                 engine=engine,
                 config={"enabled": True, "max_memories_injected": 10, "relevance_threshold": 0.3},
             )
-            context = auto.get_session_context(
-                query=getattr(args, "query", "") or "recent decisions and important context",
-            )
+            # Loading context, not answering a question: never judged.
+            from superlocalmemory.core.answer_check_scope import skip_answer_check
+            with skip_answer_check():
+                context = auto.get_session_context(
+                    query=getattr(args, "query", "") or "recent decisions and important context",
+                )
             if context:
                 if use_json:
                     from superlocalmemory.cli.json_output import json_print
@@ -4444,7 +4513,7 @@ def cmd_observe(args: Namespace) -> None:
 
         try:
             config = SLMConfig.load()
-            engine = MemoryEngine(config)
+            engine = MemoryEngine(_without_answer_check(config))
             engine.initialize()
 
             from superlocalmemory.core.engine_ingestion import (
@@ -4490,7 +4559,7 @@ def cmd_decay(args: Namespace) -> None:
 
     try:
         config = SLMConfig.load()
-        engine = MemoryEngine(config)
+        engine = MemoryEngine(_without_answer_check(config))
         engine.initialize()
         pid = profile or engine.profile_id
 
@@ -4549,7 +4618,7 @@ def cmd_quantize(args: Namespace) -> None:
 
     try:
         config = SLMConfig.load()
-        engine = MemoryEngine(config)
+        engine = MemoryEngine(_without_answer_check(config))
         engine.initialize()
         pid = profile or engine.profile_id
 
@@ -4624,7 +4693,7 @@ def cmd_consolidate(args: Namespace) -> None:
 
     try:
         config = SLMConfig.load()
-        engine = MemoryEngine(config)
+        engine = MemoryEngine(_without_answer_check(config))
         engine.initialize()
         pid = profile or engine.profile_id
 
@@ -4673,7 +4742,7 @@ def cmd_soft_prompts(args: Namespace) -> None:
 
     try:
         config = SLMConfig.load()
-        engine = MemoryEngine(config)
+        engine = MemoryEngine(_without_answer_check(config))
         engine.initialize()
         pid = profile or engine.profile_id
 

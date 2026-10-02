@@ -93,6 +93,11 @@ def memory_protocol_markdown() -> str:
         "learned>\", \"tags\": \"<comma-separated kebab-case keywords>\"}`.\n"
         "- A \"substantial task\" is anything you would write a commit "
         "message or handoff note about — not every tool call.\n"
+        "- **Recall can say a memory does not answer the question.** If the "
+        "response has `abstained: true`, the returned memories do not "
+        "answer it — say you don't have it, or ask; never present them as "
+        "the answer anyway. `answer_confidence` is a measurement, not a "
+        "guarantee.\n"
         "\n"
         + optimize_protocol_markdown()
         + "\n"

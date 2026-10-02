@@ -332,16 +332,38 @@ class TestItIsSafeToRunForever:
         finally:
             conn.close()
 
-    def test_repair_is_reachable_and_is_the_same_operation(self, store: Path) -> None:
+    def test_repair_withholds_pollution_and_moves_no_memory(self, store: Path) -> None:
         """The runner calls repair() when verify() fails on a completed row.
 
         That makes M043 a standing guard rather than a one-shot: if pollution
-        ever reappears, the next start withholds it with nobody asking.
+        ever reappears, the next start withholds it with nobody asking. What a
+        completed store must never get is the restore step again: every memory
+        archived there was archived by the running product after the upgrade,
+        and re-running it undid those decisions on every start
+        (test_a_finished_repair_never_moves_memories.py).
         """
+        from superlocalmemory.storage.migrations import M003_migration_log
+
         conn = _open(store)
         try:
+            conn.executescript(M003_migration_log.DDL)
+            conn.execute(
+                "INSERT INTO migration_log (name, applied_at, ddl_sha256,"
+                " rows_affected, status) VALUES (?, '2026-08-20', 'x', 0,"
+                " 'complete')", (M043.NAME,),
+            )
+            zones = (
+                "SELECT group_concat(lifecycle_zone) FROM "
+                "(SELECT lifecycle_zone FROM fact_retention ORDER BY fact_id)"
+            )
+            before = _one(conn, zones)
+            assert M043.verify(conn) is False, "fixture is wrong: nothing to guard"
             M043.repair(conn)
             assert M043.verify(conn) is True
+            assert _one(
+                conn, "SELECT COUNT(*) FROM atomic_facts WHERE quarantined=1"
+            ) == 2
+            assert _one(conn, zones) == before, "repair moved memories"
         finally:
             conn.close()
 

@@ -22,6 +22,13 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+# Imported at collection time on purpose: tests/conftest.py replaces the
+# module attribute with a MagicMock for the whole session so no test loads
+# the real model. Importing inside a test would get that mock instead.
+from superlocalmemory.retrieval.reranker import (
+    CrossEncoderReranker as _RealCrossEncoderReranker,
+)
+
 import pytest
 
 from superlocalmemory.core.config import ChannelWeights, RetrievalConfig
@@ -302,22 +309,61 @@ class TestCrossEncoderIntegration:
         assert response.reranker_applied is False
         assert response.reranker_status == "error"
 
-    def test_cold_reranker_fallback_is_explicit(self) -> None:
-        facts = [_make_fact("f1")]
-        db = _mock_db(facts)
-        reranker = MagicMock()
-        reranker._worker_ready = False
+    def test_cold_reranker_fallback_is_explicit_and_self_heals(self) -> None:
+        """A cold reranker reports an explicit fallback — and is still asked.
+
+        This test used to assert the engine must NOT consult a reranker whose
+        worker was down. That assertion was the bug: the reranker's own
+        re-warm lives inside the call the engine refused to make, so once the
+        worker died — the routine 500-request recycle, the 30-minute idle kill,
+        a crash — reranking stayed off until the daemon was restarted. The live
+        daemon ran unranked for seven days that way. The fallback must stay
+        explicit; the engine must still let the reranker heal itself.
+        """
+        facts = [_make_fact("f1"), _make_fact("f2")]
+        with patch.object(_RealCrossEncoderReranker, "_start_background_warmup"):
+            reranker = _RealCrossEncoderReranker(model_name="fake-model")
+        assert type(reranker) is _RealCrossEncoderReranker  # not the session mock
+        reranker._worker_ready = False  # the state _kill_worker leaves behind
+        reranker._model_loaded = False
         engine = _build_engine(
-            db=db,
-            semantic_results=[("f1", 0.9)],
+            db=_mock_db(facts),
+            semantic_results=[("f1", 0.9), ("f2", 0.5)],
             reranker=reranker,
+        )
+
+        with patch.object(reranker, "_start_background_warmup") as rewarm:
+            response = engine.recall("q", "default")
+
+        rewarm.assert_called_once()
+        assert response.reranker_applied is False
+        assert response.reranker_status == "fallback_not_ready"
+        assert response.results and response.results[0].fact.fact_id == "f1"
+
+    def test_a_reranker_type_without_worker_ready_is_used(self) -> None:
+        """RemoteReranker has no ``_worker_ready`` attribute at all.
+
+        The engine gated on ``getattr(reranker, "_worker_ready", False)``, so
+        a configured remote reranker was never called: every recall reported
+        ``fallback_not_ready`` and returned the fused order, silently.
+        """
+        f1, f2 = _make_fact("f1"), _make_fact("f2")
+
+        class NoWorkerFlagReranker:
+            def rerank_with_status(self, query, candidates, top_k=10):
+                return [(f2, 0.95), (f1, 0.4)][:top_k], True, "applied"
+
+        assert not hasattr(NoWorkerFlagReranker(), "_worker_ready")
+        engine = _build_engine(
+            db=_mock_db([f1, f2]),
+            semantic_results=[("f1", 0.9), ("f2", 0.5)],
+            reranker=NoWorkerFlagReranker(),
         )
 
         response = engine.recall("q", "default")
 
-        reranker.rerank.assert_not_called()
-        assert response.reranker_applied is False
-        assert response.reranker_status == "fallback_not_ready"
+        assert response.reranker_applied is True
+        assert response.reranker_status == "applied"
 
 
 # ---------------------------------------------------------------------------

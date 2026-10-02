@@ -63,21 +63,38 @@ def build_default_adapters(
     *, base_dir: Path | None = None,
     recall_fn: RecallFn | None = None,
     sync_log_db: Path | None = None,
+    include_project_scope: bool = True,
 ) -> list:
+    """Adapters that write SLM context into each host's rules files.
+
+    The working directory is only a project when someone is standing in one.
+    The daemon passes ``include_project_scope=False``: it serves every project
+    at once, and taking the project from its working directory sent the
+    project-scoped adapters to whatever directory it happened to start in.
+    Under launchd that is "/", so they tried to write /.cursor and /.agent —
+    2,904 read-only failures in one daemon's log. The root of the disk is never
+    a project, whoever calls this.
+    """
     base = Path(base_dir or Path.cwd())
+    resolved = base.resolve()
+    if resolved == Path(resolved.anchor):
+        include_project_scope = False
     recall = recall_fn or _get_recall_fn()
     db = sync_log_db or _default_sync_log_db()
     adapters: list = []
-    adapters.append(CursorAdapter(scope="project", base_dir=base,
-                                  sync_log_db=db, recall_fn=recall))
+    if include_project_scope:
+        adapters.append(CursorAdapter(scope="project", base_dir=base,
+                                      sync_log_db=db, recall_fn=recall))
     adapters.append(CursorAdapter(scope="global", base_dir=Path.home(),
                                   sync_log_db=db, recall_fn=recall))
-    adapters.append(AntigravityAdapter(scope="workspace", base_dir=base,
-                                       sync_log_db=db, recall_fn=recall))
+    if include_project_scope:
+        adapters.append(AntigravityAdapter(scope="workspace", base_dir=base,
+                                           sync_log_db=db, recall_fn=recall))
     adapters.append(AntigravityAdapter(scope="global", base_dir=Path.home(),
                                        sync_log_db=db, recall_fn=recall))
-    adapters.append(CopilotAdapter(base_dir=base, sync_log_db=db,
-                                   recall_fn=recall))
+    if include_project_scope:
+        adapters.append(CopilotAdapter(base_dir=base, sync_log_db=db,
+                                       recall_fn=recall))
     return adapters
 
 

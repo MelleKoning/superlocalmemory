@@ -67,7 +67,7 @@ results are reproducible by a reviewer with nothing but the published package.
 | `exp1_erasure_completeness.py` | Real Bm25Owner + TemporalOwner + VectorOwner erase all projection rows (bm25_tokens, fact_temporal_validity, embedding_metadata); receipt + tombstones verified; keep-tenant content-hash unchanged |
 | `exp2_transaction_atomicity.py` | Committed op → manifest COMPLETE; faulted op → manifest DEGRADED, real service.compensate() removes successful owner's projection |
 | `exp3_migration_downgrade.py` | Newer-stamped DB refused on the deferred pass with zero mutation |
-| `exp4_backup_restore_atomicity.py` | Partial-restore failure rolls live data back to pre-restore bytes |
+| `exp4_backup_restore_atomicity.py` | A restore that fails after writing the first store rolls live data back to its pre-restore content |
 | `exp5_multitenant_isolation.py` | Personal rows never leak across tenants on any read path (with positive control) |
 | `exp6_temporal_micro_eval.py` | 6a superseded-fact demotion · 6b recency-decay monotonicity · 6c time-window inference |
 | `exp7_generation_fence.py` | Stale-epoch ADMISSION rejected; fresh-epoch ADMISSION from runtime.remember() committed (_generation set directly, not via full rebind_engine path) |

@@ -215,6 +215,12 @@ substitute the local English model. Setting `cross_encoder_endpoint` while
 `cross_encoder_backend` is a local value is reported as a configuration error
 rather than ignored (issue #103).
 
+Each remote rerank call has one time limit of 1 second (or your configured
+timeout, if lower; the environment variable `SLM_REMOTE_RERANK_DEADLINE_S`
+allows a longer one). After failures the endpoint is paused — 10 seconds,
+doubling up to 5 minutes — and checked in the background; recall carries on
+with its usual ranking meanwhile.
+
 **Privacy and network boundary — remote reranker
 (`src/superlocalmemory/retrieval/remote_reranker.py`).** Remote reranking
 sends the **recall query and every candidate's text** (`{model, query,
@@ -237,6 +243,60 @@ when memory text must not leave the machine.
 remote-reranker URL hardening, no secret/PII pre-filter, and no scoped SSRF
 claim applies. The `provider="openai"` token is the generic OpenAI-compatible
 endpoint selector, not a claim of SSRF hardening.
+
+## Answer Check (4.1.18)
+
+[Answer check](answer-check.md) is configured from **Settings → Answer
+check** in the dashboard — there is no config file workflow for it, since
+most SLM users are not editing JSON by hand.
+
+These settings are the same in every operating mode, so they are not kept in
+`config.json` or the per-mode `mode_a/b/c.json` files: they live in one
+owner-only file, `answer_check.json`, in the data folder. Switching modes
+(`slm mode`, the MCP `set_mode` tool, or the dashboard) never changes them.
+An install that never touched the answer check has no such file yet and uses
+the defaults below. The dashboard writes these keys on your behalf, and the
+settings API accepts a change only with SLM's own credential (the
+dashboard's install token, the daemon capability, or an API key):
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `sufficiency_judge` | `"auto"` | `auto`, `laya` (on this Mac), `jev` (online), or `off`. `auto` is the starting state before anyone chooses: the on-device check once an install exists that passed its check, otherwise exactly as `off`. It never resolves to `jev` on its own, and the dashboard never offers it — choosing writes an explicit `laya`, `jev`, or `off` |
+| `sufficiency_python`, `sufficiency_model`, `sufficiency_hf_home` | unset | Where the on-device model lives; written by the dashboard's setup/adopt flow, cleared by **Remove** |
+| `sufficiency_timeout_s` | `1.5` | Seconds the on-device check waits before giving up on one recall |
+| `sufficiency_jev_provider` | `"typesafe"` | `typesafe` or `openrouter` |
+| `sufficiency_jev_consent` | `false` | Must be explicitly `true`; set only by the dashboard's consent checkbox |
+| `sufficiency_jev_timeout_s` | `2.0` | Seconds the online check waits for a reply |
+| `sufficiency_jev_rerank`, `sufficiency_jev_rerank_consent` | `false` | Reordering with Jev and its own consent; both must be `true`; set only by the dashboard switch |
+| `sufficiency_jev_rerank_k` | `20` | How many top results reordering sends (clamped to 5–30) |
+
+The provider key is never stored in any of these files; it lives in its own
+owner-only key store. Hand-editing `answer_check.json` works but is
+unsupported — use the dashboard. A damaged file is read as "no consent".
+
+## Consistency Checking at Store Time (4.1.18)
+
+The optional consistency check that runs when a memory is stored
+(`math.sheaf_at_encoding`) is now **off by default**, including on
+installs upgraded from an earlier release — a measured comparison on a real
+store found it changed no recall answer while running on every store and
+every maintenance pass.
+
+**What turning it off changes.** In Mode A (and in Mode B or C whenever no
+language model is reachable) this check is also how storing a memory that
+contradicts an older one marks the older one as no longer current. With it
+off, both memories stay current and recall ranks them as usual. Nothing is
+deleted either way. Mode B and C with a reachable model still check for
+contradictions with the model; they pick what to check by shared names
+instead.
+
+**Turning it back on.** Set `"sheaf_at_encoding": true` and
+`"sheaf_default_reviewed": true` under `math` in `config.json`. Both keys
+make the choice unambiguous; a `math` section you write yourself that sets
+`sheaf_at_encoding` to `true` is also respected. The one case read as the old
+default is a full `math` section saved by 4.1.0–4.1.17, which wrote `true`
+for everyone; that is switched off once, with a warning in the log naming
+the setting and how to turn it back on.
 
 ## Environment Variables
 

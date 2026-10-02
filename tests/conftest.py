@@ -226,6 +226,12 @@ def _prevent_heavy_model_loading():
             "superlocalmemory.core.worker_pool.WorkerPool.shared",
             return_value=mock_pool,
         ),
+        # 4.1.18: with the default "auto", a dev Mac that has laya-mlx installed
+        # would start a real Laya worker in every engine a test builds.
+        _patch(
+            "superlocalmemory.core.engine_wiring.init_sufficiency_judge",
+            return_value=None,
+        ),
     ]
     for p in patches:
         p.start()

@@ -175,3 +175,24 @@ def test_slm_ledger_persists_to_real_engine(tmp_path, monkeypatch):
         assert ledger.runs("demo-fix") == ["demo-fix-xyz"]
     finally:
         store.close()
+
+
+def test_the_ledger_engine_never_loads_an_answer_check(tmp_path, monkeypatch):
+    """It only writes loop records. A model loaded here would sit beside the
+    daemon's for nothing — so, like the reranker, the answer check is off."""
+    import superlocalmemory.core.engine as engine_mod
+    from superlocalmemory.loops import ledger as ledger_mod
+
+    seen = {}
+
+    class _Engine:
+        def __init__(self, config):
+            seen["config"] = config
+
+        def initialize(self):
+            pass
+
+    monkeypatch.setattr(engine_mod, "MemoryEngine", _Engine)
+    ledger_mod.open_engine_store(tmp_path / "loops.db")
+    assert seen["config"].retrieval.sufficiency_judge == "off"
+    assert seen["config"].retrieval.use_cross_encoder is False

@@ -87,6 +87,8 @@ _KNOWN_DEAD: dict[str, str] = {
     "core/rate_limit.py": "seeded 4.0.6 — triage",
     "core/recall_worker.py": "ALIVE — subprocess-spawned by infra/self_heal.py",
     "core/reranker_worker.py": "ALIVE — subprocess reranker backend",
+    "core/laya_worker.py": "ALIVE — run by file path in Laya's own Python, which cannot "
+                           "import this package (retrieval/sufficiency.py, core/laya_runtime.py)",
     "dynamics/activation_guided_quantization.py": "seeded 4.0.6 — triage",
     "infra/cache_manager.py": "seeded 4.0.6 — triage",
     "ingestion/calendar_adapter.py": "seeded 4.0.6 — triage",

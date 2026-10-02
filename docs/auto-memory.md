@@ -78,6 +78,17 @@ IDE instruction files contain only static product protocol. SLM retrieves
 dynamic memory through MCP at runtime rather than copying recalled text into a
 trusted Cursor, Copilot, or Antigravity rules file.
 
+### Auto-recall and Answer check
+
+When [Answer check](answer-check.md) is on (off until an on-device install
+has passed its check) and it decides
+none of the matching memories answer your question, auto-recall injects one
+short line — "SuperLocalMemory: no stored memory answers this." — instead of
+the memory list, so your assistant doesn't quietly present an unrelated
+memory as if it were the answer. Nothing is deleted; the next explicit
+`recall` still returns the full result set, with the same verdict attached
+to it.
+
 ## Configuration
 
 ### Toggle auto-capture and auto-recall

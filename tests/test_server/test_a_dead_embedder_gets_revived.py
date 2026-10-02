@@ -217,3 +217,126 @@ class TestTheDirectQuestion:
                 return None
 
         assert rh._embedder_is_dead(_engine(Unavailable(), [])) is True
+
+
+class _KeywordOnlyResult:
+    """What a content-free probe actually gets back: keyword and entity hits
+    with no semantic score among its top three."""
+    channel_scores = {"semantic": 0.0, "bm25": 0.7, "entity_graph": 1.0}
+
+
+class TestAProbeWithoutASemanticMatchIsNotAnOutage:
+    """4.1.18. The live daemon logged "semantic channel DEAD" on 1,970
+    consecutive ticks and recorded zero recoveries, while a real query on the
+    same daemon scored semantic 1.228. The embedder was fine every time: the
+    probe phrase is content-free by design and asks for only three results, so
+    none of them carries a semantic score. Treating that as an outage meant a
+    CRITICAL and a "heal" every five minutes — and an operator who learns to
+    ignore this monitor would also ignore it on the day it is right."""
+
+    def test_a_serving_embedder_with_keyword_only_results_is_healthy(self) -> None:
+        state = rh.RecallHealth()
+        log = _Log()
+
+        rh.run_health_tick(_engine(_Serving(), [_KeywordOnlyResult()]), state, log=log)
+
+        assert state.healthy is True
+        assert state.total_heals == 0
+        assert log.at("critical") == []
+
+    def test_an_embedder_that_returns_no_vector_is_still_caught(self) -> None:
+        """Guard against over-relaxing: flags say warm, embed() gives nothing."""
+        class _Hollow:
+            _available = True
+            is_warm = True
+
+            def embed(self, text):
+                return None
+
+        state = rh.RecallHealth()
+        log = _Log()
+
+        rh.run_health_tick(_engine(_Hollow(), [_KeywordOnlyResult()]), state, log=log)
+
+        assert state.healthy is False
+        assert log.at("critical")
+
+
+class _Reranker:
+    """Shaped like CrossEncoderReranker after ``_kill_worker``."""
+
+    def __init__(self, loaded: bool = False, loading: bool = False) -> None:
+        self._model_loaded = loaded
+        self._worker_loading = loading
+        self.warmups = 0
+
+    def _start_background_warmup(self) -> None:
+        self.warmups += 1
+
+
+def _engine_with_reranker(reranker):
+    engine = _engine(_Serving(), [_Result()])
+    engine._retrieval_engine = type("Retrieval", (), {"_reranker": reranker})()
+    return engine
+
+
+class TestTheRerankerIsWatched:
+    """4.1.18. The live reranker died on 2026-09-25 and stayed dead for seven
+    days while /health said recall_healthy: true — the monitor never looked at
+    it. It now reports the reranker and re-arms its warm-up, a recovery path
+    that does not depend on recall traffic reaching the reranker at all."""
+
+    def test_a_reranker_with_no_model_loaded_is_re_armed(self) -> None:
+        reranker = _Reranker(loaded=False)
+        state = rh.RecallHealth()
+        log = _Log()
+
+        rh.run_health_tick(_engine_with_reranker(reranker), state, log=log)
+
+        assert reranker.warmups == 1
+        assert state.reranker_ready is False
+        assert state.reranker_rearms == 1
+        assert log.at("warning")
+
+    def test_a_loaded_reranker_is_left_alone(self) -> None:
+        reranker = _Reranker(loaded=True)
+        state = rh.RecallHealth()
+        log = _Log()
+
+        rh.run_health_tick(_engine_with_reranker(reranker), state, log=log)
+
+        assert reranker.warmups == 0
+        assert state.reranker_ready is True
+        assert log.lines == []
+
+    def test_a_reranker_already_warming_is_not_re_armed_again(self) -> None:
+        reranker = _Reranker(loaded=False, loading=True)
+        state = rh.RecallHealth()
+
+        rh.run_health_tick(_engine_with_reranker(reranker), state, log=_Log())
+
+        assert reranker.warmups == 0
+
+    def test_a_reranker_without_a_local_model_is_not_judged(self) -> None:
+        """RemoteReranker has no model to load and no warm-up to start."""
+        state = rh.RecallHealth()
+
+        rh.run_health_tick(_engine_with_reranker(object()), state, log=_Log())
+
+        assert state.reranker_configured is True
+        assert state.reranker_ready is None
+
+    def test_no_reranker_configured_is_not_a_fault(self) -> None:
+        state = rh.RecallHealth()
+        log = _Log()
+
+        rh.run_health_tick(_engine(_Serving(), [_Result()]), state, log=log)
+
+        assert state.reranker_configured is False
+        assert log.lines == []
+
+    def test_the_snapshot_reports_the_reranker(self) -> None:
+        snapshot = rh.get_recall_health()
+
+        assert "reranker_ready" in snapshot
+        assert "reranker_rearms" in snapshot

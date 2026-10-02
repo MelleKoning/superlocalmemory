@@ -91,6 +91,14 @@ safe default; it will not crash the CLI.
 - Every direct read path (`recall`, `search`, `list_recent`, the `slm://recent`
   resource) is private by default; none surface another profile's data unless you opt in.
 
+## Answer check and scope (4.1.18)
+
+[Answer check](answer-check.md) does not change what a recall is allowed to
+return. It runs after scope filtering, on whichever results a given call's
+`include_global`/`include_shared` flags already produced — it never performs
+a separate, wider search of its own. A caller who cannot see a shared or
+global memory will not see it via the answer check either.
+
 ## Known limits (v3.6.15)
 
 - Cognitive-consolidation (CCQ) summary blocks are always `personal` for now; opting a

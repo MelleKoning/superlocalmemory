@@ -863,13 +863,48 @@ def _resettle_shown_after_bias(
             r.fact.fact_id for r in results[:ADMIT_TOP_N]
             if getattr(r, "fact", None) is not None
         ]
-        if set(shown_now) == set(shown_before):
+        # Compare with what the play RECORDED when the sink knows it: a pass
+        # that ran in between (the exact-lexical guard) can make the caller's
+        # "before" list already equal to the final one while the stored record
+        # is stale.
+        recorded = play_sink.get("shown")
+        baseline = recorded if isinstance(recorded, list) else shown_before
+        if set(shown_now) == set(baseline):
             return
-        ContextualBandit(Path(learning_db), profile_id).record_shown(
+        if ContextualBandit(Path(learning_db), profile_id).record_shown(
             play_id, shown_now,
-        )
+        ):
+            play_sink["shown"] = list(shown_now)
     except Exception as exc:  # pragma: no cover — advisory
         logger.debug("shown-set correction skipped: %s", exc)
+
+
+def _note_order_replaced(
+    play_sink: dict, profile_id: str, response: Any, shown_before: list[str],
+) -> None:
+    """Tell the play its arm did not choose what was shown first.
+
+    Only when the opt-in hosted reorder replaced the order AND that changed the
+    shown top. The play still settles and the memories an outcome names are
+    still credited; only the arm's posterior is left alone, because the outcome
+    describes an order the arm did not produce. Never raises.
+    """
+    play_id = play_sink.get("play_id")
+    learning_db = play_sink.get("learning_db")
+    if not play_id or not learning_db:
+        return
+    try:
+        from superlocalmemory.retrieval.jev_rerank import STATUS_LISTWISE
+
+        if getattr(response, "reranker_status", "") != STATUS_LISTWISE:
+            return
+        if _top_ids(response.results) == list(shown_before):
+            return
+        from superlocalmemory.learning.bandit import ContextualBandit
+
+        ContextualBandit(Path(learning_db), profile_id).mark_order_replaced(play_id)
+    except Exception as exc:  # pragma: no cover — advisory
+        logger.debug("order-replaced note skipped: %s", exc)
 
 
 def _admit_to_working_memory(
@@ -1032,17 +1067,20 @@ def apply_v2_bandit_ensemble(
         # reference instead of falling through to the neutral default. Written
         # after the rerank because that is when the shown order is final.
         if choice.play_id:
+            shown_ids = [r.fact.fact_id for r in final_results[:5]]
+            recorded = False
             try:
-                bandit.record_shown(
-                    choice.play_id, [r.fact.fact_id for r in final_results[:5]],
-                )
+                recorded = bandit.record_shown(choice.play_id, shown_ids)
             except Exception as exc:  # pragma: no cover — never break a recall
                 logger.debug("v2 bandit record_shown skipped: %s", exc)
             if play_sink is not None:
                 # So the caller can correct this record if the order changes
-                # after this function returns.
+                # after this function returns — compared against the list
+                # actually stored, not one taken after later passes.
                 play_sink["play_id"] = choice.play_id
                 play_sink["learning_db"] = str(db_path)
+                if recorded:
+                    play_sink["shown"] = list(shown_ids)
 
         # Recall is a query.  Implicit learning signals are deliberately
         # disabled on this path: even a non-blocking enqueue eventually writes
@@ -1120,6 +1158,44 @@ def resolve_hot_path_fast(fast: bool | None, config: "SLMConfig") -> bool:
     return client_driven
 
 
+
+def _judge_sufficiency(retrieval_engine: Any, query: str, response: RecallResponse) -> Any:
+    """The verdict of the engine's answer check, or None (the previous behaviour).
+
+    Kept for direct callers; ``run_recall`` uses ``answer_check_stage`` itself so
+    that the recall's time budget and the per-recall request apply, and so that
+    the response says what became of the check.
+    """
+    from superlocalmemory.core.answer_check_stage import run_answer_check
+
+    return run_answer_check(retrieval_engine, query, response).verdict
+
+
+def _reorders(judge: Any) -> bool:
+    from superlocalmemory.core.answer_check_stage import reorders
+
+    return reorders(judge)
+
+
+def _rerank_and_judge(judge: Any, query: str, response: RecallResponse) -> Any:
+    from superlocalmemory.core.answer_check_stage import rerank_and_judge
+
+    return rerank_and_judge(judge, query, response, None).verdict
+
+
+def _apply_order(response: RecallResponse, order: tuple[int, ...]) -> bool:
+    from superlocalmemory.core.answer_check_stage import apply_order
+
+    return apply_order(response, order)
+
+
+def _top_ids(results: list) -> list[str]:
+    from superlocalmemory.core.working_memory import ADMIT_TOP_N
+
+    return [r.fact.fact_id for r in results[:ADMIT_TOP_N]
+            if getattr(r, "fact", None) is not None]
+
+
 def run_recall(
     query: str,
     profile_id: str,
@@ -1145,11 +1221,18 @@ def run_recall(
     known_as_of: str | None = None,
     valid_at: str | None = None,
     include_unknown: bool = False,
+    answer_check: str | None = None,
 ) -> RecallResponse:
     """Recall relevant facts for a query.
 
     Multi-scope: ``include_global`` / ``include_shared`` control which
     scopes participate in retrieval (passed through to retrieval engine).
+
+    ``answer_check``: ``"full"`` (the default — every recall a person or
+    agent asked for) or ``"no_reorder"`` (the check without the opt-in
+    reorder: the loop gate). Unknown values raise ValueError. A recall that is
+    not a question runs inside ``core.answer_check_scope.skip_answer_check()``
+    and is never judged.
 
     Pipeline: retrieval -> agentic sufficiency (if configured) -> post-recall updates.
 
@@ -1165,6 +1248,12 @@ def run_recall(
     all existing behaviour unchanged.
     """
     m = mode or config.mode
+    from superlocalmemory.retrieval.answer_check_status import normalize_request
+    answer_check = normalize_request(answer_check)
+    # The answer check's budget runs from here: what retrieval and ranking use
+    # is what the check cannot.
+    import time as _time_budget
+    _recall_started = _time_budget.monotonic()
 
     # v3.8.2: resolve the client-driven-agentic default when a caller left
     # ``fast`` unset (None). After this line ``fast`` is a concrete bool, so
@@ -1270,12 +1359,14 @@ def run_recall(
     # (SLM_RANKING=off|v1|v2|v2-ensemble) controls the pipeline. Legacy
     # SLM_V2_PIPELINE_DISABLED + SLM_BANDIT_DISABLED still honoured for
     # one-release back-compat. Identity when no active model.
+    # Bound before the try: everything after it reads the sink, and an empty
+    # sink is the "no play recorded" case every reader already handles.
+    play_sink: dict = {}
     try:
         import os as _os
         import uuid as _uuid
         query_id = _uuid.uuid4().hex
         mode = _resolve_ranking_mode(_os.environ)
-        play_sink: dict = {}
         response = apply_ranking(
             response, query, profile_id, query_id,
             config=config, pipeline_version=mode, record_signals=False,
@@ -1321,8 +1412,22 @@ def run_recall(
     # mutation here.  Those state transitions require a separately authenticated
     # positive/negative outcome; merely returning a result is an exposure.
 
+    from superlocalmemory.core.answer_check_stage import run_answer_check
     from superlocalmemory.core.score_contract import finalize_score_contract
-    finalize_score_contract(response)
+    _shown_before_judge = _top_ids(response.results)
+    outcome = run_answer_check(retrieval_engine, query, response,
+                               request=answer_check, recall_started=_recall_started,
+                               profile_id=profile_id)
+    _mark("sufficiency")
+    # The opt-in hosted reordering may have changed what is shown first; the
+    # play's evidence must name what the caller actually sees, and the arm the
+    # play credits must not be rewarded for an order it did not choose.
+    _note_order_replaced(play_sink, profile_id, response, _shown_before_judge)
+    _resettle_shown_after_bias(
+        play_sink, profile_id, response.results, _shown_before_judge,
+    )
+    finalize_score_contract(response, verdict=outcome.verdict)
+    response.answer_check_status = outcome.status
 
     # LLD-00 §3 — stamp HMAC markers on every result so post_tool_outcome_hook
     # can validate fact_ids observed in downstream tool output.

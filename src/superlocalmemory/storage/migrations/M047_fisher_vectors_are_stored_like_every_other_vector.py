@@ -263,10 +263,12 @@ def verify(conn: sqlite3.Connection) -> bool:
                 _encode(raw)
             except (ValueError, TypeError, json.JSONDecodeError):
                 continue  # genuinely unconvertible; apply() reported it
-            logger.error(
-                "M047 verify: %s on fact %s is still text and would have "
-                "converted, so the conversion stopped early",
-                column, fact_id,
+            # Not necessarily an interrupted run: until 4.1.18 the maintenance
+            # cycle wrote the variance back as text, and an older build still
+            # running does the same. The runner converts it on this start.
+            logger.warning(
+                "M047 verify: %s on fact %s is in the old text form; it will "
+                "be converted now", column, fact_id,
             )
             return False
 

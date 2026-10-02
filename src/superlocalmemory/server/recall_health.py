@@ -79,6 +79,13 @@ class RecallHealth:
     last_tick_at: float = 0.0
     #: Whether the embedder could produce a vector at the last tick.
     embedder_alive: bool = True
+    #: The cross-encoder reranker. Not watched before 4.1.18: on a real daemon
+    #: it died and stayed dead for seven days while /health reported
+    #: recall_healthy. ``reranker_ready`` is None when the configured reranker
+    #: has no local model to judge (RemoteReranker).
+    reranker_configured: bool = False
+    reranker_ready: bool | None = None
+    reranker_rearms: int = 0
 
 
 def _max_semantic(results) -> float:
@@ -101,6 +108,57 @@ def _get_embedder(engine):
         re_eng = getattr(engine, "_retrieval_engine", None)
         emb = getattr(re_eng, "_embedder", None) if re_eng is not None else None
     return emb
+
+
+def _get_reranker(engine):
+    """The retrieval engine's reranker, or None when none is configured."""
+    re_eng = getattr(engine, "_retrieval_engine", None)
+    return getattr(re_eng, "_reranker", None) if re_eng is not None else None
+
+
+def _watch_reranker(engine, state: RecallHealth, *, log) -> None:
+    """Report the reranker, and re-arm its warm-up if its model is gone.
+
+    Every way a reranker worker dies — the 500-request recycle, the 30-minute
+    idle kill, a crash — leaves no model loaded. The reranker re-warms itself
+    when a recall reaches it; this is a second path that does not depend on
+    recall traffic, so a quiet daemon recovers too. Starting the warm-up is
+    idempotent and never blocks.
+    """
+    reranker = _get_reranker(engine)
+    state.reranker_configured = reranker is not None
+    start = getattr(reranker, "_start_background_warmup", None)
+    if reranker is None or not callable(start) or not hasattr(reranker, "_model_loaded"):
+        state.reranker_ready = None
+        return
+    state.reranker_ready = bool(reranker._model_loaded)
+    if state.reranker_ready or getattr(reranker, "_worker_loading", False):
+        return
+    try:
+        start()
+    except Exception as exc:
+        log.critical("recall-health: could not re-arm the reranker warm-up: %s", exc)
+        return
+    state.reranker_rearms += 1
+    log.warning(
+        "recall-health: reranker had no model loaded — re-armed its warm-up "
+        "(re-arm #%d)", state.reranker_rearms,
+    )
+
+
+def _embedder_produces_vector(engine) -> bool:
+    """Ask the embedder for one vector. True only if it returns a non-empty one."""
+    emb = _get_embedder(engine)
+    if emb is None:
+        return False
+    try:
+        vec = emb.embed(HEAL_PROBE)
+    except Exception:
+        return False
+    try:
+        return vec is not None and len(vec) > 0
+    except TypeError:
+        return bool(vec)
 
 
 def _embedder_is_dead(engine) -> bool:
@@ -175,6 +233,7 @@ def run_health_tick(engine, state: RecallHealth, *, probe: str = DEFAULT_PROBE,
     re-warm once the switch has committed.
     """
     state.checks += 1
+    _watch_reranker(engine, state, log=log)
 
     # Tier 1: re-warm. A real full-fusion recall keeps the graph page cache hot
     # and the embedder resident.
@@ -215,19 +274,33 @@ def run_health_tick(engine, state: RecallHealth, *, probe: str = DEFAULT_PROBE,
     state.last_semantic_score = sem
     state.last_tick_at = time.time()
 
-    # Tier 2: readiness. Two independent signatures, and the second one is why
-    # this monitor exists.
+    # Tier 2: readiness.
     #
-    #   * rows present but semantic never fired  -> warm-but-broken
     #   * the embedder cannot produce a vector   -> dead, whatever the recall said
+    #   * rows present but none scored by meaning -> ask the embedder directly
     #
-    # The second used to be missing, and its absence was load-bearing: zero
-    # results was treated as "not this signature", so the case where the embedder
-    # is dead AND the probe matches nothing by keyword -- which is the normal
-    # shape of an idle-timeout kill -- came out as healthy, silently.
+    # The first used to be missing, and its absence was load-bearing: zero
+    # results was treated as healthy, so the case where the embedder is dead AND
+    # the probe matches nothing by keyword -- the normal shape of an idle-timeout
+    # kill -- came out as healthy, silently.
+    #
+    # The second used to be read as an outage on its own. 4.1.18: it is the
+    # ordinary outcome for a working embedder -- the probe phrase is content-free
+    # and only its top three results come back, so none of them need carry a
+    # semantic score. A live daemon logged "semantic channel DEAD" on 1,970
+    # consecutive ticks that way while its real queries scored semantic 1.2. So
+    # the embedder is asked for a vector, and only a failure counts.
+    #
+    # What neither signature can catch, and the old one never did either: a
+    # vector index that is broken while the embedder still works. That needs a
+    # probe whose answer is known to be stored. The old check fired on every
+    # tick, so it would have looked exactly the same during a real index failure.
     dead = _embedder_is_dead(engine)
     state.embedder_alive = not dead
-    broken = dead or (bool(results) and sem <= 0.0)
+    semantic_silent = bool(results) and sem <= 0.0
+    if semantic_silent and not dead and _embedder_produces_vector(engine):
+        semantic_silent = False
+    broken = dead or semantic_silent
     if dead:
         log.critical(
             "recall-health: embedder cannot produce a vector (%d probe results) "
@@ -329,6 +402,9 @@ def get_recall_health() -> dict:
         "checks": s.checks,
         "last_semantic_score": round(s.last_semantic_score, 4),
         "last_error": s.last_error,
+        "reranker_configured": s.reranker_configured,
+        "reranker_ready": s.reranker_ready,
+        "reranker_rearms": s.reranker_rearms,
         # Proof of life. A tick that finds nothing wrong logs nothing, so there
         # was no way to tell this monitor apart from a thread that never started
         # -- someone spent an hour reading logs for lines that were never going

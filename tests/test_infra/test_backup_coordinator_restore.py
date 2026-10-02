@@ -5,8 +5,8 @@
 """Tests for BackupCoordinator restore atomicity and LanceDB directory handling.
 
 Tests use real temp directories and real SQLite databases — no MagicMock on
-any path under test. Failure injection is done via monkeypatching the shutil
-module or specific coordinator methods.
+any path under test. Failure injection is done via monkeypatching Path.rename
+(lance/ directory) or the coordinator's write into a live store.
 """
 
 from __future__ import annotations
@@ -49,12 +49,44 @@ def _read_marker(path: Path) -> str:
     return row[0] if row else ""
 
 
+def _all_markers(path: Path) -> list[str]:
+    """Return every marker value, in insertion order."""
+    conn = sqlite3.connect(str(path))
+    try:
+        return [r[0] for r in conn.execute("SELECT val FROM marker ORDER BY rowid")]
+    finally:
+        conn.close()
+
+
 def _coord(base_dir: Path, backup_dir: Path) -> BackupCoordinator:
     return BackupCoordinator(
         managed_databases=_SUBSET,
         base_dir=base_dir,
         backup_dir=backup_dir,
     )
+
+
+def _fail_live_write_on_call(
+    coord: BackupCoordinator, monkeypatch: pytest.MonkeyPatch, failing_call: int
+) -> list[str]:
+    """Make the Nth write into a live store raise; every other write is real.
+
+    Writes are counted across Phase C and the rollback, so ``failing_call=2``
+    fails the second store's restore after the first store was written, and
+    lets the rollback writes that follow go through. Returns the target names
+    in call order.
+    """
+    real_write = coord._write_into_live_store
+    calls: list[str] = []
+
+    def _write(source: Path, target: Path) -> None:
+        calls.append(target.name)
+        if len(calls) == failing_call:
+            raise OSError(f"simulated disk error writing {target.name}")
+        real_write(source, target)
+
+    monkeypatch.setattr(coord, "_write_into_live_store", _write)
+    return calls
 
 
 # ---------------------------------------------------------------------------
@@ -128,16 +160,12 @@ class TestHappyPathRestore:
 class TestMidRestoreRollback:
     """Inject a failure after the first store is written; verify rollback."""
 
-    def test_live_bytes_restored_to_original_after_partial_write(
+    def test_live_content_restored_to_original_after_partial_write(
         self,
         live_env: tuple[Path, Path, BackupCoordinator],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         base_dir, backup_dir, coord = live_env
-
-        # Record original byte content before backup
-        original_memory_bytes = (base_dir / "memory.db").read_bytes()
-        original_learning_bytes = (base_dir / "learning.db").read_bytes()
 
         manifest = coord.create_backup_set()
 
@@ -145,39 +173,28 @@ class TestMidRestoreRollback:
         # clearly distinguish original vs backup
         _make_sqlite(base_dir / "memory.db", "new_epoch_memory")
         _make_sqlite(base_dir / "learning.db", "new_epoch_learning")
+        new_memory_rows = _all_markers(base_dir / "memory.db")
+        new_learning_rows = _all_markers(base_dir / "learning.db")
 
-        new_memory_bytes = (base_dir / "memory.db").read_bytes()
-        new_learning_bytes = (base_dir / "learning.db").read_bytes()
+        # The backup holds the original epoch. Fail Phase C on the second
+        # store, AFTER the first store (memory.db) has been written, so the
+        # rollback has real work to do.
+        calls = _fail_live_write_on_call(coord, monkeypatch, failing_call=2)
 
-        # The backup holds the original epoch; we now poison Phase C so
-        # it fails after writing the first store (memory.db).
-        import shutil as real_shutil
-
-        call_count = [0]
-        real_copy2 = real_shutil.copy2
-
-        def _failing_copy2(src: str, dst: str) -> None:
-            call_count[0] += 1
-            if call_count[0] == 1:
-                # Let the first copy succeed (writes memory.db.restore_staging)
-                real_copy2(src, dst)
-            else:
-                # Fail on the second copy (learning.db.restore_staging)
-                raise OSError("simulated disk error on second store")
-
-        import superlocalmemory.infra.backup as backup_mod
-        monkeypatch.setattr(backup_mod.shutil, "copy2", _failing_copy2)
-
-        with pytest.raises(BackupRestoreError):
+        with pytest.raises(BackupRestoreError, match="rolled back"):
             coord.restore_from_manifest(manifest)
 
-        # After rollback: live stores must contain the "new epoch" bytes,
-        # not the backup epoch bytes — the rollback restores what was live
-        # BEFORE the restore attempt began.
-        assert (base_dir / "memory.db").read_bytes() == new_memory_bytes, (
+        # memory.db was written, learning.db failed, then memory.db was rolled
+        # back. Anything else means the injection did not hit a partial write.
+        assert calls == ["memory.db", "learning.db", "memory.db"]
+        # After rollback: live stores must hold the "new epoch" content, not
+        # the backup epoch — the rollback restores what was live BEFORE the
+        # restore attempt began. Content, not bytes: SQLite rewrites header
+        # counters when it writes a database.
+        assert _all_markers(base_dir / "memory.db") == new_memory_rows, (
             "memory.db was not rolled back: contains unexpected content"
         )
-        assert (base_dir / "learning.db").read_bytes() == new_learning_bytes, (
+        assert _all_markers(base_dir / "learning.db") == new_learning_rows, (
             "learning.db was not rolled back to pre-restore state"
         )
 
@@ -189,20 +206,7 @@ class TestMidRestoreRollback:
         base_dir, backup_dir, coord = live_env
         manifest = coord.create_backup_set()
 
-        import shutil as real_shutil
-
-        call_count = [0]
-        real_copy2 = real_shutil.copy2
-
-        def _failing_copy2(src: str, dst: str) -> None:
-            call_count[0] += 1
-            if call_count[0] == 1:
-                real_copy2(src, dst)
-            else:
-                raise OSError("injected failure")
-
-        import superlocalmemory.infra.backup as backup_mod
-        monkeypatch.setattr(backup_mod.shutil, "copy2", _failing_copy2)
+        _fail_live_write_on_call(coord, monkeypatch, failing_call=2)
 
         with pytest.raises(BackupRestoreError):
             coord.restore_from_manifest(manifest)
@@ -218,20 +222,13 @@ class TestMidRestoreRollback:
         live_env: tuple[Path, Path, BackupCoordinator],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Phase C rename failure raises BackupRestoreError, never swallowed."""
+        """Phase C write failure raises BackupRestoreError, never swallowed."""
         base_dir, backup_dir, coord = live_env
         manifest = coord.create_backup_set()
 
-        # Patch Path.rename so that the restore-staging flip raises, while
-        # leaving shutil.copy2 intact (so Phase B snapshots succeed).
-        real_rename = Path.rename
-
-        def _failing_rename(self_path: Path, target: Path) -> Path:
-            if ".restore_staging" in str(self_path):
-                raise OSError("disk full — simulated")
-            return real_rename(self_path, target)
-
-        monkeypatch.setattr(Path, "rename", _failing_rename)
+        # Fail the first write into a live store, after the Phase B snapshots
+        # have succeeded.
+        _fail_live_write_on_call(coord, monkeypatch, failing_call=1)
 
         with pytest.raises(BackupRestoreError, match="Restore write phase failed"):
             coord.restore_from_manifest(manifest)

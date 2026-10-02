@@ -212,7 +212,9 @@ class TestGcCalledAfterBackup:
             backups_root.mkdir(parents=True, exist_ok=True)
             mr.apply_all(learning_db, memory_db)
 
-        gc_mock.assert_called_once_with(backups_root)
+        gc_mock.assert_called_once()
+        # The root itself; ``protect`` (the copy just taken) is keyword-only.
+        assert gc_mock.call_args.args == (backups_root,)
 
 
 # ---------------------------------------------------------------------------

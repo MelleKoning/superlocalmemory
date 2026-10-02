@@ -67,6 +67,9 @@ _PLACEHOLDER_SEGMENTS = frozenset({
     "user", "username", "name", "me", "someone", "somebody",
     "alice", "bob", "carol", "foo", "bar", "baz", "example", "test",
     "runner", "ci", "root", "home", "u", "x", "...",
+    # macOS's folder shared by every account (/Users/Shared) -- a system path,
+    # named in code that refuses to run programs from it, not a person.
+    "shared",
 })
 
 

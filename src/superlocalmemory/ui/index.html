@@ -260,6 +260,13 @@
                       <span class="muted" style="width:120px">Version</span>
                       <span class="mono" id="dashboard-version">...</span>
                     </div>
+                    <!-- Answer check (4.1.18): on-device Laya / hosted Jev /
+                         off. Populated by loadAnswerCheckSummary() in
+                         dashboard.js from GET /api/v3/answer-check. -->
+                    <div class="list-row">
+                      <span class="muted" style="width:120px">Answer check</span>
+                      <span class="mono" id="dashboard-answer-check">...</span>
+                    </div>
                     <div class="list-row" style="margin-top:8px">
                       <span class="muted" style="width:120px">Switch mode</span>
                       <div class="btn-group btn-group-sm" role="group">
@@ -1604,6 +1611,7 @@
     <script src="static/js/od-mesh.js?v=a7bc694a"></script>
     <script src="static/js/od-optimize.js?v=1f511698"></script>
     <script src="static/js/od-settings.js?v=386"></script>
+    <script src="static/js/answer-check.js?v=2"></script>
     <script src="static/js/od-backup.js?v=379"></script>
     <!-- MCP & Integrations pane (v3.8.0): shows exposed MCP tool profile + counts -->
     <script src="static/js/od-mcp.js?v=380"></script>

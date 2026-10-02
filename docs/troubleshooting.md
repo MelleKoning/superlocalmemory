@@ -135,6 +135,42 @@ slm consolidate --cognitive
 
 `consolidate --cognitive` rebuilds the entity graph (and pattern index) from your memories; use it when entity relationships look wrong or after bulk imports.
 
+## Answer Check Issues
+
+See [Answer Check](answer-check.md) for the full feature. Quick fixes:
+
+### "On this Mac" isn't offered / "Needs a Mac with Apple Silicon"
+
+The on-device option needs Apple Silicon. Choose **Online with Jev** in
+Settings → Answer check instead, or leave the check off.
+
+### Setup fails with a download error
+
+If the dashboard shows *"Couldn't reach the download server. If your
+network blocks downloads, use 'Use an existing install'"* — common on a
+locked-down company network — open **Advanced — use an existing install**
+and point it at a Python interpreter and model copied over from another
+machine, instead of downloading again.
+
+### A saved key won't test successfully
+
+- *"The key was not accepted."* — re-check or regenerate the key.
+- *"The account has no credit left."* — add credit with your provider.
+- *"Too many requests — try again in a minute."* — wait, then retry; keys
+  are rate-limited to one test every few seconds.
+
+### Every recall reports the check as unjudged on one of several SLM processes
+
+Expected when more than one SLM process runs on the same machine at once —
+only one of them runs the on-device model; the others report recalls as if
+the check were off rather than loading a second copy of it.
+
+### Uninstalling SLM doesn't remove the on-device model
+
+Uninstalling leaves the on-device answer-check model (about 1.1 GB) in
+`~/.superlocalmemory/runtimes/laya`; choose **Remove** in Settings → Answer
+check first, or delete that folder afterwards.
+
 ## Mode C Issues
 
 ### "API key not set" or authentication errors
@@ -320,6 +356,28 @@ This reports the status of:
 | Entity graph | Node count, edge count |
 
 If any component shows an error, the output includes a suggested fix.
+
+### 4.1.18 fixes worth knowing about
+
+A few quiet bugs in earlier releases are now fixed, and you may notice the
+difference:
+
+- **Reranking no longer silently stays off after a restart.** A reranker
+  that was recycled, idle, or had crashed now recovers on its own, instead
+  of staying off until the daemon was restarted by hand.
+- **A configured remote reranker is now actually used**, rather than being
+  set up but never called.
+- **A health check for the reranker component exists now**, and no longer
+  reports a false alarm when a healthy setup simply has no close match for
+  its own internal probe question.
+- **Storing a new memory no longer down-ranks an older, related one** (or
+  vice versa) as a side effect of the two being linked.
+- **Background integration sync no longer tries to write files to the root
+  of your disk** on some setups — a cosmetic error that didn't lose data
+  but could show up in logs.
+
+None of these require any action; they take effect automatically on
+upgrade.
 
 ## Getting Help
 

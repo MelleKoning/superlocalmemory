@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-<h1 align="center">SuperLocalMemory V4.1.17 — local-first memory for AI agents</h1>
+<h1 align="center">SuperLocalMemory V4.1.18 — local-first memory for AI agents</h1>
 
 <h2 align="center">Rent the LLM. Own the memory.</h2>
 
@@ -34,7 +34,6 @@ If the proof is useful for your agent workflow, [star the repository](https://gi
 
 ## Governance, architecture and research
 
-
 <p align="center"><strong>The governed memory layer for AI agents: local-first, auditable, and built for the compliance obligations teams now actually carry.</strong><br/>
 Models are interchangeable and rented by the token. What your agents <em>remember</em> is
 yours — it is your customers' data, your retention obligations, and your audit trail. SLM
@@ -51,12 +50,12 @@ guarantee here is stated as a falsifiable invariant, tested under an adversarial
 negative control, and shipped with the harness that regenerates the evidence:
 <code>python benchmark/run_all.py --trials 200 --output-dir results/</code>. What each experiment
 does <em>not</em> exercise is stated too.</p>
-<p align="center"><code>v4.1.17</code> — one control plane: <strong>SLM-Mesh</strong> peer coordination · multi-scope memory (personal / shared / global) · profiles · Cache · Compress · 7-layer retrieval · code graph · Entity Explorer · skill evolution · Modes A/B/C · GDPR retention &amp; audit chain · bounded loops — across CLI, MCP, dashboard, the <strong>Claude plugin</strong>, the <strong>Codex add-on</strong>, and documented IDE integrations.<br/>
+<p align="center"><code>v4.1.18</code> — one control plane: <strong>SLM-Mesh</strong> peer coordination · multi-scope memory (personal / shared / global) · profiles · Cache · Compress · 7-layer retrieval · code graph · Entity Explorer · skill evolution · Modes A/B/C · GDPR retention &amp; audit chain · bounded loops — across CLI, MCP, dashboard, the <strong>Claude plugin</strong>, the <strong>Codex add-on</strong>, and documented IDE integrations.<br/>
 Proxy: <code>slm wrap claude</code> &nbsp;·&nbsp; MCP: add <code>slm_compress</code> to your config &nbsp;·&nbsp; Skill: zero-config</p>
 <p align="center"><strong>Four public arXiv preprints</strong> · V4: <a href="https://arxiv.org/abs/2608.08253">arXiv:2608.08253</a> · companion archive: <a href="https://zenodo.org/records/21853302">Zenodo 21853302</a> (<a href="https://doi.org/10.5281/zenodo.21853302">DOI 10.5281/zenodo.21853302</a>) · prior preprints: <a href="https://arxiv.org/abs/2603.02240">2603.02240</a> · <a href="https://arxiv.org/abs/2603.14588">2603.14588</a> · <a href="https://arxiv.org/abs/2604.04514">2604.04514</a>.</p>
 
 <p align="center">
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/v4.1.17-Current_Release-2ea44f?style=for-the-badge&logo=checkmarx&logoColor=white" alt="v4.1.17 — Current Release"/></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/v4.1.18-Current_Release-2ea44f?style=for-the-badge&logo=checkmarx&logoColor=white" alt="v4.1.18 — Current Release"/></a>
   <a href="https://arxiv.org/abs/2608.08253"><img src="https://img.shields.io/badge/arXiv-2608.08253-b31b1b?style=for-the-badge&logo=arxiv&logoColor=white" alt="SuperLocalMemory 4.0 paper on arXiv:2608.08253"/></a>
   <a href="https://zenodo.org/records/21853302"><img src="https://img.shields.io/badge/Zenodo-10.5281%2Fzenodo.21853302-1682D4?style=for-the-badge&logo=zenodo&logoColor=white" alt="V4 paper on Zenodo: 10.5281/zenodo.21853302"/></a>
   <a href="https://arxiv.org/abs/2603.14588"><img src="https://img.shields.io/badge/arXiv-2603.14588-b31b1b?style=for-the-badge&logo=arxiv&logoColor=white" alt="arXiv Paper"/></a>
@@ -92,7 +91,7 @@ SuperLocalMemory V4 combines conventional dense and lexical retrieval with graph
 - **Multi-scope memory & profiles** — workspaces (profiles) plus `personal` / `shared` / `global` scopes; cross-profile recall is default-deny.
 - **Cache & compression (context optimization)** — exact-match cache with tagged invalidation, safe compression, and opt-in reversible/aggressive paths across proxy, MCP, and skill surfaces.
 - **Entity Explorer & skill evolution** — compiled entity summaries/timelines; opt-in skill lineage, budgets, and verification outcomes.
-- **Modes A / B / C** — local-only (A), on-device LLM enrichment (B), provider-assisted (C). An operating mode records technical locality facts; it does **not** determine EU AI Act legal compliance (that is deployment-context assessment — see [Privacy controls](#privacy-controls-and-operating-modes)).
+- **Modes A / B / C** — local-only by default (A), on-device LLM enrichment (B), provider-assisted (C). An operating mode records technical locality facts; it does **not** determine EU AI Act legal compliance (that is deployment-context assessment — see [Privacy controls](#privacy-controls-and-operating-modes)).
 - **GDPR posture, retention & audit chain** — export, fail-closed cross-store erasure, retention policies, and a hash-chained audit trail. Engineering controls for compliance programs, not a legal certification.
 - **7-layer retrieval/recall stack & code graph** — multi-channel candidates (semantic, BM25, temporal, Hopfield, spreading activation) plus optional code-graph tools for blast radius and review context.
 - **MCP profiles** — `code` exposes **31** tools for installed coding agents; `full` **49**; `power` **61**; `whole` **94** (all registered). Also `core` (16), `mesh` (8), and the unrestricted default surface (49 with mesh enabled).
@@ -174,6 +173,7 @@ health surfaces expose the stages actually completed by the installed runtime.
 | **Memory boundaries** | Profile-isolated workspaces plus `personal`, `shared`, and `global` memory scopes | Personal is the default; shared/global recall requires explicit scope policy or per-call opt-in. |
 | **Ingestion** | Durable raw-to-complete operation state, fact extraction, entity resolution, graph/temporal/provenance derivations, and replay-safe identity | `--sync` waits for declared stages; dependencies and mode determine which enrichers are available. |
 | **Retrieval and recall** | Semantic, lexical, temporal, Hopfield and spreading-activation candidate channels; RRF fusion, optional reranking and graph score enhancement | Healthy channels participate; response provenance states the evidence used. |
+| **Answer check** | A check (on-device or hosted) that reports whether the top results actually answer the question, not just whether they're related | Until you choose, it runs only once an on-device install has passed its check; otherwise it is off. The hosted check runs only after you turn it on and agree. Results are never filtered or hidden because of it. See [docs/answer-check.md](docs/answer-check.md). |
 | **Brain and learning** | Behavioral patterns, feedback/outcome records, rewards, consolidation, LightGBM-related ranking components, soft prompts, and guarded skill-evolution workflows | Learning is evidence-driven; it does not claim autonomous correctness or guaranteed improvement. |
 | **Knowledge graph and entities** | Canonical entities, aliases, entity profiles, graph edges, scenes, timelines, explorer and graph APIs | Stored/derived graph data is evidence, not an instruction authority. |
 | **Scale Engine** | SQLite + sqlite-vec are canonical. CozoDB graph and LanceDB vector projections are managed with prepare → verify → promote → rollback; a structurally detected pre-v3.7 projection can be explicitly adopted. | Promotion is parity-gated and crash-recoverable. Legacy adoption preserves the prior projection as a rollback backup; repeated physical edge rows normalize to one logical edge with the strongest weight. |
@@ -539,17 +539,17 @@ For the other three, replace the directory from the tag you are on.
 
 | Mode | What | Core memory path | Optional network behavior |
 |:----:|:-----|:-----------------|:--------------------------|
-| **A** | Local Guardian | Local processing | Model/dependency downloads, connectors, backup, and other enabled integrations may use the network |
+| **A** | Local Guardian | Local processing | Model/dependency downloads, connectors, backup, the online answer check, and other enabled integrations may use the network |
 | **B** | Smart Local | Local Ollama enrichment | Same optional integrations as Mode A |
 | **C** | Provider-assisted | Local storage with provider calls | Query or enrichment content is sent to the configured provider |
 
 ```bash
-slm mode a   # Zero-cloud (default)
+slm mode a   # Local only (default)
 slm mode b   # Local Ollama
 slm mode c   # Cloud LLM
 ```
 
-Mode A can run core memory operations without sending memory content to a cloud model provider. This does not disable optional connectors, cloud backup, proxy providers, dependency acquisition, or model downloads; review configuration and network policy for the deployment.
+Mode A can run core memory operations without sending memory content to a cloud model provider. This does not disable optional connectors, cloud backup, proxy providers, dependency acquisition, or model downloads; review configuration and network policy for the deployment. The online answer check is the one exception that sends memory content: off unless you turn it on and agree, in any mode, and while it is on each recall sends its question and top memories to the provider you chose — the dashboard and the MCP `get_mode` tool say so.
 
 SuperLocalMemory provides local storage, export/erasure commands, provenance, policy, and audit features that can support a compliance program. The software is not a legal certification, and compliance depends on the use case, operator, configuration, and surrounding systems.
 

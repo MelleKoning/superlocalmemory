@@ -111,6 +111,38 @@ slm delete <fact_id> --yes    # Delete one fact by ID (use slm list to find IDs)
 
 Use `slm ops list` or `list_failed_operations` (MCP, `power`/`whole` profile) to inspect stuck operations.
 
+## Answer Check
+
+### What is Answer check?
+
+A new (4.1.18), opt-in feature that adds a second decision after recall:
+not "is this related" but "does it actually answer the question." Until you
+choose, the on-device check runs only once an on-device install has passed
+its check; otherwise it's off. Turn it on from **Settings → Answer check**
+and choose an on-device model (private, needs Apple Silicon) or a hosted one
+(needs your own key). See [[Answer Check]].
+
+### Does it hide or delete anything?
+
+No. Results are always returned exactly as recall found them. The check
+only adds fields (`abstained`, `abstention_reason`, `answer_confidence`,
+...) and, in the CLI/MCP context, one extra line — it never filters.
+
+### Does turning it on send my memories anywhere?
+
+Only if you choose **Online with Jev**, and only after you've added a key
+and ticked the consent box. Each checked recall then sends your question
+and the top 3 memories to the provider you picked. **On this Mac** never
+sends anything anywhere, and every install behaves exactly like **Off**
+until an on-device install has passed its check.
+
+### Why would I turn this on?
+
+So your AI assistant can tell the difference between "I found something
+related" and "I found the answer," and say "I don't have that" in the
+second case instead of presenting an unrelated memory with confidence. Full
+detail in [[Answer Check]].
+
 ## Modes
 
 ### Which mode should I use?
@@ -137,7 +169,7 @@ The figures retain their original protocol scope; they are not a newly rerun V4 
 
 ### What is actually verified with 2,200/2,200?
 
-Only one stress figure is verified in V4.0.0: **2,200/2,200 trials (100%)** from `benchmark/run_all.py --trials 200` (11 experiments × 200). Source: `benchmark/results/SUMMARY.md` (4.0.0, Python 3.13.13, macOS-26.5.2-arm64, 2026-08-08) and `benchmark/README.md` honesty notes (exp1 `embedding_metadata`-only without sqlite-vec ANN, exp2 lightweight `_TrackingOwner`, exp7 `_generation` set directly, etc.). No universal latency, p99, or throughput claim is made — use the measured `exp_governed_latency` p50 or run the harness on your own machine.
+Only one stress figure is verified in V4: **2,200/2,200 trials (100%)** from `benchmark/run_all.py --trials 200` (11 guarantee experiments × 200). All 11 guarantee experiments held 200/200 in that one run; the harness also runs two measurements (a learning-loop ablation and the governance cost), which are not guarantees and are not counted. An earlier run (2026-08-23) had exp7 at 199/200, where one fresh-epoch write was refused as temporarily unavailable. Source: `benchmark/results/SUMMARY.md` (one full run on the 4.1.18 release candidate: Python **3.14.5**, `macOS-26.4.1-arm64-arm-64bit-Mach-O`, generated `2026-10-02T20:19:39Z`) and `benchmark/README.md` honesty notes (exp1 `embedding_metadata`-only without sqlite-vec ANN, exp2 lightweight `_TrackingOwner`, exp7 `_generation` set directly, etc.). No universal latency, p99, or throughput claim is made — use the measured `exp_governed_latency` p50 or run the harness on your own machine.
 
 ## Privacy and Security
 

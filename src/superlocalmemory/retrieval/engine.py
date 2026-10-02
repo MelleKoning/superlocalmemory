@@ -136,8 +136,12 @@ class RetrievalEngine:
         profile_channel: Any | None = None,
         bridge_discovery: Any | None = None,
         trust_scorer: TrustScorer | None = None,
+        sufficiency_judge: Any | None = None,
     ) -> None:
         self._db = db
+        # 4.1.18: decides whether a recall answers its question; read by
+        # run_recall at the contract boundary. None means today's behaviour.
+        self._sufficiency_judge = sufficiency_judge
         self._config = config
         self._semantic: SemanticChannel | None = channels.get("semantic")
         self._bm25: BM25Channel | None = channels.get("bm25")
@@ -559,13 +563,19 @@ class RetrievalEngine:
 
         # 5. Cross-encoder rerank (optional, on the evidence-qualified pool)
         # Bug 4 fix: reduced alpha for multi-hop/temporal to preserve diversity
-        # V3.3.21: Skip reranker if worker isn't ready yet (cold start).
-        # Returns results without CE reranking (~5-10pp lower quality) but instant
-        # instead of blocking 15-19s on first recall. Worker warms up in background.
-        reranker_ready = (
-            self._reranker is not None
-            and getattr(self._reranker, '_worker_ready', False)
-        )
+        # The reranker decides its own readiness. ``rerank_with_status`` is
+        # non-blocking: with no model loaded it returns the fused order as
+        # "fallback_not_ready" and starts a background re-warm, so a cold
+        # start never blocks a recall.
+        #
+        # 4.1.18: this used to gate on the private ``_worker_ready`` flag.
+        # ``_kill_worker`` clears it on every worker death — the routine
+        # 500-request recycle, the 30-minute idle kill, a crash — and the
+        # re-warm lives inside the call this gate then refused to make, so
+        # reranking stayed off until the daemon restarted. The live daemon
+        # ran unranked for seven days that way. A reranker type without that
+        # private attribute (RemoteReranker) was never called at all.
+        reranker_ready = self._reranker is not None
         reranker_applied = False
         reranker_status = (
             "fallback_not_ready" if self._reranker is not None

@@ -15,7 +15,9 @@ death must be distinguishable from "no memories" on the user side.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -56,6 +58,10 @@ class PoolRecallResponse:
     answer_confidence: float | None = None
     abstained: bool = False
     abstention_reason: str | None = None
+    #: Every field of ``recall_response_metadata`` the daemon returned (and
+    #: the empty-recall default for any it did not), read-only. The typed
+    #: fields above are kept for existing callers; this one is complete.
+    metadata: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
 
 
 class PoolError(RuntimeError):
@@ -109,6 +115,11 @@ def pool_recall(query: str, limit: int = 10, **kwargs: Any) -> PoolRecallRespons
         _recall_kwargs["include_shared"] = kwargs["include_shared"]
     if kwargs.get("window"):
         _recall_kwargs["window"] = kwargs["window"]
+    # S-M2: a context load (session start, auto-injection) is not a question.
+    # Only an explicit False is forwarded, so every other call is unchanged;
+    # a caller inside ``skip_answer_check()`` is covered by the proxy itself.
+    if kwargs.get("answer_check") is False:
+        _recall_kwargs["answer_check"] = False
     raw = _pool().recall(**_recall_kwargs)
     _unwrap_error(raw, "recall")
     items = raw.get("results", []) if isinstance(raw, dict) else []
@@ -154,7 +165,14 @@ def pool_recall(query: str, limit: int = 10, **kwargs: Any) -> PoolRecallRespons
         answer_confidence=raw.get("answer_confidence") if isinstance(raw, dict) else None,
         abstained=bool(raw.get("abstained", False)) if isinstance(raw, dict) else False,
         abstention_reason=raw.get("abstention_reason") if isinstance(raw, dict) else None,
+        metadata=MappingProxyType(_forward_metadata(raw)),
     )
+
+
+def _forward_metadata(raw: Any) -> dict[str, Any]:
+    from superlocalmemory.mcp._recall_metadata import forward_recall_metadata
+
+    return forward_recall_metadata(raw if isinstance(raw, dict) else {})
 
 
 def pool_store(content: str, metadata: dict | None = None) -> list[str]:

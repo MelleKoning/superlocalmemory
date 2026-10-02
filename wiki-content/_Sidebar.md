@@ -15,6 +15,7 @@
 * [CLI Commands](CLI-Reference)
 * [MCP Tools](MCP-Tools) — 94 whole / 61 power / 49 full / 31 code / 16 core
 * [Retrieval Score Contract](Retrieval-Score-Contract)
+* [Answer Check](Answer-Check)
 * [Auto-Memory](Auto-Memory)
 * [Active Memory (V3.1)](Active-Memory)
 

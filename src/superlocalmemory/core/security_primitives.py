@@ -27,6 +27,8 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
+from superlocalmemory.core import credential_shapes
+
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -336,6 +338,15 @@ def redact_secrets(text: str, *, entropy_threshold: float = 4.5,
                 last4 = matched[-4:] if len(matched) >= 4 else matched
                 return f"[REDACTED:{_label}:{last4}]"
             out = pat.sub(_sub_high, out)
+        # S-H3 (4.1.18): credentials inside ordinary syntax — a connection-URL
+        # password, short Bearer/Basic credentials, ``?token=`` — for text
+        # leaving the machine. See ``core.credential_shapes``.
+        out = credential_shapes.redact_connection_secrets(out)
+
+    # Known vendor formats the patterns below miss (Slack user/app tokens,
+    # Stripe keys, webhook URLs, a PEM key's body). Both aggressions: nothing
+    # ordinary carries these prefixes, and a key must never be stored as is.
+    out = credential_shapes.redact_token_shapes(out)
 
     for pat, label in _SECRET_PATTERNS:
         def _sub(match: re.Match[str], _label: str = label) -> str:
@@ -343,6 +354,12 @@ def redact_secrets(text: str, *, entropy_threshold: float = 4.5,
             last4 = matched[-4:] if len(matched) >= 4 else matched
             return f"[REDACTED:{_label}:{last4}]"
         out = pat.sub(_sub, out)
+
+    if aggression == "high":
+        # Values after credential labels (``password=…``, ``"api_key": "…"``,
+        # a hex or UUID key after a key-like label). Last of the pattern
+        # passes, so a known token keeps its specific label.
+        out = credential_shapes.redact_labelled_values(out)
 
     # S9-W2 L-SEC-01: skip strings that already look like a REDACTED
     # marker so the entropy sweep doesn't double-redact and lose the
@@ -368,17 +385,15 @@ def redact_secrets(text: str, *, entropy_threshold: float = 4.5,
     token_re = re.compile(r"[A-Za-z0-9_\-./+]{%d,}" % window)
     _pure_upper_snake = re.compile(r"^[A-Z_]+$")
 
-    def _entropy_sub(match: re.Match[str]) -> str:
-        token = match.group(0)
-        # L-SEC-01: preserve REDACTED markers emitted by earlier passes.
-        if _redacted_marker_re.search(token):
-            return token
+    def _entropy_token(token: str) -> str:
         # S9-SKEP-12: pure UPPER_SNAKE is a legitimate-constant shape
         # ONLY when its entropy is below the secret threshold. A 24-char
         # all-caps mnemonic backup code or a hand-typed token does clear
         # 4.5 bits Shannon entropy and should be redacted — the old
         # unconditional skip let such secrets through. We now require
         # BOTH "looks like a constant" AND "low entropy" before skipping.
+        if len(token) < window:
+            return token
         entropy = _shannon_entropy(token)
         if _pure_upper_snake.match(token) and entropy < entropy_threshold:
             return token
@@ -386,6 +401,22 @@ def redact_secrets(text: str, *, entropy_threshold: float = 4.5,
             last4 = token[-4:]
             return f"[REDACTED:ENTROPY:{last4}]"
         return token
+
+    def _entropy_sub(match: re.Match[str]) -> str:
+        token = match.group(0)
+        # L-SEC-01: preserve REDACTED markers emitted by earlier passes.
+        if _redacted_marker_re.search(token):
+            return token
+        # 4.1.18: a URL or a file path is judged one segment at a time. As a
+        # whole, a mixed-case path such as ``/Users/<name>/Documents/<repo>``
+        # or ``//github.com/<org>/<repo>/blob/main/CHANGELOG.md`` clears the
+        # threshold and used to be destroyed — at storage time, for good.
+        # A long random segment inside one is still redacted. Base64 keys
+        # never contain a dot and rarely start with a slash, so they stay
+        # judged whole.
+        if "/" in token and (token.startswith("/") or "." in token):
+            return "/".join(_entropy_token(part) for part in token.split("/"))
+        return _entropy_token(token)
 
     out = token_re.sub(_entropy_sub, out)
     return out

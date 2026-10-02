@@ -108,3 +108,62 @@ def test_run_recall_no_longer_derives_confidence_from_score() -> None:
     source = inspect.getsource(recall_pipeline.run_recall)
     assert "r.confidence = min(1.0, r.score * 2.0)" not in source
     assert "finalize_score_contract" in source
+
+
+# ---------------------------------------------------------------------------
+# 4.1.18: a separate decision on whether the results answer the question
+# ---------------------------------------------------------------------------
+
+def _verdict(*probabilities: float, threshold: float = 0.6):
+    from superlocalmemory.retrieval.sufficiency import SufficiencyVerdict
+
+    return SufficiencyVerdict(tuple(probabilities), threshold, "laya-mlx:test:sufficiency:top3")
+
+
+def test_a_recall_judged_insufficient_abstains_but_keeps_every_result() -> None:
+    """Abstention is a signal, never a filter. A consumer that ignores it must
+    see exactly the results it saw before."""
+    from superlocalmemory.core.score_contract import finalize_score_contract
+
+    response = RecallResponse(results=[_result(score=0.7, fact_confidence=0.8),
+                                       _result(score=0.6, fact_confidence=0.8)])
+    finalize_score_contract(response, verdict=_verdict(0.31, 0.12))
+
+    assert len(response.results) == 2
+    assert response.abstained is True
+    assert response.abstention_reason == "judged_insufficient"
+    assert response.answer_confidence == 0.31
+
+
+def test_a_recall_judged_sufficient_reports_its_confidence() -> None:
+    from superlocalmemory.core.score_contract import finalize_score_contract
+
+    response = RecallResponse(results=[_result(score=0.7, fact_confidence=0.8)])
+    finalize_score_contract(response, verdict=_verdict(0.42, 0.88, 0.05))
+
+    assert response.abstained is False
+    assert response.abstention_reason is None
+    assert response.answer_confidence == 0.88
+    assert response.calibration_id == "laya-mlx:test:sufficiency:top3"
+
+
+def test_a_verdict_never_claims_to_be_calibrated() -> None:
+    """The threshold was measured on 124 questions, not calibrated on held-out
+    data. The response has to say so, every time."""
+    from superlocalmemory.core.score_contract import finalize_score_contract
+
+    response = RecallResponse(results=[_result(score=0.7, fact_confidence=0.8)])
+    finalize_score_contract(response, verdict=_verdict(0.9))
+
+    assert response.calibration_status != "calibrated"
+    assert response.calibration_status.endswith("not_calibrated")
+
+
+def test_an_empty_recall_keeps_its_own_reason_even_with_a_verdict() -> None:
+    from superlocalmemory.core.score_contract import finalize_score_contract
+
+    response = RecallResponse(results=[])
+    finalize_score_contract(response, verdict=_verdict(0.9))
+
+    assert response.abstained is True
+    assert response.abstention_reason == "no_candidates"

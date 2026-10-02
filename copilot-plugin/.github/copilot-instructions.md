@@ -1,11 +1,11 @@
 <!-- SLM-START -->
-<!-- SuperLocalMemory v4.1.17 — managed block. Edit outside these markers; this section is regenerated. -->
+<!-- SuperLocalMemory v4.1.18 — managed block. Edit outside these markers; this section is regenerated. -->
 
-<!-- BEGIN SuperLocalMemory v4.1.17 -->
+<!-- BEGIN SuperLocalMemory v4.1.18 -->
 
 ## SuperLocalMemory (SLM) — Agent Rules
 
-SLM is local-first memory for agents. All tools run on the user's machine; no cloud calls.
+SLM is local-first memory for agents. All tools run on the user's machine; nothing goes to the cloud unless the user chose Mode C or turned on the online answer check.
 
 ### Session start
 Call `session_init(project_path, query)` ONCE per fresh session before any recall/remember. Never twice.
@@ -20,6 +20,7 @@ Call `session_init(project_path, query)` ONCE per fresh session before any recal
 ### Recall
 - `recall` for conceptual/semantic queries; `search` for exact keywords.
 - Phrase as concepts; pass session_id when available. Never fabricate.
+- If `abstained` is `true`, the returned memories do not answer the question — say so, or ask; never present them as the answer. `answer_confidence` is a measurement, not a guarantee.
 
 ### Optimize (fail-open)
 - Output >2000 chars → `slm_compress(mode="auto", reversible=True)`; keep ccr_id if lossy.
@@ -42,8 +43,8 @@ slm-recall · slm-remember · slm-session · slm-status · slm-cache · slm-comp
 ### Subagents
 slm-memory-advisor (memory decisions, session hygiene, scope/profile guidance) · slm-optimize-advisor (context compression + KV cache) · slm-governance-advisor (scope/roles/compliance/GDPR)
 
-<!-- END SuperLocalMemory v4.1.17 -->
+<!-- END SuperLocalMemory v4.1.18 -->
 
-SuperLocalMemory v4.1.17 · Qualixar · AGPL-3.0-or-later
+SuperLocalMemory v4.1.18 · Qualixar · AGPL-3.0-or-later
 
 <!-- SLM-END -->

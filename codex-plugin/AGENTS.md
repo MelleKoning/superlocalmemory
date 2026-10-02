@@ -28,7 +28,8 @@ Call `session_init(project_path, query, max_results, max_age_days)` **once** at 
 - **Concept phrasing** — phrase queries as concepts, not vague words ("database migration strategy" not "database").
 - **Pass session_id** when available to narrow results to the current session.
 - **Empty / low results** — broaden the query, try `search`, or fall back to `list_recent`. Never fabricate a memory.
-- **Refine on low confidence** — if `no_confident_match` is `true` (or `answer_confidence` is low / `abstained` is `true`), rewrite the query into 1–3 more specific sub-queries (split multi-hop questions; try entity names, synonyms, or broader phrasing) and call `recall` again before concluding nothing was found. SLM returns fast local results (~1–2s, no server-side LLM round on the hot path) — you, the calling model, drive refinement.
+- **Refine on low confidence** — if `no_confident_match` is `true` (or `answer_confidence` is low / `abstained` is `true`), rewrite the query into 1–3 more specific sub-queries (split multi-hop questions; try entity names, synonyms, or broader phrasing) and call `recall` again before concluding nothing was found. SLM answers from this machine in about 1–2 s, with no server-side LLM round — unless the user turned on the online answer check, which adds one request to that service per recall. You, the calling model, drive refinement.
+- **Abstained means do not answer from these** — if `abstained` is `true`, the returned memories do not answer the question: say you don't have it, or ask. Never present them as the answer. `answer_confidence` is a measurement, not a guarantee. `abstention_reason: "judged_insufficient"` means candidates were found but none answers; `"evidence_floor"`/`"no_candidates"` means nothing was found.
 
 ---
 
@@ -136,4 +137,4 @@ When the SLM MCP server is unavailable, use these CLI equivalents:
 - **slm-optimize-advisor** — context compression and KV cache
 - **slm-governance-advisor** — scope/role compliance, retention policies, GDPR
 
-SuperLocalMemory v4.1.17 · Qualixar · AGPL-3.0-or-later
+SuperLocalMemory v4.1.18 · Qualixar · AGPL-3.0-or-later

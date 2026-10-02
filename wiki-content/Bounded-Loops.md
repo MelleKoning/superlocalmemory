@@ -34,6 +34,12 @@ confidence `>= gate_min_score` — making this a safe multi-agent coordination
 primitive: one agent waits, under strict bounds, for a memory another agent
 will write into shared SLM.
 
+When [Answer Check](Answer-Check) is turned on (off until an on-device
+install has passed its check), the gate
+also respects its verdict: a recall the check judges insufficient can never
+pass, even if its relevance score alone would have cleared `gate_min_score`.
+With the check off, gate behavior is unchanged.
+
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `name` | str | required | Loop identifier; used as the ledger key and `loop:<name>` tag |

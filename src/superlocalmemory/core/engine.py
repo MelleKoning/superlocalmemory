@@ -1108,8 +1108,14 @@ class MemoryEngine:
         known_as_of: str | None = None,
         valid_at: str | None = None,
         include_unknown: bool = False,
+        answer_check: str | None = None,
     ) -> RecallResponse:
         """Recall relevant facts for a query.
+
+        ``answer_check``: "full" (default) or "no_reorder" (the check without
+        the opt-in reorder: the loop gate). A recall that is not a question runs
+        inside ``core.answer_check_scope.skip_answer_check()`` instead — never
+        judged, sent or billed.
 
         ``session_id`` gives the recall continuity: memories this session was
         recently shown are held in a small in-process working set and bias the
@@ -1176,6 +1182,7 @@ class MemoryEngine:
                 known_as_of=known_as_of,
                 valid_at=valid_at,
                 include_unknown=include_unknown,
+                answer_check=answer_check,
             )
         except Exception:
             # Diagnostics are intentionally not recorded here.  A recall is a
@@ -1343,6 +1350,14 @@ class MemoryEngine:
                             unload()
             except Exception:
                 logger.warning("engine cleanup: reranker shutdown failed", exc_info=True)
+            try:
+                # Any judge, not only Laya. Off the engine, stopped unless the
+                # next engine shares it, and marked closed so a switch racing
+                # this close cannot start a model nobody would stop.
+                from superlocalmemory.core.engine_wiring import release_sufficiency_judge
+                release_sufficiency_judge(retrieval, final=True)
+            except Exception:
+                logger.warning("engine cleanup: sufficiency judge shutdown failed", exc_info=True)
             try:
                 retrieval.close(wait=False)
             except TypeError:

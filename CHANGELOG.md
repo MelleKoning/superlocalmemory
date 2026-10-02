@@ -5,6 +5,108 @@ All notable changes to SuperLocalMemory will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.18] — Recall can say "I don't have that"
+
+### Added
+
+- **Answer check.** Recall now says whether the memories it found actually
+  answer the question, instead of handing back the best of a bad set. Results
+  are never removed or hidden: each recall reports `abstained`, the reason,
+  a confidence, and `answer_check_status` (judged, off, skipped, busy,
+  warming or unavailable), and every connected agent is told not to present
+  memories that do not answer as the answer.
+- **Two ways to run it, one at a time.** "On this Mac" runs privately on Apple
+  Silicon and nothing leaves the machine. "Online with Jev" works anywhere with
+  your own TypeSafe or OpenRouter key; it is off until you choose it and tick a
+  consent box, and it sends only the question and its top three memories,
+  with credentials stripped out first. It never sends another profile's
+  memories, and recalls that only load context (session start, auto-loaded
+  context, the per-prompt hook) are never sent. Turning one on turns the
+  other off.
+- **Optional: let Jev reorder results.** Inside "Online with Jev" there is a
+  separate switch, off by default with its own notice, that also asks Jev
+  which of the top results answers the question most directly and returns
+  them in that order. Still one request per recall. On a public benchmark of
+  long conversations (LoCoMo, 1,531 questions) the memory that answers came
+  first 62% of the time instead of 49%; it adds about 0.4 seconds to a
+  recall. If the provider is slow or unreachable, results keep their usual
+  order.
+- **Set up from the dashboard.** Settings → Answer check: choose, set up with a
+  progress bar, use an existing install on networks that block downloads,
+  save and test a key (only its last four characters are ever shown), or turn
+  it off. The dashboard home shows what is actually running. Changing it
+  needs the manage permission, and withdrawing consent stops the online
+  check at once, in every mode.
+- **First-time setup installs it** on Apple Silicon (about 1.1 GB to
+  download, about 1.1 GB of memory while on). If the download is blocked or
+  interrupted, setup finishes and Set up again picks up where it left off.
+  Unattended setup skips it unless `SLM_INSTALL_LAYA=1` is set.
+- **Every recall response says what chose its order** and what became of
+  the answer check, from the MCP tools, the CLI and the HTTP API alike.
+
+### Fixed
+
+- **Archived memories stay archived after a restart.** A repair that should
+  have run once ran on every start and put archived memories back into
+  recall.
+- **Upgrades keep one safety copy instead of two**, and copies left by
+  earlier upgrades are cleaned up.
+- **Ranking no longer loses its second pass.** After a crash, a restart of its
+  helper, or an idle shutdown, the reranking step recovers on its own, and it
+  keeps ranking while its helper restarts. It also uses much less memory on
+  long, mixed-length requests.
+- **A configured remote reranker is now used**, and one that stops answering
+  no longer slows every recall: recall falls back to its usual ranking right
+  away and checks the endpoint again in the background.
+- **A newer memory is no longer pushed down by an older one** about the same
+  subject.
+- **Health checks** report the reranking step and no longer raise false alarms
+  when a working search simply has no match.
+- **No more project files at the root of the disk.** Background context sync
+  only writes into real project folders.
+- **Bounded loops** waiting on memory no longer finish on a recall that does
+  not answer their question.
+- **Restoring a backup** no longer loses or corrupts recent memories, takes
+  effect while the store is in use, and no longer leaves a large temporary
+  file next to the store.
+- **Stored memories keep their links and file paths.** Saving a memory no
+  longer blanks out long URLs and paths.
+- **`slm db compact` works while SLM is running.**
+- **Hooks work when the data folder has a long path.**
+- **Maintenance no longer reports a step that does not apply to your store
+  as a failure.**
+- **Windows:** safety copies are flushed to disk properly.
+
+### Security
+
+- **A web page on another site can no longer reach SLM through your
+  browser.** SLM now answers only requests addressed to this computer. To
+  reach a LAN install by a host name, list the name in `SLM_ALLOWED_HOSTS`;
+  reaching it by address, or by a name already allowed for network access,
+  is unchanged.
+- **The per-prompt hook only talks to your own SLM service.** Its fallback
+  path could send a prompt to any program listening on the service's port.
+- **Known API key formats, webhook links and private-key bodies are removed
+  when a memory is saved**, not only before anything is sent online.
+- Dependencies updated to versions that fix published security advisories.
+
+### Changed
+
+- **A background consistency check is off by default**, including on upgraded
+  installs. It changed no recall result in testing and ran on every save. It
+  can be turned back on, and turning it back on now sticks.
+- **Answer-check settings live in one file for every mode**, so switching
+  modes never changes them.
+- **Mode A says when it is not local-only:** with the online answer check on,
+  the mode description says so instead of "zero-cloud".
+
+### Known limits
+
+- **Macs shared by several user accounts:** another account on the same Mac
+  can reach the local SLM service. Turn on company mode (Team → Access
+  policy) on a shared Mac; a per-account check is planned for the next
+  release. See the "Shared Macs" section of the security notes.
+
 ## [4.1.17] — Vector history that actually gets pruned
 
 ### Fixed

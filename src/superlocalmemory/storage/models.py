@@ -478,6 +478,18 @@ class RecallResponse:
     # be mistaken for a reranked response.
     reranker_applied: bool = False
     reranker_status: str = "not_configured"
+    # 4.1.18: what the local cross-encoder reported when a later, opt-in step
+    # (the online answer check, ``reranker_status == "jev_listwise"``) replaced
+    # the order it produced. Empty when nothing replaced it — ``reranker_status``
+    # is then the local reranker's own. Additive — backward compatible.
+    local_reranker_status: str = ""
+    # 4.1.18: what became of the answer check on this recall — "judged",
+    # "off", "skipped", "busy", "warming" or "unavailable"
+    # (``retrieval.answer_check_status``). The recall pipeline always sets it;
+    # the default describes a response that never reached the check. Lets a
+    # caller comparing two runs tell "not judged this time" from "nothing
+    # answers". Additive — backward compatible.
+    answer_check_status: str = "skipped"
     # Wave Q2b: precomputed community summary for the cluster the top results
     # fall into (thematic context). None unless results cluster into one
     # community above threshold. Additive — backward compatible.

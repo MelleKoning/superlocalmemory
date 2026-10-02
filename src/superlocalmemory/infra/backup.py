@@ -31,6 +31,12 @@ from superlocalmemory.infra.backup_obligations import (
     erase_profile_from_snapshot,
 )
 from superlocalmemory.infra.data_root import DynamicStatePath, canonical_data_root
+from superlocalmemory.storage.backup import (
+    RESTORE_LOCK_WAIT_SECONDS,
+    LiveStoreWriteError,
+    _backup_via_sqlite_api,
+    _write_into_live_db,
+)
 
 logger = logging.getLogger("superlocalmemory.backup")
 
@@ -121,6 +127,8 @@ class BackupCoordinator:
         managed_databases: Ordered tuple of DB filenames to include.
         base_dir: Directory where the live databases reside.
         backup_dir: Directory where backup sets are written.
+        lock_wait_seconds: How long a restore waits for another connection
+            to release a live store before failing.
     """
 
     def __init__(
@@ -128,10 +136,12 @@ class BackupCoordinator:
         managed_databases: tuple[str, ...],
         base_dir: Path,
         backup_dir: Path,
+        lock_wait_seconds: float = RESTORE_LOCK_WAIT_SECONDS,
     ) -> None:
         self._managed_databases = managed_databases
         self._base_dir = Path(base_dir)
         self._backup_dir = Path(backup_dir)
+        self._lock_wait_seconds = lock_wait_seconds
 
     # ------------------------------------------------------------------
     # Public API
@@ -246,17 +256,23 @@ class BackupCoordinator:
             BackupRestoreError on any failure.
 
         Phase B — Pre-restore snapshot:
-            Copy the current live version of every store being restored into a
-            ``<store>.pre_restore`` sibling file, and the current ``lance/``
-            directory (if present) to ``lance.pre_restore/``. These snapshots
-            allow a full rollback if the write phase is interrupted.
+            Snapshot every live store being restored into a
+            ``<store>.pre_restore`` sibling through the SQLite backup API, so
+            the snapshot includes committed transactions still in the store's
+            ``-wal`` (a file copy of the main database omits them). The current
+            ``lance/`` directory (if present) is copied to ``lance.pre_restore/``.
+            These snapshots allow a full rollback if the write phase fails.
 
-        Phase C — Staged write:
-            Copy each backup file to a ``<store>.restore_staging`` temporary,
-            then rename it into place. If any step raises, all pre-restore
-            snapshots are copied back to their live locations before the error
-            is re-raised, returning the live set to its original coherent state.
-            On full success, all snapshot files are removed.
+        Phase C — Write through SQLite:
+            Write each backup into its live store through the SQLite backup
+            API, as one transaction per store, so the store's ``-wal`` stays
+            paired with it (see ``_write_into_live_store``). A failed write is
+            rolled back by SQLite itself. If any step raises, every store that
+            was already written is restored from its pre-restore snapshot the
+            same way, returning the live set to its original coherent state.
+            On full success, all snapshot files are removed. If the rollback
+            itself fails, the snapshots are kept and named in the error, as
+            they are then the only copy of the pre-restore state.
 
         The ``lance/`` directory companion is handled with the same snapshot and
         rollback discipline: if the backup set contains a ``lance/`` subdirectory
@@ -315,7 +331,7 @@ class BackupCoordinator:
                 target = self._base_dir / entry.store_name
                 snapshot = target.parent / f"{entry.store_name}.pre_restore"
                 if target.exists():
-                    shutil.copy2(str(target), str(snapshot))
+                    _backup_via_sqlite_api(target, snapshot)
                 pre_restore_map[target] = snapshot
 
             live_lance = self._base_dir / "lance"
@@ -333,13 +349,15 @@ class BackupCoordinator:
                 f"Pre-restore snapshot failed, no live files were modified: {exc}"
             ) from exc
 
-        # Phase C: Write restored files into the live directory.
+        # Phase C: Write restored content into the live stores.
+        # Only stores in `written` changed; a store whose write raised was left
+        # untouched by SQLite and needs no rollback.
+        written: list[Path] = []
         try:
             for entry in manifest.stores:
                 target = self._base_dir / entry.store_name
-                staging = target.parent / f"{entry.store_name}.restore_staging"
-                shutil.copy2(entry.file_path, str(staging))
-                staging.rename(target)
+                self._write_into_live_store(Path(entry.file_path), target)
+                written.append(target)
 
             if lance_backup is not None:
                 live_lance = self._base_dir / "lance"
@@ -361,10 +379,11 @@ class BackupCoordinator:
                 exc,
             )
             rollback_errors: list[str] = []
-            for target, snapshot in pre_restore_map.items():
+            for target in written:
+                snapshot = pre_restore_map[target]
                 if snapshot.exists():
                     try:
-                        shutil.copy2(str(snapshot), str(target))
+                        self._write_into_live_store(snapshot, target)
                     except Exception as rb_exc:
                         rollback_errors.append(f"{target.name}: {rb_exc}")
             # Roll back the lance/ directory if a snapshot was taken.
@@ -377,13 +396,18 @@ class BackupCoordinator:
                 except Exception as rb_exc:
                     rollback_errors.append(f"lance/: {rb_exc}")
 
-            self._cleanup_pre_restore_snapshots(pre_restore_map, pre_restore_lance)
-
             if rollback_errors:
+                # Keep the snapshots: they are now the only copy of what was
+                # live before this restore began.
+                kept = [str(p) for p in pre_restore_map.values() if p.exists()]
+                if pre_restore_lance is not None and pre_restore_lance.exists():
+                    kept.append(str(pre_restore_lance))
                 raise BackupRestoreError(
                     f"Restore failed and rollback encountered errors: "
-                    f"{'; '.join(rollback_errors)}. Original error: {exc}"
+                    f"{'; '.join(rollback_errors)}. Pre-restore snapshots kept "
+                    f"at: {', '.join(kept) or 'none'}. Original error: {exc}"
                 ) from exc
+            self._cleanup_pre_restore_snapshots(pre_restore_map, pre_restore_lance)
             raise BackupRestoreError(
                 f"Restore write phase failed; live files rolled back to "
                 f"pre-restore state: {exc}"
@@ -458,6 +482,24 @@ class BackupCoordinator:
         finally:
             dst_conn.close()
             src_conn.close()
+
+    def _write_into_live_store(self, source: Path, target: Path) -> None:
+        """Make ``target`` hold exactly ``source``'s content, written by SQLite.
+
+        Keeps a live store's ``-wal`` paired with the file it describes; see
+        ``storage.backup._write_into_live_db`` for why a rename cannot.
+
+        Raises:
+            BackupRestoreError: if ``source``'s ``-wal`` is not empty, if
+                another connection holds ``target``'s write lock for longer
+                than ``lock_wait_seconds``, or if ``target`` is a WAL database
+                whose page size differs from ``source``'s.
+        """
+        try:
+            _write_into_live_db(
+                source, target, lock_wait_seconds=self._lock_wait_seconds)
+        except LiveStoreWriteError as exc:
+            raise BackupRestoreError(str(exc)) from exc
 
     @staticmethod
     def _cleanup_pre_restore_snapshots(

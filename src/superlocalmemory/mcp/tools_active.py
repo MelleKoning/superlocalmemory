@@ -39,6 +39,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _answer_check_prefix(response: object) -> str:
+    """One plain line to prepend to ``session_init``'s ``context`` string.
+
+    ``context`` is the part many hosts inject verbatim; the sibling JSON
+    fields (``abstained``, ``abstention_reason``, ...) already pass through
+    the return dict unchanged, but a host reading only ``context`` saw no
+    sign the judge had run at all. "" when no judge is configured
+    (``calibration_status == "uncalibrated"``) — byte-identical context to
+    before this existed, which is the overwhelming majority of installs.
+    The same function words the line on every auto-injection surface.
+    """
+    from superlocalmemory.core.answer_check_notice import answer_check_line
+
+    return answer_check_line(response)
+
+
 def _sqlite_emergency_recall(
     query: str, limit: int, profile_id: str = "default",
     max_age_days: int = 30,
@@ -361,8 +377,10 @@ def register_active_tools(server, get_engine: Callable) -> None:
                 Set to 0 to disable the age gate entirely.
         """
         try:
+            from superlocalmemory.core.answer_check_scope import skip_answer_check
             from superlocalmemory.hooks.rules_engine import RulesEngine
             from superlocalmemory.mcp._pool_adapter import pool_recall
+            from superlocalmemory.mcp._recall_metadata import forward_recall_metadata
 
             engine = get_engine()
             rules = RulesEngine(config_path=state_path("config.json"))
@@ -399,9 +417,16 @@ def register_active_tools(server, get_engine: Callable) -> None:
                 # (DaemonPoolProxy.recall → urllib.urlopen). Must run in a
                 # thread so the async MCP event loop is not stalled — same
                 # fix class as #34 mesh tools deadlock.
-                response = await asyncio.to_thread(
-                    pool_recall, search_query, limit=max_results, fast=None,
-                )
+                # S-M2: loading a session's context is not a question — with
+                # or without an explicit query it is a topic, not something
+                # to ask whether the memories answer. Never judged, so the
+                # project path and the top memories are never sent to the
+                # online check and never billed. ``to_thread`` carries the
+                # marker; the proxy turns it into ``answer_check=skip``.
+                with skip_answer_check():
+                    response = await asyncio.to_thread(
+                        pool_recall, search_query, limit=max_results, fast=None,
+                    )
             except (PoolError, Exception) as exc:
                 logger.warning(
                     "session_init: daemon recall failed (%s) — using FTS5 emergency fallback. "
@@ -526,6 +551,14 @@ def register_active_tools(server, get_engine: Callable) -> None:
             except Exception as exc:
                 logger.warning("session_init soft-prompt injection failed: %s", exc)
 
+            # Answer-check prefix: say up front when the judge found the
+            # candidates insufficient (or confidently sufficient), since the
+            # agent may act on `context` alone without reading the sibling
+            # `abstained` / `abstention_reason` fields below.
+            _answer_check = _answer_check_prefix(response)
+            if _answer_check:
+                context = f"{_answer_check}\n\n{context}" if context else _answer_check
+
             # GAP-FIX (v3.4.65 delivery-lead): the memories[] array is part of
             # the MCP response Claude Code ingests — it MUST be bounded too, not
             # just the rendered `context` string. Previously full unclamped
@@ -612,6 +645,10 @@ def register_active_tools(server, get_engine: Callable) -> None:
                     if degraded_mode
                     else "hybrid_candidate_fusion"
                 ),
+                # M-10: the recall's metadata in full (who chose the order,
+                # abandoned channels, temporal frame, fields added later).
+                # The explicit fields below keep their session_init meaning.
+                **forward_recall_metadata(response),
                 "score_contract_version": getattr(
                     response, "score_contract_version", "2"
                 ),

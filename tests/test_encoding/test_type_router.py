@@ -210,3 +210,26 @@ class TestRouteFacts:
         assert result[0].importance == 0.8
         assert result[0].entities == ["Alice"]
         assert result[0].session_id == "s1"
+
+
+class TestRoutingChangesOnlyTheType:
+    """Routing decides a fact's type. It must not quietly reset anything else
+    about the fact — sharing, pinning, lifecycle — on the way through."""
+
+    def test_every_other_field_survives_routing(self) -> None:
+        import dataclasses
+
+        from superlocalmemory.encoding.type_router import TypeRouter
+        from superlocalmemory.storage.models import AtomicFact, FactType, Mode
+
+        fact = AtomicFact(
+            fact_id="f1", memory_id="m1", profile_id="p1",
+            content="I think we should ship the release on Friday.",
+            fact_type=FactType.SEMANTIC, scope="shared", shared_with=["team-a"],
+            pinned=True, access_count=7, langevin_position=[0.1] * 8,
+        )
+        routed = TypeRouter(mode=Mode.A).route_facts([fact])[0]
+        for f in dataclasses.fields(AtomicFact):
+            if f.name == "fact_type":
+                continue
+            assert getattr(routed, f.name) == getattr(fact, f.name), f.name

@@ -96,6 +96,25 @@ slm recall "who owns auth" --limit 5
 | `--include-global` | off | Include global-scope facts when authorized |
 | `--include-shared` | off | Include facts shared with the active profile |
 
+When [Answer check](answer-check.md) is turned on (Settings → Answer
+check — off until an on-device install has passed its check), output gets
+one extra line, e.g.:
+
+```
+Answer check: likely answered (confidence 0.91).
+```
+
+or, when none of the results answer the question:
+
+```
+Answer check: none of these memories answers the question (confidence 0.18).
+Say you don't have it, or ask — don't present these as the answer.
+```
+
+Results themselves are unchanged either way; this is an added line, not a
+filter. `slm trace` prints the same line. When the check is off, output is
+unchanged from before this feature existed.
+
 ### `slm search "query" [options]`
 
 Alias for `slm recall`. Same behavior, same options.
@@ -286,13 +305,28 @@ Score Contract v2:
     "count": 1,
     "score_contract_version": "2",
     "calibration_status": "uncalibrated",
-    "answer_confidence": null
+    "answer_confidence": null,
+    "answer_check_status": "off",
+    "reranker_status": "not_configured",
+    "local_reranker_status": ""
   },
   "next_actions": [
     {"command": "slm list --json", "description": "List recent memories"}
   ]
 }
 ```
+
+`answer_check_status` reports what happened to the [answer
+check](answer-check.md) on this recall: `judged`, `off`, `skipped`, `busy`,
+`warming`, or `unavailable` — see [Retrieval Score
+Contract](retrieval-score-contract.md) for what each means. `reranker_status`
+names whichever step produced the final order (`jev_listwise` when the
+online check's optional reorder chose it); `local_reranker_status` keeps
+the local reranker's own status when that happened, otherwise empty. A
+script that talks to the daemon's HTTP API directly, rather than through
+`slm`, can add `?answer_check=skip` or `?answer_check=no_reorder` to
+`GET /recall` to change what runs for one request; any other value is
+refused with HTTP 400.
 
 Check `slm <command> --help` before scripting a surface; structured-output
 support is explicit per command and may expand between releases.

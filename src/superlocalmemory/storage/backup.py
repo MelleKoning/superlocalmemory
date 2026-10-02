@@ -18,7 +18,7 @@ backups accumulate.  The separation is structural — not timing-dependent.
 Public API intended for use by the migration runner:
   - _backup_via_sqlite_api(src, dest)
   - _pre_migration_backup(learning_db, memory_db, *, backups_root) -> Path
-  - _gc_old_backups(backups_root, keep=2) -> None
+  - _gc_old_backups(backups_root, keep=2, protect=frozenset()) -> None
   - InsufficientDiskSpaceError
 
 Restoring a pre-migration snapshot
@@ -78,9 +78,8 @@ logger = logging.getLogger(__name__)
 
 # Timestamps in snapshot filenames are YYYYMMDD-HHmmss-ffffff (microseconds).
 # _free_name appends a collision suffix -N (integer ≥ 1) when a file already
-# exists.  Both forms are matched by this pattern.
-_SNAPSHOT_TIMESTAMP_RE = re.compile(r"^(\d{8}-\d{6}-\d{6})(?:-(\d+))?$")
-
+# exists. Retention parses every naming itself (_snapshot_retention).
+#
 # Pattern used to extract a timestamp (and optional collision suffix) from the
 # RIGHT side of a stripped filename.  Anchoring at the END means the stem may
 # contain hyphens without confusing the parser: only the rightmost field that
@@ -102,23 +101,6 @@ def _extract_snapshot_stamp(name_without_suffix: str) -> re.Match | None:
     to sort as if it were newer than any validly-named snapshot.
     """
     return _SNAPSHOT_TIMESTAMP_TAIL_RE.search(name_without_suffix)
-
-
-def _parse_generation_stamp(raw_stamp: str) -> str:
-    """Return the base YYYYMMDD-HHmmss-ffffff portion of a raw snapshot stamp.
-
-    Strips any trailing -N collision suffix added by ``_free_name``, so that::
-
-        memory-20260819-120000-123456-pre-migration.db
-        memory-20260819-120000-123456-1-pre-migration.db
-
-    are recognised as the same logical generation.
-
-    If the stamp does not match the expected pattern (e.g. an externally
-    created file), the raw stamp is returned unchanged so GC does not crash.
-    """
-    m = _SNAPSHOT_TIMESTAMP_RE.match(raw_stamp)
-    return m.group(1) if m else raw_stamp
 
 
 def _snapshot_sort_key(path: Path) -> tuple[str, int]:
@@ -206,7 +188,9 @@ def _backup_via_sqlite_api(src: Path, dest: Path) -> None:
     # Verify and durably flush BEFORE the rename, so the final name never
     # appears over incomplete or corrupt content.
     try:
-        fd = os.open(str(staging), os.O_RDONLY)
+        # Windows durable flush requires write access. This is our temporary
+        # snapshot, not the source database; do not suppress a failed flush.
+        fd = os.open(str(staging), os.O_RDWR | getattr(os, "O_BINARY", 0))
         try:
             os.fsync(fd)
         finally:
@@ -257,6 +241,120 @@ class SnapshotUnusableError(RuntimeError):
     """Raised when a snapshot cannot be verified, BEFORE the live store is touched."""
 
 
+class LiveStoreWriteError(RuntimeError):
+    """Raised when a source cannot be written into a live store; the store is untouched."""
+
+
+# How long a restore waits for another connection to release a live store's
+# write lock before giving up, and how long each SQLite busy wait lasts within
+# that window. Without a bound the backup API retries a held lock forever.
+RESTORE_LOCK_WAIT_SECONDS = 30.0
+_LOCK_POLL_SECONDS = 1.0
+
+
+def _write_into_live_db(
+    source: Path,
+    target: Path,
+    *,
+    lock_wait_seconds: float = RESTORE_LOCK_WAIT_SECONDS,
+) -> None:
+    """Make ``target`` hold exactly ``source``'s content, written by SQLite.
+
+    Use this to overwrite a database that may be live; use
+    ``_backup_via_sqlite_api`` only to create a NEW file. The pages are written
+    into ``target`` on its own connection, as one transaction, so its ``-wal``
+    and ``-shm`` stay paired with the file they describe. Renaming a copy over
+    the live file instead left the old ``-wal`` beside a new database, and
+    SQLite read (and later checkpointed) the old store's committed frames over
+    the restored pages: reproduced as a restore that reported success and
+    changed nothing, and as "database disk image is malformed" when the live
+    store had moved on since the backup. A write that raises is rolled back by
+    SQLite, so the target is either fully written or untouched.
+
+    ``source`` must be a verified, quiescent file. It is opened immutable, which
+    reads it without creating a ``-wal`` or ``-shm`` beside it — and without
+    reading one, so a source whose ``-wal`` still holds frames is refused rather
+    than restored without them.
+
+    Raises:
+        LiveStoreWriteError: if ``source``'s ``-wal`` is not empty, if another
+            connection holds ``target``'s write lock for longer than
+            ``lock_wait_seconds``, or if ``target`` is a WAL database whose
+            page size differs from ``source``'s, which the backup API cannot
+            write.
+    """
+    source_wal = Path(f"{source}-wal")
+    if source_wal.exists() and source_wal.stat().st_size > 0:
+        raise LiveStoreWriteError(
+            f"{source.name} has {source_wal.stat().st_size} bytes in its "
+            f"write-ahead log; restoring it would drop those pages")
+
+    src_conn = sqlite3.connect(
+        f"{source.absolute().as_uri()}?mode=ro&immutable=1", uri=True)
+    try:
+        dst_conn = sqlite3.connect(str(target), timeout=_LOCK_POLL_SECONDS)
+        try:
+            src_page = src_conn.execute("PRAGMA page_size").fetchall()[0][0]
+            dst_page = dst_conn.execute("PRAGMA page_size").fetchall()[0][0]
+            dst_mode = dst_conn.execute("PRAGMA journal_mode").fetchall()[0][0]
+            if dst_mode.lower() == "wal" and src_page != dst_page:
+                raise LiveStoreWriteError(
+                    f"{target.name} is a WAL database with page size "
+                    f"{dst_page}, the source has {src_page}; SQLite cannot "
+                    f"restore across page sizes into a WAL database")
+
+            deadline = time.monotonic() + lock_wait_seconds
+
+            def _bounded_wait(status: int, _remaining: int, _total: int) -> None:
+                if (status in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+                        and time.monotonic() > deadline):
+                    raise LiveStoreWriteError(
+                        f"{target.name} stayed locked by another connection "
+                        f"for over {lock_wait_seconds:g}s")
+
+            try:
+                src_conn.backup(dst_conn, pages=-1, progress=_bounded_wait)
+            finally:
+                # Success or rollback, the write went through the target's
+                # -wal, which then stays as large as the store until something
+                # truncates it -- nothing else ever does on a live store.
+                _shrink_wal(dst_conn, target)
+        finally:
+            dst_conn.close()
+    finally:
+        src_conn.close()
+
+
+# How long the log truncation may wait for readers still inside an older
+# snapshot. They are never interrupted: past this the log is left at its size
+# and the next checkpoint that finds it unused reuses it.
+_WAL_TRUNCATE_WAIT_MS = 2000
+
+
+def _shrink_wal(conn: sqlite3.Connection, target: Path) -> None:
+    """Checkpoint ``target`` and truncate its -wal to zero bytes. Never raises.
+
+    ``wal_checkpoint(TRUNCATE)`` copies the log into the database and then
+    waits, through the busy handler, until every reader has moved off the log
+    before truncating it. A reader mid-query therefore keeps its snapshot and
+    is never disturbed; if one outlasts the wait, SQLite reports busy, nothing
+    is truncated, and the store is exactly as correct as before.
+    """
+    try:
+        if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
+            return
+        conn.execute(f"PRAGMA busy_timeout={_WAL_TRUNCATE_WAIT_MS}")
+        busy, _log, _done = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    except sqlite3.Error as exc:
+        logger.info("[SLM] Could not shrink %s-wal after the restore write: %s",
+                    target.name, exc)
+        return
+    if busy:
+        logger.info(
+            "[SLM] %s-wal was not shrunk after the restore write: a reader was "
+            "still using it. It is reused at the next checkpoint.", target.name)
+
+
 def restore_pre_migration_snapshot(snapshot: Path, target: Path) -> Path:
     """Restore ``snapshot`` over ``target``, verifying before it destroys anything.
 
@@ -274,9 +372,16 @@ def restore_pre_migration_snapshot(snapshot: Path, target: Path) -> Path:
          before touching ``target`` if it is not,
       2. copies the CURRENT ``target`` aside first, outside the snapshot
          directory so no retention policy can reclaim it,
-      3. copies the snapshot into place through the SQLite backup API.
+      3. writes the snapshot's pages into ``target`` on ``target``'s own
+         connection, so a live WAL store's ``-wal`` stays paired with it.
 
     Returns the path of the safety copy of the pre-restore state.
+
+    Raises:
+        SnapshotUnusableError: the snapshot failed verification; nothing was
+            touched.
+        LiveStoreWriteError: the snapshot could not be written into ``target``;
+            ``target`` is unchanged and the safety copy exists.
     """
     if not snapshot.is_file() or snapshot.stat().st_size == 0:
         raise SnapshotUnusableError(f"snapshot is missing or empty: {snapshot}")
@@ -305,7 +410,9 @@ def restore_pre_migration_snapshot(snapshot: Path, target: Path) -> Path:
     if target.exists():
         _backup_via_sqlite_api(target, safety)
 
-    _backup_via_sqlite_api(snapshot, target)
+    # Not _backup_via_sqlite_api: its rename over a live WAL store leaves the
+    # old -wal beside the restored file, and SQLite reads those frames instead.
+    _write_into_live_db(snapshot, target)
     logger.info("[SLM] Restored %s from %s (previous state saved to %s)",
                 target.name, snapshot.name, safety)
     return safety
@@ -474,7 +581,9 @@ def _pre_migration_backup(
     return backups_root
 
 
-def _gc_old_backups(backups_root: Path, keep: int = 2) -> None:
+def _gc_old_backups(
+    backups_root: Path, keep: int = 2, protect: frozenset[str] = frozenset(),
+) -> None:
     """Remove old pre-migration snapshot GENERATIONS, retaining ``keep`` newest.
 
     A generation is one migration's snapshots — ``memory-<ts>-pre-migration.db``
@@ -484,48 +593,21 @@ def _gc_old_backups(backups_root: Path, keep: int = 2) -> None:
     retain a ``memory`` snapshot whose matching ``learning`` snapshot had been
     deleted — a half set that cannot restore a consistent store.
 
-    Only files directly under ``backups_root`` matching ``*-pre-migration.db``
-    are eligible. Every deletion uses an explicit full path; no glob is ever
-    passed to the deletion call.
+    Generations are ordered by the time in their NAME, never by mtime, which
+    was nondeterministic when two copies landed in one filesystem second. A
+    ``-N`` collision suffix stays in its generation. Copies named for the
+    version they precede (``memory-<local time>-pre-4.1.0.db``) and the first
+    release's second-granularity names are generations too, and every copy's
+    ``-wal`` / ``-shm`` goes with it; ``_snapshot_retention`` has the rules.
+
+    Only regular files directly under ``backups_root`` are eligible, never
+    through a symlink. Every deletion uses an explicit full path; no glob is
+    ever passed to the deletion call.
+
+    ``protect`` names the files of the copy just taken: that generation is
+    kept whatever time is in its name (a clock running behind would otherwise
+    have it pruned on the spot). Staging files a crash left behind go too.
     """
-    if not backups_root.exists():
-        return
+    from superlocalmemory.storage._snapshot_retention import prune
 
-    generations: dict[str, list[Path]] = {}
-    for candidate in backups_root.glob("*-pre-migration.db"):
-        if not candidate.is_file() or candidate.parent != backups_root:
-            continue
-        # Extract the raw stamp and normalise away any collision suffix so that
-        # "memory-20260819-120000-123456-pre-migration.db" and
-        # "memory-20260819-120000-123456-1-pre-migration.db" land in the same
-        # generation bucket.  Without normalisation a collision suffix makes GC
-        # count one migration's files as two separate generations and can delete
-        # one file from a paired set, leaving a snapshot that cannot be used for
-        # a consistent restore.
-        #
-        # Search from the RIGHT side of the stripped name so a stem that
-        # contains hyphens does not shift the extracted timestamp — the same
-        # fix applied to _snapshot_sort_key.
-        stripped = candidate.name.rsplit("-pre-migration.db", 1)[0]
-        m = _extract_snapshot_stamp(stripped)
-        raw_stamp = m.group(1) if m else stripped
-        stamp = _parse_generation_stamp(raw_stamp)
-        generations.setdefault(stamp, []).append(candidate)
-
-    if len(generations) <= keep:
-        return
-
-    # Sort by the base timestamp string.  YYYYMMDD-HHmmss-ffffff is lexically
-    # monotonic, so alphabetical order is chronological order.  Using st_mtime
-    # here was nondeterministic when two snapshots landed in the same filesystem
-    # timestamp second (FAT, relatime ext4).
-    ordered = sorted(
-        generations.items(),
-        key=lambda kv: kv[0],
-    )
-    for _stamp, files in ordered[: len(generations) - keep]:
-        for target in sorted(files):
-            if target.parent != backups_root or not target.is_file():
-                continue
-            logger.info("[SLM] Removing old pre-migration snapshot: %s", target)
-            target.unlink()
+    prune(backups_root, keep, protect)

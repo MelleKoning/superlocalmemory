@@ -328,8 +328,63 @@ function setTextById(id, val) {
     if (el) el.textContent = String(val);
 }
 
+// Answer check (4.1.18): one extra System-card row — on-device Laya,
+// hosted Jev, or off. A separate, independent fetch from GET
+// /api/v3/answer-check (see routes/answer_check.py) rather than a new field
+// on /api/v3/dashboard, so this stays a dashboard.js-only change. Fail-open:
+// a status line that cannot load must never block the rest of the card.
+//
+// Rendered from status.active — what actually runs — not status.mode: the
+// never-chosen starting mode "auto" runs the on-device check once it is set
+// up, and the card must not say "Off" while it does.
+function answerCheckSummaryText(status) {
+    var jev = status.jev || {};
+    var providerName = jev.provider === 'openrouter' ? 'OpenRouter' : 'TypeSafe';
+    if (status.active === 'laya') {
+        return 'On this Mac · ready' + (status.mode === 'auto' ? ' (turned on by itself)' : '');
+    }
+    if (status.active === 'jev') {
+        var line = 'Online (' + providerName + ') · ready';
+        if (jev.rerank && jev.rerank.active) line += ' · reordering on';
+        return line;
+    }
+    // Nothing runs. Say why when something was chosen.
+    if (status.mode === 'laya') return 'On this Mac · ' + status.laya.state;
+    if (status.mode === 'jev') return 'Online (' + providerName + ') · off';
+    if (status.laya.state === 'installing') return 'On this Mac · setting up';
+    return null;
+}
+
+function loadAnswerCheckSummary() {
+    fetch('/api/v3/answer-check', { credentials: 'same-origin' }).then(function (r) {
+        return r.ok ? r.json() : null;
+    }).then(function (status) {
+        var el = document.getElementById('dashboard-answer-check');
+        if (!el || !status || !status.laya) return;
+        el.innerHTML = '';
+        var text = answerCheckSummaryText(status);
+        if (text) { el.textContent = text; return; }
+        var neverConfigured = status.laya.state === 'not_installed' &&
+            !(status.jev && status.jev.has_key);
+        if (neverConfigured) {
+            var link = document.createElement('a');
+            link.href = '#';
+            link.textContent = 'Not set up — Set up';
+            link.addEventListener('click', function (e) {
+                e.preventDefault();
+                var navLink = document.querySelector('.nav-link[data-tab="settings-pane"]');
+                if (navLink) navLink.click();
+            });
+            el.appendChild(link);
+            return;
+        }
+        el.textContent = 'Off';
+    }).catch(function () {});
+}
+
 async function loadDashboard() {
     var PANE_ID = 'dashboard-pane';
+    loadAnswerCheckSummary();
     try {
         var response = await fetch('/api/v3/dashboard', { credentials: 'same-origin' });
         if (!response.ok) {

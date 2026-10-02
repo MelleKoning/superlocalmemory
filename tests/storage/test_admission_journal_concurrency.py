@@ -232,14 +232,17 @@ def test_queued_writers_bound_preopened_connections(tmp_path, monkeypatch) -> No
                 )
                 for sequence in range(16)
             ]
-            reached_eight_connections = eight_connections_open.wait(timeout=1.0)
+            # Generous waits: this checks how many handles queue, not how
+            # fast a loaded disk syncs. A full-sync commit can take seconds
+            # under heavy I/O, and that is not what is under test.
+            reached_eight_connections = eight_connections_open.wait(timeout=15.0)
             time.sleep(0.05)
             with connection_lock:
                 observed_max = max_open_connections
             journal._write_lock.release()
             writer_lock_held = False
             for future in futures:
-                future.result(timeout=3.0)
+                future.result(timeout=30.0)
             assert reached_eight_connections
             assert observed_max <= 8
     finally:

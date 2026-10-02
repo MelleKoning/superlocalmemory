@@ -88,6 +88,7 @@ class DaemonPoolProxy:
         valid_at: str | None = None,
         include_unknown: bool = False,
         profile_id: str = "",
+        answer_check: bool | str = True,
     ) -> dict[str, Any]:
         if self._unavailable:
             return self._unavailable_response()
@@ -125,6 +126,25 @@ class DaemonPoolProxy:
             _params["valid_at"] = valid_at
         if include_unknown:
             _params["include_unknown"] = "true"
+        # S-M2: a recall that loads context (session start, auto-injection) is
+        # not a question, so the daemon must not judge it or send it anywhere.
+        # Sent only when asked — explicitly, or from inside
+        # ``skip_answer_check()`` — so every other query string is unchanged.
+        from superlocalmemory.core.answer_check_scope import (
+            ANSWER_CHECK_PARAM,
+            ANSWER_CHECK_SKIP,
+            answer_check_skipped,
+        )
+        # ``answer_check`` is True (ask as usual), False (skip), or one of the
+        # daemon's request words — the bounded-loop gate sends "no_reorder":
+        # it needs the verdict, never the reorder, and pays for one per lap.
+        from superlocalmemory.retrieval.answer_check_status import REQUEST_NO_REORDER
+
+        if answer_check is False or answer_check_skipped() or (
+                isinstance(answer_check, str) and answer_check == ANSWER_CHECK_SKIP):
+            _params[ANSWER_CHECK_PARAM] = ANSWER_CHECK_SKIP
+        elif answer_check == REQUEST_NO_REORDER:
+            _params[ANSWER_CHECK_PARAM] = REQUEST_NO_REORDER
         params = urllib.parse.urlencode(_params)
         try:
             from superlocalmemory.cli.daemon import daemon_request

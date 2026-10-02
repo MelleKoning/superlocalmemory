@@ -49,6 +49,12 @@ _SHOWN_FACT_LIMIT = 5
 
 _FALLBACK_ARM_ID = "fallback_default"
 
+#: Marks a play whose shown order was replaced after the arm chose it (the
+#: opt-in hosted reorder). Written to ``settlement_type`` while the play is
+#: open; ``update`` then settles the play but leaves the arm's posterior alone,
+#: because the outcome describes an order the arm did not produce.
+ORDER_REPLACED = "order_replaced"
+
 _DEFAULT_ALPHA_CAP = float(os.environ.get("SLM_BANDIT_ALPHA_CAP", "1000.0"))
 
 # Query-type bins (must match features.py one-hot exactly).
@@ -371,7 +377,7 @@ class ContextualBandit:
 
         try:
             row = conn.execute(
-                "SELECT profile_id, stratum, arm_id, settled_at "
+                "SELECT profile_id, stratum, arm_id, settled_at, settlement_type "
                 "FROM bandit_plays WHERE play_id = ?",
                 (int(play_id),),
             ).fetchone()
@@ -391,6 +397,9 @@ class ContextualBandit:
         arm_id = row["arm_id"]
         now = _now_iso()
         cap = self._alpha_cap
+
+        if row["settlement_type"] == ORDER_REPLACED:
+            return self._settle_without_arm(conn, int(play_id), reward_f, kind, now)
 
         try:
             # Ensure an arm row exists with prior (1,1). INSERT OR IGNORE is
@@ -428,6 +437,46 @@ class ContextualBandit:
         except Exception:  # pragma: no cover — defensive
             pass
         return True
+
+    @staticmethod
+    def _settle_without_arm(conn: sqlite3.Connection, play_id: int, reward: float,
+                            kind: str, now: str) -> bool:
+        """Close a play whose order was replaced: reward recorded, arm untouched.
+
+        Returns True so a caller still credits the memories the outcome named —
+        the person did see them; only the ORDER was not the arm's.
+        """
+        try:
+            cur = conn.execute(
+                "UPDATE bandit_plays "
+                "SET reward = ?, settled_at = ?, settlement_type = ? "
+                "WHERE play_id = ? AND settled_at IS NULL",
+                (reward, now, f"{kind}:{ORDER_REPLACED}", play_id),
+            )
+        except sqlite3.Error as exc:
+            logger.warning("bandit.update: write failed: %s", exc)
+            return False
+        return bool(cur.rowcount)
+
+    def mark_order_replaced(self, play_id: int) -> bool:
+        """Say that what this play showed first was not the arm's order.
+
+        Only an open play can be marked; a settled one is history. Best-effort,
+        like ``record_shown``: a failure means the arm is credited as before.
+        """
+        if not play_id:
+            return False
+        try:
+            conn = _conn_for(self._db_path)
+            cur = conn.execute(
+                "UPDATE bandit_plays SET settlement_type = ? "
+                "WHERE play_id = ? AND settled_at IS NULL",
+                (ORDER_REPLACED, int(play_id)),
+            )
+            return bool(cur.rowcount)
+        except sqlite3.Error as exc:
+            logger.debug("bandit.mark_order_replaced: %s", exc)
+            return False
 
     def record_shown(self, play_id: int, fact_ids: Sequence[str]) -> bool:
         """Record which memories this play surfaced, for later settlement.
@@ -645,6 +694,7 @@ def retention_sweep(
 
 
 __all__ = (
+    "ORDER_REPLACED",
     "BanditChoice",
     "ContextualBandit",
     "close_threadlocal_conn",

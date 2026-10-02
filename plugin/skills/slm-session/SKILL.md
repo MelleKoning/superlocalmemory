@@ -92,6 +92,11 @@ session_init(
   "core_memory": [],
   "degraded_mode": false,
   "retrieval_mode": "full_6_channel",
+  "calibration_status": "uncalibrated",
+  "calibration_id": null,
+  "answer_confidence": null,
+  "abstained": false,
+  "abstention_reason": null,
   "learning": {
     "feedback_signals": 37,
     "phase": 1,
@@ -103,6 +108,16 @@ session_init(
 **Check `degraded_mode`.** When `true`, the daemon was unreachable and only
 FTS5 BM25 was used — semantic, graph, temporal, and structural channels were
 unavailable. The context is still usable; note the degradation if relevant.
+
+**Check `abstained`.** If `true`, the memories returned in `context` and
+`memories` do not answer the query that seeded this session — say so, or
+ask, rather than presenting them as settled fact. This is most relevant
+when you passed an explicit `query`; the default project-context query
+rarely has a single "right answer" for a judge to evaluate.
+`answer_confidence` is a measurement, not a guarantee. `calibration_status:
+"uncalibrated"` means no judge is configured, and `abstained` then only
+reflects the older "nothing found" signal. See `slm-recall` for the full
+rule, which applies identically here.
 
 **Check `learning.phase`:**
 - Phase 1 (< 50 signals): collecting baseline feedback
@@ -253,4 +268,4 @@ explicitly and call `recall` with `include_global`/`include_shared` after
 
 ---
 
-*SuperLocalMemory v4.1.17 · Qualixar · AGPL-3.0-or-later*
+*SuperLocalMemory v4.1.18 · Qualixar · AGPL-3.0-or-later*

@@ -16,6 +16,8 @@ import logging
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from superlocalmemory.core import answer_check_state as _answer_check_state
+from superlocalmemory.core import config_upgrades as _config_upgrades
 from superlocalmemory.infra.data_root import DynamicStatePath, canonical_data_root
 from superlocalmemory.storage.models import Mode
 
@@ -291,6 +293,41 @@ class RetrievalConfig:
     # relevant facts before reranking. See bench-v342-locomo.md.
     use_cross_encoder: bool = True
     cross_encoder_model: str = "cross-encoder/ms-marco-MiniLM-L-12-v2"
+    # 4.1.18: a separate decision on whether a recall actually answers the
+    # question (retrieval/sufficiency.py). Exactly one backend runs, never two:
+    #   "laya" — local Laya-MLX (Apple Silicon); memory text stays on the machine.
+    #   "jev"  — hosted Jev; needs a key and ``sufficiency_jev_consent``; the
+    #            question and the top memories are sent to the chosen provider.
+    #   "off"  — no answer check.
+    #   "auto" — "laya" when it is installed and supported, otherwise "off".
+    #            "auto" NEVER resolves to "jev": data leaves the machine only
+    #            when someone chose that.
+    # Switching takes effect without a restart (engine_wiring.attach_
+    # sufficiency_judge): the running check stops before the next one starts.
+    sufficiency_judge: str = "auto"
+    # An interpreter with laya-mlx installed. "" = find one: the SLM-managed
+    # install when it is ready, else SLM's own (the ``laya`` extra). When set
+    # it is used or the check is off — never silently swapped for another.
+    sufficiency_python: str = ""
+    # A Hugging Face repo id, or a local snapshot folder. Responses name the
+    # weights as repo@revision, never by their path on this machine.
+    sufficiency_model: str = "aac6fef/laya-mlx"
+    # Where the Laya weights are cached. "" = the Hugging Face default.
+    sufficiency_hf_home: str = ""
+    sufficiency_timeout_s: float = 1.5
+    # Hosted Jev. The key is NOT here: it lives in its own owner-only file
+    # (core/judge_keys.py) so no config dump can ever carry it.
+    sufficiency_jev_provider: str = "typesafe"  # "typesafe" | "openrouter"
+    sufficiency_jev_consent: bool = False
+    sufficiency_jev_timeout_s: float = 2.0
+    # Optional, inside the Jev option only: the same single request also asks
+    # Jev to reorder the top ``sufficiency_jev_rerank_k`` results (clamped to
+    # 5..30). It sends more memories than the answer check alone, so it has its
+    # own consent, and both must be the boolean True. Laya never reorders.
+    # Turning Jev off, removing its key or withdrawing either consent clears both.
+    sufficiency_jev_rerank: bool = False
+    sufficiency_jev_rerank_k: int = 20
+    sufficiency_jev_rerank_consent: bool = False
     # "" = PyTorch (~500MB stable), "onnx" = ONNX (leaks on ARM64 CoreML),
     # "openai"/"remote" = v3.8.12 (issue #105) OpenAI-compatible /v1/rerank
     # endpoint (llama-server, TEI, Infinity, vLLM, Cohere-shaped services).
@@ -311,9 +348,10 @@ class RetrievalConfig:
     # When persisted for backward compatibility, config.json is atomically
     # forced to owner-only mode 0600 by save().
     cross_encoder_api_key: str = ""
-    # Per-request read budget for the remote reranker. Recall is interactive,
-    # so this stays tight: a slow reranker degrades to fusion scores rather
-    # than holding the recall open.
+    # Per-request read budget for the remote reranker. It can only TIGHTEN the
+    # per-call limit: each rerank call, retries included, is held to 1 s of
+    # wall clock (SLM_REMOTE_RERANK_DEADLINE_S allows longer), so a slow or
+    # hung reranker degrades to fusion order rather than holding recall open.
     cross_encoder_timeout_seconds: float = 15.0
 
     # v3.9.x (issue #112): plain-HTTP trust for private-LAN reranker endpoints.
@@ -446,13 +484,23 @@ class MathConfig:
     ebbinghaus_langevin_coupling_enabled: bool = False
 
     # Sheaf (at encoding time, NOT retrieval)
-    sheaf_at_encoding: bool = True
+    # 4.1.18: off by default. A measured A/B on a real store showed it changes
+    # no recall answer, while it runs on every store and every maintenance
+    # pass. This one flag gates all three places it is used: the store-time
+    # check, the maintenance pass, and Mode A contradiction detection in the
+    # temporal validator (which finds none without it). True turns it back on.
+    sheaf_at_encoding: bool = False
     sheaf_contradiction_threshold: float = 0.45
     # Max edges to check per fact during sheaf consistency.
     # At 18K+ edges, coboundary computation becomes O(N*dim^2) and hangs.
     # Facts with more edges than this skip sheaf check (still get contradiction
     # detection via consolidator UPDATE/SUPERSEDE path).
     sheaf_max_edges_per_check: int = 200
+    # Every config saved before 4.1.18 wrote sheaf_at_encoding: true because
+    # save() writes the whole section — a stored default, not a choice. A
+    # section without this marker is read as that old default and switched
+    # off once; a section with it is respected, so turning it back on sticks.
+    sheaf_default_reviewed: bool = True
 
     # Rate-Distortion (production only, disabled for benchmarks)
 
@@ -1302,7 +1350,7 @@ class SLMConfig:
                 )
             except Exception:
                 raw_base_dir = _runtime_base
-        config = cls.for_mode(
+        config = cls._mode_template(
             mode,
             llm_provider=llm_data.get("provider", ""),
             llm_model=llm_data.get("model", ""),
@@ -1416,6 +1464,10 @@ class SLMConfig:
                 k: v for k, v in rt.items()
                 if k in RetrievalConfig.__dataclass_fields__
             })
+        # 4.1.18: the answer check's settings have one home, whichever config
+        # file this is (config.json or a mode_<x>.json) — see
+        # core/answer_check_state.py. Nothing stored yet = this file's values.
+        config.retrieval = _answer_check_state.overlay_safely(config.retrieval, path.parent)
 
         # 4.1.0 (#124): restore the two sections save() now writes. This runs
         # AFTER for_mode() has applied its presets, so a value someone chose
@@ -1436,6 +1488,7 @@ class SLMConfig:
                 rng = fields.get("langevin_weight_range")
                 if isinstance(rng, list):
                     fields["langevin_weight_range"] = tuple(rng)
+                fields = _config_upgrades.sheaf_reviewed(mth, fields)
                 config.math = MathConfig(**fields)
             except (TypeError, ValueError) as exc:
                 logger.warning(
@@ -1575,6 +1628,7 @@ class SLMConfig:
         # that clone a config via replace() will lose unknown-key preservation,
         # which is acceptable: the primary contract is load→save round-trip.
         config._raw_preserved: dict = dict(data)  # type: ignore[attr-defined]
+        _answer_check_state.remember_baseline(config)
         return config
 
     def save(
@@ -1644,7 +1698,10 @@ class SLMConfig:
             # Persist the complete retrieval contract.  Saving only the
             # cross-encoder subset silently reset channel limits, evidence
             # floors, and agentic settings on the next mode/provider change.
-            "retrieval": asdict(self.retrieval),
+            # The answer check's settings are the exception once they have
+            # their own file (core/answer_check_state.retrieval_to_save).
+            "retrieval": _answer_check_state.retrieval_to_save(
+                self, path.parent, mode_change=mode_change),
         }
 
         # V3.4.11: Persist evolution config (C-CONFIGSAVE fix)
@@ -1816,7 +1873,21 @@ class SLMConfig:
         return cls.for_mode(Mode.A)
 
     @classmethod
-    def for_mode(
+    def for_mode(cls, mode: Mode, base_dir: Path | None = None, **overrides) -> SLMConfig:
+        """Create config with mode-appropriate defaults.
+
+        4.1.18: the answer check's settings are the person's, not the mode's,
+        so the template carries what is stored for them (core/answer_check_
+        state.py). A dashboard mode switch builds the new engine from this
+        template's ``retrieval``; without this it reset the check to defaults.
+        """
+        config = cls._mode_template(mode, base_dir, **overrides)
+        config.retrieval = _answer_check_state.overlay_safely(config.retrieval, config.base_dir)
+        _answer_check_state.remember_baseline(config)
+        return config
+
+    @classmethod
+    def _mode_template(
         cls,
         mode: Mode,
         base_dir: Path | None = None,
@@ -1832,7 +1903,7 @@ class SLMConfig:
         embedding_model_name: str = "",
         embedding_dimension: int = 0,
     ) -> SLMConfig:
-        """Create config with mode-appropriate defaults."""
+        """The mode's presets alone — nothing read from disk."""
         # resolve base dir via slm_home() at call time when base_dir is not explicit.
         if base_dir is None:
             try:
@@ -2083,6 +2154,12 @@ class SLMConfig:
         old_config = cls.load(_base / "config.json")
         old_mode = old_config.mode.value.lower()
         new_mode_val = _M(new_mode.lower())
+
+        # 4.1.18: the answer check's settings get their one home before any
+        # per-mode file is read, seeded from what is in effect now — so the
+        # target mode's copy can never bring back a withdrawn consent.
+        _answer_check_state.ensure(
+            _base, seed=lambda: _answer_check_state.snapshot(old_config.retrieval))
 
         # 1. Save current config to its per-mode file (preserve customizations)
         if old_mode != new_mode.lower():

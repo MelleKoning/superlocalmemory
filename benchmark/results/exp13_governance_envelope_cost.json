@@ -1,50 +1,70 @@
 {
-  "experiment": "exp13_governance_envelope_cost",
-  "method": "direct component timing inside the real governed write; no comparand pipeline is constructed and no subtraction is performed",
-  "governed_write_total": {
-    "n": 400,
-    "p50_ms": 11.001,
-    "p99_ms": 21.8725,
-    "mean_ms": 11.517
+  "environment": {
+    "package": "superlocalmemory",
+    "platform": "macOS-26.4.1-arm64-arm-64bit-Mach-O",
+    "python": "3.14.5",
+    "timestamp": "2026-10-02T20:19:23.059653+00:00",
+    "version": "4.1.17"
   },
-  "envelope_components": {
-    "generation_fence": {
-      "n": 400,
-      "p50_ms": 0.0019,
-      "p99_ms": 0.0047,
-      "mean_ms": 0.002
+  "result": {
+    "extra": {
+      "caveats": [
+        "In-process. HTTP transport, request parsing and the trust hook are excluded.",
+        "Temporary filesystem; a persistent disk raises the journal fsync component.",
+        "Component timings include the timing wrapper itself (sub-microsecond).",
+        "Sum of component p50s is not the p50 of the sum; reported as an indicative share."
+      ],
+      "envelope_components": {
+        "generation_fence": {
+          "mean_ms": 0.0019,
+          "n": 200,
+          "p50_ms": 0.0019,
+          "p99_ms": 0.0033
+        },
+        "journal_commit": {
+          "mean_ms": 2.836,
+          "n": 200,
+          "p50_ms": 2.8172,
+          "p99_ms": 3.5253
+        },
+        "journal_dispatch": {
+          "mean_ms": 1.383,
+          "n": 200,
+          "p50_ms": 1.3755,
+          "p99_ms": 2.0285
+        },
+        "journal_prepare": {
+          "mean_ms": 2.8661,
+          "n": 200,
+          "p50_ms": 2.8782,
+          "p99_ms": 3.8228
+        },
+        "projection_obligations": {
+          "mean_ms": 0.0427,
+          "n": 200,
+          "p50_ms": 0.0416,
+          "p99_ms": 0.0672
+        }
+      },
+      "envelope_p50_ms": 7.1144,
+      "envelope_share_of_p50": 0.7252,
+      "experiment": "exp13_governance_envelope_cost",
+      "governed_write_total": {
+        "mean_ms": 9.864,
+        "n": 200,
+        "p50_ms": 9.8105,
+        "p99_ms": 12.5329
+      },
+      "method": "direct component timing inside the real governed write; no comparand pipeline is constructed and no subtraction is performed"
     },
-    "journal_commit": {
-      "n": 400,
-      "p50_ms": 3.1373,
-      "p99_ms": 7.8742,
-      "mean_ms": 3.3099
-    },
-    "journal_dispatch": {
-      "n": 400,
-      "p50_ms": 1.4804,
-      "p99_ms": 2.9157,
-      "mean_ms": 1.5425
-    },
-    "journal_prepare": {
-      "n": 400,
-      "p50_ms": 3.1094,
-      "p99_ms": 8.4013,
-      "mean_ms": 3.2566
-    },
-    "projection_obligations": {
-      "n": 400,
-      "p50_ms": 0.0418,
-      "p99_ms": 0.0656,
-      "mean_ms": 0.0428
-    }
-  },
-  "envelope_p50_ms": 7.7708,
-  "envelope_share_of_p50": 0.7064,
-  "caveats": [
-    "In-process. HTTP transport, request parsing and the trust hook are excluded.",
-    "Temporary filesystem; a persistent disk raises the journal fsync component.",
-    "Component timings include the timing wrapper itself (sub-microsecond).",
-    "Sum of component p50s is not the p50 of the sum; reported as an indicative share."
-  ]
+    "failures": [],
+    "guarantee": "every governed write records every declared envelope component",
+    "held": 200,
+    "method": "direct component timing inside the real governed write; no comparand pipeline is constructed and no subtraction is performed",
+    "metric_name": "envelope_p50_ms",
+    "metric_value": 7.1144,
+    "name": "exp13_governance_envelope_cost",
+    "passed": true,
+    "trials": 200
+  }
 }

@@ -1063,7 +1063,15 @@ def _recall_keyword_fallback(
             })
     except Exception as exc:
         logger.warning("recall keyword fallback failed (non-fatal): %s", exc)
+    # Every other recall carries the full response contract; this one never ran
+    # the answer check, ranking or channels, and says so with the defaults
+    # (answer_check_status "skipped") instead of leaving the fields out.
+    from superlocalmemory.server.recall_serializer import recall_response_metadata
+    from superlocalmemory.storage.models import RecallResponse
+
+    contract = recall_response_metadata(RecallResponse(query=query))
     return {
+        **contract,
         "ok": True,
         "query": query,
         "query_type": "text_search",
@@ -2199,7 +2207,9 @@ async def lifespan(application: FastAPI):
     try:
         from superlocalmemory.infra.self_heal import expire_stale_mesh_locks
 
-        _mesh_db = canonical_data_root() / "memory.db"
+        # The store resolved from config for the migration step above, not
+        # the default location: a configured store keeps its own leases.
+        _mesh_db = locals().get("_memory_db") or canonical_data_root() / "memory.db"
         _mesh_expired = expire_stale_mesh_locks(_mesh_db)
         if _mesh_expired:
             logger.info("boot mesh expiry: cleared %d stale mesh_lock row(s)", _mesh_expired)
@@ -2506,37 +2516,15 @@ async def lifespan(application: FastAPI):
                 _t.sleep(0.5)
             try:
                 t0 = _t.monotonic()
-                # Fire 2 warmup queries: one to load the graph page cache,
-                # second to warm the reranker subprocess + all producers.
-                # Without this, dashboard POST /api/search hits 11s cold.
-                # Each query holds its own brief operation_nowait() lease so a
-                # concurrent profile switch is not blocked by both recalls.
-                for wq in ("memory recall performance", "context injection retrieval"):
-                    with profile_runtime.operation_nowait() as _snap:
-                        if _snap is None:
-                            logger.debug(
-                                "Recall warmup preempted by profile transition "
-                                "— skipping remaining warmup queries"
-                            )
-                            break
-                        engine.recall(wq, limit=5, fast=True)  # short lease so a profile switch can drain within 5s
-                # v3.8: the --fast recalls above skip spreading activation; warm
-                # that channel directly so the first FULL recall is not cold.
-                _warm_spreading_activation(engine, profile_runtime)
-                # v3.8.5: the fast recalls above do NOT exercise the full ranking
-                # path or the agentic round, so the FIRST real user query that
-                # takes the full path paid an 8-13s cold cost (ranking model +
-                # graph-metrics load).  Fire ONE full (fast=False) recall here in
-                # the background so those load at boot, not on a user's query.
-                # Best-effort; never blocks readiness.
-                try:
-                    with profile_runtime.operation_nowait() as _fsnap:
-                        if _fsnap is not None:
-                            engine.recall(
-                                "memory recall performance", limit=5, fast=False,
-                            )
-                except Exception as _fexc:
-                    logger.debug("Full-path warmup skipped (non-fatal): %s", _fexc)
+                # 4.1.18: the system's own recalls — never asked of the answer
+                # check, so a daemon start sends and bills nothing. See
+                # server/recall_warmup.py for what each recall warms.
+                from superlocalmemory.server.recall_warmup import run_warmup_recalls
+
+                run_warmup_recalls(
+                    engine, profile_runtime,
+                    warm_spreading_activation=_warm_spreading_activation,
+                )
                 elapsed = round((_t.monotonic() - t0) * 1000)
                 logger.info(
                     "Recall engine pre-warmed in %dms", elapsed,
@@ -3100,7 +3088,8 @@ async def lifespan(application: FastAPI):
             from superlocalmemory.hooks.sync_loop import schedule as _schedule_sync
             # Keep the task handle so it can be cancelled at shutdown (H-CONC-2)
             # — otherwise adapter file I/O outlives the daemon.
-            application.state._sync_task = _schedule_sync(build_default_adapters())
+            application.state._sync_task = _schedule_sync(
+                build_default_adapters(include_project_scope=False))
         except Exception as exc:  # pragma: no cover — defensive
             logger.warning("cross-platform sync loop failed to start: %s", exc)
 
@@ -3812,6 +3801,11 @@ def create_app() -> FastAPI:
     except Exception as _mcp_exc:  # pragma: no cover — defensive
         logger.warning("MCP HTTP mount failed (non-fatal, stdio still works): %s", _mcp_exc)
 
+    # Added last, so it is the outermost layer: a request not addressed to this
+    # machine (DNS rebinding from a web page) is refused before anything runs.
+    from superlocalmemory.server.host_guard import HostGuardMiddleware
+    application.add_middleware(HostGuardMiddleware)
+
     return application
 
 
@@ -4210,6 +4204,10 @@ def _register_dashboard_routes(application: FastAPI) -> None:
     from superlocalmemory.server.routes.config_api import router as config_api_router
     application.include_router(config_api_router)
 
+    # Answer-check settings (4.1.18): on-device Laya, hosted Jev, or off.
+    from superlocalmemory.server.routes.answer_check import router as answer_check_router
+    application.include_router(answer_check_router)
+
     # Task #47: dashboard-editable rate limits (GET/PUT /api/v3/ratelimit)
     from superlocalmemory.server.routes.ratelimit import router as ratelimit_router
     application.include_router(ratelimit_router)
@@ -4564,9 +4562,24 @@ def _register_daemon_routes(application: FastAPI) -> None:
         known_as_of: str = "",
         valid_at: str = "",
         include_unknown: bool = False,
+        # 4.1.18: "skip" for a recall that is not a question (context loading,
+        # a per-prompt hook): never judged, nothing sent or billed.
+        # "no_reorder": the answer check without the opt-in reorder (the loop
+        # gate). Empty or "full": every other recall. Anything else is a 400.
+        answer_check: str = "",
     ):
         _update_activity()
         search_query = q or query  # Accept both ?q= and ?query= for compatibility
+        from superlocalmemory.core.answer_check_scope import wants_skip
+        _skip_check = wants_skip(answer_check)
+        _check_request = (answer_check or "").strip().lower()
+        if not _skip_check and _check_request not in ("", "full", "no_reorder"):
+            from starlette.responses import JSONResponse
+            return JSONResponse(
+                {"error": "invalid_answer_check",
+                 "message": "answer_check must be one of: skip, no_reorder, full"},
+                status_code=400,
+            )
         engine = _get_engine_or_503()
         req_profile = (profile_id or "").strip()
         # 4.1.14 audit: permission before existence on the read path, the
@@ -4691,22 +4704,33 @@ def _register_daemon_routes(application: FastAPI) -> None:
             # GENEROUS budget; only if it is exceeded do we serve the fast
             # keyword fallback. The orphaned recall finishes in the background.
             loop = asyncio.get_running_loop()
-            _rf = loop.run_in_executor(
-                None,
-                lambda: engine.recall(
-                    search_query, limit=limit, session_id=effective_sid,
-                    agent_id=recall_actor,
-                    fast=fast,
-                    profile_id=req_profile or None,
-                    include_global=include_global,
-                    include_shared=include_shared,
-                    window=window or None,
-                    as_of=as_of or None,
-                    known_as_of=known_as_of or None,
-                    valid_at=valid_at or None,
-                    include_unknown=include_unknown,
-                ),
-            )
+
+            def _run_recall():
+                # The skip marker is entered HERE, on the executor thread: a
+                # context variable set on the event loop does not cross
+                # run_in_executor.
+                from contextlib import nullcontext
+
+                from superlocalmemory.core.answer_check_scope import skip_answer_check
+                with skip_answer_check() if _skip_check else nullcontext():
+                    return engine.recall(
+                        search_query, limit=limit, session_id=effective_sid,
+                        agent_id=recall_actor,
+                        fast=fast,
+                        profile_id=req_profile or None,
+                        include_global=include_global,
+                        include_shared=include_shared,
+                        window=window or None,
+                        as_of=as_of or None,
+                        known_as_of=known_as_of or None,
+                        valid_at=valid_at or None,
+                        include_unknown=include_unknown,
+                        # Only when asked: an engine stand-in need not know it.
+                        **({"answer_check": "no_reorder"}
+                           if _check_request == "no_reorder" else {}),
+                    )
+
+            _rf = loop.run_in_executor(None, _run_recall)
             _budget = _recall_budget_s()
             _deadline = loop.time() + _budget
             while not _rf.done() and loop.time() < _deadline:
@@ -5306,6 +5330,29 @@ def _register_daemon_routes(application: FastAPI) -> None:
         except Exception as exc:
             raise HTTPException(500, detail=str(exc))
 
+    # `slm db compact` (live): only the daemon holds the vector backends, so
+    # the CLI asks it here rather than compacting in its own process.
+    @application.post("/maintenance/compact")
+    async def compact_vector_store_endpoint(request: Request):
+        _update_activity()
+        engine = _get_engine_or_503()
+        from superlocalmemory.access.rbac import Permission
+        from superlocalmemory.server.rbac_enforce import require_permission
+        require_permission(request, Permission.WRITE, profile=engine._profile_id)
+        from superlocalmemory.server.route_mutations import (
+            authorize_route_mutation,
+        )
+        authorization = authorize_route_mutation(
+            request,
+            operation="update",
+            source_agent_id="http-maintenance",
+            profile_id=engine.profile_id,
+        )
+        from superlocalmemory.core.maintenance_scheduler import compact_vector_store
+        out = await asyncio.to_thread(compact_vector_store)
+        authorization.complete()
+        return out
+
     @application.get("/status")
     async def status():
         _update_activity()
@@ -5602,6 +5649,8 @@ def _register_daemon_routes(application: FastAPI) -> None:
             "message": "Daemon restart initiated — it will be back in a few seconds.",
         }
 
+    _SESSION_OPEN_MAX_RESULTS = 50
+
     @application.post("/session/open")
     async def session_open(req: SessionOpenRequest, request: Request):
         """#49: Open a session locally — warm recall context with no model
@@ -5616,7 +5665,11 @@ def _register_daemon_routes(application: FastAPI) -> None:
             query = f"project context {req.project_path}"
         else:
             query = "recent important decisions"
+        # Warming loads at most what session_init would show. An unbounded
+        # count from the request used to go straight into the recall.
+        limit = max(1, min(int(req.max_results), _SESSION_OPEN_MAX_RESULTS))
         try:
+            from superlocalmemory.core.answer_check_scope import skip_answer_check
             from superlocalmemory.server.write_identity import (
                 authenticated_request_actor,
             )
@@ -5625,11 +5678,18 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 getattr(application.state, "daemon_descriptor", None),
                 actor_kind="http-session-open",
             )
-            resp = engine.recall(
-                query,
-                limit=req.max_results,
-                agent_id=actor_id,
-            )
+
+            def _warm():
+                # S-M2: warming a session is not a question. The query is a
+                # project path or a topic; judging it would send that path and
+                # the top memories to the online check and bill the user's
+                # key at every session start. Results are unaffected.
+                with skip_answer_check():
+                    return engine.recall(query, limit=limit, agent_id=actor_id)
+
+            # Off the event loop: a recall can take a second or more, and
+            # every other client of this daemon would wait for it.
+            resp = await asyncio.to_thread(_warm)
             results = (
                 getattr(resp, "results", None)
                 or getattr(resp, "memories", None)
@@ -5639,8 +5699,11 @@ def _register_daemon_routes(application: FastAPI) -> None:
         except HTTPException:
             raise
         except Exception as exc:
-            # Warming is best-effort — never fail the session-open hook.
-            return {"ok": True, "query": query, "warmed": 0, "warning": str(exc)}
+            # Warming is best-effort — never fail the session-open hook. The
+            # exception's type only: its message can quote a path or a memory.
+            logger.warning("session open warm-up failed: %s", type(exc).__name__)
+            return {"ok": True, "query": query, "warmed": 0,
+                    "warning": "The session context could not be warmed."}
 
     @application.post("/session/close")
     async def session_close(req: SessionCloseRequest, request: Request):

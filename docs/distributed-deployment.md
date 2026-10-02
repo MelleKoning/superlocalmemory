@@ -39,6 +39,22 @@ Environment=SLM_DAEMON_HOST=0.0.0.0
 
 ---
 
+## Host names SLM answers to (4.1.18+)
+
+SLM refuses any request — dashboard, HTTP API or `/mcp` — that is not
+addressed to this computer, so a web page on another site cannot reach it
+through your browser. Requests addressed to `localhost` or to an IP address
+are always served, so reaching a LAN install by its address needs nothing
+new. To reach it by a host **name**, list the name in `SLM_ALLOWED_HOSTS`
+(comma-separated; `*.office.lan` covers a whole suffix):
+
+```bash
+SLM_ALLOWED_HOSTS=slm.lan,*.office.lan slm serve start
+```
+
+Names you already list in `SLM_MCP_ALLOWED_HOSTS` (for example `slm.lan:*`)
+are accepted too, so existing LAN setups keep working unchanged.
+
 ## Opening the HTTP MCP transport to LAN clients (v3.6.9+)
 
 The `/mcp` endpoint uses MCP's DNS-rebinding protection, which defaults to localhost-only even when the daemon is bound on `0.0.0.0`. Set `SLM_MCP_ALLOWED_HOSTS` to open it:

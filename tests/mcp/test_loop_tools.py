@@ -297,3 +297,54 @@ def test_ledger_persists_and_reads_back_on_real_engine(real_tools):
     assert show["laps"][-1]["decision"] == "done"
     # The agent's own claim is recorded (advisory) and False for a watcher.
     assert show["laps"][0]["agent_claimed_done"] is False
+
+
+# ── The answer check can keep a gate closed (4.1.18) ─────────────────────────
+
+@dataclass
+class _JudgedResp:
+    results: list = field(default_factory=list)
+    no_confident_match: bool = False
+    abstained: bool = True
+    abstention_reason: str | None = "judged_insufficient"
+
+
+class _JudgedInsufficientEngine(_FakeEngine):
+    """A strong-scoring hit that the answer check says does not answer."""
+
+    def recall(self, query, limit=3, fast=True, **kw):
+        return _JudgedResp(results=[_FakeResult(0.9)])
+
+
+class _JudgedInsufficientPool(_FakePool):
+    def recall(self, query, limit=3, fast=True):
+        self.recalled.append((query, limit, fast))
+        return {"ok": True, "results": [{"content": "looks related", "score": 0.9}],
+                "no_confident_match": False, "abstained": True,
+                "abstention_reason": "judged_insufficient"}
+
+
+def test_a_hit_the_answer_check_rejects_never_counts_as_done():
+    """A loop must not converge on a recall its own answer check called
+    insufficient: the score only says "related", the check says "not the answer"."""
+    cap = _Capture()
+    register_loop_tools(cap, _JudgedInsufficientEngine)
+    out = _run(cap.fns["slm_loop_run"](
+        name="judged", gate_query="build pipeline passed",
+        max_iterations=2, poll_interval_s=0.25,
+    ))
+    assert out["status"] == "HALT"
+    assert out["passed"] is False
+
+
+def test_the_pool_path_honours_the_answer_check_too():
+    pool = _JudgedInsufficientPool()
+    cap = _Capture()
+    register_loop_tools(cap, _FakeEngine, get_pool=lambda: pool)
+    out = _run(cap.fns["slm_loop_run"](
+        name="judged-pool", gate_query="build pipeline passed",
+        max_iterations=2, poll_interval_s=0.25,
+    ))
+    assert pool.recalled, "the gate did not go through the pool"
+    assert out["status"] == "HALT"
+    assert out["passed"] is False

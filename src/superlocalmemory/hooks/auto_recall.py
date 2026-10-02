@@ -15,6 +15,7 @@ from superlocalmemory.retrieval.temporal_frame import relative_age, temporal_fra
 logger = logging.getLogger(__name__)
 
 
+
 class AutoRecall:
     """Automatically recalls relevant context for AI sessions.
 
@@ -67,10 +68,19 @@ class AutoRecall:
             return ""
 
     def _recall(self, query: str, limit: int):
-        if self._recall_fn is not None:
-            return self._recall_fn(query, limit=limit)
-        if self._engine is not None:
-            return self._engine.recall(query, limit=limit)
+        # S-M2: everything AutoRecall does is loading context — session start,
+        # ``slm://context``, ``slm session-context --full``. Nobody asked a
+        # question, so the answer check is skipped: nothing is judged, and
+        # with the online check on nothing is sent off the machine or billed.
+        # In-process recalls read the marker; across HTTP the daemon proxy
+        # sends it as ``answer_check=skip``.
+        from superlocalmemory.core.answer_check_scope import skip_answer_check
+
+        with skip_answer_check():
+            if self._recall_fn is not None:
+                return self._recall_fn(query, limit=limit)
+            if self._engine is not None:
+                return self._engine.recall(query, limit=limit)
         return None
 
     def get_session_context(self, project_path: str = "", query: str = "") -> str:
@@ -100,6 +110,15 @@ class AutoRecall:
             # Still return soft prompt if present
             return soft_prompt
 
+        # --- 2b. The answer check's verdict, if one ran ---
+        # H-3: added ABOVE the memories, never in their place — exactly as
+        # session_init and the CLI do. A false "not answered" must not hide
+        # what the user stored. "" when no judge ran (the usual case, and
+        # always for this context-loading recall once the skip is honoured).
+        from superlocalmemory.core.answer_check_notice import answer_check_line
+
+        verdict_line = answer_check_line(response) if response is not None else ""
+
         # --- 3. Build memory context block (empty string when no results) ---
         memory_ctx = ""
         try:
@@ -127,8 +146,8 @@ class AutoRecall:
         except Exception as exc:
             logger.warning("Auto-recall memory formatting failed: %s", exc)
 
-        # --- 4. Combine: soft-prompt + memories (either may be empty) ---
-        parts = [p for p in (soft_prompt, memory_ctx) if p]
+        # --- 4. Combine: verdict + soft-prompt + memories (any may be empty) ---
+        parts = [p for p in (verdict_line, soft_prompt, memory_ctx) if p]
         return "\n\n".join(parts)
 
     def get_query_context(self, query: str) -> list[dict]:

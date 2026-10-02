@@ -1179,6 +1179,23 @@
   }
 
   /* ═══════════════════════════════════════════════════════════
+     Answer check (4.1.18) — on-device Laya, hosted Jev, or off.
+     Chrome (group card, search row) lives here like every other section;
+     the actual controls are rendered by answer-check.js via the
+     window.SLMAnswerCheck.renderInto(mount) hook, so the feature's own
+     logic (API calls, validation, confirms) stays in its own file.
+  ═══════════════════════════════════════════════════════════ */
+  function buildAnswerCheck() {
+    var mount = el('div', { 'data-set':'', 'data-txt':'answer check laya jev sufficiency' },
+      { padding:'16px 20px' });
+    var g = makeGrp('Answer check', 'shield', [mount]);
+    if (window.SLMAnswerCheck && typeof window.SLMAnswerCheck.renderInto === 'function') {
+      window.SLMAnswerCheck.renderInto(mount);
+    }
+    return g;
+  }
+
+  /* ═══════════════════════════════════════════════════════════
      Filter + Load all
   ═══════════════════════════════════════════════════════════ */
   function filterSettings(query, hub) {
@@ -1230,7 +1247,7 @@
     hub.appendChild(sWrap);
 
     var frag = document.createDocumentFragment();
-    [buildMode(), buildEmb(), buildStorage(), buildScope(), buildRuntime(),
+    [buildMode(), buildAnswerCheck(), buildEmb(), buildStorage(), buildScope(), buildRuntime(),
      buildCapture(), buildRecall(), buildInvoke(), buildForgetting(),
      buildEvolution(), buildBackup(), buildMesh(), buildTrust(),
      buildRateLimit(), buildDaemon()
