@@ -67,11 +67,24 @@ _MISSING = object()
 # `fact_type` is kept in lock-step with whichever kind value survives, so a
 # confirmed row's `fact_type` only ever changes together with its kind (I2).
 # ---------------------------------------------------------------------------
+#
+# L1-13: the third clause used to compare `atomic_facts.memory_kind_source`
+# and `excluded.memory_kind_source` to the literal 'caller' with no COALESCE.
+# SQL's three-valued logic makes `NULL = 'caller'` evaluate to NULL rather
+# than FALSE, so a re-store with no kind source at all (a restore-reimport
+# row, or any write that simply omits the column) turned the whole AND-chain
+# NULL instead of TRUE — and `CASE WHEN NULL` takes the ELSE branch, the same
+# as FALSE. The kind columns' own ELSE (`COALESCE(excluded.col,
+# atomic_facts.col)`) happened to fall back to the old value anyway, masking
+# the bug there, but `fact_type`'s ELSE (`excluded.fact_type`, no COALESCE)
+# does not — so fact_type moved to the incoming row's value even while the
+# kind stayed put, breaking the "fact_type travels with its kind" invariant
+# (I2). Every comparison below is now COALESCE'd on both sides.
 _KIND_KEEP_OLD_PREDICATE = (
     "COALESCE(atomic_facts.memory_kind_source, '') IN ('user', 'caller') "
     "AND COALESCE(excluded.memory_kind_source, '') NOT IN ('user') "
-    "AND NOT (atomic_facts.memory_kind_source = 'caller' "
-    "AND excluded.memory_kind_source = 'caller')"
+    "AND NOT (COALESCE(atomic_facts.memory_kind_source, '') = 'caller' "
+    "AND COALESCE(excluded.memory_kind_source, '') = 'caller')"
 )
 
 
@@ -86,6 +99,59 @@ _FACT_TYPE_KIND_AWARE_SQL = (
     f"fact_type = CASE WHEN {_KIND_KEEP_OLD_PREDICATE} "
     "THEN atomic_facts.fact_type ELSE excluded.fact_type END"
 )
+
+# ---------------------------------------------------------------------------
+# L1-06: the same authority guard, for `update_fact`'s plain UPDATE.
+#
+# `_KIND_KEEP_OLD_PREDICATE` above reads the candidate value off an
+# `excluded` row, which only exists inside an upsert's ON CONFLICT clause.
+# `update_fact` has no `excluded` row to read, so the candidate
+# `memory_kind_source` is bound as an ordinary parameter instead (twice,
+# once per place the predicate names it). Without this guard, enrichment —
+# `core.kind_assignment.assign_kinds` suggesting a kind for an
+# already-materialized fact, then writing it back through
+# `kind_update_columns` + `update_fact` — could silently downgrade a kind a
+# person or a trusted caller had already confirmed, because `update_fact`
+# always overwrote every column it was given with no regard for what was
+# already stored.
+# ---------------------------------------------------------------------------
+_UPDATE_KIND_KEEP_OLD_PREDICATE = (
+    "COALESCE(memory_kind_source, '') IN ('user', 'caller') "
+    "AND COALESCE(?, '') NOT IN ('user') "
+    "AND NOT (COALESCE(memory_kind_source, '') = 'caller' AND COALESCE(?, '') = 'caller')"
+)
+
+
+def _guarded_update_set_clause(clean: dict[str, Any]) -> tuple[str, list[Any]]:
+    """The ``SET`` clause and its bound params for ``update_fact``.
+
+    Plain ``column = ?`` for every column, exactly as before M052, UNLESS
+    ``clean`` carries at least one kind column (``KIND_COLUMNS``) — in which
+    case every kind column present, and ``fact_type`` if it is also present,
+    get the authority-aware CASE guard instead of a bare assignment. An
+    update that touches no kind column is byte-for-byte the pre-guard SQL:
+    the overwhelming majority of `update_fact` calls (embeddings, lifecycle,
+    access_count, scope, ...) never go near a kind column and pay nothing
+    for this.
+    """
+    kind_keys = set(clean) & set(KIND_COLUMNS)
+    guard_fact_type = bool(kind_keys) and "fact_type" in clean
+    new_source = clean.get("memory_kind_source")
+
+    parts: list[str] = []
+    params: list[Any] = []
+    for key, value in clean.items():
+        if key in kind_keys or (key == "fact_type" and guard_fact_type):
+            parts.append(
+                f"{key} = CASE WHEN {_UPDATE_KIND_KEEP_OLD_PREDICATE} "
+                f"THEN {key} ELSE ? END"
+            )
+            params.extend([new_source, new_source, value])
+        else:
+            parts.append(f"{key} = ?")
+            params.append(value)
+    return ", ".join(parts), params
+
 
 #: Column order for the fact upsert/insert, exactly as the pre-4.1.19
 #: statement declared it. Shared by both the legacy and kind-aware variants
@@ -1449,19 +1515,23 @@ class DatabaseManager:
                 clean[k] = v.value
             else:
                 clean[k] = v
-        set_clause = ", ".join(f"{k} = ?" for k in clean)
+        # L1-06: kind-aware whenever `clean` carries a kind column — see
+        # `_guarded_update_set_clause` — so an enrichment write can never
+        # downgrade a confirmed kind (or the `fact_type` that travels with
+        # it) the same way the `store_fact` upsert already cannot.
+        set_clause, set_params = _guarded_update_set_clause(clean)
 
         def _write() -> None:
             if profile_id is not None:
                 self.execute(
                     f"UPDATE atomic_facts SET {set_clause} "
                     "WHERE fact_id = ? AND profile_id = ?",
-                    (*clean.values(), fact_id, profile_id),
+                    (*set_params, fact_id, profile_id),
                 )
             else:
                 self.execute(
                     f"UPDATE atomic_facts SET {set_clause} WHERE fact_id = ?",
-                    (*clean.values(), fact_id),
+                    (*set_params, fact_id),
                 )
             # Only an update that changes something a projection is derived
             # from needs re-projecting. Recall bumps access_count on every hit,
