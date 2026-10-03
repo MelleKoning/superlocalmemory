@@ -89,6 +89,7 @@ from superlocalmemory.storage._migration_catalogue import (  # noqa: F401 -- re-
     _M049,
     _M050,
     _M051,
+    _M052,
 )
 from superlocalmemory.storage._schema_version import (
     SUPPORTED_SCHEMA_VERSION,
@@ -206,6 +207,26 @@ def _foreign_live_daemon(memory_db: Path) -> "int | None":
         return pid
     except (OSError, ValueError):
         return None
+
+
+def _downgrade_hold_active(data_root: Path) -> bool:
+    """True while the user has prepared this store for an older version.
+
+    The predicate (marker present and no other build has run since) is owned by
+    ``storage.upgrade_restore``. Absent module means no hold. A predicate that
+    raises also means no hold: stamping keeps an older build refused, which is
+    the safe direction.
+    """
+    # TODO(WP-6): upgrade_restore.downgrade_hold_active lands with WP-6.
+    try:
+        from superlocalmemory.storage.upgrade_restore import downgrade_hold_active
+    except ImportError:
+        return False
+    try:
+        return bool(downgrade_hold_active(data_root))
+    except Exception as exc:  # noqa: BLE001 - fail toward stamping
+        logger.warning("downgrade hold check failed; stamping normally: %s", exc)
+        return False
 
 
 def _nothing_left_to_apply(learning_db: Path, memory_db: Path) -> bool:
@@ -602,6 +623,10 @@ def apply_deferred(
             failed.append("schema_version_stamp")
             details["schema_version_stamp"] = (
                 "not stamped; incomplete migrations: " + ", ".join(incomplete)
+            )
+        elif _downgrade_hold_active(memory_db.parent):
+            details["schema_version_stamp"] = (
+                "held: this store is prepared for an older version"
             )
         else:
             for _stamp_db in (learning_db, memory_db):

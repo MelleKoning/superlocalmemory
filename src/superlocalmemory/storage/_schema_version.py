@@ -44,7 +44,12 @@ from pathlib import Path
 #: be additive is a silent bad write.  Those are not comparable, and judging
 #: additivity per migration is exactly the judgement that let it fall three
 #: behind.
-SUPPORTED_SCHEMA_VERSION: int = 51
+#:
+#: M052 is additive (five nullable columns and two tables); the ceiling moves to
+#: it by the same convention. An older build that must run on the store goes
+#: through prepare-for-downgrade, which may lower the stamp to M052's
+#: ``DOWNGRADE_FLOOR``.
+SUPPORTED_SCHEMA_VERSION: int = 52
 
 
 class SchemaVersionError(RuntimeError):

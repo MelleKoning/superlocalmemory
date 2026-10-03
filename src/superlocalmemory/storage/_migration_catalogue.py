@@ -145,6 +145,7 @@ from superlocalmemory.storage.migrations import (
     M049_a_schema_version_marker_is_one_row as _M049,
     M050_execution_learning_v2 as _M050,
     M051_lifecycle_is_recomputed_not_resampled as _M051,
+    M052_memory_kinds as _M052,
 )
 from superlocalmemory.storage.migrations import (
     M043_quarantine_display_summaries as _M043,
@@ -217,6 +218,13 @@ MIGRATIONS: list[Migration] = [
     # contains identifiers only and does not alter temporal fact state.
     Migration(name=_M042.NAME, db_target="memory", ddl=_M042.DDL,
               dependencies=(_M032.NAME,)),
+    # M052 adds five nullable memory-kind columns to atomic_facts and two new
+    # tables. Eager on purpose, unlike the other atomic_facts migrations: ADD
+    # COLUMN with no constraint reads no row, so it is safe before engine init,
+    # and running here means journal replay never writes a fact the columns do
+    # not exist for. On a fresh install atomic_facts is absent and only the two
+    # tables are created; schema.py creates the columns with the table.
+    Migration(name=_M052.NAME, db_target="memory", ddl=_M052.DDL),
     # M044 lets a bandit play record which memories it showed, so the reward
     # proxy can settle it from evidence instead of always falling through to
     # the 120-second neutral default. Additive column on M005's bandit_plays,

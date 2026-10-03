@@ -83,6 +83,16 @@ def _resolve(content: str) -> str:
     return "semantic" if resolved == _PROSPECTIVE else resolved
 
 
+#: A plan a person filed as a plan is not this pass's to re-read: the wording
+#: rule is a guess and the person is the authority. Applied only on a store that
+#: has the memory-kind columns (M052); without them nothing is confirmed.
+_NOT_CONFIRMED = " AND COALESCE(memory_kind_source,'') NOT IN ('user','caller')"
+
+
+def _unconfirmed_clause(columns: set[str]) -> str:
+    return _NOT_CONFIRMED if "memory_kind_source" in columns else ""
+
+
 @contextlib.contextmanager
 def _held(conn: sqlite3.Connection):
     """Yield the connection the caller already owns, and leave it open."""
@@ -113,6 +123,7 @@ def apply(
     if "fact_type" not in existing or "content" not in existing:
         logger.info("M048: %s has no fact_type/content; nothing to re-read", _TABLE)
         return
+    unconfirmed = _unconfirmed_clause(existing)
 
     cursor = 0
     demoted = 0
@@ -121,7 +132,8 @@ def apply(
         with acquire() as active:
             batch = active.execute(
                 f"SELECT rowid, fact_id, content FROM {_TABLE} "
-                f"WHERE rowid > ? AND fact_type = ? ORDER BY rowid LIMIT {_BATCH}",
+                f"WHERE rowid > ? AND fact_type = ?{unconfirmed} "
+                f"ORDER BY rowid LIMIT {_BATCH}",
                 (cursor, _PROSPECTIVE),
             ).fetchall()
             if not batch:
@@ -145,7 +157,8 @@ def apply(
                     for new_type, rowid in moves:
                         cur = active.execute(
                             f"UPDATE {_TABLE} SET fact_type = ? "
-                            f"WHERE rowid = ? AND fact_type = '{_PROSPECTIVE}'",
+                            f"WHERE rowid = ? AND fact_type = '{_PROSPECTIVE}'"
+                            f"{unconfirmed}",
                             (new_type, rowid),
                         )
                         # Count what the guard let through, not what was
@@ -189,7 +202,8 @@ def verify(conn: sqlite3.Connection) -> bool:
         return True
 
     rows = conn.execute(
-        f"SELECT fact_id, content FROM {_TABLE} WHERE fact_type = ?",
+        f"SELECT fact_id, content FROM {_TABLE} WHERE fact_type = ?"
+        f"{_unconfirmed_clause(existing)}",
         (_PROSPECTIVE,),
     ).fetchall()
     if not rows:
