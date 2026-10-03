@@ -13,7 +13,6 @@ and is skipped unless the local install it needs is present.
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import sys
@@ -22,6 +21,13 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+
+try:
+    import fcntl
+except ImportError:  # Windows: Laya is Apple-Silicon only; detect() already
+    fcntl = None  # type: ignore[assignment]  # refuses before any lock is taken.
+    # One test below exercises flock() directly to prove a second installer
+    # process is refused; it is POSIX-only and is skipped on this platform.
 
 import pytest
 
@@ -441,6 +447,9 @@ class TestInstall:
         marker = json.loads((lr.runtime_dir() / ".slm-managed").read_text())
         assert marker["verified"] is False
 
+    @pytest.mark.skipif(
+        fcntl is None, reason="fcntl is POSIX-only; this test exercises flock() directly",
+    )
     def test_install_refuses_when_lock_already_held_by_another_process(self, monkeypatch):
         self._patch_happy_steps(monkeypatch)
         venv_calls = []
@@ -461,6 +470,11 @@ class TestInstall:
             fcntl.flock(external_fh.fileno(), fcntl.LOCK_UN)
             external_fh.close()
 
+    @pytest.mark.skipif(
+        fcntl is None,
+        reason="_acquire_install_lock() is a deliberate no-op without fcntl "
+               "(Laya is Apple-Silicon only); nothing POSIX-specific to prove here",
+    )
     def test_lock_primitive_refuses_a_second_holder(self, tmp_path):
         lock_path = tmp_path / "install.lock"
         fh1 = lr._acquire_install_lock(lock_path)

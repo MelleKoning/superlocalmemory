@@ -397,3 +397,26 @@ def engine_with_mock_deps(mode_a_config, mock_embedder, tmp_path):
 
     yield engine
     engine.close()
+
+
+@pytest.fixture()
+def safely_owned_interpreter(monkeypatch):
+    """Treat the interpreter running the suite as safely owned, only when it is not.
+
+    Several Laya tests point an environment's ``bin/python`` at
+    ``sys.executable``. ``laya_interpreter.refusal()`` resolves that link and
+    checks who can change the real file, so on a CI runner whose shared tool
+    cache is group-writable the rule correctly refuses it - which is not what
+    those tests exercise. Where ``sys.executable`` already passes (a normal
+    developer machine) this does nothing and the real rule runs end to end.
+    The rule's own refusal tests build deliberately badly-owned files and do
+    not use this fixture.
+    """
+    from superlocalmemory.core import laya_interpreter
+
+    try:
+        real = Path(sys.executable).resolve(strict=True)
+    except (OSError, RuntimeError):
+        real = None
+    if real is None or not laya_interpreter._safely_owned(real):
+        monkeypatch.setattr(laya_interpreter, "_safely_owned", lambda path: True)

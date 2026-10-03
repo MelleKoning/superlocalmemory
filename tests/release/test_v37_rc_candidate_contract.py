@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -32,4 +32,14 @@ def test_citation_metadata_matches_the_package_release() -> None:
     assert version is not None
     assert release_date is not None
     assert version.group(1) == package_version.group(1)
-    assert date.fromisoformat(release_date.group(1)) <= date.today()
+
+    recorded = date.fromisoformat(release_date.group(1))
+    utc_today = datetime.now(timezone.utc).date()
+    # date-released is recorded in the releaser's local timezone (IST, UTC+5:30);
+    # CI evaluates date.today() in UTC. A release cut late in the IST day lands
+    # on the next UTC calendar date, so the recorded date can be legitimately
+    # one day ahead of UTC "today" without being a real future date typo.
+    assert recorded <= utc_today + timedelta(days=1), (
+        f"CITATION.cff date-released {recorded.isoformat()} is more than one "
+        f"day ahead of UTC today {utc_today.isoformat()}"
+    )

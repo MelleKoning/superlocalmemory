@@ -29,6 +29,7 @@ from superlocalmemory.storage.models import AtomicFact, RecallResponse, Retrieva
 
 _FAKE_WORKER = r'''
 import json, os, sys, time
+
 mode = os.environ.get("FAKE_LAYA_MODE", "normal")
 log = os.environ.get("FAKE_LAYA_LOG")
 for raw in sys.stdin:
@@ -410,3 +411,8 @@ class TestOneLayaPerDataFolder:
             first.shutdown()
             if second is not None:
                 second.shutdown()
+
+
+# A worker is started from the interpreter running the suite; on a CI runner
+# whose tool cache is group-writable the Laya safety rule would refuse it.
+pytestmark = pytest.mark.usefixtures("safely_owned_interpreter")

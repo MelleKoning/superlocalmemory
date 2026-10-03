@@ -219,6 +219,13 @@ jobs:
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
           packages-dir: dist/python/
+          # Belt-and-suspenders: the registry-guard step above already skips
+          # this step when PyPI reports the version exists, but we publish
+          # from the laptop first and that check can race a newly-uploaded
+          # file PyPI has not finished indexing yet. skip-existing makes the
+          # upload itself idempotent so that race can never turn into a hard
+          # failure ("File already exists") on an otherwise-successful release.
+          skip-existing: true
 
       - name: Publish to npm
         if: steps.registry.outputs.npm_exists != 'true'

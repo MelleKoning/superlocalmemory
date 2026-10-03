@@ -62,7 +62,8 @@ def test_inventory_matches_the_real_slm_parser_tree() -> None:
     """A CLI addition cannot ship without Hermes reachability."""
     inventory = json.loads((PLUGIN / "command-inventory.json").read_text(encoding="utf-8"))
     result = subprocess.run(
-        [str(REPO / ".venv" / "bin" / "slm"), "--help"],
+        # The CLI of the interpreter running the suite (CI has no .venv).
+        [sys.executable, "-m", "superlocalmemory.cli.main", "--help"],
         text=True, capture_output=True, check=True, timeout=30,
     )
     match = re.search(r"\{([^}]+)\} \.\.\.", result.stdout)

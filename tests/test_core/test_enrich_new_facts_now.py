@@ -116,7 +116,21 @@ class TestTheVectorIsAttached:
         Searching by meaning reads the vector projection, not the canonical
         column. Writing only the column looks like success at the database level
         and leaves the memory exactly as unfindable as before.
+
+        A deterministic local embedder is injected through the engine's own
+        seam (``engine._embedder`` — see ``_local_embedder_mock`` above and
+        ``tests/core/test_warm_guard_embed.py``) rather than relying on
+        whatever real embedder the engine fixture would otherwise build: CI has
+        no local model and no Ollama, so the real embedder is never warm and
+        this test would otherwise fail on "is it embedded" instead of on the
+        thing it is actually pinning (the column/projection pair).
         """
+        fake = _local_embedder_mock()
+        fake._available = True
+        fake.embed.return_value = [0.01] * 768
+        fake.compute_fisher_params.return_value = ([0.0] * 768, [1.0] * 768)
+        engine._embedder = fake
+
         fact_id = _fact_without_a_vector(engine, "The Helsinki ledger reconciliation is deferred.")
         assert _state(engine, fact_id) == ("null", 0), "test setup did not strip the vector"
 
@@ -150,6 +164,12 @@ class TestTheVectorIsAttached:
         meaning, and is exactly the state this number must not claim success for.
         So the end state is checked too.
         """
+        fake = _local_embedder_mock()
+        fake._available = True
+        fake.embed.return_value = [0.02] * 768
+        fake.compute_fisher_params.return_value = ([0.0] * 768, [1.0] * 768)
+        engine._embedder = fake
+
         fact_id = engine.store_fast("Procurement confirmed the tariff schedule.")[0]
         spy = MagicMock(wraps=engine._embedder)
         spy._config = None

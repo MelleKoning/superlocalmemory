@@ -21,6 +21,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from superlocalmemory.server.unified_daemon import create_app
+from tests.helpers.env_capabilities import (
+    NO_VECTOR_SEARCH_REASON,
+    vector_search_available,
+)
 from superlocalmemory.storage.migrations import (
     M018_ingestion_operations,
     M032_write_coordinator_admission,
@@ -589,6 +593,9 @@ class TestMcpSurface:
 # _enrich_and_release → engine.enrich_new_facts_now.
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skipif(
+    not vector_search_available(), reason=NO_VECTOR_SEARCH_REASON,
+)
 class TestRoutedInlineEnrichment:
     @staticmethod
     def _spy_enrich(engine, monkeypatch):

@@ -33,6 +33,7 @@ _MEASURED = "20aed815fc6acde75733882e7ec0e3f28aeb9717"
 
 _FAKE_WORKER = r'''
 import json, os, sys, time
+
 mode = os.environ.get("FAKE_MODE", "ok")
 delay = float(os.environ.get("FAKE_JUDGE_DELAY", "0"))
 first_delay = float(os.environ.get("FAKE_FIRST_JUDGE_DELAY", "-1"))
@@ -300,3 +301,8 @@ class TestOnlyTheMeasuredWeightsMayAbstain:
         judge = LayaSufficiencyJudge(model=model, start=False)
         assert judge.threshold == 0.0
         assert judge.calibration_status == "not_measured_cannot_abstain"
+
+
+# A worker is started from the interpreter running the suite; on a CI runner
+# whose tool cache is group-writable the Laya safety rule would refuse it.
+pytestmark = pytest.mark.usefixtures("safely_owned_interpreter")

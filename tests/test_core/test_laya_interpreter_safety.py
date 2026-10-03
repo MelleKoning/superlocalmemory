@@ -88,10 +88,11 @@ def _script(path: Path, mode: int = 0o755) -> Path:
 
 
 class TestTheRule:
-    def test_the_interpreter_slm_runs_on_is_accepted(self):
+    def test_the_interpreter_slm_runs_on_is_accepted(self, safely_owned_interpreter):
         assert lr.check_interpreter(sys.executable) == ""
 
-    def test_a_python_inside_an_environment_is_accepted(self, tmp_path, not_temp):
+    def test_a_python_inside_an_environment_is_accepted(
+            self, tmp_path, not_temp, safely_owned_interpreter):
         assert lr.check_interpreter(str(_venv(tmp_path / "venv"))) == ""
 
     def test_a_shell_is_refused(self):
@@ -214,7 +215,8 @@ def recording_worker(tmp_path, monkeypatch):
 
 
 class TestTheCanaryIsBounded:
-    def test_the_load_request_carries_a_memory_cap(self, recording_worker, tmp_path):
+    def test_the_load_request_carries_a_memory_cap(
+            self, recording_worker, tmp_path, safely_owned_interpreter):
         ok, _ = lr.verify(sys.executable, "", str(tmp_path))
         assert ok is True
         load = json.loads(recording_worker.read_text().splitlines()[0])
@@ -222,7 +224,7 @@ class TestTheCanaryIsBounded:
         assert isinstance(load.get("memory_limit_mb"), int) and load["memory_limit_mb"] > 0
 
     def test_no_second_model_while_the_answer_check_holds_the_slot(
-            self, recording_worker, tmp_path, monkeypatch):
+            self, recording_worker, tmp_path, monkeypatch, safely_owned_interpreter):
         from superlocalmemory.retrieval import sufficiency
 
         held = sufficiency._take_slot()
@@ -239,7 +241,8 @@ class TestTheCanaryIsBounded:
         assert "running" in reason.lower()
         assert spawned == []
 
-    def test_the_slot_is_given_back_afterwards(self, recording_worker, tmp_path):
+    def test_the_slot_is_given_back_afterwards(
+            self, recording_worker, tmp_path, safely_owned_interpreter):
         from superlocalmemory.retrieval import sufficiency
 
         assert lr.verify(sys.executable, "", str(tmp_path))[0] is True

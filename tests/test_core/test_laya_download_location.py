@@ -77,9 +77,16 @@ class _FinishedDownload:
 
 
 @pytest.fixture()
-def offline_install(monkeypatch, tmp_path):
+def offline_install(monkeypatch, tmp_path, safely_owned_interpreter):
     """Every step but the network: the venv is a real interpreter, pip is a
-    no-op, and the download puts files where the real library would."""
+    no-op, and the download puts files where the real library would.
+
+    The venv's python is a symlink to ``sys.executable`` (below), so
+    ``lr.install()``'s final ownership check lands on the real running
+    interpreter. ``safely_owned_interpreter`` keeps that check honest without
+    making it a precondition these tests have to satisfy by luck of where CI
+    happens to install Python.
+    """
     worker = tmp_path / "worker.py"
     worker.write_text(_WORKER)
     monkeypatch.setattr(lr, "WORKER_PATH", worker)

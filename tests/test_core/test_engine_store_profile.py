@@ -28,6 +28,10 @@ import pytest
 
 from superlocalmemory.core.engine import MemoryEngine
 from superlocalmemory.storage.models import AtomicFact, FactType
+from tests.helpers.env_capabilities import (
+    NO_VECTOR_SEARCH_REASON,
+    vector_search_available,
+)
 
 TARGET = "profile-target"
 
@@ -284,7 +288,22 @@ def _warm_mock_embedder(eng, monkeypatch):
     )
 
 
+@pytest.mark.skipif(
+    not vector_search_available(), reason=NO_VECTOR_SEARCH_REASON,
+)
 class TestEnrichNewFactsNowProfile:
+    """Enrichment only counts a fact once a search on meaning can reach it,
+
+    which needs a real vector projection — see ``_attach_vector`` in
+    ``engine.py``. The embedder here is already faked (``_warm_mock_embedder``
+    below), so that is not what this skip guards: it is the SQLite build's
+    ``enable_load_extension`` capability that ``sqlite-vec`` needs to load at
+    all (the same gap ``test_enrich_new_facts_now.py::TestTheVectorIsAttached``
+    already guards against). Without it the projection can never succeed, so
+    ``enriched`` stays 0 regardless of the embedder — a capability gap, not a
+    routing defect, and not this test's job to prove.
+    """
+
     def _spy_get_fact(self, eng, monkeypatch):
         """Record every (fact_id, profile_id) lookup, then serve the real row."""
         real = eng._db.get_fact

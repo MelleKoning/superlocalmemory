@@ -16,9 +16,16 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
 from superlocalmemory.storage.database import DatabaseManager
 
 
+@pytest.mark.skipif(
+    not hasattr(sqlite3.Connection, "setconfig"),
+    reason="Connection.setconfig (Python 3.12+) is needed to turn off the close-time "
+    "checkpoint; on 3.11 SLM warns once and runs without it",
+)
 def test_close_leaves_wal_uncheckpointed(tmp_path) -> None:
     """With NO_CKPT_ON_CLOSE, close() must not checkpoint the WAL.
 

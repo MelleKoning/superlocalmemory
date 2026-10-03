@@ -190,6 +190,13 @@ class TestImportlibMetadataReadsDisk:
         (upgraded / "METADATA").write_text(
             "Metadata-Version: 2.1\nName: fakepkg\nVersion: 2.0.0\n", encoding="utf-8"
         )
+        # A real upgrade lands seconds after the install it replaces. The
+        # metadata finder caches a folder by its modification time, so a
+        # same-tick swap (a fast CI disk) would look unchanged; move the clock
+        # on the way an upgrade does.
+        import os
+        later = tmp_path.stat().st_mtime_ns + 2_000_000_000
+        os.utime(tmp_path, ns=(later, later))
 
         assert md.version("fakepkg") == "2.0.0", (
             "importlib.metadata returned a cached version. The staleness check "
