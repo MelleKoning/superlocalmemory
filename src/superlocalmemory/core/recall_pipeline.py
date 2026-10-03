@@ -113,27 +113,22 @@ def _preserve_exact_lexical_evidence(
     they must not demote a fact containing the caller's exact query behind
     semantically similar noise. This guard runs after every learned layer and
     changes only ordering; it does not introduce or bypass evidence.
+    What counts as an exact hit is defined once, in retrieval.exact_lexical,
+    which the kind-aware pass reads too so it never moves anything above it.
     """
-    normalized_query = " ".join(query.casefold().split())
-    if len(normalized_query) < 3 or len(response.results) < 2:
+    from superlocalmemory.retrieval.exact_lexical import (
+        bm25_strength,
+        is_exact_lexical_hit,
+        normalize_query,
+    )
+
+    normalized_query = normalize_query(query)
+    if len(response.results) < 2:
         return
-    exact = [
-        result
-        for result in response.results
-        if (
-            float((result.channel_scores or {}).get("bm25", 0.0) or 0.0) > 0.0
-            and normalized_query
-            in " ".join(result.fact.content.casefold().split())
-        )
-    ]
+    exact = [r for r in response.results if is_exact_lexical_hit(r, normalized_query)]
     if not exact:
         return
-    strongest = max(
-        exact,
-        key=lambda result: float(
-            (result.channel_scores or {}).get("bm25", 0.0) or 0.0,
-        ),
-    )
+    strongest = max(exact, key=bm25_strength)
     if response.results[0] is strongest:
         return
     response.results = [
@@ -1413,20 +1408,18 @@ def run_recall(
     _preserve_exact_lexical_evidence(response, query)
 
     # Kind-aware ordering: "what did we decide" favours decisions, "current
-    # status" puts the newest current-state memory first. Bounded, read-only,
-    # no model; a question with no intent keeps its order (retrieval/kind_aware).
+    # status" puts the newest confirmed current-state memory about the named
+    # subject first. Bounded, read-only, no model; never above the exact hit
+    # pinned just above; retrieval.kind_aware=False skips it (retrieval/kind_aware).
     if response.results:
         from superlocalmemory.core.working_memory import ADMIT_TOP_N as _KTOP
-        from superlocalmemory.retrieval.kind_aware import DEFAULT_BOOST, apply_kind_awareness
+        from superlocalmemory.retrieval import kind_aware as _kind_aware
 
-        _rc = getattr(config, "retrieval", None)
         _shown_before_kind = [r.fact.fact_id for r in response.results[:_KTOP]
                               if getattr(r, "fact", None) is not None]
-        response.results = apply_kind_awareness(
-            response.results, query,
-            enabled=getattr(_rc, "kind_aware", True) is not False,
-            boost=getattr(_rc, "kind_aware_boost", DEFAULT_BOOST),
-        )
+        response.results = _kind_aware.apply_for_recall(
+            response.results, query, profile_id, getattr(config, "retrieval", None),
+            engine=retrieval_engine, db=db)
         _resettle_shown_after_bias(play_sink, profile_id, response.results,
                                    _shown_before_kind)
     _mark("learning+ranking")

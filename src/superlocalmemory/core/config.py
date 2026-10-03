@@ -455,6 +455,24 @@ class RetrievalConfig:
     write_recency_floor_enabled: bool = True
     write_recency_floor_minutes: float = 60.0
 
+    # 4.1.19: kind-aware ordering (retrieval/kind_aware.py). False = recall's
+    # order is exactly what it is without the pass. The boost is how far a
+    # memory whose kind matches the question may pass a neighbour with a higher
+    # ranking key, as a fraction of its own key; clamped to [0, 0.5], and a
+    # non-number reads as 0.15. Only the boolean False turns the pass off.
+    kind_aware: bool = True
+    kind_aware_boost: float = 0.15
+
+    def __post_init__(self) -> None:
+        from superlocalmemory.retrieval.kind_aware import validated_settings
+
+        enabled, boost = validated_settings(self.kind_aware, self.kind_aware_boost)
+        if (enabled, boost) != (self.kind_aware, self.kind_aware_boost):
+            logger.warning("retrieval.kind_aware=%r, kind_aware_boost=%r is out of range; "
+                           "using %r, %r", self.kind_aware, self.kind_aware_boost,
+                           enabled, boost)
+        self.kind_aware, self.kind_aware_boost = enabled, boost
+
 
 # ---------------------------------------------------------------------------
 # Math Config

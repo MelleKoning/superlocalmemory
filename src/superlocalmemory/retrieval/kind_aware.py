@@ -7,30 +7,48 @@
 "What did we decide about X" wants a decision, "how do I ..." wants a how-to,
 "what is the current state of X" wants the newest current-state memory. This
 module reads that intent from the question with fixed patterns - no model, no
-store write - and makes two bounded adjustments to the finished ranking:
+store write - and makes two bounded adjustments to the finished ranking. It may
+move only what it has evidence for; every other result keeps exactly the order
+the pipeline gave it.
 
-1. A memory whose kind matches the intent may move up past a neighbour whose
-   score is within the boost (default 15%). It can never jump a clearly better
-   result. A confirmed kind counts fully, a suggested one by half: a model's
-   suggestion is a weaker signal than the kind its author declared.
-2. When the question asks for a current state or a decision, the newer of two
-   such memories about the same subject (a shared entity) is placed first, and
-   the older one says which memory is newer. Nothing is removed or hidden.
+1. A memory whose kind matches the intent may move up past a neighbour with
+   less kind evidence, compared on the pipeline's own ranking key
+   (``core.recall_pipeline._rank_key``), when its key lifted by the boost
+   (default 15% of its magnitude, never more than 50%) beats the neighbour's.
+   It can never jump a clearly better result. A confirmed kind counts fully, a
+   suggested one by half: a model's suggestion is a weaker signal than the kind
+   its author declared.
+2. When the question asks for a current state or a decision, a newer memory is
+   placed above an older one only when BOTH carry that kind CONFIRMED (by a
+   user or a caller - LLD I6, Varun's V2) and both mention an entity the
+   QUESTION names. The older one then says which memory is newer. A suggested
+   kind never drives this, and neither does an entity the question does not
+   name. Nothing is removed or hidden.
 
-A question that names no intent is returned in exactly the order it came in.
+Neither adjustment moves anything above the exact lexical hit recall pins first
+(``retrieval.exact_lexical``). A question that names no intent, or where no
+memory's kind matches it, is returned in exactly the order it came in.
 """
 
 from __future__ import annotations
 
+import logging
+import math
 import re
-from dataclasses import dataclass
-from typing import Any
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, replace
+from typing import Any, Union
 
+from superlocalmemory.retrieval.exact_lexical import is_exact_lexical_hit, normalize_query
 from superlocalmemory.storage.memory_kinds import MemoryKind, is_confirmed
 
+logger = logging.getLogger(__name__)
+
 #: Default ceiling on the kind boost: a matching memory can pass a neighbour
-#: whose score is at most this fraction higher.
+#: whose ranking key is at most this fraction (of its own) higher.
 DEFAULT_BOOST = 0.15
+#: The most the boost may ever be, whatever the configuration says.
+MAX_BOOST = 0.5
 #: Only the head of the list is re-ordered; below it nobody reads the order.
 WINDOW = 10
 
@@ -57,6 +75,9 @@ _CUES: tuple[tuple[MemoryKind, re.Pattern[str]], ...] = (
 )
 _LATEST_KINDS = frozenset({MemoryKind.STATUS, MemoryKind.DECISION})
 
+#: The entities a question names: given, or read on demand (and only if needed).
+Subject = Union[Iterable[str], Callable[[], Iterable[str]], None]
+
 
 @dataclass(frozen=True, slots=True)
 class Intent:
@@ -66,6 +87,10 @@ class Intent:
     def wants_latest(self) -> bool:
         return bool(self.kinds & _LATEST_KINDS)
 
+    @property
+    def values(self) -> frozenset[str]:
+        return frozenset(k.value for k in self.kinds)
+
 
 def query_intent(query: str) -> Intent:
     """The memory kinds a question asks for (possibly none)."""
@@ -74,75 +99,206 @@ def query_intent(query: str) -> Intent:
     return Intent(frozenset(kind for kind, cue in _CUES if cue.search(query)))
 
 
+def clamp_boost(value: object) -> float:
+    """A usable boost: a finite number clamped to [0, MAX_BOOST]; anything else
+    (text, a boolean, NaN, infinity, nothing) reads as DEFAULT_BOOST."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return DEFAULT_BOOST
+    number = float(value)
+    if not math.isfinite(number):
+        return DEFAULT_BOOST
+    return min(MAX_BOOST, max(0.0, number))
+
+
+def validated_settings(enabled: object, boost: object) -> tuple[bool, float]:
+    """``(kind_aware, kind_aware_boost)`` as recall may use them. Only the
+    boolean False turns the pass off; any other non-boolean reads as the
+    default (on), the rule every other memory-kind switch follows."""
+    return (enabled if isinstance(enabled, bool) else True), clamp_boost(boost)
+
+
 def _kind_weight(fact: Any, intent: Intent) -> float:
     kind = getattr(fact, "memory_kind", None)
-    if not kind or kind not in {k.value for k in intent.kinds}:
+    if not kind or kind not in intent.values:
         return 0.0
     return 1.0 if is_confirmed(getattr(fact, "memory_kind_source", None)) else 0.5
 
 
-def _boosted_order(results: list, intent: Intent, boost: float) -> list:
-    """Stable re-sort of the head by score x (1 + boost x weight)."""
-    head, tail = results[:WINDOW], results[WINDOW:]
-    keyed = []
-    for position, r in enumerate(head):
-        weight = _kind_weight(r.fact, intent)
-        keyed.append((-(float(r.score or 0.0) * (1.0 + boost * weight)), position, r, weight))
-    keyed.sort(key=lambda item: (item[0], item[1]))
-    out = []
-    for _key, position, r, weight in keyed:
-        if weight and len(out) < position:  # moved up because of its kind
-            r.evidence_chain = [*(r.evidence_chain or []), f"kind_intent({r.fact.memory_kind})"]
-        out.append(r)
-    return out + tail
+def _boosted_order(head: list, intent: Intent, boost: float,
+                   floor: int) -> tuple[list[int], set[int]]:
+    """Indices of ``head`` in their new order, and which ones the boost moved.
 
+    Each matching memory, in incoming order, moves up one neighbour at a time
+    while the neighbour has less kind evidence AND a ranking key below the
+    memory's lifted key (key + boost x weight x |key|; relative to |key| so a
+    negative learned utility is still lifted, never sunk). Ties keep the
+    incoming order. Nothing moves above ``floor``.
+    """
+    order = list(range(len(head)))
+    weights = [_kind_weight(r.fact, intent) for r in head]
+    if boost <= 0.0 or not any(weights):
+        return order, set()
+    from superlocalmemory.core.recall_pipeline import _rank_key
 
-def _same_subject(a: Any, b: Any) -> bool:
-    ea = set(getattr(a, "canonical_entities", None) or [])
-    eb = set(getattr(b, "canonical_entities", None) or [])
-    return bool(ea & eb)
-
-
-def _latest_first(results: list, intent: Intent) -> list:
-    """Within the head, a newer same-kind, same-subject memory precedes an older one."""
-    wanted = {k.value for k in intent.kinds & _LATEST_KINDS}
-    head, tail = list(results[:WINDOW]), results[WINDOW:]
-    changed = True
-    while changed:
-        changed = False
-        for i in range(len(head)):
-            for j in range(i + 1, len(head)):
-                older, newer = head[i].fact, head[j].fact
-                if (older.memory_kind in wanted and newer.memory_kind == older.memory_kind
-                        and _same_subject(older, newer)
-                        and (newer.created_at or "") > (older.created_at or "")):
-                    mover = head.pop(j)
-                    head.insert(i, mover)
-                    note = f"newer:{newer.fact_id}"
-                    if note not in (head[i + 1].evidence_chain or []):
-                        head[i + 1].evidence_chain = [*(head[i + 1].evidence_chain or []), note]
-                    changed = True
-                    break
-            if changed:
+    keys = [-_rank_key(r)[0] for r in head]
+    lifted = [k + boost * w * abs(k) for k, w in zip(keys, weights)]
+    moved: set[int] = set()
+    for item in range(len(head)):
+        if not weights[item]:
+            continue
+        pos = order.index(item)
+        while pos > floor:
+            above = order[pos - 1]
+            if weights[above] >= weights[item] or lifted[above] >= lifted[item]:
                 break
-    return head + tail
+            order[pos - 1], order[pos] = item, above
+            pos -= 1
+            moved.add(item)
+    return order, moved
+
+
+def _subject_ids(subject: Subject) -> frozenset[str]:
+    if callable(subject):
+        try:
+            subject = subject()
+        except Exception as exc:  # noqa: BLE001 - ordering is advisory
+            logger.debug("kind-aware: the question's subject was unreadable (%s)",
+                         type(exc).__name__)
+            return frozenset()
+    if subject is None or isinstance(subject, str):
+        return frozenset()
+    return frozenset(str(s) for s in subject)
+
+
+def _confirmed_latest(fact: Any, wanted: frozenset[str]) -> bool:
+    return (getattr(fact, "memory_kind", None) in wanted
+            and is_confirmed(getattr(fact, "memory_kind_source", None)))
+
+
+def _named(fact: Any, subject: frozenset[str]) -> frozenset[str]:
+    return subject & frozenset(str(e) for e in (getattr(fact, "canonical_entities", None) or ()))
+
+
+def _latest_first(head: list, order: list[int], wanted: frozenset[str],
+                  subject: frozenset[str], floor: int, notes: dict[int, list[str]]) -> list[int]:
+    """A newer memory moves above the older ones it shares a confirmed kind and
+    a question-named entity with; each older one it passes is told so.
+
+    One pass in incoming order; a mover never jumps a memory about the same
+    subject that is as new or newer, so subjects that do not chain cannot loop.
+    """
+    eligible = {i for i in order if _confirmed_latest(head[i].fact, wanted)
+                and _named(head[i].fact, subject)}
+    if len(eligible) < 2:
+        return order
+    order = list(order)
+
+    def same(a: int, b: int) -> bool:
+        fa, fb = head[a].fact, head[b].fact
+        return fa.memory_kind == fb.memory_kind and bool(_named(fa, subject) & _named(fb, subject))
+
+    for mover in [i for i in order[floor:] if i in eligible]:
+        pos, target = order.index(mover), None
+        born = str(head[mover].fact.created_at or "")
+        for i in range(pos - 1, floor - 1, -1):
+            other = order[i]
+            if other not in eligible or not same(other, mover):
+                continue
+            if str(head[other].fact.created_at or "") >= born:
+                break
+            target = i
+        if target is None:
+            continue
+        for older in order[target:pos]:
+            if older in eligible and same(older, mover):
+                notes.setdefault(older, []).append(f"newer:{head[mover].fact.fact_id}")
+        order.insert(target, order.pop(pos))
+    return order
+
+
+def _restamped(results: list, head: list, order: list[int],
+               notes: dict[int, list[str]]) -> list:
+    """New result objects for the new order; the input is not modified."""
+    ordered = [*((i, head[i]) for i in order), *((None, r) for r in results[len(head):])]
+    out = []
+    for rank, (index, r) in enumerate(ordered, start=1):
+        chain = list(r.evidence_chain or [])
+        chain += [n for n in notes.get(index, ()) if n not in chain]
+        out.append(replace(r, rank_position=rank, evidence_chain=chain))
+    return out
 
 
 def apply_kind_awareness(results: list, query: str, *, enabled: bool = True,
-                         boost: float = DEFAULT_BOOST) -> list:
-    """``results`` re-ordered for the question's intent; the same list object's
-    items, nothing added or removed. Unchanged when disabled or no intent."""
+                         boost: float = DEFAULT_BOOST, subject: Subject = None) -> list:
+    """``results`` re-ordered for the question's intent: the same items, nothing
+    added or removed. The input list is returned untouched when disabled, when
+    the question names no intent, or when nothing moved.
+
+    ``subject``: the entity ids the question names (or a callable returning
+    them, called only when latest-first could apply). Without it latest-first
+    never fires: two memories sharing some entity is not evidence that they
+    describe the subject that was asked about.
+    """
     if not enabled or not results:
         return results
     intent = query_intent(query)
     if not intent.kinds:
         return results
-    ordered = _boosted_order(list(results), intent, max(0.0, float(boost)))
-    if intent.wants_latest:
-        ordered = _latest_first(ordered, intent)
-    for rank, r in enumerate(ordered, start=1):
-        r.rank_position = rank
-    return ordered
+    head = list(results[:WINDOW])
+    floor = 1 if is_exact_lexical_hit(head[0], normalize_query(query)) else 0
+    order, moved = _boosted_order(head, intent, clamp_boost(boost), floor)
+    notes: dict[int, list[str]] = {
+        i: [f"kind_intent({head[i].fact.memory_kind})"] for i in moved}
+    wanted = frozenset(k.value for k in intent.kinds & _LATEST_KINDS)
+    if wanted and sum(_confirmed_latest(r.fact, wanted) for r in head[floor:]) >= 2:
+        order = _latest_first(head, order, wanted, _subject_ids(subject), floor, notes)
+    if order == list(range(len(head))):
+        return results
+    return _restamped(results, head, order, notes)
 
 
-__all__ = ["DEFAULT_BOOST", "Intent", "WINDOW", "apply_kind_awareness", "query_intent"]
+def query_subject(query: str, profile_id: str, *, resolver: Any = None,
+                  db: Any = None) -> frozenset[str]:
+    """The entities the question names, resolved read-only exactly the way the
+    ``about`` facet resolves a name (``facets.entity_ids_named``). Empty when it
+    names none or the store cannot be read - never an error, never a write."""
+    if resolver is None and db is None:
+        return frozenset()
+    from superlocalmemory.retrieval.entity_channel import extract_query_entities
+    from superlocalmemory.retrieval.facets import entity_ids_named
+
+    try:
+        names = extract_query_entities(query)
+        if not names:
+            return frozenset()
+        return frozenset(entity_ids_named(db, names, profile_id, resolver))
+    except Exception as exc:  # noqa: BLE001 - ordering is advisory
+        logger.debug("kind-aware: the question's subject could not be read (%s)",
+                     type(exc).__name__)
+        return frozenset()
+
+
+def apply_for_recall(results: list, query: str, profile_id: str, retrieval_config: Any,
+                     *, engine: Any = None, db: Any = None) -> list:
+    """The pass as recall runs it: settings from ``retrieval.kind_aware`` and
+    ``retrieval.kind_aware_boost``, the subject read from the store the
+    retrieval used and only when latest-first could apply. Off means the input
+    list comes back as it went in."""
+    enabled, boost = validated_settings(
+        getattr(retrieval_config, "kind_aware", True),
+        getattr(retrieval_config, "kind_aware_boost", DEFAULT_BOOST))
+    if not enabled:
+        return results
+    store = getattr(engine, "_db", None)
+    store = db if store is None else store
+    resolver = getattr(getattr(engine, "_entity", None), "_resolver", None)
+    return apply_kind_awareness(
+        results, query, boost=boost,
+        subject=lambda: query_subject(query, profile_id, resolver=resolver, db=store))
+
+
+__all__ = [
+    "DEFAULT_BOOST", "Intent", "MAX_BOOST", "WINDOW", "apply_for_recall",
+    "apply_kind_awareness", "clamp_boost", "query_intent", "query_subject",
+    "validated_settings",
+]
