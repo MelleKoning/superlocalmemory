@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Say which memory a new one replaces.** `remember(..., replaces=<id>)`
   retires the old memory (kept, never deleted) and recall shows the new one.
   Undoing it through correction review brings the old memory back exactly.
+  It works with a per-request `profile_id` too: a client routed to its own
+  profile can replace a memory and undo it there (`review_correction` and
+  `list_corrections` take the same `profile_id`), without switching the
+  daemon's active profile.
 - **Upgrades keep a verified copy you can go back to:** restore points, a
   restore that also brings back memories saved since the copy, and a prepared
   path back to the previous version (`slm db restore-points | restore |
@@ -97,8 +101,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Macs shared by several user accounts:** the per-account check is still not
   in this release. Turn on company mode (Team → Access policy) on a shared Mac.
-- **`replaces` works only when saving to the active profile**; a save routed
-  to another profile is refused before anything is written.
 - **Classifying existing memories with a cloud model** uses on-device rules.
 - **Drive does not rotate old backups**: delete plain-text backups made before
   this release yourself.
