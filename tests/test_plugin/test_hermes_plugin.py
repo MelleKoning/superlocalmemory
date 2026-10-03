@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import importlib.util
 import pathlib
 import re
@@ -65,10 +66,13 @@ def test_inventory_matches_the_real_slm_parser_tree() -> None:
         # The CLI of the interpreter running the suite (CI has no .venv).
         [sys.executable, "-m", "superlocalmemory.cli.main", "--help"],
         text=True, capture_output=True, check=True, timeout=30,
+        # argparse wraps the command list to the terminal width; on a narrow
+        # CI terminal the list breaks across lines. Pin a wide one.
+        env={**os.environ, "COLUMNS": "10000"},
     )
-    match = re.search(r"\{([^}]+)\} \.\.\.", result.stdout)
+    match = re.search(r"\{([^}]+)\}\s+\.\.\.", result.stdout)
     assert match, result.stdout[:500]
-    parser_commands = set(match.group(1).split(","))
+    parser_commands = {c.strip() for c in match.group(1).split(",") if c.strip()}
     expected = set(inventory["primary_commands"]) | set(inventory["aliases"])
     assert parser_commands == expected
 

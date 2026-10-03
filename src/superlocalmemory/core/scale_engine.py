@@ -85,7 +85,13 @@ class ScaleEngineManager:
     def promotion_journal_path(self) -> Path:
         return self.data_dir / self.PROMOTION_JOURNAL
 
-    def status(self) -> dict[str, Any]:
+    def stage_manifests(self) -> list[dict[str, Any]]:
+        """Every staged projection's manifest, read from disk and nothing else.
+
+        Callers that only need the stages (retiring them after a restore) use
+        this: ``status()`` also inspects the runtime, which needs the vector
+        extension a machine may not be able to load.
+        """
         manifests: list[dict[str, Any]] = []
         if self.staging_root.exists():
             for path in sorted(self.staging_root.glob(f"*/{self.MANIFEST_NAME}")):
@@ -93,6 +99,10 @@ class ScaleEngineManager:
                     manifests.append(json.loads(path.read_text()))
                 except (OSError, json.JSONDecodeError):
                     manifests.append({"stage_id": path.parent.name, "state": "corrupt"})
+        return manifests
+
+    def status(self) -> dict[str, Any]:
+        manifests = self.stage_manifests()
         backups = (
             sorted(p.name for p in self.backup_root.glob("*") if p.is_dir())
             if self.backup_root.exists()

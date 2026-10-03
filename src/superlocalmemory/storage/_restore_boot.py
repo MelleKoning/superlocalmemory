@@ -306,7 +306,9 @@ def settle_projections_after_restore(config: Any, data_root: Path) -> str:
         from superlocalmemory.core.scale_engine import ScaleEngineManager
 
         manager = ScaleEngineManager(config)
-        for stage in manager.status().get("stages") or []:
+        # Disk-only listing: retiring must not depend on loading the vector
+        # extension, or stale copies stay "verified" on machines without it.
+        for stage in manager.stage_manifests():
             if str(stage.get("state")) in {"prepared", "verified"} and stage.get("stage_id"):
                 manager._retire_superseded_stage(str(stage["stage_id"]))
     except Exception as exc:  # noqa: BLE001 - demotion below still makes it safe
