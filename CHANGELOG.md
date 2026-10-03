@@ -5,6 +5,104 @@ All notable changes to SuperLocalMemory will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.19] — Memories know what kind they are
+
+### Added
+
+- **Nine memory kinds.** A memory can be a fact, an event, a current status, an
+  opinion, a standing rule, a decision, a how-to, a plan or a correction. You
+  or your agent can say which when saving (`kind` on `remember`, `--kind` on
+  the CLI); otherwise SLM suggests one. A suggestion changes nothing until
+  someone confirms it.
+- **Standing rules at session start.** Rules and decisions you confirmed are
+  given to every new agent session, up to ten rules and five decisions.
+  Proposed, rejected, archived, quarantined and replaced items are never
+  included.
+- **Classify existing memories** in the background (`slm kinds backfill`, or
+  HTTP), with progress, pause, cancel and an exact undo. It never changes a
+  kind you confirmed. Classifying online with Jev needs its own consent and a
+  confirmation that memory text leaves this machine.
+- **Review and confirm kinds** from agents (four new tools in the default,
+  code, full and power tool sets), the CLI (`slm kinds set | review | confirm`)
+  and HTTP.
+- **Ask for a kind of memory.** Recall, search and list take a `kind` filter.
+  "What did we decide" favours decisions, "how do I" favours how-tos, and "what
+  is the current state" puts the newest confirmed status or decision first.
+  Questions that ask for no particular kind are ranked exactly as before.
+- **Narrow a recall** by project, by the agent that saved a memory, or by who
+  or what it is about (`project`, `saved_by`, `about`). The filter applies on
+  every recall path and before the answer check, so the check judges only what
+  you will see.
+- **Say which memory a new one replaces.** `remember(..., replaces=<id>)`
+  retires the old memory (kept, never deleted) and recall shows the new one.
+  Undoing it through correction review brings the old memory back exactly.
+- **Upgrades keep a verified copy you can go back to:** restore points, a
+  restore that also brings back memories saved since the copy, and a prepared
+  path back to the previous version (`slm db restore-points | restore |
+  prepare-downgrade`).
+- **Encrypted cloud backups** (see Security), with `slm backup recovery-key` and
+  `slm backup decrypt`.
+
+### Fixed
+
+- **Recall never writes.** Asking about an unknown name no longer creates
+  entities or calls a model, which also removes a multi-second delay on the
+  first question about a new name.
+- **Enrichment no longer gets stuck** on memories that hold credentials.
+- **Memories blanked by an earlier release are repaired once**, after a
+  verified safety copy: their text, the facts searched from it, and wrongly
+  set "replaced" marks.
+- **A restore never repeats a loss.** It deletes again only what you or a
+  privacy erasure deleted, works when the live store is damaged, refuses a copy
+  made by a newer version, keeps kinds you confirmed after the copy, keeps
+  erased profiles erased in learning data, and cannot be cancelled half-way
+  through. Its messages say what actually happened.
+- **A kind you confirmed is never overwritten** by background work, and a
+  machine suggestion never changes a memory's type.
+- **The same request gives the same answer on MCP, the CLI and HTTP**,
+  including refusals. Every `--json` command prints JSON on errors too.
+- **The Hermes plugin works with the release it ships with**, and asks for
+  confirmation before `remember --replaces`.
+- **Windows:** the test suite runs on Windows again, and a read timeout in the
+  embedding worker no longer freezes it.
+- **npm install on Linux finds `python3.12` and newer** next to an older
+  `python3`, and honours `SLM_PYTHON`.
+
+### Security
+
+- **Credentials leave this machine redacted on every path.** One outbound gate
+  covers model providers, cloud embedders, summaries, the reranker, the
+  answer check, a LAN Ollama and mesh peers; a model provider's key is sent only
+  to that provider. Context given to agent sessions is redacted the same way,
+  with no last-four-character tails. Requests to this machine never go through
+  an environment proxy.
+- **Cloud backups are encrypted on this machine before upload** to GitHub or
+  Google Drive. You get a recovery key; keep it to restore on another
+  machine. Backups made by earlier releases still restore.
+- **Every new read route checks permission.**
+- **Error responses no longer include file paths or internal messages.**
+
+### Changed
+
+- **Credentials you save are stored as written.** Up to 4.1.18, known key
+  formats were removed on save. SLM keeps them so your agents can recall them,
+  and redacts them on the way out.
+- **Python 3.12 or newer is required**, and every check now says so.
+- **Tool sets:** default and full 54 tools, code 38, power 66. The Antigravity
+  plugin uses the power set (within Antigravity's limit) and the Cursor
+  configuration uses the code set.
+- **Recall's ceiling is 3.0 seconds** including the answer check.
+
+### Known limits
+
+- **Macs shared by several user accounts:** the per-account check is still not
+  in this release. Turn on company mode (Team → Access policy) on a shared Mac.
+- **`replaces` works only when saving to the active profile**; a save routed
+  to another profile is refused before anything is written.
+- **Classifying existing memories with a cloud model** uses on-device rules.
+- **Drive does not rotate old backups**: delete plain-text backups made before
+  this release yourself.
+
 ## [4.1.18] — Recall can say "I don't have that"
 
 ### Added
