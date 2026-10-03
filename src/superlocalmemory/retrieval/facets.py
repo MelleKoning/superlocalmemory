@@ -127,7 +127,16 @@ def _about(db: Any, fact_ids: list[str], profile_id: str, name: str, resolver: A
     return keep
 
 
-def _by_kind(db: Any, fact_ids: list[str], wanted: str) -> set[str]:
+#: Fallback only for a caller that does not pass the configured value.
+#: storage.memory_kinds.kind_fields defaults to this too, so the two never
+#: disagree when neither side is told otherwise — but every real caller
+#: SHOULD pass the live ``SLMConfig.memory_kinds.display_min_confidence``
+#: (4.1.19 M3: this used to be silently hard-coded everywhere).
+_DEFAULT_DISPLAY_MIN_CONFIDENCE = 0.20
+
+
+def _by_kind(db: Any, fact_ids: list[str], wanted: str, *,
+            display_min_confidence: float = _DEFAULT_DISPLAY_MIN_CONFIDENCE) -> set[str]:
     from superlocalmemory.storage.memory_kinds import kind_fields
 
     keep: set[str] = set()
@@ -140,14 +149,25 @@ def _by_kind(db: Any, fact_ids: list[str], wanted: str) -> set[str]:
         )
         for row in rows:
             d = dict(row)
-            if kind_fields(d)["memory_kind"] == wanted:
+            fields = kind_fields(d, display_min_confidence=display_min_confidence)
+            if fields["memory_kind"] == wanted:
                 keep.add(str(d["fact_id"]))
     return keep
 
 
 def matching_fact_ids(db: Any, fact_ids: Iterable[str], profile_id: str,
-                      facets: Facets, resolver: Any = None) -> set[str]:
-    """The subset of ``fact_ids`` that matches every requested facet."""
+                      facets: Facets, resolver: Any = None, *,
+                      display_min_confidence: float = _DEFAULT_DISPLAY_MIN_CONFIDENCE,
+                      ) -> set[str]:
+    """The subset of ``fact_ids`` that matches every requested facet.
+
+    ``display_min_confidence`` (4.1.19 M3): the kind facet's confidence
+    threshold for an unconfirmed (model-suggested) kind. Callers that have a
+    live ``SLMConfig`` should pass ``config.memory_kinds.display_min_confidence``
+    so this agrees with every other kind-aware surface; the default here
+    exists only for a caller with no config in hand and matches
+    ``storage.memory_kinds.kind_fields``'s own default.
+    """
     remaining = list(dict.fromkeys(str(f) for f in fact_ids))
     if facets.empty or not remaining:
         return set(remaining)
@@ -163,7 +183,8 @@ def matching_fact_ids(db: Any, fact_ids: Iterable[str], profile_id: str,
                 db, remaining, profile_id, facets.about, resolver)]
         if facets.kind is not None and remaining:
             remaining = [f for f in remaining if f in _by_kind(
-                db, remaining, facets.kind)]
+                db, remaining, facets.kind,
+                display_min_confidence=display_min_confidence)]
     except Exception as exc:  # noqa: BLE001 - a filter that cannot run keeps nothing
         logger.warning("Recall facet filter failed (%s); no results kept", type(exc).__name__)
         return set()

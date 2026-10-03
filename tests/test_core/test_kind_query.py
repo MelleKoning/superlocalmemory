@@ -109,3 +109,64 @@ def test_search_kind_filter_keeps_only_matches(db) -> None:
     _save(db, "alpha decision", kind="decision", source="user")
     facts = search_facts(db, "alpha", "default", 10, "decision")
     assert [f.content for f in facts] == ["alpha decision"]
+
+
+# -- L2-13/M2: the kind filter is not bounded to a fixed over-fetch window ----
+
+
+def test_list_recent_kind_filter_finds_a_match_beyond_the_old_100_row_cap(db) -> None:
+    """4.1.19 L2-13 / Muse M2: the old implementation over-fetched AT MOST
+    ``overfetch_limit(limit)`` (capped at 100) and never looked further, so
+    an older confirmed row pushed past that window by newer non-matching
+    memories came back empty even though the limit was never filled and the
+    store plainly still had the match. 150 notes is comfortably past the old
+    100-row ceiling.
+    """
+    the_rule = _save(db, "Never force-push to main.", kind="rule", source="user")
+    for i in range(150):
+        _save(db, f"note {i}: the build took {i} seconds")
+    facts = list_recent_facts(db, "default", 10, "rule")
+    assert [f.fact_id for f in facts] == [the_rule]
+
+
+def test_search_kind_filter_finds_a_match_beyond_the_old_100_row_cap(db) -> None:
+    the_rule = _save(db, "alpha rule: never force-push", kind="rule", source="user")
+    for i in range(150):
+        _save(db, f"alpha note {i}")
+    facts = search_facts(db, "alpha", "default", 10, "rule")
+    assert [f.fact_id for f in facts] == [the_rule]
+
+
+def test_list_recent_kind_filter_reports_truncation_when_the_pool_is_capped(
+    db, monkeypatch,
+) -> None:
+    """When the hard cap is hit before ``limit`` is filled AND the store is
+    not exhausted, the caller must be told the answer may be incomplete —
+    never a silent short answer."""
+    from superlocalmemory.core import kind_query as kq
+
+    monkeypatch.setattr(kq, "WINDOWED_FETCH_HARD_CAP", 5)
+    _save(db, "rule one", kind="rule", source="user")
+    for i in range(20):
+        _save(db, f"note {i}")
+    truncated: list[bool] = []
+    facts = list_recent_facts(db, "default", 10, "rule", truncated=truncated)
+    assert facts == []  # the one matching rule sits past the artificially tiny cap
+    assert truncated == [True]
+
+
+def test_list_recent_kind_filter_not_truncated_when_pool_is_exhausted(db) -> None:
+    the_rule = _save(db, "rule one", kind="rule", source="user")
+    truncated: list[bool] = []
+    facts = list_recent_facts(db, "default", 10, "rule", truncated=truncated)
+    assert [f.fact_id for f in facts] == [the_rule]
+    assert truncated == [False]
+
+
+def test_list_recent_kind_filter_uses_the_configured_display_threshold(db) -> None:
+    low_conf = _save(db, "maybe a decision", kind="decision", source="model:llm")
+    db.execute("UPDATE atomic_facts SET memory_kind_confidence=0.15 WHERE fact_id=?",
+              (low_conf,))
+    assert list_recent_facts(db, "default", 10, "decision") == []
+    facts = list_recent_facts(db, "default", 10, "decision", display_min_confidence=0.10)
+    assert [f.fact_id for f in facts] == [low_conf]

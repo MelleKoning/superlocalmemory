@@ -41,7 +41,7 @@ import uuid
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 # v3.6.7: Tell mcp/server.py it is being imported inside the daemon process.
 # This suppresses the three side-effect threads (mcp-warmup, parent-watchdog,
@@ -1056,6 +1056,7 @@ def _recall_budget_s() -> float:
 def _recall_keyword_fallback(
     engine, query: str, limit: int, *, profile_id: str | None = None,
     profile: str | None = None, profile_generation: int | None = None,
+    facets: Any = None,
 ) -> dict:
     """Fast profile-scoped keyword (LIKE) fallback for /recall.
 
@@ -1067,17 +1068,64 @@ def _recall_keyword_fallback(
     4.1.14 audit: the envelope echoes the SERVED namespace (profile +
     profile_generation), exactly like the success path — a degraded routed
     recall must never be readable as an active-profile answer.
+
+    4.1.19 L2-09/L3-10: this is the ONLY recall path that used to skip every
+    hard filter. It now excludes quarantined and caller-replaced (temporal
+    validity) rows in SQL via ``current_fact_clause`` — the same predicate
+    every other "what do I know now" surface applies — and, when ``facets``
+    (project / agent / about / kind) is given, narrows through the shared
+    ``retrieval.facets.matching_fact_ids`` exactly like full recall and
+    ``core.kind_query`` do. A facet that cannot be verified (the matcher
+    raised) keeps NOTHING rather than silently serving the unfiltered pool,
+    and ``facet_filter_error`` in the envelope says why — never an unfiltered
+    answer with no word about it.
     """
-    results = []
+    results: list[dict] = []
+    has_facets = facets is not None and not facets.empty
+    facet_filter_error: str | None = None
     try:
-        rows = engine._db.execute(
-            "SELECT fact_id, content, confidence FROM atomic_facts "
-            "WHERE profile_id = ? AND content LIKE ? "
-            "ORDER BY confidence DESC LIMIT ?",
-            (profile_id or engine.profile_id, f"%{query}%", limit),
+        db = engine._db
+        pid = profile_id or engine.profile_id
+        # A facet filter runs AFTER this fetch, so overfetch the candidate
+        # pool the same way core.kind_query / retrieval.kind_filter do —
+        # otherwise a filtered answer could come back short even though
+        # enough matches exist further down the unfiltered LIKE order.
+        from superlocalmemory.retrieval.kind_filter import overfetch_limit
+        pool_limit = overfetch_limit(limit) if has_facets else limit
+        # The "af" alias matters: current_fact_clause's temporal-validity
+        # check is a correlated subquery against fact_temporal_validity,
+        # which has its own fact_id/profile_id columns. An unqualified
+        # prefix ("") leaves the outer reference unqualified too, so SQLite
+        # resolves it against the subquery's OWN table instead of the outer
+        # atomic_facts row — turning "this row was not replaced" into "no
+        # row anywhere was ever replaced" and excluding every row once any
+        # one fact in the whole profile had been superseded.
+        current_clause = db.current_fact_clause("af")
+        rows = db.execute(
+            "SELECT af.fact_id AS fact_id, af.content AS content, "
+            "af.confidence AS confidence FROM atomic_facts AS af "
+            f"WHERE af.profile_id = ? AND af.content LIKE ? {current_clause} "
+            "ORDER BY af.confidence DESC LIMIT ?",
+            (pid, f"%{query}%", pool_limit),
         )
-        for pos, r in enumerate(rows, start=1):
-            d = dict(r)
+        candidates = [dict(r) for r in rows]
+        if has_facets:
+            try:
+                from superlocalmemory.core.kind_query import (
+                    engine_display_min_confidence,
+                )
+                from superlocalmemory.retrieval.facets import matching_fact_ids
+                keep = matching_fact_ids(
+                    db, [c["fact_id"] for c in candidates], pid, facets,
+                    # M3: the configured threshold, same as full recall.
+                    display_min_confidence=engine_display_min_confidence(engine),
+                )
+                candidates = [c for c in candidates if c["fact_id"] in keep]
+            except Exception as exc:  # noqa: BLE001 - a filter that cannot
+                # run must cost results, never silently skip the filter.
+                facet_filter_error = type(exc).__name__
+                candidates = []
+        for pos, d in enumerate(candidates[:limit], start=1):
             results.append({
                 "fact_id": d.get("fact_id"),
                 "content": (d.get("content") or "")[:2400],
@@ -1087,6 +1135,8 @@ def _recall_keyword_fallback(
             })
     except Exception as exc:
         logger.warning("recall keyword fallback failed (non-fatal): %s", exc)
+        if has_facets and facet_filter_error is None:
+            facet_filter_error = type(exc).__name__
     # Every other recall carries the full response contract; this one never ran
     # the answer check, ranking or channels, and says so with the defaults
     # (answer_check_status "skipped") instead of leaving the fields out.
@@ -1101,6 +1151,11 @@ def _recall_keyword_fallback(
         "query_type": "text_search",
         "retrieval_mode": "degraded_lexical",
         "degraded_reason": "recall_budget_exceeded",
+        # None on the common path (no facet, or a facet that was applied
+        # cleanly); the exception's type name when a requested facet could
+        # not be verified and the response above is filtered down to nothing
+        # rather than silently unfiltered.
+        "facet_filter_error": facet_filter_error,
         "profile": profile if profile else engine.profile_id,
         "profile_generation": profile_generation,
         "result_count": len(results),
@@ -4843,10 +4898,14 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 )
                 from superlocalmemory.server.profile_runtime import get_profile_runtime
                 fallback_snapshot = get_profile_runtime(application.state).snapshot
+                # L2-09/L3-10: the fallback must honour the same facets (and
+                # the kind facet) the primary path was asked for — reuse the
+                # identical construction so the two paths cannot drift.
                 return _recall_keyword_fallback(
                     engine, search_query, limit, profile_id=req_profile or None,
                     profile=req_profile or fallback_snapshot.profile_id,
                     profile_generation=fallback_snapshot.generation,
+                    facets=_facet_kwargs(project, saved_by, about, _kind).get("facets"),
                 )
             response = _rf.result()
             # v3.4.26: return the same field shape as recall_worker so

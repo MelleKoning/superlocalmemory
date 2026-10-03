@@ -77,6 +77,69 @@ def test_list_facets_counts_memories_per_project_and_agent(db) -> None:
     assert out["agents"] == [{"name": "claude", "memories": 2}, {"name": "grok", "memories": 1}]
 
 
+def _save_kind(db, content, *, kind=None, source=None, confidence=None) -> str:
+    memory_id = db.store_memory(MemoryRecord(profile_id="default", content=content))
+    return db.store_fact(AtomicFact(
+        profile_id="default", memory_id=memory_id, content=content,
+        fact_type=FactType.SEMANTIC, memory_kind=kind, memory_kind_source=source,
+        memory_kind_confidence=confidence,
+    ))
+
+
+def test_real_retrieval_engine_is_wired_with_the_configured_threshold(
+    mode_a_config, mock_embedder,
+) -> None:
+    """4.1.19 M3 regression: ``RetrievalEngine.__init__``'s own ``config``
+    is a ``RetrievalConfig`` (no ``memory_kinds`` field — that section lives
+    on the top-level ``SLMConfig``). A first attempt at this fix read
+    ``self._config.memory_kinds.display_min_confidence`` straight off
+    ``RetrievalEngine`` and raised ``AttributeError`` on every real recall —
+    caught only by running the real engine construction path
+    (``core.engine_wiring.init_retrieval``), not by any mock-based unit
+    test. This pins the wiring with a value that is NOT the class's own
+    default (0.20) — using the default on both sides would pass whether or
+    not the value was actually threaded through.
+    """
+    import dataclasses
+    from unittest.mock import patch
+
+    from superlocalmemory.core.engine import MemoryEngine
+
+    mode_a_config.memory_kinds = dataclasses.replace(
+        mode_a_config.memory_kinds, display_min_confidence=0.37,
+    )
+    engine = MemoryEngine(mode_a_config)
+    with patch("superlocalmemory.core.engine_wiring.init_embedder", return_value=mock_embedder):
+        engine.initialize()
+        engine._embedder = mock_embedder
+    try:
+        assert engine._retrieval_engine is not None
+        assert engine._retrieval_engine._display_min_confidence == 0.37
+    finally:
+        engine.close()
+
+
+def test_kind_facet_uses_the_configured_display_threshold(db) -> None:
+    """4.1.19 M3: the kind facet must honour the CONFIGURED
+    ``memory_kinds.display_min_confidence`` everywhere — not the 0.20
+    hard-coded default ``storage.memory_kinds.kind_fields`` falls back to
+    when nobody passes one.
+    """
+    low_conf = _save_kind(db, "maybe a decision", kind="decision",
+                          source="model:llm", confidence=0.15)
+    other = _save_kind(db, "unrelated note")
+    ids = [low_conf, other]
+
+    # Default threshold (0.20): a 0.15-confidence suggestion is not shown.
+    assert matching_fact_ids(db, ids, "default", Facets.of(kind="decision")) == set()
+
+    # A caller-configured LOWER threshold (0.10) surfaces the same row.
+    assert matching_fact_ids(
+        db, ids, "default", Facets.of(kind="decision"),
+        display_min_confidence=0.10,
+    ) == {low_conf}
+
+
 def _response():
     fact = AtomicFact(fact_id="f1", content="x", fact_type=FactType.SEMANTIC)
     return RecallResponse(query="q", results=[RetrievalResult(fact=fact, score=0.5)])

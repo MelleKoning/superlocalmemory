@@ -135,7 +135,7 @@ class TestAgenticRetrieverRetrieve:
         )
         assert len(results) == 5
         engine.recall_facts.assert_called_once_with(
-            "query", "default", top_k=20, skip_agentic=True,
+            "query", "default", top_k=20, skip_agentic=True, facets=None,
         )
 
     def test_multi_hop_not_skipped(self) -> None:
@@ -197,6 +197,81 @@ class TestAgenticRetrieverRetrieve:
         assert retriever.rounds[0].query == "test query"
         assert retriever.rounds[0].round_num == 1
         assert retriever.rounds[0].result_count == 15
+
+    # -- L2-08: facets must survive every round, not just round 1 -----------
+
+    def test_facets_forwarded_on_round1(self) -> None:
+        from superlocalmemory.retrieval.facets import Facets
+
+        engine = _mock_engine(_make_results(10, 0.9))
+        facets = Facets.of(project="zephyr")
+        retriever = AgenticRetriever()
+        retriever.retrieve("query", "default", engine, facets=facets)
+        engine.recall_facts.assert_called_once_with(
+            "query", "default", top_k=20, skip_agentic=True, facets=facets,
+        )
+
+    def test_facets_forwarded_on_round2_mode_a_heuristic(self) -> None:
+        """Round 2's heuristic-expansion re-retrieval (Mode A, no LLM) must
+        carry the SAME facets object round 1 used — before this fix, round 2
+        re-ran with none and its results REPLACED the filtered round-1
+        response."""
+        from superlocalmemory.retrieval.facets import Facets
+
+        r1_data = _make_results(1, 0.2)  # forces round 2 (score < 0.3, len < 3)
+        r2_data = _make_results(2, 0.7)
+        engine = MagicMock()
+        # Mode A's heuristic expansion can generate up to 3 sub-queries
+        # (entity+action, action-only, entity-only); round 1 + headroom.
+        engine.recall_facts.side_effect = [r1_data] + [r2_data] * 4
+        facets = Facets.of(project="zephyr")
+
+        retriever = AgenticRetriever()
+        retriever.retrieve("Atlas Postgres deploy", "default", engine, facets=facets)
+
+        assert engine.recall_facts.call_count >= 2
+        for call in engine.recall_facts.call_args_list:
+            assert call.kwargs.get("facets") is facets
+
+    def test_facets_forwarded_on_round2_llm_refine(self) -> None:
+        """Mode C (LLM refine) round 2 must carry facets too."""
+        from superlocalmemory.retrieval.facets import Facets
+
+        r1_data = _make_results(3, 0.4)
+        r2_data = _make_results(5, 0.7)
+        engine = MagicMock()
+        engine.recall_facts.side_effect = [r1_data, r2_data]
+        llm = _mock_llm(True, "")
+        llm.generate.side_effect = [
+            MagicMock(text='{"is_sufficient": false}'),
+            MagicMock(text='["better query"]'),
+        ]
+        facets = Facets.of(kind="status")
+
+        retriever = AgenticRetriever()
+        retriever.retrieve("query", "default", engine, llm=llm, top_k=20, facets=facets)
+
+        for call in engine.recall_facts.call_args_list:
+            assert call.kwargs.get("facets") is facets
+
+    def test_facets_forwarded_on_skip_branch(self, monkeypatch) -> None:
+        """``_SKIP_TYPES`` is empty in production (S15 removed "temporal"),
+        so this early-return branch is currently unreachable — but it must
+        stay correct if a skip type is ever reinstated. Force it via the
+        module constant rather than asserting on dead behaviour."""
+        from superlocalmemory.retrieval import agentic as agentic_mod
+        from superlocalmemory.retrieval.facets import Facets
+
+        monkeypatch.setattr(agentic_mod, "_SKIP_TYPES", frozenset({"temporal"}))
+        engine = _mock_engine(_make_results(5, 0.6))
+        facets = Facets.of(project="zephyr")
+        retriever = AgenticRetriever()
+        retriever.retrieve(
+            "query", "default", engine, query_type="temporal", facets=facets,
+        )
+        engine.recall_facts.assert_called_once_with(
+            "query", "default", top_k=20, skip_agentic=True, facets=facets,
+        )
 
 
 # ---------------------------------------------------------------------------

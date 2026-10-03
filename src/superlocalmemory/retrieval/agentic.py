@@ -60,6 +60,7 @@ class RetrievalEngine(Protocol):
     """Minimal retrieval engine interface."""
     def recall_facts(self, query: str, profile_id: str,
                      top_k: int, skip_agentic: bool = True,
+                     facets: Any = None,
                      ) -> list[tuple[AtomicFact, float]]: ...
 
 
@@ -105,19 +106,29 @@ class AgenticRetriever:
         retrieval_engine: RetrievalEngine,
         llm: LLMBackend | None = None,
         top_k: int = 20, query_type: str = "",
+        facets: Any = None,
     ) -> list[AtomicFact]:
-        """2-round retrieval with sufficiency check."""
+        """2-round retrieval with sufficiency check.
+
+        ``facets`` (4.1.19 L2-08): the caller's hard filter (project / agent /
+        about / kind), forwarded to EVERY round so the internal verification
+        pass (``fast=False``) narrows exactly like round 1 did. Before this,
+        round 2 re-ran retrieval with no facets at all and its results
+        REPLACED round 1's already-filtered response — a caller who asked
+        for ``project=zephyr`` could get back memories from another project
+        with nothing in the response saying the facet had been dropped.
+        """
         self.rounds = []
 
         # S15: skip agentic for temporal (but NOT multi_hop — bridge handles that)
         if query_type in _SKIP_TYPES:
             logger.debug("Skipping agentic for query_type=%s", query_type)
             return [f for f, _ in retrieval_engine.recall_facts(
-                query, profile_id, top_k=top_k, skip_agentic=True)]
+                query, profile_id, top_k=top_k, skip_agentic=True, facets=facets)]
 
         # Round 1: standard retrieval
         r1 = retrieval_engine.recall_facts(
-            query, profile_id, top_k=top_k, skip_agentic=True,
+            query, profile_id, top_k=top_k, skip_agentic=True, facets=facets,
         )
         r1_avg = _avg(r1)
         max_score = max((s for _, s in r1), default=0.0)
@@ -153,7 +164,7 @@ class AgenticRetriever:
 
         for rq in refined:
             rn = retrieval_engine.recall_facts(
-                rq, profile_id, top_k=top_k, skip_agentic=True,
+                rq, profile_id, top_k=top_k, skip_agentic=True, facets=facets,
             )
             for fact, score in rn:
                 existing = pool.get(fact.fact_id)
