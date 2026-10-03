@@ -45,7 +45,7 @@ npx superlocalmemory status
 
 ### "Python not found" during setup
 
-SLM V4 requires Python 3.10 or later for the math engine.
+SLM V4 requires Python 3.12 or later for the math engine.
 
 ```bash
 # Check Python version
