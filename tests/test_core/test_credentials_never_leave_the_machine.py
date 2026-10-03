@@ -12,6 +12,7 @@ model or embedder running on this machine sees the text as it is.
 from __future__ import annotations
 
 import json
+import types
 
 import pytest
 
@@ -87,35 +88,25 @@ def test_a_model_on_this_machine_sees_the_text_as_written(monkeypatch) -> None:
     assert _KEY in json.dumps(sent[0]["payload"])
 
 
-class _Response:
-    status_code = 200
-
-    def __init__(self, n: int) -> None:
-        self._n = n
-
-    def raise_for_status(self) -> None:
-        return None
-
-    def json(self) -> dict:
-        return {"data": [{"embedding": [0.0, 1.0], "index": i} for i in range(self._n)]}
-
-
-class _Client:
-    def __init__(self) -> None:
-        self.bodies: list[dict] = []
-
-    def post(self, url, headers=None, json=None, timeout=None, **_):  # noqa: A002
-        self.bodies.append(json)
-        return _Response(len(json["input"]))
-
-
 def _embedder(monkeypatch, **cfg):
+    """The real embedding client, with only the wire replaced: whatever the
+    outbound gate lets through is what the transport records."""
+    import httpx
+
     from superlocalmemory.core.embeddings import EmbeddingService
+    from superlocalmemory.core.outbound_http import GatedClient
 
     service = EmbeddingService(EmbeddingConfig(dimension=2, **cfg))
-    client = _Client()
-    monkeypatch.setattr(service, "_get_http_client", lambda: client)
-    return service, client
+    bodies: list[dict] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        bodies.append(body)
+        return httpx.Response(200, json={"data": [
+            {"embedding": [0.0, 1.0], "index": i} for i in range(len(body["input"]))]})
+
+    service._http_client = GatedClient(transport=httpx.MockTransport(_handler))
+    return service, types.SimpleNamespace(bodies=bodies)
 
 
 def test_a_cloud_embedder_never_receives_a_credential(monkeypatch) -> None:
