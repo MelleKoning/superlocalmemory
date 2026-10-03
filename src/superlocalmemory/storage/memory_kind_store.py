@@ -29,9 +29,7 @@ from superlocalmemory.storage.memory_kinds import (
     KindAssignment,
     KindSource,
     MemoryKind,
-    is_confirmed,
     kind_fields,
-    parse_kind,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle avoidance only
@@ -128,24 +126,13 @@ class MemoryKindStore:
         )
         untyped = 0
         legacy = 0
+        # Counted exactly as every surface shows them (kind_fields).
         for row in rows:
-            d = _row_dict(row)
-            parsed = parse_kind(d.get("memory_kind"))
-            source = d.get("memory_kind_source")
-            if parsed is not None and is_confirmed(source if isinstance(source, str) else None):
-                kind_counts[parsed.value]["confirmed"] += 1
-                continue
-            if parsed is not None:
-                confidence = d.get("memory_kind_confidence")
-                try:
-                    confidence_f = float(confidence) if confidence is not None else None
-                except (TypeError, ValueError):
-                    confidence_f = None
-                if confidence_f is not None and confidence_f >= display_min_confidence:
-                    kind_counts[parsed.value]["suggested"] += 1
-                    continue
-            fields = kind_fields(d, display_min_confidence=display_min_confidence)
-            if fields["memory_kind_state"] == "legacy":
+            fields = kind_fields(_row_dict(row), display_min_confidence=display_min_confidence)
+            state = fields["memory_kind_state"]
+            if state in ("confirmed", "suggested"):
+                kind_counts[str(fields["memory_kind"])][state] += 1
+            elif state == "legacy":
                 legacy += 1
             else:
                 untyped += 1
@@ -155,15 +142,16 @@ class MemoryKindStore:
         self, profile_id: str, *, kind: MemoryKind | None, limit: int,
         offset: int, display_min_confidence: float,
     ) -> list[dict[str, Any]]:
-        """Facts carrying a model suggestion at or above the display threshold."""
+        """Facts carrying a suggestion a person can confirm: a model's at or
+        above the display threshold, or the rules' (which has no confidence)."""
         if not self.db.has_memory_kind_columns():
             return []
         where = [
             "profile_id = ?", "COALESCE(quarantined, 0) = 0",
             "memory_kind IS NOT NULL",
             "memory_kind_source NOT IN ('user', 'caller')",
-            "memory_kind_confidence IS NOT NULL",
-            "memory_kind_confidence >= ?",
+            "(memory_kind_confidence >= ? OR (memory_kind_source = 'rules' "
+            "AND memory_kind_confidence IS NULL))",
         ]
         params: list[Any] = [profile_id, display_min_confidence]
         if kind is not None:

@@ -286,6 +286,22 @@ def test_suggestions_are_previews_with_kind_fields(tmp_path, monkeypatch) -> Non
     assert tc.get("/api/memory-kinds/suggestions?kind=banana").status_code == 422
 
 
+def test_kinds_from_the_rules_are_counted_and_offered_for_review(tmp_path, monkeypatch) -> None:
+    # A rules run stores kinds without a confidence. They must show up in the
+    # counts and in the review list, or a rule can never be confirmed.
+    tc, app, db = _client(tmp_path, monkeypatch)
+    ruled = _fact(db, "Never push to main on Fridays.", kind="rule", source="rules")
+    _fact(db, "A model guess with no confidence.", kind="decision", source="model:laya")
+    counts = tc.get("/api/memory-kinds/status").json()["counts"]
+    assert counts["kind"]["rule"]["suggested"] == 1
+    assert counts["kind"]["decision"]["suggested"] == 0
+    assert counts["legacy"] == 1
+    items = tc.get("/api/memory-kinds/suggestions?kind=rule").json()["items"]
+    assert [i["fact_id"] for i in items] == [ruled]
+    assert items[0]["memory_kind_state"] == "suggested"
+    assert items[0]["memory_kind_source"] == "rules"
+
+
 def test_errors_never_leak_a_traceback(tmp_path, monkeypatch) -> None:
     tc, app, db = _client(tmp_path, monkeypatch)
 

@@ -264,8 +264,9 @@ def kind_fields(obj: object, *, display_min_confidence: float = 0.20) -> dict[st
     (one of ``'confirmed' | 'suggested' | 'legacy' | 'untyped'``),
     ``memory_kind_source``, ``memory_kind_confidence``.
 
-    A row with no `memory_kind` of its own, or one whose suggestion falls
-    below the display threshold, is shown as the kind nearest its legacy
+    A suggestion from the rules has no confidence and is always shown. A row
+    with no `memory_kind` of its own, or a model suggestion without a
+    confidence or below the display threshold, is shown as the kind nearest its legacy
     ``fact_type`` with state ``'legacy'`` — never as a wrong or invented kind,
     and never by raising. A row with neither a parseable kind nor a mappable
     legacy ``fact_type`` reports ``'untyped'``. Pure read: never classifies,
@@ -284,7 +285,12 @@ def kind_fields(obj: object, *, display_min_confidence: float = 0.20) -> dict[st
             "memory_kind_confidence": confidence,
         }
 
-    if parsed is not None and confidence is not None and confidence >= display_min_confidence:
+    # The rules never give a confidence (their kind comes from a fixed cue),
+    # so the display threshold, which is about a model's confidence, does
+    # not apply to them. A model answer without a confidence is not shown.
+    from_rules = raw_source == KindSource.RULES.value and confidence is None
+    if parsed is not None and (from_rules or (
+            confidence is not None and confidence >= display_min_confidence)):
         return {
             "memory_kind": parsed.value,
             "memory_kind_label": LABELS[parsed],

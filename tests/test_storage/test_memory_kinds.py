@@ -167,6 +167,28 @@ class TestKindFields:
         assert fields["memory_kind"] == "episodic"
         assert fields["memory_kind_source"] is None
 
+    def test_rules_suggestion_is_shown_without_a_confidence(self) -> None:
+        # The rules never give a confidence; their kind must still be shown,
+        # not hidden behind the old fact type.
+        fields = kind_fields({
+            "memory_kind": "decision", "memory_kind_source": "rules",
+            "memory_kind_confidence": None, "fact_type": "semantic",
+        }, display_min_confidence=0.20)
+        assert fields["memory_kind_state"] == "suggested"
+        assert fields["memory_kind"] == "decision"
+        assert fields["memory_kind_source"] == "rules"
+        assert fields["memory_kind_confidence"] is None
+
+    def test_model_suggestion_without_a_confidence_is_not_shown(self) -> None:
+        # A model answer always carries a confidence; one without it is not
+        # trusted for display.
+        fields = kind_fields({
+            "memory_kind": "decision", "memory_kind_source": "model:laya",
+            "memory_kind_confidence": None, "fact_type": "semantic",
+        })
+        assert fields["memory_kind_state"] == "legacy"
+        assert fields["memory_kind"] == "semantic"
+
     def test_untyped_row_falls_back_to_legacy_fact_type(self) -> None:
         fields = kind_fields({
             "memory_kind": None, "memory_kind_source": None,
