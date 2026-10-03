@@ -401,6 +401,9 @@ _SENSITIVE_READ_PREFIXES = (
 _SENSITIVE_READ_EXACT_PATHS = (
     "/api/search", "/api/v3/recall/trace", "/api/patterns",
     "/api/feedback/stats", "/api/stats", "/api/timeline",
+    # L3-01: project/agent names and per-bucket memory counts — the same
+    # cross-tenant metadata the prefixes above already gate.
+    "/api/v3/facets",
 )
 
 
