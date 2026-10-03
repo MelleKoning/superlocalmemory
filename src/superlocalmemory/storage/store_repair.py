@@ -11,7 +11,13 @@
    because the stored copy no longer matched it. A memory is restored only when
    the stored text is exactly the original with some spans replaced by those
    markers; anything else is left alone and counted.
-2. Entities that a question created. Asking about an unknown name used to
+2. Facts marked "replaced" by an automatic check that was wrong. Builds
+   before 4.1.19 marked a fact as replaced when an embedding-geometry check, or
+   a local model asked about it, judged a newer fact to contradict it; on a
+   real store 0 of 22 sampled marks were genuine, and every marked fact was
+   pushed down in every recall. Those marks are undone and the old reason is
+   kept in the record. A user's own correction is never touched.
+3. Entities that a question created. Asking about an unknown name used to
    create an empty entity for it. One is removed only when nothing in the store
    refers to it.
 
@@ -29,6 +35,9 @@ from dataclasses import dataclass
 
 _MARKER = re.compile(r"\[REDACTED:[A-Z_]+:[^\]]*\]")
 _MISMATCH = "queryable ingestion memory content mismatch"
+#: Reasons written by the automatic checks, never by a person.
+_MACHINE_REASONS = ("LLM-verified contradiction", "Sheaf coboundary")
+_REVERTED = "reverted in 4.1.19 (automatic check, not a correction): "
 
 #: (table, column, is_json_list). Any mention keeps an entity.
 _ENTITY_REFERENCES: tuple[tuple[str, str, bool], ...] = (
@@ -58,12 +67,14 @@ class RepairPlan:
     restorable: tuple[RestoreItem, ...]
     not_restorable: tuple[str, ...]      # operation ids left alone
     empty_entities: tuple[str, ...]      # entity ids nothing refers to
+    wrong_replacements: tuple[str, ...] = ()  # fact ids wrongly marked replaced
 
     def summary(self) -> dict[str, int]:
         return {
             "memories_to_restore": len(self.restorable),
             "memories_left_alone": len(self.not_restorable),
             "empty_entities_to_remove": len(self.empty_entities),
+            "wrong_replaced_marks_to_undo": len(self.wrong_replacements),
         }
 
 
@@ -72,6 +83,7 @@ class RepairResult:
     memories_restored: int
     memories_skipped: int
     entities_removed: int
+    replaced_marks_undone: int = 0
 
 
 def is_blanked_copy(stored: str, original: str) -> bool:
@@ -142,15 +154,26 @@ def _plan_empty_entities(conn: sqlite3.Connection) -> list[str]:
     return [eid for eid in candidates if eid not in referenced]
 
 
+def _plan_wrong_replacements(conn: sqlite3.Connection) -> list[str]:
+    if "invalidation_reason" not in _table_columns(conn, "fact_temporal_validity"):
+        return []
+    clauses = " OR ".join("invalidation_reason LIKE ?" for _ in _MACHINE_REASONS)
+    return [str(r[0]) for r in conn.execute(
+        "SELECT fact_id FROM fact_temporal_validity WHERE system_expired_at IS NOT NULL "
+        f"AND ({clauses}) ORDER BY fact_id",
+        tuple(f"{r}%" for r in _MACHINE_REASONS))]
+
+
 def plan_repair(conn: sqlite3.Connection) -> RepairPlan:
     """What a repair would change. Reads only."""
     restorable, left = _plan_restores(conn)
-    return RepairPlan(tuple(restorable), tuple(left), tuple(_plan_empty_entities(conn)))
+    return RepairPlan(tuple(restorable), tuple(left), tuple(_plan_empty_entities(conn)),
+                      tuple(_plan_wrong_replacements(conn)))
 
 
 def apply_repair(conn: sqlite3.Connection, plan: RepairPlan) -> RepairResult:
     """Apply ``plan`` in one transaction. Rows changed since planning are skipped."""
-    restored = skipped = removed = 0
+    restored = skipped = removed = undone = 0
     conn.execute("BEGIN IMMEDIATE")
     try:
         for item in plan.restorable:
@@ -180,11 +203,20 @@ def apply_repair(conn: sqlite3.Connection, plan: RepairPlan) -> RepairResult:
                 "DELETE FROM canonical_entities WHERE entity_id=? "
                 "AND COALESCE(fact_count, 0) = 0", (entity_id,))
             removed += cur.rowcount
+        clauses = " OR ".join("invalidation_reason LIKE ?" for _ in _MACHINE_REASONS)
+        for fact_id in plan.wrong_replacements:
+            cur = conn.execute(
+                "UPDATE fact_temporal_validity SET valid_until=NULL, system_expired_at=NULL, "
+                "invalidation_reason=? || invalidation_reason WHERE fact_id=? "
+                "AND system_expired_at IS NOT NULL "
+                f"AND ({clauses})",
+                (_REVERTED, fact_id, *(f"{r}%" for r in _MACHINE_REASONS)))
+            undone += cur.rowcount
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
         raise
-    return RepairResult(restored, skipped, removed)
+    return RepairResult(restored, skipped, removed, undone)
 
 
 __all__ = ["RepairPlan", "RepairResult", "RestoreItem", "apply_repair",

@@ -35,6 +35,8 @@ def conn(tmp_path) -> sqlite3.Connection:
         CREATE TABLE canonical_entities(entity_id TEXT PRIMARY KEY, canonical_name TEXT,
                                         fact_count INT);
         CREATE TABLE entity_aliases(entity_id TEXT, alias TEXT, source TEXT);
+        CREATE TABLE fact_temporal_validity(fact_id TEXT PRIMARY KEY, valid_until TEXT,
+            system_expired_at TEXT, invalidated_by TEXT, invalidation_reason TEXT);
     """)
     c.execute("INSERT INTO memories VALUES ('m1', ?)", (BLANKED,))
     c.execute("INSERT INTO atomic_facts VALUES ('f1', 'm1', ?, '[\"e_used\"]')", (BLANKED,))
@@ -52,6 +54,14 @@ def conn(tmp_path) -> sqlite3.Connection:
     # Every entity carries its own name as a 'canonical' self-alias.
     for eid, name in (("e_zorblax", "Zorblax"), ("e_alias", "Aliased"), ("e_used", "Used")):
         c.execute("INSERT INTO entity_aliases VALUES (?, ?, 'canonical')", (eid, name))
+    T0 = "2026-07-20T12:49:05+00:00"
+    c.execute("INSERT INTO fact_temporal_validity VALUES ('f_llm', ?, ?, 'f_new', "
+              "'LLM-verified contradiction (sheaf pre-filter severity=0.5)')", (T0, T0))
+    c.execute("INSERT INTO fact_temporal_validity VALUES ('f_sheaf', ?, ?, 'f_new', "
+              "'Sheaf coboundary 0.493 > 0.45 along semantic edge')", (T0, T0))
+    c.execute("INSERT INTO fact_temporal_validity VALUES ('f_user', NULL, ?, 'f_fix', "
+              "'direct_content_correction')", (T0,))
+    c.execute("INSERT INTO fact_temporal_validity VALUES ('f_live', NULL, NULL, NULL, NULL)")
     return c
 
 
@@ -66,7 +76,9 @@ def test_the_plan_reads_only(conn) -> None:
     before = conn.execute("SELECT * FROM memories ORDER BY 1").fetchall()
     plan = plan_repair(conn)
     assert plan.summary() == {"memories_to_restore": 1, "memories_left_alone": 1,
-                              "empty_entities_to_remove": 1}
+                              "empty_entities_to_remove": 1,
+                              "wrong_replaced_marks_to_undo": 2}
+    assert plan.wrong_replacements == ("f_llm", "f_sheaf")
     assert plan.empty_entities == ("e_zorblax",)
     assert conn.execute("SELECT * FROM memories ORDER BY 1").fetchall() == before
 
@@ -95,3 +107,17 @@ def test_a_memory_edited_after_planning_is_skipped_not_overwritten(conn) -> None
     assert (result.memories_restored, result.memories_skipped) == (0, 1)
     assert conn.execute("SELECT content FROM memories WHERE memory_id='m1'"
                         ).fetchone()[0] == "edited by the user"
+
+
+def test_wrong_replaced_marks_are_undone_and_a_users_correction_is_kept(conn) -> None:
+    result = apply_repair(conn, plan_repair(conn))
+    assert result.replaced_marks_undone == 2
+    rows = dict((r[0], r[1:]) for r in conn.execute(
+        "SELECT fact_id, valid_until, system_expired_at, invalidation_reason "
+        "FROM fact_temporal_validity"))
+    for fact_id in ("f_llm", "f_sheaf"):
+        valid_until, expired, reason = rows[fact_id]
+        assert valid_until is None and expired is None
+        assert reason.startswith("reverted in 4.1.19")      # the old reason is kept
+    assert rows["f_user"][1] is not None                     # correction untouched
+    assert rows["f_user"][2] == "direct_content_correction"
