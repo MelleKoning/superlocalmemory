@@ -219,6 +219,17 @@ class AtomicFact:
     # v3.4.65: Core Memory Block explicit pin (M015)
     pinned: bool = False
 
+    # 4.1.19 (M052): nine-kind memory typing — all optional, all nullable.
+    # NULL/None means untyped: no caller, user, model or rules pass has ever
+    # classified this fact. Values and vocabulary live in
+    # storage.memory_kinds (the only module allowed to spell a kind as a
+    # literal); this dataclass only carries them.
+    memory_kind: str | None = None
+    memory_kind_source: str | None = None
+    memory_kind_confidence: float | None = None
+    memory_kind_recipe: str | None = None
+    memory_kind_at: str | None = None
+
     created_at: str = field(default_factory=_now)
 
 
