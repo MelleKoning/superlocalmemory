@@ -88,6 +88,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
         idempotency_key: str = "",
         session_date: str = "",
         profile_id: str = "",
+        kind: str = "",
     ) -> dict:
         """Store content to memory with intelligent indexing.
 
@@ -108,6 +109,17 @@ def register_core_tools(server, get_engine: Callable) -> None:
         an unknown id is rejected, never created); empty = the active
         profile, byte-identical to the legacy call. Routing never moves
         the active-profile pointer.
+
+        ``kind`` says what sort of memory this is. Set it whenever you know:
+        ``rule`` (a standing instruction: "always/never ..."), ``decision`` (a
+        choice that settles one question), ``status`` (the current state of
+        something, which a later update will replace), ``procedure`` (steps or
+        commands), ``prospective`` (a plan or to-do), ``opinion`` (a
+        preference or view), ``correction`` (says an earlier memory was wrong),
+        ``episodic`` (something that happened) or ``semantic`` (a lasting
+        fact). A declared kind is confirmed: rules and decisions you save this
+        way are loaded at the start of later sessions. Leave it empty when
+        unsure; SLM may suggest one later, and a suggestion changes nothing.
         """
         # v3.6.10: resolve "mcp_client" sentinel → URL path (HTTP) or env var (stdio)
         if agent_id == "mcp_client":
@@ -138,6 +150,19 @@ def register_core_tools(server, get_engine: Callable) -> None:
             "agent_id": agent_id,
             "session_id": session_id,
         }
+        if (kind or "").strip():
+            from superlocalmemory.storage.memory_kinds import METADATA_KEY, MemoryKind, parse_kind
+
+            parsed_kind = parse_kind(kind)
+            if parsed_kind is None:
+                return {
+                    "success": False,
+                    "code": "INVALID_KIND",
+                    "retryable": False,
+                    "error": "Unknown memory kind. Use one of: "
+                             + ", ".join(k.value for k in MemoryKind),
+                }
+            meta[METADATA_KEY] = parsed_kind.value
         effective_idempotency_key = idempotency_key
         if not effective_idempotency_key:
             # Derive a stable key before the first attempt so every retry of

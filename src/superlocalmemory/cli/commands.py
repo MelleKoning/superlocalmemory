@@ -1657,6 +1657,14 @@ def cmd_remember(args: Namespace) -> None:
         from superlocalmemory.cli.daemon import (
             daemon_request, ensure_daemon, is_daemon_running,
         )
+        kind = (getattr(args, "kind", "") or "").strip()
+        if kind:
+            from superlocalmemory.storage.memory_kinds import MemoryKind, parse_kind
+
+            if parse_kind(kind) is None:
+                print("Unknown memory kind. Use one of: "
+                      + ", ".join(k.value for k in MemoryKind), file=sys.stderr)
+                sys.exit(2)
         if not (is_daemon_running() or ensure_daemon()):
             _daemon_unavailable("remember", use_json)
         path = "/remember?wait=true" if sync_mode else "/remember"
@@ -1666,6 +1674,7 @@ def cmd_remember(args: Namespace) -> None:
                 "tags": args.tags or "",
                 "scope": scope,
                 "shared_with": shared_with,
+                "kind": kind,
             },
             timeout_seconds=30,
         )

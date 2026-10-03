@@ -662,6 +662,9 @@ class RememberRequest(BaseModel):
     #: Empty means "today", the previous behaviour. Format is YYYY-MM-DD or a
     #: full ISO 8601 timestamp.
     session_date: str = ""
+    #: What sort of memory this is (rule, decision, status, ...). Declared by
+    #: the caller, so it is confirmed on every fact of the memory. Empty = none.
+    kind: str = ""
 
     @field_validator("session_date")
     @classmethod
@@ -4900,6 +4903,18 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 detail="canonical remember writer is not ready; retry shortly",
             )
 
+        # An unknown kind is the caller's mistake: say so (422), before any
+        # admission work, rather than storing the memory untyped.
+        declared_kind = None
+        if (req.kind or "").strip():
+            from superlocalmemory.storage.memory_kinds import MemoryKind, parse_kind
+
+            declared_kind = parse_kind(req.kind)
+            if declared_kind is None:
+                raise HTTPException(422, detail=(
+                    "Unknown memory kind. Use one of: "
+                    + ", ".join(k.value for k in MemoryKind)))
+
         try:
             from superlocalmemory.core.remember_runtime import (
                 validate_deterministic_admission,
@@ -4912,6 +4927,10 @@ def _register_daemon_routes(application: FastAPI) -> None:
             extra = getattr(req, "metadata", None)
             if isinstance(extra, dict):
                 meta.update(extra)
+            if declared_kind is not None:
+                from superlocalmemory.storage.memory_kinds import METADATA_KEY
+
+                meta[METADATA_KEY] = declared_kind.value
 
             store_config = getattr(engine._config, "store", None)
             validate_deterministic_admission(

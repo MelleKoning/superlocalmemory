@@ -413,6 +413,12 @@ def main() -> None:
     remember_p = sub.add_parser("remember", help="Store a memory (extracts facts, builds graph)")
     remember_p.add_argument("content", help="Content to remember")
     remember_p.add_argument("--tags", default="", help="Comma-separated tags")
+    remember_p.add_argument(
+        "--kind", default="",
+        help="What sort of memory this is: rule, decision, status, procedure, "
+             "prospective (plan/to-do), opinion, correction, episodic or semantic. "
+             "Rules and decisions saved this way load at the start of later sessions.",
+    )
     remember_p.add_argument("--json", action="store_true", help="Output structured JSON (agent-native)")
     remember_p.add_argument(
         "--sync", dest="sync_mode", action="store_true",
