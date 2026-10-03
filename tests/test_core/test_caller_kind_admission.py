@@ -133,3 +133,53 @@ def test_pre_m052_store_pipeline_unchanged(metadata) -> None:
     out = assign_kinds([fact], metadata=metadata, source_type="http", classifier=_Suggests(),
                        db=_Db(False))
     assert out[0] is fact
+
+
+class _SuggestsNothing:
+    """A classifier with no suggestion to give for any fact — the same shape
+    ``KindClassifier._suggest`` returns when its backend resolves to OFF (it
+    never returns a per-fact mix: either every fact gets ``None`` or none
+    does)."""
+
+    def suggest(self, facts, *, caller_kind):
+        return [None] * len(facts)
+
+
+def _fact_with_llm_hint(kind: str) -> AtomicFact:
+    """A fact the Mode B/C extractor already tagged with a ``model:llm`` kind
+    hint (``encoding.llm_kind_hint.with_hint``), exactly as it arrives at
+    ``assign_kinds`` during real extraction — before this function decides
+    whether a suggestion applies at all."""
+    from superlocalmemory.encoding import llm_kind_hint
+
+    return llm_kind_hint.with_hint(_fact(), {"kind": kind})
+
+
+def test_no_suggestion_clears_a_hint_the_fact_already_carried() -> None:
+    """L2-12: memory kinds OFF (or any other no-suggestion outcome) must
+    store no machine kind at all — not merely withhold a new one. An
+    extractor-attached ``model:llm`` hint predates the OFF/no-suggestion
+    decision and must be blanked, the same clearing
+    ``encoding.memory_kind_classifier.with_kind`` already documents for its
+    own backend-off case. A caller-declared kind is unaffected: that path
+    never produces ``assignment is None`` (``_suggestions`` returns a CALLER
+    assignment for every fact when one is declared)."""
+    hinted = _fact_with_llm_hint("decision")
+    assert hinted.memory_kind == "decision"  # sanity: the hint really landed
+
+    out = assign_kinds([hinted], metadata={}, source_type="http",
+                       classifier=_SuggestsNothing(), db=_Db(True))
+    assert out[0].memory_kind is None
+    assert out[0].memory_kind_source is None
+    assert out[0].memory_kind_confidence is None
+    assert out[0].memory_kind_recipe is None
+    assert out[0].memory_kind_at is None
+    assert out[0].fact_type is FactType.SEMANTIC  # a suggestion never touches it
+
+
+def test_no_classifier_also_clears_a_hint_the_fact_already_carried() -> None:
+    hinted = _fact_with_llm_hint("status")
+    out = assign_kinds([hinted], metadata={}, source_type="http", classifier=None,
+                       db=_Db(True))
+    assert out[0].memory_kind is None
+    assert out[0].memory_kind_source is None

@@ -20,6 +20,7 @@ from typing import Any, Sequence
 
 from superlocalmemory.storage.memory_kinds import (
     COARSE,
+    KIND_COLUMNS,
     METADATA_KEY,
     KindAssignment,
     KindSource,
@@ -57,9 +58,22 @@ def _has_columns(db: Any) -> bool:
 
 
 def with_assignment(fact: Any, assignment: KindAssignment | None, now_iso: str) -> Any:
-    """``fact`` carrying ``assignment``: confirmed kinds also set ``fact_type``."""
+    """``fact`` carrying ``assignment``: confirmed kinds also set ``fact_type``.
+
+    ``assignment`` is ``None`` whenever there is nothing to apply — kinds
+    turned off, no classifier wired, or a suggestion attempt that yielded
+    nothing (L2-12). That must also blank any kind ``fact`` already carries,
+    not merely withhold a new one: the Mode B/C extraction call can already
+    have attached a ``model:llm`` hint (``encoding.llm_kind_hint.with_hint``)
+    before ``assign_kinds`` ever runs, and a disabled backend must store no
+    machine kind at all — the same clearing
+    ``encoding.memory_kind_classifier.with_kind`` already documents for its
+    own backend-off case. A caller-declared kind is never affected: that
+    path always produces a concrete CALLER assignment, never ``None``
+    (``_suggestions`` returns one for every fact once a kind is declared).
+    """
     if assignment is None:
-        return fact
+        return dataclasses.replace(fact, **{name: None for name in KIND_COLUMNS})
     from superlocalmemory.storage.models import FactType
 
     columns = assignment.as_columns(now_iso)

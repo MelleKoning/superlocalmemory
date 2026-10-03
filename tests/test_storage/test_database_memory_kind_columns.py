@@ -203,6 +203,97 @@ class TestKindColumnsPresent:
         assert row.memory_kind_source == "user"
         assert row.memory_kind_recipe == "manual"
 
+    def test_upsert_keeps_caller_kind_when_restore_gives_no_kind_source(
+        self, kind_db: DatabaseManager,
+    ) -> None:
+        """L1-13: the upsert guard must be NULL-safe.
+
+        A re-store with no kind source at all (``memory_kind_source is None``,
+        as a restore-reimport row carries) must not slip past the guard just
+        because SQL's three-valued logic turns an unqualified comparison
+        against NULL into NULL rather than ``False``.
+        """
+        mid = kind_db.store_memory(MemoryRecord(profile_id="default", content="hi"))
+        original = _fact("f1", mid, "content A", kind="rule", source="caller")
+        original.fact_type = FactType.SEMANTIC  # COARSE[RULE]
+        kind_db.store_fact(original)
+        # A different fact_type on the incoming row, so a wrongly-NULL-unsafe
+        # guard that lets fact_type slip through (even while correctly
+        # COALESCE-ing the kind columns themselves back to their old value)
+        # is actually caught, instead of being masked by both sides agreeing.
+        unsourced = _fact("f1", mid, "content B", kind=None, source=None)
+        unsourced.fact_type = FactType.EPISODIC
+        kind_db.store_fact(unsourced)
+        row = kind_db.get_all_facts("default")[0]
+        assert row.content == "content B"  # non-kind columns still update
+        assert row.memory_kind == "rule"  # the caller kind must survive
+        assert row.memory_kind_source == "caller"
+        assert row.fact_type == FactType.SEMANTIC  # kept in lock-step with the kind
+
+
+class TestUpdateFactKindGuard:
+    """L1-06: ``update_fact`` must share the same authority guard as the
+    ``store_fact`` upsert (``storage/memory_kinds.py::AUTHORITY``), so an
+    enrichment write through ``core.kind_assignment`` can never downgrade a
+    kind a person or a trusted caller already confirmed."""
+
+    def test_a_rules_suggestion_never_overwrites_a_user_kind(
+        self, kind_db: DatabaseManager,
+    ) -> None:
+        mid = kind_db.store_memory(MemoryRecord(profile_id="default", content="hi"))
+        original = _fact("f1", mid, "We will ship on Friday", kind="decision", source="user")
+        original.fact_type = FactType.EPISODIC  # COARSE[DECISION], confirmed in lock-step
+        fid = kind_db.store_fact(original)
+        assert kind_db.get_all_facts("default")[0].fact_type == FactType.EPISODIC
+
+        # Re-enrichment later suggests "prospective" from the rules — a label
+        # only, and it must not touch what the user already confirmed.
+        kind_db.update_fact(fid, {
+            "memory_kind": "prospective", "memory_kind_source": "rules",
+            "memory_kind_confidence": None, "memory_kind_recipe": "kinds-rules-v1",
+            "memory_kind_at": "2026-02-02T00:00:00+00:00",
+            "fact_type": FactType.PROSPECTIVE,
+        })
+        row = kind_db.get_all_facts("default")[0]
+        assert row.memory_kind == "decision"
+        assert row.memory_kind_source == "user"
+        assert row.fact_type == FactType.EPISODIC
+
+    def test_a_caller_declared_kind_never_overwrites_a_user_kind(
+        self, kind_db: DatabaseManager,
+    ) -> None:
+        """A caller-declared kind is confirmed, but a user's kind outranks it
+        (AUTHORITY: user=6 > caller=5) — a caller write must not downgrade it,
+        even though a caller write also sets ``fact_type``."""
+        mid = kind_db.store_memory(MemoryRecord(profile_id="default", content="hi"))
+        original = _fact("f1", mid, "We will ship on Friday", kind="decision", source="user")
+        original.fact_type = FactType.EPISODIC  # COARSE[DECISION], confirmed in lock-step
+        fid = kind_db.store_fact(original)
+        kind_db.update_fact(fid, {
+            "memory_kind": "rule", "memory_kind_source": "caller",
+            "memory_kind_confidence": None, "memory_kind_recipe": "caller",
+            "memory_kind_at": "2026-02-02T00:00:00+00:00",
+            "fact_type": FactType.SEMANTIC,
+        })
+        row = kind_db.get_all_facts("default")[0]
+        assert row.memory_kind == "decision"
+        assert row.memory_kind_source == "user"
+        assert row.fact_type == FactType.EPISODIC
+
+    def test_unrelated_columns_are_unaffected_by_the_guard(
+        self, kind_db: DatabaseManager,
+    ) -> None:
+        """An update that carries no kind column is untouched by the guard —
+        same plain ``column = ?`` SQL as before M052."""
+        mid = kind_db.store_memory(MemoryRecord(profile_id="default", content="hi"))
+        fid = kind_db.store_fact(
+            _fact("f1", mid, "We will ship on Friday", kind="decision", source="user"),
+        )
+        kind_db.update_fact(fid, {"access_count": 3})
+        row = kind_db.get_all_facts("default")[0]
+        assert row.access_count == 3
+        assert row.memory_kind == "decision"
+
 
 class TestCapabilityProbe:
     def test_capability_probe_rechecks_false_after_5s(

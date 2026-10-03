@@ -241,8 +241,13 @@ class MemoryKindStore:
     def revert_batch(self, run_id: str, profile_id: str, *, limit: int = 200) -> BatchResult:
         return _writes.revert_batch(self.db, run_id, profile_id, limit=limit)
 
-    def reconcile_confirmed(self, profile_id: str, *, limit: int = 500) -> int:
-        return _writes.reconcile_confirmed(self.db, profile_id, limit=limit)
+    def reconcile_confirmed(
+        self, profile_id: str, *, limit: int = 500,
+        max_seconds: float = _writes._RECONCILE_DEFAULT_MAX_SECONDS,
+    ) -> int:
+        return _writes.reconcile_confirmed(
+            self.db, profile_id, limit=limit, max_seconds=max_seconds,
+        )
 
     def set_kinds(
         self, conn: sqlite3.Connection, profile_id: str,
