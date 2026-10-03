@@ -137,12 +137,19 @@ class RetrievalEngine:
         bridge_discovery: Any | None = None,
         trust_scorer: TrustScorer | None = None,
         sufficiency_judge: Any | None = None,
+        display_min_confidence: float = 0.20,
     ) -> None:
         self._db = db
         # 4.1.18: decides whether a recall answers its question; read by
         # run_recall at the contract boundary. None means today's behaviour.
         self._sufficiency_judge = sufficiency_judge
         self._config = config
+        # M3: the kind facet's confidence threshold. RetrievalConfig (this
+        # class's own ``config``) has no memory_kinds field — that lives on
+        # the TOP-LEVEL SLMConfig — so the wiring layer that HAS the full
+        # config passes the live value through here, rather than this class
+        # reaching for a config section it was never given.
+        self._display_min_confidence = display_min_confidence
         self._semantic: SemanticChannel | None = channels.get("semantic")
         self._bm25: BM25Channel | None = channels.get("bm25")
         self._entity: EntityGraphChannel | None = channels.get("entity_graph")
@@ -530,7 +537,7 @@ class RetrievalEngine:
                 # M3: the configured threshold, not kind_fields' 0.20 default —
                 # so a kind facet agrees with what the recall response itself
                 # displays for the SAME row.
-                display_min_confidence=self._config.memory_kinds.display_min_confidence,
+                display_min_confidence=self._display_min_confidence,
             )
             fused = [fr for fr in fused if fr.fact_id in keep]
             _em("facets")

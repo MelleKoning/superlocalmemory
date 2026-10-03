@@ -685,6 +685,11 @@ def init_retrieval(
         bridge_discovery=bridge,
         trust_scorer=trust_scorer,
         sufficiency_judge=init_sufficiency_judge(config.retrieval),
+        # M3: RetrievalConfig (config.retrieval) has no memory_kinds section —
+        # it lives on the top-level SLMConfig this function already has, so
+        # the kind facet's threshold is threaded through here rather than
+        # RetrievalEngine reaching for a config section it was never given.
+        display_min_confidence=config.memory_kinds.display_min_confidence,
     )
     judge_selection.register_engine(engine)  # so a switch reaches this engine too
     # V3.3.13: Ensure reranker warmup is in progress.

@@ -86,6 +86,39 @@ def _save_kind(db, content, *, kind=None, source=None, confidence=None) -> str:
     ))
 
 
+def test_real_retrieval_engine_is_wired_with_the_configured_threshold(
+    mode_a_config, mock_embedder,
+) -> None:
+    """4.1.19 M3 regression: ``RetrievalEngine.__init__``'s own ``config``
+    is a ``RetrievalConfig`` (no ``memory_kinds`` field — that section lives
+    on the top-level ``SLMConfig``). A first attempt at this fix read
+    ``self._config.memory_kinds.display_min_confidence`` straight off
+    ``RetrievalEngine`` and raised ``AttributeError`` on every real recall —
+    caught only by running the real engine construction path
+    (``core.engine_wiring.init_retrieval``), not by any mock-based unit
+    test. This pins the wiring with a value that is NOT the class's own
+    default (0.20) — using the default on both sides would pass whether or
+    not the value was actually threaded through.
+    """
+    import dataclasses
+    from unittest.mock import patch
+
+    from superlocalmemory.core.engine import MemoryEngine
+
+    mode_a_config.memory_kinds = dataclasses.replace(
+        mode_a_config.memory_kinds, display_min_confidence=0.37,
+    )
+    engine = MemoryEngine(mode_a_config)
+    with patch("superlocalmemory.core.engine_wiring.init_embedder", return_value=mock_embedder):
+        engine.initialize()
+        engine._embedder = mock_embedder
+    try:
+        assert engine._retrieval_engine is not None
+        assert engine._retrieval_engine._display_min_confidence == 0.37
+    finally:
+        engine.close()
+
+
 def test_kind_facet_uses_the_configured_display_threshold(db) -> None:
     """4.1.19 M3: the kind facet must honour the CONFIGURED
     ``memory_kinds.display_min_confidence`` everywhere — not the 0.20
