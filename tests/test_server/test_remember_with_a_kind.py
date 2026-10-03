@@ -39,6 +39,25 @@ def test_http_remember_with_an_unknown_kind_is_refused(engine_with_mock_deps) ->
     assert engine_with_mock_deps._db.execute("SELECT * FROM memories") == []
 
 
+def test_http_remember_metadata_cannot_smuggle_a_confirmed_kind(engine_with_mock_deps) -> None:
+    """L3-13: a caller's own ``metadata`` must not set ``_slm_memory_kind``.
+
+    The documented way to declare a kind is the ``kind`` request field, which
+    is parsed and validated before it reaches this metadata slot. Smuggling
+    the same key directly through free-form ``metadata`` must not confirm a
+    kind at all -- including "rule", which would otherwise create a confirmed
+    standing rule through a door neither the memory-kinds HTTP routes, MCP,
+    nor the CLI expose.
+    """
+    with _client(engine_with_mock_deps) as client:
+        response = client.post("/remember", json={
+            "content": CONTENT, "idempotency_key": "kind-smuggle-1",
+            "metadata": {"_slm_memory_kind": "rule"},
+        })
+    assert response.status_code == 200, response.text
+    assert _kinds(engine_with_mock_deps) == [(None, None)]
+
+
 def test_mcp_remember_refuses_an_unknown_kind_before_saving(monkeypatch) -> None:
     from superlocalmemory.mcp import tools_core
 

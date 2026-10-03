@@ -5044,7 +5044,13 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 meta["tags"] = req.tags
             extra = getattr(req, "metadata", None)
             if isinstance(extra, dict):
-                meta.update(extra)
+                # L3-13: a caller's own metadata must never set a reserved
+                # _slm_* key directly -- that would let a plain /remember
+                # body forge a CONFIRMED kind (e.g. a standing rule) through a
+                # door with none of the memory-kind routes' permission checks.
+                from superlocalmemory.core.metadata_guard import strip_reserved_metadata
+
+                meta.update(strip_reserved_metadata(extra))
             if declared_kind is not None:
                 from superlocalmemory.storage.memory_kinds import METADATA_KEY
 
