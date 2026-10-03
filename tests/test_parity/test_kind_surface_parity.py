@@ -22,7 +22,7 @@ from types import SimpleNamespace
 from superlocalmemory.cli import kinds_cmd
 from superlocalmemory.cli.daemon import DaemonConflict, DaemonNotFound
 from superlocalmemory.storage.models import AtomicFact, FactType
-from tests.test_server.test_memory_kinds_routes import _client, _fact
+from tests.test_server.test_memory_kinds_routes import _client, _fact, _session
 
 KIND_KEYS = ("memory_kind", "memory_kind_label", "memory_kind_state",
             "memory_kind_source", "memory_kind_confidence")
@@ -61,7 +61,21 @@ def _bind_daemon_request(monkeypatch, tc) -> None:
 
     def fake_daemon_request(method, path, body=None, *, preserve_conflict=False,
                             preserve_not_found=False, preserve_unprocessable=False, **_kw):
-        response = tc.request(method, path, json=body)
+        import os
+
+        # Matches cli.daemon.daemon_request: an opted-in caller session rides
+        # along as a header, never silently dropped (needed so an MCP call
+        # made under SLM_USER_SESSION is authenticated the same way the real
+        # client would authenticate it).
+        session = os.environ.get("SLM_USER_SESSION", "").strip()
+        headers = {"X-SLM-User-Session": session} if session else {}
+        response = tc.request(method, path, json=body, headers=headers)
+        if response.status_code in (401, 403):
+            # Matches cli.daemon.daemon_request: a refusal is an answer, not an
+            # outage, on every door (L3-04) — never collapsed to None here.
+            from superlocalmemory.cli.daemon import DaemonRefused
+
+            raise DaemonRefused(response.status_code, path)
         if response.status_code == 409 and preserve_conflict:
             raise DaemonConflict(response.json().get("detail", ""))
         if response.status_code == 404 and preserve_not_found:
@@ -108,6 +122,34 @@ def test_set_kind_identical(tmp_path, monkeypatch, capsys) -> None:
 
     assert _kind_subset(mcp_out) == _kind_subset(cli_out["data"]) == _kind_subset(http_out.json())
     assert mcp_out["memory_kind"] == "decision"
+
+
+# -- test_daemon_refusal_identical (L3-04) ---------------------------------
+
+
+def test_daemon_refusal_identical(tmp_path, monkeypatch) -> None:
+    """A role without WRITE is refused identically on HTTP and MCP.
+
+    Before L3-04, MCP mapped this 403 to DAEMON_UNAVAILABLE/retryable=True —
+    an outage a caller might retry forever — while HTTP correctly answered
+    403. Both doors now agree: not authorized, not retryable.
+    """
+    monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path))
+    tc, app, db = _client(tmp_path, monkeypatch)
+    fid = _fact(db, "Never push to main.")
+    viewer = _session(app, "vera", "viewer")
+    app.state.rbac.set_require_login(True)
+    monkeypatch.setenv("SLM_USER_SESSION", viewer["X-SLM-User-Session"])
+    _bind_daemon_request(monkeypatch, tc)
+
+    http_out = tc.patch(f"/api/memory-kinds/fact/{fid}", json={"kind": "rule"},
+                        headers=viewer)
+    assert http_out.status_code == 403, http_out.text
+
+    mcp_out = asyncio.run(_kind_tools()["set_memory_kind"](fid, "rule"))
+    assert mcp_out["success"] is False
+    assert mcp_out["code"] == "NOT_AUTHORIZED"
+    assert mcp_out["retryable"] is False
 
 
 # -- test_status_identical -------------------------------------------------------
