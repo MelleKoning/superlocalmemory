@@ -211,6 +211,30 @@ def test_fact_edit_needs_write_and_owner(tmp_path, monkeypatch) -> None:
     assert tc.patch(f"/api/memory-kinds/fact/{mine}", json={"kind": "banana"}).status_code == 422
 
 
+def test_member_set_kind_admitted_in_company_mode(tmp_path, monkeypatch) -> None:
+    """L3-15: set-kind/confirm follow the documented WRITE contract.
+
+    Before the fix, ``_authorize_memory_mutation("update", ...)`` admitted
+    these routes through ``OperationKind.CORRECT`` (owner/admin only), so a
+    MEMBER who holds RBAC WRITE on the profile — and is explicitly allowed by
+    this route's own docstring — was refused with 403 in company mode, even
+    though the identical personal-mode call (no login required) succeeded.
+    """
+    monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path))
+    tc, app, db = _client(tmp_path, monkeypatch)
+    mine = _fact(db, "Alice likes green tea.")
+    member = _session(app, "mo", "member")
+    app.state.rbac.set_require_login(True)
+    r = tc.patch(f"/api/memory-kinds/fact/{mine}", json={"kind": "opinion"}, headers=member)
+    assert r.status_code == 200, r.text
+    assert r.json()["memory_kind"] == "opinion"
+    fid2 = _fact(db, "We went with SQLite.")
+    r2 = tc.post("/api/memory-kinds/confirm",
+                 json={"items": [{"fact_id": fid2, "kind": "decision"}]}, headers=member)
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["items"][0]["ok"] is True
+
+
 def test_confirm_accepts_the_suggestion_or_a_given_kind(tmp_path, monkeypatch) -> None:
     tc, app, db = _client(tmp_path, monkeypatch)
     suggested = _fact(db, "We went with SQLite.", kind="decision", source="model:laya", conf=0.6)

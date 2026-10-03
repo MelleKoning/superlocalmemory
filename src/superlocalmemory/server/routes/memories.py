@@ -119,12 +119,26 @@ def _mutation_runtime_or_missing_fact(
     raise HTTPException(503, detail="canonical mutation writer is not ready; retry shortly")
 
 
-def _admit_http_mutation(request: Request, operation: str) -> None:
+def _admit_http_mutation(
+    request: Request, operation: str, *, admission_kind: "OperationKind | None" = None,
+) -> None:
     """Route a memory HTTP mutation through OperationPolicyRegistry.evaluate().
 
     Called from _authorize_memory_mutation after RBAC passes. Raises HTTP 403
     if the policy registry denies the actor. Maps "delete" → FORGET,
-    "update" → CORRECT. Uses the server-derived principal and roles.
+    "update" → CORRECT (owner/admin only — this is a content *correction*,
+    which is why ``/replaces`` stays on CORRECT). Uses the server-derived
+    principal and roles.
+
+    ``admission_kind`` lets a caller that passes operation="update" for its
+    RBAC permission (WRITE) and hook name (unchanged, so the trust-gate
+    pre-hook still fires) override which OperationKind the policy registry
+    actually evaluates. Memory-kinds' set/confirm routes use this: they are
+    documented as a WRITE-level operation on a fact the active profile owns
+    (consistent with ``remember(kind=...)``), not the owner/admin-only
+    CORRECT contract a content edit requires — so they pass
+    ``admission_kind=OperationKind.REMEMBER`` instead of letting "update"
+    default to CORRECT.
     """
     from fastapi import HTTPException as _HTTPException
 
@@ -161,7 +175,10 @@ def _admit_http_mutation(request: Request, operation: str) -> None:
         principal=principal,
         roles=actor_roles,
     )
-    kind = OperationKind.FORGET if operation == "delete" else OperationKind.CORRECT
+    if admission_kind is not None:
+        kind = admission_kind
+    else:
+        kind = OperationKind.FORGET if operation == "delete" else OperationKind.CORRECT
     try:
         admit(kind, actor, mode=mode)
     except AdmissionDenied as exc:
@@ -178,8 +195,15 @@ def _authorize_memory_mutation(
     *,
     content_preview: str = "",
     run_pre_hook: bool = True,
+    admission_kind: "OperationKind | None" = None,
 ):
-    """Authenticate a mutation, optionally gating route-owned direct SQL."""
+    """Authenticate a mutation, optionally gating route-owned direct SQL.
+
+    ``admission_kind`` is forwarded to ``_admit_http_mutation`` unchanged; see
+    its docstring. It does not affect the RBAC permission (still keyed off
+    ``operation``) or the hook name run below (still ``operation``) — only
+    which ``OperationKind`` the policy registry evaluates.
+    """
     from superlocalmemory.server.write_identity import require_write_actor
 
     actor_id = require_write_actor(
@@ -196,7 +220,7 @@ def _authorize_memory_mutation(
         _Perm.DELETE if operation == "delete" else _Perm.WRITE,
     )
     # Phase 1: admission gateway — policy registry decision for this route.
-    _admit_http_mutation(request, operation)
+    _admit_http_mutation(request, operation, admission_kind=admission_kind)
     engine = _get_engine(request)
     if engine is None:
         raise HTTPException(503, detail="Engine not initialized")
