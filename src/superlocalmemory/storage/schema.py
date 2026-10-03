@@ -200,6 +200,12 @@ CREATE TABLE IF NOT EXISTS atomic_facts (
     -- DatabaseManager.get_facts_by_ids, which every channel's candidates are
     -- re-authorised through and which the engine hydrates from.
     quarantined        INTEGER NOT NULL DEFAULT 0,
+    -- Memory kind (M052 on upgraded stores). NULL = untyped; no CHECK by design.
+    memory_kind            TEXT,
+    memory_kind_source     TEXT,
+    memory_kind_confidence REAL,
+    memory_kind_recipe     TEXT,
+    memory_kind_at         TEXT,
     langevin_position  TEXT,
 
     -- Emotional
@@ -1012,6 +1018,17 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
             )
 
 
+#: M052's index, created only when the column exists: an index on a missing
+#: column would fail engine start on a store M052 has not reached (the ``pinned`` trap).
+def _create_memory_kind_index(conn: sqlite3.Connection) -> None:
+    try:
+        if any(r[1] == "memory_kind" for r in conn.execute("PRAGMA table_info(atomic_facts)")):
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_facts_memory_kind ON atomic_facts "
+                         "(profile_id, memory_kind) WHERE memory_kind IS NOT NULL")
+    except sqlite3.Error as exc:
+        logger.warning("memory-kind index not created: %s", exc)
+
+
 def create_all_tables(conn: sqlite3.Connection) -> None:
     """Create every table, index, trigger, and FTS virtual table.
 
@@ -1052,6 +1069,7 @@ def create_all_tables(conn: sqlite3.Connection) -> None:
     # poisoned row from retrieval must not be contingent on a migration having
     # succeeded.
     _add_missing_columns(conn)
+    _create_memory_kind_index(conn)
 
     # Seed schema version on first run.
     existing = conn.execute(
