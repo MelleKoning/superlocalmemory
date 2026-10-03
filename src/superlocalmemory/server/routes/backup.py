@@ -25,6 +25,8 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
+from superlocalmemory.infra.cloud_backup_crypto import recovery_key_page_text
+
 from .helpers import DB_PATH, MEMORY_DIR, BackupConfigRequest
 
 logger = logging.getLogger("superlocalmemory.routes.backup")
@@ -675,6 +677,7 @@ def google_oauth_callback(
         icon="&#x2601;&#xFE0F;",
         title="Google Drive Connected!",
         message=f"Signed in as {result.get('email', 'unknown')}. The destination is configured; sync status will appear after an upload."
+        + recovery_key_page_text(result),
     ))
 
 
@@ -787,12 +790,18 @@ async function doConnect() {
       var repoText = document.createElement('p');
       repoText.style.cssText = 'color:#999;margin:0 0 20px;';
       repoText.textContent = 'Repository: ' + (data.repo || repo);
+      var keyText = document.createElement('p');
+      keyText.style.cssText = 'color:#e0e0e0;font-family:monospace;word-break:break-all;';
+      if (data.encryption && data.encryption.recovery_key) {
+        repoText.textContent += '. ' + data.encryption.message;
+        keyText.textContent = data.encryption.recovery_key;
+      } else if (data.encryption) { repoText.textContent += '. ' + (data.encryption.message || data.encryption.error || ''); }
       var closeBtn = document.createElement('button');
       closeBtn.className = 'btn';
       closeBtn.style.cssText = 'background:#00D4AA;color:#0a0a0f;border:none;padding:10px 24px;border-radius:8px;cursor:pointer;font-weight:600;';
       closeBtn.textContent = 'Close Window';
       closeBtn.addEventListener('click', function () { window.close(); });
-      card.append(icon, title, repoText, closeBtn);
+      card.append(icon, title, repoText, keyText, closeBtn);
       document.body.replaceChildren(card);
     } else {
       status.style.color = '#ff4757';
@@ -862,6 +871,7 @@ def github_oauth_callback(
             icon="&#x2705;",
             title="GitHub Connected!",
             message=f"Repository: {result.get('repo', 'slm-backup')}. The destination is configured; sync status will appear after an upload."
+            + recovery_key_page_text(result),
         ))
 
     except Exception:
