@@ -42,18 +42,26 @@ class Facets:
     project: str | None = None
     agent: str | None = None
     about: str | None = None
+    #: 4.1.19 WP8: the DISPLAYED kind (storage.memory_kinds.kind_fields), so a
+    #: legacy row matches the kind it is mapped to, not its raw stored value.
+    #: Already validated/normalized by the caller (core.kind_query.resolve_kind)
+    #: before it ever reaches here — this module only matches, never parses.
+    kind: str | None = None
 
     @classmethod
-    def of(cls, project: object = None, agent: object = None, about: object = None) -> "Facets":
-        return cls(_clean(project), _clean(agent), _clean(about))
+    def of(cls, project: object = None, agent: object = None, about: object = None,
+          kind: object = None) -> "Facets":
+        return cls(_clean(project), _clean(agent), _clean(about), _clean(kind))
 
     @property
     def empty(self) -> bool:
-        return self.project is None and self.agent is None and self.about is None
+        return (self.project is None and self.agent is None and self.about is None
+                and self.kind is None)
 
     def as_dict(self) -> dict[str, str]:
         return {k: v for k, v in (("project", self.project), ("agent", self.agent),
-                                  ("about", self.about)) if v is not None}
+                                  ("about", self.about), ("kind", self.kind))
+                if v is not None}
 
 
 def _chunks(items: list[str], size: int = 500) -> Iterable[list[str]]:
@@ -104,6 +112,24 @@ def _about(db: Any, fact_ids: list[str], profile_id: str, name: str, resolver: A
     return keep
 
 
+def _by_kind(db: Any, fact_ids: list[str], wanted: str) -> set[str]:
+    from superlocalmemory.storage.memory_kinds import kind_fields
+
+    keep: set[str] = set()
+    for chunk in _chunks(fact_ids):
+        rows = db.execute(
+            "SELECT fact_id, memory_kind, memory_kind_source, memory_kind_confidence, "
+            "fact_type FROM atomic_facts "
+            f"WHERE fact_id IN ({','.join('?' * len(chunk))})",
+            tuple(chunk),
+        )
+        for row in rows:
+            d = dict(row)
+            if kind_fields(d)["memory_kind"] == wanted:
+                keep.add(str(d["fact_id"]))
+    return keep
+
+
 def matching_fact_ids(db: Any, fact_ids: Iterable[str], profile_id: str,
                       facets: Facets, resolver: Any = None) -> set[str]:
     """The subset of ``fact_ids`` that matches every requested facet."""
@@ -120,6 +146,9 @@ def matching_fact_ids(db: Any, fact_ids: Iterable[str], profile_id: str,
         if facets.about is not None and remaining:
             remaining = [f for f in remaining if f in _about(
                 db, remaining, profile_id, facets.about, resolver)]
+        if facets.kind is not None and remaining:
+            remaining = [f for f in remaining if f in _by_kind(
+                db, remaining, facets.kind)]
     except Exception as exc:  # noqa: BLE001 - a filter that cannot run keeps nothing
         logger.warning("Recall facet filter failed (%s); no results kept", type(exc).__name__)
         return set()

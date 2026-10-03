@@ -4,27 +4,19 @@
 
 """GET /recall's ``kind`` filter (LLD/WP8 4.1.19).
 
-``engine.recall`` itself is monkeypatched to a canned response (the reranker
-and embedder are not under test here) so this exercises only the HTTP
-boundary: validation before retrieval, the over-fetched ``limit`` the route
-asks the engine for, and the filtered/truncated response shape.
+``kind`` is a facet (retrieval/facets.py), matched inside retrieval before the
+answer check — not a post-serialization filter. A defect in 6722466b over-fetched
+and filtered AFTER ``engine.recall`` returned, so the answer check judged the
+unfiltered top three while the caller saw a different, filtered set. See
+tests/test_core/test_the_kind_facet_runs_before_the_judge.py for the test that
+proves the judge and the caller now see the same memories; this file only
+covers the HTTP boundary, mirroring test_retrieval/test_recall_facets.py's
+``test_http_recall_passes_facets_to_the_engine``.
 """
 
 from __future__ import annotations
 
 from types import SimpleNamespace
-
-from superlocalmemory.storage.models import AtomicFact, FactType
-
-
-def _result(fact_id, content, *, kind=None, source=None):
-    fact = AtomicFact(fact_id=fact_id, memory_id=f"m-{fact_id}", content=content,
-                      fact_type=FactType.SEMANTIC)
-    if kind is not None:
-        fact.memory_kind, fact.memory_kind_source = kind, source
-    return SimpleNamespace(fact=fact, score=0.9, relevance_score=0.9, confidence=0.9,
-                           memory_confidence=0.9, ranking_score=0.9, rank_position=1,
-                           trust_score=0.5, channel_scores={}, evidence_chain=[])
 
 
 def _response(results):
@@ -34,31 +26,15 @@ def _response(results):
     )
 
 
-def test_recall_kind_filter_keeps_only_matches(engine_with_mock_deps, monkeypatch) -> None:
-    from tests.test_server.test_canonical_remember_route import _client
-
-    results = [
-        _result("f1", "a decision", kind="decision", source="user"),
-        _result("f2", "a fact", kind="semantic", source="user"),
-        _result("f3", "another decision", kind="decision", source="user"),
-    ]
-    monkeypatch.setattr(engine_with_mock_deps, "recall", lambda *a, **k: _response(results))
-    with _client(engine_with_mock_deps) as client:
-        r = client.get("/recall", params={"q": "decisions", "kind": "decision"})
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert {item["fact_id"] for item in body["results"]} == {"f1", "f3"}
-    assert all(item["memory_kind"] == "decision" for item in body["results"])
-
-
-def test_recall_kind_filter_overfetches_the_engine_call(engine_with_mock_deps, monkeypatch) -> None:
+def test_recall_passes_kind_as_a_facet_with_the_original_limit(
+    engine_with_mock_deps, monkeypatch,
+) -> None:
     from tests.test_server.test_canonical_remember_route import _client
 
     seen = {}
 
     def fake_recall(*args, **kwargs):
         seen.update(kwargs)
-        seen["limit_arg"] = kwargs.get("limit")
         return _response([])
 
     monkeypatch.setattr(engine_with_mock_deps, "recall", fake_recall)
@@ -67,11 +43,18 @@ def test_recall_kind_filter_overfetches_the_engine_call(engine_with_mock_deps, m
         plain_seen = dict(seen)
         seen.clear()
         client.get("/recall", params={"q": "decisions", "limit": 10})
-    assert plain_seen["limit_arg"] == 30  # overfetch_limit(10)
-    assert seen["limit_arg"] == 10  # unchanged when no kind filter
+
+    assert plain_seen["facets"].kind == "decision"
+    # No over-fetch: the facet is matched inside retrieval, so the engine is
+    # asked for exactly what the caller asked for, same as every other facet.
+    assert plain_seen["limit"] == 10
+    assert "facets" not in seen
+    assert seen["limit"] == 10
 
 
-def test_recall_rejects_an_unknown_kind_before_any_retrieval(engine_with_mock_deps, monkeypatch) -> None:
+def test_recall_rejects_an_unknown_kind_before_any_retrieval(
+    engine_with_mock_deps, monkeypatch,
+) -> None:
     from tests.test_server.test_canonical_remember_route import _client
 
     called = []

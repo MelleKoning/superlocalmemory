@@ -167,15 +167,28 @@ def _recall_result(fact_id, content, *, kind, source):
                            trust_score=0.5, channel_scores={}, evidence_chain=[])
 
 
-def _recall_response():
-    results = [
-        _recall_result("f1", "a decision", kind="decision", source="user"),
-        _recall_result("f2", "a fact", kind="semantic", source="user"),
-        _recall_result("f3", "another decision", kind="decision", source="user"),
-    ]
-    return SimpleNamespace(results=results, query="q", query_type="lookup",
+_RECALL_CANDIDATES = [
+    _recall_result("f1", "a decision", kind="decision", source="user"),
+    _recall_result("f2", "a fact", kind="semantic", source="user"),
+    _recall_result("f3", "another decision", kind="decision", source="user"),
+]
+
+
+def _facet_filtered_recall(*_args, **kwargs):
+    """Stand-in for MemoryEngine.recall(): applies the ``kind`` facet the same
+    way the real RetrievalEngine does (matching_fact_ids, BEFORE the answer
+    check — see test_the_kind_facet_runs_before_the_judge.py), so this proves
+    the three surfaces agree on what reaches the engine, not just on the
+    shape of a canned response.
+    """
+    facets = kwargs.get("facets")
+    if facets is not None and not facets.empty and facets.kind:
+        kept = [r for r in _RECALL_CANDIDATES if r.fact.memory_kind == facets.kind]
+    else:
+        kept = _RECALL_CANDIDATES
+    return SimpleNamespace(results=kept, query="q", query_type="lookup",
                            retrieval_time_ms=1.0, channel_weights={},
-                           total_candidates=len(results), no_confident_match=False)
+                           total_candidates=len(kept), no_confident_match=False)
 
 
 def test_recall_kind_filter_identical(engine_with_mock_deps, monkeypatch, capsys) -> None:
@@ -183,7 +196,7 @@ def test_recall_kind_filter_identical(engine_with_mock_deps, monkeypatch, capsys
     from superlocalmemory.mcp import _daemon_proxy, tools_core
     from tests.test_server.test_canonical_remember_route import _client as recall_client
 
-    monkeypatch.setattr(engine_with_mock_deps, "recall", lambda *a, **k: _recall_response())
+    monkeypatch.setattr(engine_with_mock_deps, "recall", _facet_filtered_recall)
 
     with recall_client(engine_with_mock_deps) as client:
         http_body = client.get("/recall", params={"q": "decisions", "kind": "decision"}).json()

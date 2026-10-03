@@ -1019,12 +1019,21 @@ import asyncio as _asyncio
 _recall_semaphore = _asyncio.Semaphore(3)
 
 
-def _facet_kwargs(project: str, saved_by: str, about: str) -> dict:
+def _facet_kwargs(project: str, saved_by: str, about: str, kind: str | None = None) -> dict:
     """{"facets": ...} when any recall facet was given, else {} (stand-ins
-    of the engine need not know about facets)."""
+    of the engine need not know about facets).
+
+    ``kind`` (4.1.19 WP8) is already validated/normalized by the caller
+    (``core.kind_query.resolve_kind``) — a defect found in 6722466b: kind was
+    originally applied AFTER retrieval (in serialize_recall_response), which
+    let the answer check judge a different, unfiltered top-3 than what the
+    caller was shown. As a facet it is matched inside retrieval, after
+    fusion, before the answer check — exactly where project/saved_by/about
+    already run — so the judge and the caller always see the same memories.
+    """
     from superlocalmemory.retrieval.facets import Facets
 
-    facets = Facets.of(project=project, agent=saved_by, about=about)
+    facets = Facets.of(project=project, agent=saved_by, about=about, kind=kind)
     return {} if facets.empty else {"facets": facets}
 
 
@@ -4794,12 +4803,6 @@ def _register_daemon_routes(application: FastAPI) -> None:
             # GENEROUS budget; only if it is exceeded do we serve the fast
             # keyword fallback. The orphaned recall finishes in the background.
             loop = asyncio.get_running_loop()
-            # A kind filter runs AFTER retrieval (recall_serializer), so the
-            # engine must be asked for more than `limit` candidates or a
-            # filtered answer can come back short on a store that has
-            # plenty of matches further down the unfiltered list.
-            from superlocalmemory.retrieval.kind_filter import overfetch_limit
-            _engine_limit = overfetch_limit(limit) if _kind else limit
 
             def _run_recall():
                 # The skip marker is entered HERE, on the executor thread: a
@@ -4810,7 +4813,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 from superlocalmemory.core.answer_check_scope import skip_answer_check
                 with skip_answer_check() if _skip_check else nullcontext():
                     return engine.recall(
-                        search_query, limit=_engine_limit, session_id=effective_sid,
+                        search_query, limit=limit, session_id=effective_sid,
                         agent_id=recall_actor,
                         fast=fast,
                         profile_id=req_profile or None,
@@ -4821,7 +4824,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
                         known_as_of=known_as_of or None,
                         valid_at=valid_at or None,
                         include_unknown=include_unknown,
-                        **_facet_kwargs(project, saved_by, about),
+                        **_facet_kwargs(project, saved_by, about, _kind),
                         # Only when asked: an engine stand-in need not know it.
                         **({"answer_check": "no_reorder"}
                            if _check_request == "no_reorder" else {}),
@@ -4849,17 +4852,8 @@ def _register_daemon_routes(application: FastAPI) -> None:
             # v3.4.26: return the same field shape as recall_worker so
             # MCP processes proxying through the daemon get recall_trace-
             # compatible data without a second round trip.
-            # Sliced to `limit` as before UNLESS a kind filter is active: a
-            # filtered survivor can sit anywhere in the over-fetched
-            # candidate set, so this must batch-load source content for the
-            # full set serialize_recall_response will filter from. Without a
-            # kind filter, keep the original bound — an aggregation query's
-            # response.results can hold up to 100 candidates regardless of
-            # `limit`, and this must not start loading memory content for all
-            # of them when only `limit` will ever be shown.
-            _memory_id_source = response.results if _kind else response.results[:limit]
             memory_ids = list({
-                r.fact.memory_id for r in _memory_id_source
+                r.fact.memory_id for r in response.results[:limit]
                 if r.fact.memory_id
             })
             memory_map = (
@@ -4888,7 +4882,6 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 include_marker=bool(session_id),
                 full=full,
                 include_source=include_source,
-                kind=_kind,
             )
             for _r in results:
                 _r["content"] = _sanitize_json_text(_r.get("content", ""))
