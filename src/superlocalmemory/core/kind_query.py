@@ -12,9 +12,10 @@ so it lives here once and each surface imports it rather than writing its own
 loop that could drift from the other's.
 
 ``recall`` and HTTP ``/recall`` do NOT use this module — their retrieval goes
-through ``RetrievalEngine.recall`` and the shared serialization chokepoint
-(``server.recall_serializer.serialize_recall_response``), which applies the
-same ``kind_filter`` primitives at that different layer.
+through ``RetrievalEngine.recall``, which applies its own kind filtering
+earlier, in the retrieval layer, before any of this module's callers ever
+see the candidates. ``server.recall_serializer`` only attaches the display
+fields (``kind_fields``); it does not filter.
 """
 
 from __future__ import annotations

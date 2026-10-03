@@ -299,7 +299,7 @@ register_brain_tools(_target, get_engine)  # v4.0.2 portable Brain receipts
 from superlocalmemory.mcp.tools_summaries import register_summary_tools
 register_summary_tools(_target, get_engine)  # v4.0.8 issue #113 summary reads
 from superlocalmemory.mcp.tools_kinds import register_kind_tools
-register_kind_tools(_target, get_engine)  # 4.1.19 WP8: memory-kind management (power profile)
+register_kind_tools(_target, get_engine)  # 4.1.19 WP8: memory-kind management (ships in every profile, not only power)
 from superlocalmemory.mcp.tools_context import register_prestage_tool
 
 
