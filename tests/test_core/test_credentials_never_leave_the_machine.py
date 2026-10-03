@@ -90,14 +90,15 @@ def test_a_model_on_this_machine_sees_the_text_as_written(monkeypatch) -> None:
 
 def _embedder(monkeypatch, **cfg):
     """The real embedding client, with only the wire replaced: whatever the
-    outbound gate lets through is what the transport records."""
+    service's own client lets through is what the transport records."""
     import httpx
 
     from superlocalmemory.core.embeddings import EmbeddingService
-    from superlocalmemory.core.outbound_http import GatedClient
 
     service = EmbeddingService(EmbeddingConfig(dimension=2, **cfg))
     bodies: list[dict] = []
+    options: list[dict] = []
+    real_client = httpx.Client
 
     def _handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
@@ -105,8 +106,13 @@ def _embedder(monkeypatch, **cfg):
         return httpx.Response(200, json={"data": [
             {"embedding": [0.0, 1.0], "index": i} for i in range(len(body["input"]))]})
 
-    service._http_client = GatedClient(transport=httpx.MockTransport(_handler))
-    return service, types.SimpleNamespace(bodies=bodies)
+    def _factory(**kwargs):
+        options.append(dict(kwargs))
+        kwargs.pop("transport", None)
+        return real_client(transport=httpx.MockTransport(_handler), **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", _factory)
+    return service, types.SimpleNamespace(bodies=bodies, options=options)
 
 
 def test_a_cloud_embedder_never_receives_a_credential(monkeypatch) -> None:
@@ -129,3 +135,5 @@ def test_an_embedder_on_this_machine_sees_the_text_as_written(monkeypatch) -> No
                                 api_endpoint="http://localhost:8080/v1", api_key="")
     service._openai_compatible_embed_batch([_TEXT])
     assert _KEY in json.dumps(client.bodies)
+    # This machine is reached directly, never through an environment proxy.
+    assert client.options and client.options[-1].get("trust_env") is False

@@ -318,3 +318,31 @@ def test_remote_rerank_text_keeps_no_part_of_a_credential() -> None:
 
     out = _redact_remote_text(_MEMORY)
     assert _KEY not in out and "[REDACTED:" not in out and "S9t0" not in out
+
+
+def test_the_hosted_check_transport_screens_what_it_sends() -> None:
+    """Defence in depth: the judge redacts before it builds a request, and
+    the transport screens again on the final URL."""
+    import time
+
+    from superlocalmemory.retrieval.jev_transport import HostedTransport
+
+    bodies: list[bytes] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(request.content)
+        return httpx.Response(200, json={"ok": True})
+
+    hosted = HostedTransport(transport=httpx.MockTransport(_handler))
+    try:
+        for kw in ({"json": {"memories": [_MEMORY]}},
+                   {"content": json.dumps({"memories": [_MEMORY]}).encode()}):
+            _body, status, failure = hosted.post(
+                "https://api.typesafe.ai/v1/systemone", {"X": "1"},
+                deadline=time.monotonic() + 5, **kw)
+            assert (status, failure) == (200, "")
+    finally:
+        hosted.close()
+    assert len(bodies) == 2
+    for body in bodies:
+        assert _KEY.encode() not in body and b"Hunt3rTwo" not in body
