@@ -329,6 +329,19 @@ class MemoryEngine:
         from superlocalmemory.learning.adaptive import AdaptiveLearner
         self._adaptive_learner = AdaptiveLearner(self._db)
 
+        # 4.1.19 (L1-15): reconcile_confirmed existed, was unit-tested, and
+        # had no production caller — a 4.1.18 downgrade window's fact_type
+        # drift on an already-confirmed kind (LLD §6.5) was never actually
+        # repaired anywhere reachable. Engine start is bounded (rows and
+        # time, inside reconcile_confirmed itself) and, like every other
+        # best-effort migration above, a failure here is a warning, never a
+        # boot failure.
+        try:
+            from superlocalmemory.storage.memory_kind_store import MemoryKindStore
+            MemoryKindStore(self._db).reconcile_confirmed(self._profile_id)
+        except Exception as exc:
+            logger.warning("Memory kind reconcile skipped at start: %s", exc)
+
     def _try_init_proxy(self) -> None:
         """V3.5.9: Attach McpEmbedderProxy when running in LIGHT mode.
 

@@ -151,3 +151,54 @@ class TestLightEngineDBOnlyFeatures:
         # happy path that Varun cares about (no "learning disabled" copy
         # showing up in the MCP response).
         assert learner.get_feedback_count(engine.profile_id) == 0
+
+
+class TestKindReconcileAtStart:
+    """L1-15: ``reconcile_confirmed`` had no production caller at all — it
+    existed, was unit-tested, and fixed nothing on any reachable path. Engine
+    start is the right place: it is bounded (rows and time) and a failure
+    there must never block boot (``_init_db_layer`` logs a warning for every
+    other best-effort migration the same way)."""
+
+    def test_engine_start_repairs_a_confirmed_kind_fact_type(self, mode_a_config) -> None:
+        from superlocalmemory.storage.models import AtomicFact, FactType, MemoryRecord
+
+        # First boot: only to create the M052 schema the same way production
+        # does (through real migrations, not a hand-applied DDL fixture).
+        first = MemoryEngine(mode_a_config, capabilities=Capabilities.LIGHT)
+        first.initialize()
+        assert first.db.has_memory_kind_columns() is True
+
+        mid = first.db.store_memory(
+            MemoryRecord(profile_id=first.profile_id, content="s"))
+        fid = first.db.store_fact(AtomicFact(
+            profile_id=first.profile_id, memory_id=mid,
+            content="We decided to ship Friday", fact_type=FactType.SEMANTIC))
+        # A confirmed kind whose fact_type fell out of step with it — the
+        # LLD §6.5 downgrade-window corruption reconcile_confirmed repairs.
+        first.db.execute(
+            "UPDATE atomic_facts SET memory_kind = 'decision', "
+            "memory_kind_source = 'user' WHERE fact_id = ?", (fid,),
+        )
+        first.close()
+
+        restarted = MemoryEngine(mode_a_config, capabilities=Capabilities.LIGHT)
+        restarted.initialize()  # the repair must happen here, with no manual call
+        row = dict(restarted.db.execute(
+            "SELECT fact_type FROM atomic_facts WHERE fact_id = ?", (fid,))[0])
+        assert row["fact_type"] == "episodic"  # COARSE[DECISION]
+        restarted.close()
+
+    def test_engine_start_never_fails_if_the_reconcile_itself_fails(
+        self, mode_a_config, monkeypatch,
+    ) -> None:
+        import superlocalmemory.storage.memory_kind_store as mks_module
+
+        def _boom(self, profile_id, **kwargs):
+            raise RuntimeError("simulated reconcile failure")
+
+        monkeypatch.setattr(mks_module.MemoryKindStore, "reconcile_confirmed", _boom)
+        engine = MemoryEngine(mode_a_config, capabilities=Capabilities.LIGHT)
+        engine.initialize()  # must not raise
+        assert engine._initialized is True
+        engine.close()
