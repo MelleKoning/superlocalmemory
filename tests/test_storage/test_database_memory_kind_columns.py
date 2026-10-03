@@ -56,19 +56,34 @@ CREATE TABLE memory_kind_history (
 
 
 def _apply_memory_kind_schema(db: DatabaseManager) -> None:
-    """Apply LLD §4.2's DDL by hand, standing in for M052 (WP-1, not yet merged)."""
+    """Upgrade the store with the real M052 migration."""
+    from superlocalmemory.storage.migrations import M052_memory_kinds as m052
+
     with db.raw_connection() as conn:
-        for name, sql_type in _KIND_COLUMN_DDL:
-            conn.execute(f"ALTER TABLE atomic_facts ADD COLUMN {name} {sql_type}")
-        conn.execute(_RUNS_TABLE_DDL)
-        conn.execute(_HISTORY_TABLE_DDL)
+        m052.apply(conn)
     db._kind_columns_present = True  # noqa: SLF001 - test shortcut, mirrors a fresh probe
+
+
+def _strip_kind_columns(db: DatabaseManager) -> None:
+    """Make a fresh store look like one from before M052: no kind columns,
+    index or tables (the current schema creates them)."""
+    with db.raw_connection() as conn:
+        conn.execute("DROP INDEX IF EXISTS idx_facts_memory_kind")
+        present = {r[1] for r in conn.execute("PRAGMA table_info(atomic_facts)")}
+        for name, _sql_type in _KIND_COLUMN_DDL:
+            if name in present:
+                conn.execute(f"ALTER TABLE atomic_facts DROP COLUMN {name}")
+        conn.execute("DROP TABLE IF EXISTS memory_kind_history")
+        conn.execute("DROP TABLE IF EXISTS memory_kind_runs")
+    db._kind_columns_present = False  # noqa: SLF001 - forget any earlier probe
+    db._kind_columns_checked_at = 0.0  # noqa: SLF001
 
 
 @pytest.fixture()
 def db(tmp_path: Path) -> DatabaseManager:
     mgr = DatabaseManager(tmp_path / "test.db")
     mgr.initialize(real_schema)
+    _strip_kind_columns(mgr)
     return mgr
 
 

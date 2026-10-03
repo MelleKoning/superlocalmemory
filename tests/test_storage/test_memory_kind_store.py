@@ -21,46 +21,16 @@ from superlocalmemory.storage.memory_kinds import KindAssignment, KindSource, Me
 from superlocalmemory.storage.memory_kind_store import KindChange, MemoryKindStore
 from superlocalmemory.storage.models import AtomicFact, FactType, MemoryRecord
 
-_KIND_COLUMN_DDL = (
-    ("memory_kind", "TEXT"),
-    ("memory_kind_source", "TEXT"),
-    ("memory_kind_confidence", "REAL"),
-    ("memory_kind_recipe", "TEXT"),
-    ("memory_kind_at", "TEXT"),
-)
 
-_RUNS_TABLE_DDL = """
-CREATE TABLE memory_kind_runs (
-    run_id TEXT PRIMARY KEY, profile_id TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('queued','running','paused','completed',
-                                           'cancelled','failed','reverting','reverted')),
-    backend TEXT NOT NULL, recipe_id TEXT NOT NULL,
-    mode TEXT NOT NULL CHECK (mode IN ('untyped','refresh')),
-    cursor_rowid INTEGER NOT NULL DEFAULT 0, revert_cursor INTEGER,
-    total_estimate INTEGER NOT NULL DEFAULT 0, processed INTEGER NOT NULL DEFAULT 0,
-    changed INTEGER NOT NULL DEFAULT 0, skipped INTEGER NOT NULL DEFAULT 0,
-    errors INTEGER NOT NULL DEFAULT 0, last_error TEXT,
-    requested_by TEXT NOT NULL, created_at TEXT NOT NULL, started_at TEXT,
-    finished_at TEXT, updated_at TEXT NOT NULL)
-"""
 
-_HISTORY_TABLE_DDL = """
-CREATE TABLE memory_kind_history (
-    history_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    fact_id TEXT NOT NULL, profile_id TEXT NOT NULL, run_id TEXT,
-    origin TEXT NOT NULL CHECK (origin IN ('backfill','user_edit','revert','reconcile','restore')),
-    old_kind TEXT, old_source TEXT, old_confidence REAL, old_fact_type TEXT,
-    new_kind TEXT, new_source TEXT, new_confidence REAL, new_fact_type TEXT,
-    actor TEXT NOT NULL, changed_at TEXT NOT NULL)
-"""
 
 
 def _apply_memory_kind_schema(db: DatabaseManager) -> None:
+    """Upgrade the store with the real M052 migration (idempotent)."""
+    from superlocalmemory.storage.migrations import M052_memory_kinds as m052
+
     with db.raw_connection() as conn:
-        for name, sql_type in _KIND_COLUMN_DDL:
-            conn.execute(f"ALTER TABLE atomic_facts ADD COLUMN {name} {sql_type}")
-        conn.execute(_RUNS_TABLE_DDL)
-        conn.execute(_HISTORY_TABLE_DDL)
+        m052.apply(conn)
     db._kind_columns_present = True  # noqa: SLF001 - test shortcut
 
 
