@@ -151,13 +151,17 @@ def test_profile_full_exact():
 
 
 # ---------------------------------------------------------------------------
-# RED-5: power == 62 and ⊇ full
+# RED-5: power == 66 and ⊇ full
 # ---------------------------------------------------------------------------
 
 _POWER_EXTRA = frozenset({
     "get_version", "get_mode", "health", "consistency_check", "recall_trace",
     "get_lifecycle_status", "set_retention_policy", "compact_memories",
     "get_behavioral_patterns", "audit_trail", "quantize", "get_retention_stats",
+    # 4.1.19 WP8: memory-kind management — governance layer over the `kind`
+    # filter every profile's recall/search/list_recent already carries.
+    "set_memory_kind", "memory_kinds_status", "review_memory_kinds",
+    "confirm_memory_kinds",
 })
 
 _EXPECTED_POWER = _EXPECTED_FULL | _POWER_EXTRA
@@ -169,7 +173,7 @@ def test_profile_power_exact():
     assert power == _EXPECTED_POWER, (
         f"power diff — extra: {power - _EXPECTED_POWER}, missing: {_EXPECTED_POWER - power}"
     )
-    assert len(power) == 62, f"power must be 62 names, got {len(power)}"
+    assert len(power) == 66, f"power must be 66 names, got {len(power)}"
     full = mod._PROFILE_DEFINITIONS["full"]
     assert full <= power, f"power must be a superset of full; missing: {full - power}"
 
@@ -236,6 +240,7 @@ def test_every_profile_name_is_a_real_registered_tool():
     from superlocalmemory.mcp.tools_loops import register_loop_tools
     from superlocalmemory.mcp.tools_brain import register_brain_tools
     from superlocalmemory.mcp.tools_context import register_prestage_tool
+    from superlocalmemory.mcp.tools_kinds import register_kind_tools
     from superlocalmemory.mcp.tools_summaries import register_summary_tools
 
     collector = _NameCollector()
@@ -255,6 +260,7 @@ def test_every_profile_name_is_a_real_registered_tool():
     register_brain_tools(collector, get_engine_stub)
     register_prestage_tool(collector, lambda *a, **k: [])
     register_summary_tools(collector, get_engine_stub)
+    register_kind_tools(collector, get_engine_stub)
 
     mod = _get_module()
     all_profile_names: set[str] = set()

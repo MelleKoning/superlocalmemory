@@ -91,7 +91,7 @@ When the SLM MCP server is unavailable, use these CLI equivalents:
 > `observe_bounded_loop_evidence`), 3 bounded-loop tools (`slm_loop_run`,
 > `slm_loop_history`, `slm_loop_show`) and 2 usefulness reports (`report_outcome`,
 > `report_feedback`).
-> Use `full` (50 tools) to add mesh coordination. Use `power` (62 tools) for governance
+> Use `full` (50 tools) to add mesh coordination. Use `power` (66 tools) for governance
 > and audit tools. See slm-profile for profile switching.
 
 | Tool               | Signature (key params)                                                                       | Notes                                  |

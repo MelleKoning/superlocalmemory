@@ -174,6 +174,7 @@ def serialize_recall_response(
     full: bool = False,
     include_source: bool = False,
     include_marker: bool = False,
+    kind: str | None = None,
 ) -> tuple[list[dict], bool]:
     """Convert a RecallResponse into budgeted, source-disciplined dicts.
 
@@ -190,6 +191,15 @@ def serialize_recall_response(
         full:           Bypass clamping/stubs (additive escape hatch).
         include_source: Return full source_content (else ≤280-char preview).
         include_marker: Emit each result's HMAC usage marker. See below.
+        kind:           Keep only results whose DISPLAYED kind
+                        (``kind_fields()["memory_kind"]``) equals this value.
+                        ``None``/``""`` = no filter (byte-identical to before
+                        this parameter existed). Applied over every candidate
+                        in ``response.results`` — not just the first
+                        ``limit`` — so a caller that over-fetched (see
+                        ``retrieval.kind_filter.overfetch_limit``) still gets
+                        up to ``limit`` matches; truncation to ``limit``
+                        happens AFTER the filter, never before it.
 
     Returns:
         (results, no_confident_match) — results is a list of dicts; the bool
@@ -222,7 +232,19 @@ def serialize_recall_response(
     from datetime import datetime as _dt, timezone as _tz
     _now = _dt.now(_tz.utc)
     raw: list[dict] = []
-    for r in (response.results or [])[:limit]:
+    # The kind filter (below) needs to see every candidate the caller handed
+    # in, not just the first `limit` — a caller asking for a kind filter has
+    # already over-fetched for exactly this reason
+    # (retrieval.kind_filter.overfetch_limit). Slicing to `limit` happens
+    # AFTER filtering instead, in that case.
+    #
+    # Without a kind filter this must stay response.results[:limit], not the
+    # full list: an aggregation query's response.results can hold up to 100
+    # candidates regardless of the caller's limit, and building a full entry
+    # (budget/discipline-ready dict) for every one of them when only `limit`
+    # will ever be shown is wasted work this change must not introduce.
+    _candidates = response.results if kind else (response.results or [])[:limit]
+    for r in (_candidates or []):
         fact = r.fact
         _created = getattr(fact, "created_at", "") or ""
         fact_type = getattr(fact, "fact_type", None)
@@ -273,6 +295,10 @@ def serialize_recall_response(
             if marker:
                 entry["marker"] = marker
         raw.append(entry)
+
+    from superlocalmemory.retrieval.kind_filter import filter_items_by_kind
+
+    raw = filter_items_by_kind(raw, kind, limit)
 
     # F-3 source discipline, then F-2 budget — order matters (discipline first
     # so the template firewall runs before any preview slicing).

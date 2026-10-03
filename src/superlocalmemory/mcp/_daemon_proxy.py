@@ -92,6 +92,7 @@ class DaemonPoolProxy:
         project: str = "",
         saved_by: str = "",
         about: str = "",
+        kind: str = "",
     ) -> dict[str, Any]:
         if self._unavailable:
             return self._unavailable_response()
@@ -126,6 +127,10 @@ class DaemonPoolProxy:
                                           ("about", about)):
             if (_facet_value or "").strip():
                 _params[_facet_name] = _facet_value.strip()
+        # 4.1.19 WP8: sent only when set, so an unset kind keeps the query
+        # string byte-identical to before this filter existed.
+        if (kind or "").strip():
+            _params["kind"] = kind.strip()
         if as_of:
             _params["as_of"] = as_of
         if known_as_of:

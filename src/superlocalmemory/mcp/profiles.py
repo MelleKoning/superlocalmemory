@@ -86,10 +86,17 @@ _PROFILE_FULL: frozenset[str] = frozenset({
     # prestage_context remains registered but deliberately raw-server-only.
 }) | _PROFILE_FULL_MESH  # 50
 
-_PROFILE_POWER: frozenset[str] = _PROFILE_FULL | frozenset({  # 62
+_PROFILE_POWER: frozenset[str] = _PROFILE_FULL | frozenset({  # 66
     "get_version", "get_mode", "health", "consistency_check", "recall_trace",
     "get_lifecycle_status", "set_retention_policy", "compact_memories",
     "get_behavioral_patterns", "audit_trail", "quantize", "get_retention_stats",
+    # 4.1.19 WP8: memory-kind management (set/status/review/confirm). Base
+    # recall/search/list_recent already carry a `kind` filter in every
+    # profile; these four are the governance layer on top (changing or
+    # bulk-confirming a kind), which is why they sit with the other
+    # admin/audit tools rather than in core/full.
+    "set_memory_kind", "memory_kinds_status", "review_memory_kinds",
+    "confirm_memory_kinds",
 })
 
 _PROFILE_MESH: frozenset[str] = _PROFILE_FULL_MESH  # 8

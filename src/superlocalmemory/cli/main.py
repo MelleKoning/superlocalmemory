@@ -484,6 +484,9 @@ def main() -> None:
                           help="Only memories saved by this agent (e.g. claude-desktop).")
     recall_p.add_argument("--about", default="",
                           help="Only memories that mention this name (a person, project or tool).")
+    recall_p.add_argument("--kind", default="",
+                          help="Only memories of this kind (e.g. decision, rule, status). "
+                               "See 'slm remember --help' for the full list.")
     recall_p.add_argument(
         "--as-of", dest="as_of", default="",
         help="Point-in-time recall: an ISO-8601 timestamp "
@@ -573,6 +576,8 @@ def main() -> None:
         "--limit", "-n", type=int, default=CANONICAL_LIST_LIMIT,
         help=f"Number of entries (default {CANONICAL_LIST_LIMIT})",
     )
+    list_p.add_argument("--kind", default="",
+                       help="Only memories of this kind (e.g. decision, rule, status).")
     list_p.add_argument("--json", action="store_true", help="Output structured JSON (agent-native)")
 
     # -- Diagnostics ---------------------------------------------------

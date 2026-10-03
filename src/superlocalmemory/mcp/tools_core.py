@@ -457,6 +457,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
         project: str = "",
         saved_by: str = "",
         about: str = "",
+        kind: str = "",
     ) -> dict:
         """Search memories through hybrid retrieval, RRF fusion, and reranking.
 
@@ -506,11 +507,23 @@ def register_core_tools(server, get_engine: Callable) -> None:
         person, project or tool). Each is a hard filter. Questions phrased as
         "what did we decide", "how do I", "what is the current status of" get
         decisions, how-tos and the newest current-state memory first.
+
+        ``kind`` (4.1.19 WP8) keeps only results whose kind — the same nine
+        values ``remember``'s ``kind`` parameter takes — equals this value,
+        including memories SLM only mapped from their legacy type. Refused
+        (``INVALID_KIND``) before anything is retrieved if it does not parse.
+        Composes with ``project``/``saved_by``/``about`` as AND.
         """
         # v3.6.10: resolve "mcp_client" sentinel → URL path (HTTP) or env var (stdio)
         if agent_id == "mcp_client":
             from superlocalmemory.mcp.agent_context import get_current_agent_id
             agent_id = get_current_agent_id()
+        from superlocalmemory.core.kind_query import InvalidKind, resolve_kind
+        try:
+            _kind = resolve_kind(kind)
+        except InvalidKind as exc:
+            return {"success": False, "code": "INVALID_KIND", "retryable": False,
+                    "error": str(exc)}
         import asyncio
         try:
             from superlocalmemory.mcp._daemon_proxy import choose_pool
@@ -585,6 +598,8 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     # 4.1.19 facets, only when set.
                     **{k: v.strip() for k, v in (("project", project), ("saved_by", saved_by),
                                                  ("about", about)) if (v or "").strip()},
+                    # 4.1.19 WP8: the already-validated, normalized kind.
+                    **({"kind": _kind} if _kind else {}),
                 )
 
             result = await asyncio.to_thread(
@@ -630,12 +645,25 @@ def register_core_tools(server, get_engine: Callable) -> None:
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
     @admits(OperationKind.RECALL)
-    async def search(query: str, limit: int = CANONICAL_RECALL_LIMIT) -> dict:
-        """Full-text search across memories using FTS5 with BM25 ranking."""
+    async def search(query: str, limit: int = CANONICAL_RECALL_LIMIT, kind: str = "") -> dict:
+        """Full-text search across memories using FTS5 with BM25 ranking.
+
+        ``kind`` (4.1.19 WP8) keeps only results whose kind — the same nine
+        values ``remember``'s ``kind`` parameter takes — equals this value,
+        including memories SLM only mapped from their legacy type. Refused
+        (``INVALID_KIND``) before anything is retrieved if it does not parse.
+        """
+        from superlocalmemory.core.kind_query import InvalidKind, resolve_kind, search_facts
+        from superlocalmemory.storage.memory_kinds import kind_fields
+        try:
+            parsed_kind = resolve_kind(kind)
+        except InvalidKind as exc:
+            return {"success": False, "code": "INVALID_KIND", "retryable": False,
+                    "error": str(exc)}
         try:
             engine = get_engine()
             pid = await _runtime_profile(get_engine)
-            facts = engine._db.search_facts_fts(query, pid, limit=limit)
+            facts = search_facts(engine._db, query, pid, limit, parsed_kind)
             items = []
             for f in facts:
                 items.append({
@@ -644,6 +672,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     "fact_type": f.fact_type.value,
                     "confidence": round(f.confidence, 3),
                     "date": f.observation_date,
+                    **kind_fields(f),
                 })
             return {"success": True, "results": items, "count": len(items)}
         except Exception as exc:
@@ -710,15 +739,28 @@ def register_core_tools(server, get_engine: Callable) -> None:
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
     @admits(OperationKind.RECALL)
-    async def list_recent(limit: int = CANONICAL_LIST_LIMIT) -> dict:
-        """List most recently stored memories, newest first."""
+    async def list_recent(limit: int = CANONICAL_LIST_LIMIT, kind: str = "") -> dict:
+        """List most recently stored memories, newest first.
+
+        ``kind`` (4.1.19 WP8) keeps only memories whose kind — the same nine
+        values ``remember``'s ``kind`` parameter takes — equals this value,
+        including memories SLM only mapped from their legacy type. Refused
+        (``INVALID_KIND``) before anything is retrieved if it does not parse.
+        """
+        from superlocalmemory.core.kind_query import InvalidKind, list_recent_facts, resolve_kind
+        from superlocalmemory.storage.memory_kinds import kind_fields
+        try:
+            parsed_kind = resolve_kind(kind)
+        except InvalidKind as exc:
+            return {"success": False, "code": "INVALID_KIND", "retryable": False,
+                    "error": str(exc)}
         try:
             engine = get_engine()
             pid = await _runtime_profile(get_engine)
             # v3.6.12 (search-2): push the limit into the query — was loading the
             # ENTIRE facts table (deserializing every 768-float embedding) just
             # to return the top N. get_all_facts preserves created_at DESC order.
-            facts = engine._db.get_all_facts(pid, limit=limit)
+            facts = list_recent_facts(engine._db, pid, limit, parsed_kind)
             items = []
             for f in facts:
                 items.append({
@@ -727,6 +769,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     "fact_type": f.fact_type.value,
                     "created_at": f.created_at,
                     "session_id": f.session_id,
+                    **kind_fields(f),
                 })
             return {"success": True, "results": items, "count": len(items)}
         except Exception as exc:

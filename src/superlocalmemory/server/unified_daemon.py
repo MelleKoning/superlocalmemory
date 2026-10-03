@@ -4645,6 +4645,10 @@ def _register_daemon_routes(application: FastAPI) -> None:
         project: str = "",
         saved_by: str = "",
         about: str = "",
+        # 4.1.19 WP8: only memories whose DISPLAYED kind matches. Refused
+        # before any retrieval when it does not parse (never silently
+        # ignored). See core.kind_query / retrieval.kind_filter.
+        kind: str = "",
     ):
         _update_activity()
         search_query = q or query  # Accept both ?q= and ?query= for compatibility
@@ -4657,6 +4661,14 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 {"error": "invalid_answer_check",
                  "message": "answer_check must be one of: skip, no_reorder, full"},
                 status_code=400,
+            )
+        from superlocalmemory.core.kind_query import InvalidKind, resolve_kind
+        try:
+            _kind = resolve_kind(kind)
+        except InvalidKind as exc:
+            from starlette.responses import JSONResponse
+            return JSONResponse(
+                {"error": "invalid_kind", "message": str(exc)}, status_code=422,
             )
         engine = _get_engine_or_503()
         req_profile = (profile_id or "").strip()
@@ -4782,6 +4794,12 @@ def _register_daemon_routes(application: FastAPI) -> None:
             # GENEROUS budget; only if it is exceeded do we serve the fast
             # keyword fallback. The orphaned recall finishes in the background.
             loop = asyncio.get_running_loop()
+            # A kind filter runs AFTER retrieval (recall_serializer), so the
+            # engine must be asked for more than `limit` candidates or a
+            # filtered answer can come back short on a store that has
+            # plenty of matches further down the unfiltered list.
+            from superlocalmemory.retrieval.kind_filter import overfetch_limit
+            _engine_limit = overfetch_limit(limit) if _kind else limit
 
             def _run_recall():
                 # The skip marker is entered HERE, on the executor thread: a
@@ -4792,7 +4810,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 from superlocalmemory.core.answer_check_scope import skip_answer_check
                 with skip_answer_check() if _skip_check else nullcontext():
                     return engine.recall(
-                        search_query, limit=limit, session_id=effective_sid,
+                        search_query, limit=_engine_limit, session_id=effective_sid,
                         agent_id=recall_actor,
                         fast=fast,
                         profile_id=req_profile or None,
@@ -4831,8 +4849,17 @@ def _register_daemon_routes(application: FastAPI) -> None:
             # v3.4.26: return the same field shape as recall_worker so
             # MCP processes proxying through the daemon get recall_trace-
             # compatible data without a second round trip.
+            # Sliced to `limit` as before UNLESS a kind filter is active: a
+            # filtered survivor can sit anywhere in the over-fetched
+            # candidate set, so this must batch-load source content for the
+            # full set serialize_recall_response will filter from. Without a
+            # kind filter, keep the original bound — an aggregation query's
+            # response.results can hold up to 100 candidates regardless of
+            # `limit`, and this must not start loading memory content for all
+            # of them when only `limit` will ever be shown.
+            _memory_id_source = response.results if _kind else response.results[:limit]
             memory_ids = list({
-                r.fact.memory_id for r in response.results[:limit]
+                r.fact.memory_id for r in _memory_id_source
                 if r.fact.memory_id
             })
             memory_map = (
@@ -4861,6 +4888,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 include_marker=bool(session_id),
                 full=full,
                 include_source=include_source,
+                kind=_kind,
             )
             for _r in results:
                 _r["content"] = _sanitize_json_text(_r.get("content", ""))

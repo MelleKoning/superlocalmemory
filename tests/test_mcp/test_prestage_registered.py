@@ -45,7 +45,7 @@ def test_prestage_context_absent_from_counted_profiles():
     # surface and must mirror "full" exactly — asserted below.
     assert len(mod._ESSENTIAL_TOOLS) == 50
     assert len(mod._PROFILE_DEFINITIONS["full"]) == 50
-    assert len(mod._PROFILE_DEFINITIONS["power"]) == 62
+    assert len(mod._PROFILE_DEFINITIONS["power"]) == 66
     assert set(mod._ESSENTIAL_TOOLS) == set(mod._PROFILE_DEFINITIONS["full"]), (
         "the fallback surface drifted from the full profile; a client on the\n"
         "legacy path would gain or lose tools silently"
