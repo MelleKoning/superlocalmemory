@@ -49,6 +49,15 @@ _HISTORY_INSERT_SQL = (
     "new_fact_type, actor, changed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
 )
 
+#: A run's own change also keeps the recipe and time it replaced, so undoing
+#: a refresh run restores those exactly too, not only the kind.
+_BACKFILL_HISTORY_INSERT_SQL = (
+    "INSERT INTO memory_kind_history (fact_id, profile_id, run_id, origin, old_kind, "
+    "old_source, old_confidence, old_fact_type, old_recipe, old_at, new_kind, new_source, "
+    "new_confidence, new_fact_type, actor, changed_at) "
+    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+)
+
 
 def _autocheckpoint(conn: sqlite3.Connection) -> int:
     try:
@@ -130,6 +139,11 @@ def apply_batch(
                 cols = change.new.as_columns(now)
                 confirmed_new = is_confirmed(change.new.source.value)
                 new_fact_type = COARSE[change.new.kind] if confirmed_new else change.fact_type
+                prior = conn.execute(
+                    "SELECT memory_kind_recipe, memory_kind_at FROM atomic_facts "
+                    "WHERE rowid = ? AND profile_id = ?", (change.rowid, profile_id),
+                ).fetchone()
+                old_recipe, old_at = (prior[0], prior[1]) if prior is not None else (None, None)
                 cur = conn.execute(
                     "UPDATE atomic_facts SET memory_kind = ?, memory_kind_source = ?, "
                     "memory_kind_confidence = ?, memory_kind_recipe = ?, memory_kind_at = ?, "
@@ -145,11 +159,12 @@ def apply_batch(
                 if cur.rowcount == 1:
                     applied += 1
                     conn.execute(
-                        _HISTORY_INSERT_SQL,
+                        _BACKFILL_HISTORY_INSERT_SQL,
                         (
                             change.fact_id, profile_id, run_id, "backfill",
                             change.old_kind, change.old_source, change.old_confidence,
-                            change.fact_type, cols["memory_kind"], cols["memory_kind_source"],
+                            change.fact_type, old_recipe, old_at,
+                            cols["memory_kind"], cols["memory_kind_source"],
                             cols["memory_kind_confidence"], new_fact_type, actor, now,
                         ),
                     )
@@ -212,7 +227,7 @@ def revert_batch(
 
             rows = conn.execute(
                 "SELECT history_id, fact_id, old_kind, old_source, old_confidence, "
-                "new_kind, new_source FROM memory_kind_history "
+                "old_recipe, old_at, new_kind, new_source FROM memory_kind_history "
                 "WHERE run_id = ? AND profile_id = ? AND origin = 'backfill' "
                 "AND history_id < ? ORDER BY history_id DESC LIMIT ?",
                 (run_id, profile_id, revert_cursor, limit),
@@ -224,17 +239,17 @@ def revert_batch(
             for row in rows:
                 d = _row_dict(row)
                 last_history_id = d["history_id"]
-                # Undoing onto an untyped row restores it exactly: all five
-                # columns NULL again, not an untyped row with a timestamp.
+                # Undo restores all five kind columns exactly as they were:
+                # an untyped row gets NULLs back, a refreshed one its earlier
+                # recipe and time.
                 cur = conn.execute(
                     "UPDATE atomic_facts SET memory_kind = ?, memory_kind_source = ?, "
-                    "memory_kind_confidence = ?, memory_kind_recipe = NULL, "
-                    "memory_kind_at = CASE WHEN ? IS NULL THEN NULL ELSE ? END "
+                    "memory_kind_confidence = ?, memory_kind_recipe = ?, memory_kind_at = ? "
                     "WHERE fact_id = ? AND profile_id = ? "
                     "AND memory_kind IS ? AND memory_kind_source IS ?",
                     (
                         d["old_kind"], d["old_source"], d["old_confidence"],
-                        d["old_kind"], now,
+                        d["old_recipe"], d["old_at"],
                         d["fact_id"], profile_id, d["new_kind"], d["new_source"],
                     ),
                 )

@@ -122,6 +122,7 @@ _HISTORY_TABLE = """CREATE TABLE IF NOT EXISTS memory_kind_history (
     origin TEXT NOT NULL CHECK (origin IN ('backfill','user_edit','revert',
                                            'reconcile','restore')),
     old_kind TEXT, old_source TEXT, old_confidence REAL, old_fact_type TEXT,
+    old_recipe TEXT, old_at TEXT,
     new_kind TEXT, new_source TEXT, new_confidence REAL, new_fact_type TEXT,
     actor TEXT NOT NULL,
     changed_at TEXT NOT NULL)"""

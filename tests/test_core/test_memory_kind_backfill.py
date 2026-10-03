@@ -562,6 +562,27 @@ def test_revert_restores_exact_prior_state(db: DatabaseManager) -> None:
     assert _snapshot(db) == before
 
 
+def test_revert_of_a_refresh_run_restores_exact_prior_state(db: DatabaseManager) -> None:
+    # A refresh run re-types memories that already carry a suggestion; undo
+    # must give back the earlier recipe and time too, not only the kind.
+    for t in TEXTS:
+        fid = _fact(db, t)
+        db.execute(
+            "UPDATE atomic_facts SET memory_kind = 'semantic', memory_kind_source = 'model:laya', "
+            "memory_kind_confidence = 0.41, memory_kind_recipe = 'kinds-v0', "
+            "memory_kind_at = '2026-09-01T10:00:00+00:00' WHERE fact_id = ?", (fid,))
+    before = _snapshot(db)
+    judge = _Judge(backend="laya", choice="status", confidence=0.7)
+    engine = _engine(db, cfg=_cfg(backend="laya", batch_size={"laya": 3}), judge=judge)
+    runner = _runner(engine)
+    run = runner.create_run("default", mode="refresh", requested_by="test")
+    _drain(runner)
+    assert _snapshot(db) != before
+    runner.revert(run["run_id"], requested_by="test")
+    _drain(runner)
+    assert _snapshot(db) == before
+
+
 def test_revert_whole_run_is_resumable(db: DatabaseManager) -> None:
     ids = [_fact(db, t) for t in TEXTS]
     engine = _engine(db)
