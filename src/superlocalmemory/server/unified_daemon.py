@@ -4678,10 +4678,8 @@ def _register_daemon_routes(application: FastAPI) -> None:
         try:
             _kind = resolve_kind(kind)
         except InvalidKind as exc:
-            from starlette.responses import JSONResponse
-            return JSONResponse(
-                {"error": "invalid_kind", "message": str(exc)}, status_code=422,
-            )
+            from superlocalmemory.server.kind_error import invalid_kind_http
+            raise invalid_kind_http(exc)
         engine = _get_engine_or_503()
         req_profile = (profile_id or "").strip()
         # 4.1.14 audit: permission before existence on the read path, the
@@ -4915,8 +4913,12 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 "no_confident_match": no_confident_match,
                 **recall_response_metadata(response),
             }
-        except Exception as exc:
-            raise HTTPException(500, detail=str(exc))
+        except Exception:
+            # L3-06: never let str(exc) leave the server — it can carry a
+            # local path, a stack value, or other internal detail that is
+            # none of the caller's business.
+            logger.exception("GET /recall failed")
+            raise HTTPException(500, detail="recall failed; see server logs")
         finally:
             if not fast:
                 _recall_semaphore.release()
@@ -5007,13 +5009,13 @@ def _register_daemon_routes(application: FastAPI) -> None:
         # admission work, rather than storing the memory untyped.
         declared_kind = None
         if (req.kind or "").strip():
-            from superlocalmemory.storage.memory_kinds import MemoryKind, parse_kind
+            from superlocalmemory.storage.memory_kinds import parse_kind
 
             declared_kind = parse_kind(req.kind)
             if declared_kind is None:
-                raise HTTPException(422, detail=(
-                    "Unknown memory kind. Use one of: "
-                    + ", ".join(k.value for k in MemoryKind)))
+                from superlocalmemory.core.kind_query import InvalidKind
+                from superlocalmemory.server.kind_error import invalid_kind_http
+                raise invalid_kind_http(InvalidKind(req.kind))
 
         # Same for ``replaces``: refused here, before the try below would turn
         # the 422 into a 500, and before anything is journaled or saved.
@@ -5421,8 +5423,9 @@ def _register_daemon_routes(application: FastAPI) -> None:
             }
         except HTTPException:
             raise
-        except Exception as exc:
-            raise HTTPException(500, detail=str(exc))
+        except Exception:
+            logger.exception("POST /consolidate/cognitive failed")
+            raise HTTPException(500, detail="cognitive consolidation failed; see server logs")
 
     # v3.4.26: run_maintenance via daemon so MCP doesn't import
     # EbbinghausCurve, ForgettingScheduler, or ConsolidationWorker.
@@ -5490,8 +5493,9 @@ def _register_daemon_routes(application: FastAPI) -> None:
             return {"ok": True, "profile": pid, **results}
         except HTTPException:
             raise
-        except Exception as exc:
-            raise HTTPException(500, detail=str(exc))
+        except Exception:
+            logger.exception("POST /maintenance/run failed")
+            raise HTTPException(500, detail="maintenance run failed; see server logs")
 
     # `slm db compact` (live): only the daemon holds the vector backends, so
     # the CLI asks it here rather than compacting in its own process.
@@ -5608,8 +5612,9 @@ def _register_daemon_routes(application: FastAPI) -> None:
             from superlocalmemory.core import component_registry
             cfg = getattr(application.state, "config", None)
             return component_registry.snapshot(cfg)
-        except Exception as exc:
-            raise HTTPException(500, detail=str(exc))
+        except Exception:
+            logger.exception("GET /api/v3/components failed")
+            raise HTTPException(500, detail="component snapshot failed; see server logs")
 
     @application.post("/api/v3/components/heal")
     async def heal_components(request: Request):
@@ -5743,23 +5748,43 @@ def _register_daemon_routes(application: FastAPI) -> None:
         return result
 
     @application.get("/list")
-    async def list_facts(limit: int = 50):
+    async def list_facts(limit: int = 50, kind: str = ""):
+        """Most recent memories, newest first.
+
+        ``kind`` (L3-20) narrows to one of the nine memory kinds, the same
+        filter ``list_recent`` (MCP) and ``slm list`` (CLI) already take —
+        all three doors share ``core.kind_query.list_recent_facts`` so they
+        cannot drift from each other. Refused (422, INVALID_KIND) before any
+        retrieval if it does not parse.
+        """
         _update_activity()
+        from superlocalmemory.core.kind_query import InvalidKind, kind_item, list_recent_facts, resolve_kind
+        try:
+            parsed_kind = resolve_kind(kind)
+        except InvalidKind as exc:
+            from superlocalmemory.server.kind_error import invalid_kind_http
+            raise invalid_kind_http(exc)
         engine = _get_engine_or_503()
         try:
-            facts = engine.list_facts(limit=limit)
+            profile_id = getattr(engine, "profile_id", None) or getattr(
+                engine, "_profile_id", "default")
+            facts = list_recent_facts(engine._db, profile_id, limit, parsed_kind)
             items = [
                 {
                     "content": f.content[:100],
                     "fact_type": getattr(f.fact_type, 'value', str(f.fact_type)),
                     "created_at": (f.created_at or "")[:19],
                     "fact_id": f.fact_id,
+                    **kind_item(f),
                 }
                 for f in facts
             ]
             return {"results": items, "count": len(items)}
-        except Exception as exc:
-            raise HTTPException(500, detail=str(exc))
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("GET /list failed")
+            raise HTTPException(500, detail="list failed; see server logs")
 
     @application.post("/stop")
     async def stop(request: Request):
@@ -5913,8 +5938,9 @@ def _register_daemon_routes(application: FastAPI) -> None:
                     "summary_events_created": int(created)}
         except HTTPException:
             raise
-        except Exception as exc:
-            raise HTTPException(500, detail=str(exc))
+        except Exception:
+            logger.exception("POST /session/close failed")
+            raise HTTPException(500, detail="session close failed; see server logs")
 
 
 def _update_activity():

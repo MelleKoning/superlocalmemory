@@ -38,7 +38,9 @@ from superlocalmemory.core.memory_kind_config import (
     save_memory_kind_settings,
     settings_dict,
 )
+from superlocalmemory.core.kind_query import InvalidKind
 from superlocalmemory.server import write_identity
+from superlocalmemory.server.kind_error import invalid_kind_http
 from superlocalmemory.storage.memory_kind_store import MemoryKindStore
 from superlocalmemory.storage.memory_kinds import is_confirmed, parse_kind
 
@@ -208,7 +210,7 @@ def _set_kinds(request: Request, profile_id: str, pairs: list[tuple[str, str]]) 
         receipt = runtime.set_fact_kinds(profile_id, pairs,
                                          idempotency_key=_mutation_idempotency_key(request))
     except ValueError as exc:
-        raise HTTPException(422, detail="Not a memory kind.") from exc
+        raise invalid_kind_http(InvalidKind(str(exc))) from exc
     except Exception as exc:  # noqa: BLE001 — typed mapping, never a traceback
         raise _canonical_mutation_error(exc, "Could not change the memory kind") from exc
     if not receipt.get("ok", False) and not receipt.get("facts"):
@@ -313,7 +315,7 @@ def get_suggestions(request: Request, kind: str | None = Query(None, max_length=
     _read_gate(request)
     parsed = parse_kind(kind) if kind else None
     if kind and parsed is None:
-        raise HTTPException(422, detail="Not a memory kind.")
+        raise invalid_kind_http(InvalidKind(kind))
     try:
         engine = _engine(request)
         db = getattr(engine, "db", None) or getattr(engine, "_db", None)
@@ -389,7 +391,7 @@ def patch_fact_kind(request: Request, fact_id: str, body: KindEdit):
     """
     parsed = parse_kind(body.kind)
     if parsed is None:
-        raise HTTPException(422, detail="Not a memory kind.")
+        raise invalid_kind_http(InvalidKind(body.kind))
     _engine_obj, profile_id = _authorize(request, fact_id)
     applied = _set_kinds(request, profile_id, [(fact_id, parsed.value)])
     if not applied or not applied[0].get("ok"):
