@@ -144,16 +144,23 @@ def apply_batch(
                     "WHERE rowid = ? AND profile_id = ?", (change.rowid, profile_id),
                 ).fetchone()
                 old_recipe, old_at = (prior[0], prior[1]) if prior is not None else (None, None)
+                # L1-07: guarded on `fact_type` too, not only `memory_kind`/
+                # `memory_kind_source`. Without it, a concurrent writer that
+                # changed ONLY fact_type (the kind untouched, e.g. a
+                # correction successor) was invisible to this guard, and the
+                # batch wrote back its own stale `change.fact_type` read from
+                # `select_batch` time — a lost update.
                 cur = conn.execute(
                     "UPDATE atomic_facts SET memory_kind = ?, memory_kind_source = ?, "
                     "memory_kind_confidence = ?, memory_kind_recipe = ?, memory_kind_at = ?, "
                     "fact_type = ? WHERE rowid = ? AND profile_id = ? "
-                    "AND memory_kind IS ? AND memory_kind_source IS ?",
+                    "AND memory_kind IS ? AND memory_kind_source IS ? AND fact_type IS ?",
                     (
                         cols["memory_kind"], cols["memory_kind_source"],
                         cols["memory_kind_confidence"], cols["memory_kind_recipe"],
                         cols["memory_kind_at"], new_fact_type,
                         change.rowid, profile_id, change.old_kind, change.old_source,
+                        change.fact_type,
                     ),
                 )
                 if cur.rowcount == 1:
@@ -227,7 +234,8 @@ def revert_batch(
 
             rows = conn.execute(
                 "SELECT history_id, fact_id, old_kind, old_source, old_confidence, "
-                "old_recipe, old_at, new_kind, new_source FROM memory_kind_history "
+                "old_recipe, old_at, old_fact_type, new_kind, new_source, new_fact_type "
+                "FROM memory_kind_history "
                 "WHERE run_id = ? AND profile_id = ? AND origin = 'backfill' "
                 "AND history_id < ? ORDER BY history_id DESC LIMIT ?",
                 (run_id, profile_id, revert_cursor, limit),
@@ -239,18 +247,24 @@ def revert_batch(
             for row in rows:
                 d = _row_dict(row)
                 last_history_id = d["history_id"]
-                # Undo restores all five kind columns exactly as they were:
-                # an untyped row gets NULLs back, a refreshed one its earlier
-                # recipe and time.
+                # Undo restores all five kind columns AND fact_type exactly as
+                # they were: an untyped row gets NULLs back, a refreshed one
+                # its earlier recipe and time. Guarded on fact_type too
+                # (L1-07): a row whose fact_type moved again since this run
+                # applied (e.g. another revert, or a correction successor) no
+                # longer matches `new_fact_type` and is left untouched, same
+                # as the existing kind/source guard already does.
                 cur = conn.execute(
                     "UPDATE atomic_facts SET memory_kind = ?, memory_kind_source = ?, "
-                    "memory_kind_confidence = ?, memory_kind_recipe = ?, memory_kind_at = ? "
+                    "memory_kind_confidence = ?, memory_kind_recipe = ?, memory_kind_at = ?, "
+                    "fact_type = ? "
                     "WHERE fact_id = ? AND profile_id = ? "
-                    "AND memory_kind IS ? AND memory_kind_source IS ?",
+                    "AND memory_kind IS ? AND memory_kind_source IS ? AND fact_type IS ?",
                     (
                         d["old_kind"], d["old_source"], d["old_confidence"],
-                        d["old_recipe"], d["old_at"],
+                        d["old_recipe"], d["old_at"], d["old_fact_type"],
                         d["fact_id"], profile_id, d["new_kind"], d["new_source"],
+                        d["new_fact_type"],
                     ),
                 )
                 if cur.rowcount == 1:
@@ -259,8 +273,9 @@ def revert_batch(
                         _HISTORY_INSERT_SQL,
                         (
                             d["fact_id"], profile_id, run_id, "revert",
-                            d["new_kind"], d["new_source"], None, None,
-                            d["old_kind"], d["old_source"], d["old_confidence"], None,
+                            d["new_kind"], d["new_source"], None, d["new_fact_type"],
+                            d["old_kind"], d["old_source"], d["old_confidence"],
+                            d["old_fact_type"],
                             "system", now,
                         ),
                     )
@@ -291,12 +306,33 @@ def revert_batch(
     )
 
 
-def reconcile_confirmed(db: "DatabaseManager", profile_id: str, *, limit: int = 500) -> int:
-    """Repair ``fact_type`` on confirmed rows a 4.1.18 downgrade window changed (I2)."""
+#: L1-15: a default conservative enough to never delay engine start, chosen
+#: to be well inside startup's own tolerance (every other best-effort
+#: migration in ``_init_db_layer`` is similarly "try briefly, then move on").
+#: Checked between rows, not mid-row, so a slow single row can still run
+#: over it slightly — the bound is advisory against a large backlog, not a
+#: hard preemption.
+_RECONCILE_DEFAULT_MAX_SECONDS = 0.25
+
+
+def reconcile_confirmed(
+    db: "DatabaseManager", profile_id: str, *, limit: int = 500,
+    max_seconds: float = _RECONCILE_DEFAULT_MAX_SECONDS,
+) -> int:
+    """Repair ``fact_type`` on confirmed rows a 4.1.18 downgrade window changed (I2).
+
+    Bounded by both ``limit`` (rows read in one call) and ``max_seconds``
+    (wall-clock budget, checked before each row): whichever is hit first
+    stops the pass. A store with more mismatched rows than either bound
+    allows is left with some unfixed — they are picked up on a later call
+    (engine start calls this once per boot), never processed unbounded in
+    this one.
+    """
     if not db.has_memory_kind_columns():
         return 0
     now = _now_iso()
     fixed = 0
+    started = time.perf_counter()
     with db.raw_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -308,6 +344,8 @@ def reconcile_confirmed(db: "DatabaseManager", profile_id: str, *, limit: int = 
                 (profile_id, limit),
             ).fetchall()
             for row in rows:
+                if time.perf_counter() - started > max_seconds:
+                    break
                 d = _row_dict(row)
                 parsed = parse_kind(d["memory_kind"])
                 if parsed is None:

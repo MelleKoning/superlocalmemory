@@ -147,6 +147,34 @@ class TestApplyBatch:
         history = db.execute("SELECT * FROM memory_kind_history WHERE fact_id = ?", (fid,))
         assert history == []  # no partial history row survived the rollback
 
+    def test_apply_batch_does_not_clobber_fact_type_changed_since_select(
+        self, db: DatabaseManager, store: MemoryKindStore,
+    ) -> None:
+        """L1-07: the batch's guard compared only ``memory_kind``/
+        ``memory_kind_source`` against the stale read, so a concurrent writer
+        that changed ``fact_type`` alone (the kind unchanged) was invisible to
+        it — the batch wrote its own stale ``fact_type`` back over the live
+        value, a lost update."""
+        fid = _fact(db, "default", "a fact")  # fact_type defaults to semantic
+        rowid = _rowid(db, fid)
+        run_id = self._running_run(db, store)
+
+        change = KindChange(
+            rowid=rowid, fact_id=fid, old_kind=None, old_source=None, old_confidence=None,
+            fact_type="semantic",  # the batch's own (now stale) read
+            new=KindAssignment(MemoryKind.RULE, KindSource.RULES, None, "kinds-rules-v1"),
+        )
+        # A concurrent writer changes fact_type only (e.g. a correction
+        # successor) between select_batch and apply_batch.
+        db.execute("UPDATE atomic_facts SET fact_type = 'episodic' WHERE fact_id = ?", (fid,))
+
+        result = store.apply_batch(run_id, "default", [change], new_cursor=rowid, actor="test")
+        assert result.applied == 0
+        assert result.skipped == 1
+        row = db.get_all_facts("default")[0]
+        assert row.fact_type == FactType.EPISODIC  # untouched by the stale write
+        assert row.memory_kind is None  # no suggestion applied either
+
 
 class TestRevertBatch:
     def test_revert_restores_old_values_but_not_over_user_edit(
@@ -192,6 +220,41 @@ class TestRevertBatch:
         assert row_b.memory_kind == "procedure"  # the user's edit is untouched
         assert row_b.memory_kind_source == "user"
 
+    def test_revert_restores_fact_type_exactly(
+        self, db: DatabaseManager, store: MemoryKindStore,
+    ) -> None:
+        """L1-07: undo must restore ``fact_type`` exactly, not only the kind
+        columns. Uses a confirmed source so the apply side actually moves
+        ``fact_type`` (a real backfill run never selects user/caller rows,
+        per ``_REFRESH_ELIGIBLE_SOURCES``, but ``apply_batch`` must still
+        guard and restore it correctly on this defensive path)."""
+        fid = _fact(db, "default", "a fact")  # fact_type defaults to semantic
+        rowid = _rowid(db, fid)
+        run = store.create_run(
+            "default", backend="rules", recipe_id="kinds-rules-v1", mode="untyped",
+            requested_by="test", total_estimate=1,
+        )
+        run_id = run["run_id"]
+        store.set_run_status(run_id, "running", expected=["queued"])
+
+        change = KindChange(
+            rowid=rowid, fact_id=fid, old_kind=None, old_source=None, old_confidence=None,
+            fact_type="semantic",
+            new=KindAssignment(MemoryKind.DECISION, KindSource.CALLER, None, "test-recipe"),
+        )
+        result = store.apply_batch(run_id, "default", [change], new_cursor=rowid, actor="test")
+        assert result.applied == 1
+        row = db.get_all_facts("default")[0]
+        assert row.fact_type == FactType.EPISODIC  # COARSE[DECISION]
+
+        store.set_run_status(run_id, "reverting", expected=["running"])
+        revert_result = store.revert_batch(run_id, "default", limit=200)
+        assert revert_result.applied == 1
+
+        row = db.get_all_facts("default")[0]
+        assert row.memory_kind is None
+        assert row.fact_type == FactType.SEMANTIC  # restored exactly, not left at episodic
+
 
 class TestReconcileConfirmed:
     def test_reconcile_confirmed_repairs_fact_type(
@@ -210,6 +273,28 @@ class TestReconcileConfirmed:
             "SELECT * FROM memory_kind_history WHERE fact_id = ? AND origin = 'reconcile'", (fid,),
         )
         assert len(history) == 1
+
+    def test_reconcile_confirmed_stops_at_its_time_bound(
+        self, db: DatabaseManager, store: MemoryKindStore, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """L1-15: bounded by time as well as by ``limit``, so a large store
+        never delays engine start — the remaining rows are picked up on a
+        later boot, not processed unbounded in this one."""
+        import time as time_mod
+
+        fid_a = _fact(db, "default", "a", kind="decision", source="user")
+        fid_b = _fact(db, "default", "b", kind="decision", source="user")
+        db.execute(
+            "UPDATE atomic_facts SET fact_type = 'semantic' WHERE fact_id IN (?, ?)",
+            (fid_a, fid_b),
+        )
+        # started, pre-row-1 check (still within budget), pre-row-2 check
+        # (over budget) — deterministic instead of racing a real clock.
+        ticks = iter([0.0, 0.0, 10.0])
+        monkeypatch.setattr(time_mod, "perf_counter", lambda: next(ticks))
+
+        fixed = store.reconcile_confirmed("default", max_seconds=1.0)
+        assert fixed == 1  # stopped before the second row
 
 
 class TestGDPRDiscovery:
