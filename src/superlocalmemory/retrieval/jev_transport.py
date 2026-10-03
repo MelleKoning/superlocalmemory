@@ -37,6 +37,8 @@ from typing import Any
 
 import httpx
 
+from superlocalmemory.core.outbound_http import GatedClient
+
 logger = logging.getLogger(__name__)
 
 #: Concurrent hosted requests per judge. One recall makes at most one, so this
@@ -62,7 +64,7 @@ class HostedTransport:
         self._transport = transport
         self._max_concurrent = max_concurrent
         self._lock = threading.Lock()
-        self._client: httpx.Client | None = None
+        self._client: GatedClient | None = None
         self._executor: futures.ThreadPoolExecutor | None = None
         self._closed = False
         self._inflight = 0
@@ -113,7 +115,7 @@ class HostedTransport:
             self._end()
 
     @staticmethod
-    def _exchange(client: httpx.Client, endpoint: str, headers: dict[str, str],
+    def _exchange(client: GatedClient, endpoint: str, headers: dict[str, str],
                   deadline: float, payload: dict[str, Any]) -> tuple[bytes | None, int, str]:
         remaining = max(0.01, deadline - time.monotonic())
         with client.stream("POST", endpoint, headers=headers,
@@ -142,13 +144,15 @@ class HostedTransport:
                     max_workers=self._max_concurrent, thread_name_prefix="jev-judge")
             return self._executor
 
-    def _begin(self) -> httpx.Client | None:
+    def _begin(self) -> GatedClient | None:
         """The gate: the last point before a request is sent."""
         with self._lock:
             if self._closed:
                 return None
             if self._client is None:
-                self._client = httpx.Client(transport=self._transport)
+                # The outbound gate's client: the body (already redacted by
+                # the judge) is screened again on the final URL.
+                self._client = GatedClient(transport=self._transport)
             self._inflight += 1
             return self._client
 
@@ -173,7 +177,7 @@ class HostedTransport:
         _close_quietly(client)
 
 
-def _close_quietly(client: httpx.Client | None) -> None:
+def _close_quietly(client: GatedClient | None) -> None:
     if client is None:
         return
     try:
