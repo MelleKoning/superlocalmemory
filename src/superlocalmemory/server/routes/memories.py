@@ -665,7 +665,17 @@ async def search_memories(request: Request, body: SearchRequest):
     search from >15s timeout to <1s warm.
 
     Falls back to direct DB LIKE search if engine is unavailable.
+
+    ``kind`` (L3-20) narrows to one of the nine memory kinds, the same
+    filter MCP's ``search`` and ``list_recent`` already take. Refused
+    (422, INVALID_KIND) before any retrieval if it does not parse.
     """
+    from superlocalmemory.core.kind_query import InvalidKind, resolve_kind
+    try:
+        parsed_kind = resolve_kind(getattr(body, "kind", ""))
+    except InvalidKind as exc:
+        from superlocalmemory.server.kind_error import invalid_kind_http
+        raise invalid_kind_http(exc)
     from superlocalmemory.core.recall_gate import begin_recall, end_recall
     begin_recall()
     try:
@@ -699,10 +709,17 @@ async def search_memories(request: Request, body: SearchRequest):
             # and the browser aborts the fetch. If it exceeds the budget we
             # fall through to the fast keyword search below, so the dashboard
             # ALWAYS returns instead of failing with an abort.
+            # A kind filter narrows AFTER retrieval (below), so ask for more
+            # than ``body.limit`` up front — the same over-fetch contract
+            # core.kind_query's list/search helpers use for the other two
+            # doors — or a kind-filtered search could come back with fewer
+            # than ``limit`` results even when enough actually exist.
+            from superlocalmemory.retrieval.kind_filter import overfetch_limit
+            _search_limit = overfetch_limit(body.limit) if parsed_kind else body.limit
             _recall_future = loop.run_in_executor(
                 None,
                 lambda: engine.recall(
-                    body.query, limit=body.limit, fast=True,
+                    body.query, limit=_search_limit, fast=True,
                     window=_window or None,
                     # Name the surface. A recall with no name leaves no record
                     # an outcome can be matched to, and a search typed into the
@@ -742,10 +759,13 @@ async def search_memories(request: Request, body: SearchRequest):
                 )
                 results, no_confident_match = serialize_recall_response(
                     response,
-                    limit=body.limit,
+                    limit=_search_limit,
                     per_fact_max=300,
                     total_max=max(300, body.limit * 300),
                 )
+                if parsed_kind:
+                    results = [r for r in results
+                              if r.get("memory_kind") == parsed_kind][:body.limit]
                 return {
                     "query": body.query,
                     "results": results,
@@ -762,13 +782,28 @@ async def search_memories(request: Request, body: SearchRequest):
         conn.row_factory = dict_factory
         cursor = conn.cursor()
         active_profile = get_active_profile()
-        cursor.execute("""
+        # Degraded-lexical fallback: a plain equality filter, not the
+        # over-fetch-then-trim windowing core.kind_query's helpers use for
+        # list/search's primary paths (this is a raw connection, not a
+        # DatabaseManager, and this path only runs when the main engine is
+        # unavailable or over its time budget). Stores without the M052 kind
+        # columns (has_kind_columns False) ignore the filter rather than
+        # erroring on an unknown column.
+        has_kind_columns = any(
+            row.get("name") == "memory_kind" for row in cursor.execute(
+                "PRAGMA table_info(atomic_facts)").fetchall()
+        )
+        apply_kind_filter = bool(parsed_kind) and has_kind_columns
+        kind_clause = " AND memory_kind = ?" if apply_kind_filter else ""
+        kind_params = (parsed_kind,) if apply_kind_filter else ()
+        kind_select = ", memory_kind" if has_kind_columns else ""
+        cursor.execute(f"""
             SELECT fact_id, content, confidence as memory_confidence,
-                   fact_type as category, created_at
+                   fact_type as category, created_at{kind_select}
             FROM atomic_facts
-            WHERE profile_id = ? AND content LIKE ?
+            WHERE profile_id = ? AND content LIKE ?{kind_clause}
             ORDER BY confidence DESC LIMIT ?
-        """, (active_profile, f'%{body.query}%', body.limit))
+        """, (active_profile, f'%{body.query}%', *kind_params, body.limit))
         rows = cursor.fetchall()
         conn.close()
 

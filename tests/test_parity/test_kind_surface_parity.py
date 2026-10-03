@@ -19,6 +19,8 @@ import json
 from argparse import Namespace
 from types import SimpleNamespace
 
+from fastapi.testclient import TestClient
+
 from superlocalmemory.cli import kinds_cmd
 from superlocalmemory.cli.daemon import DaemonConflict, DaemonNotFound
 from superlocalmemory.storage.models import AtomicFact, FactType
@@ -295,6 +297,12 @@ class _FakeEngine:
     def initialize(self) -> None:
         pass
 
+    def recall(self, *args, **kwargs):
+        """None (not raising) is exactly how /api/search reads a recall that
+        timed out or came back empty-handed -- it falls through to the
+        degraded-lexical DB fallback deterministically, with no timing race."""
+        return None
+
 
 def test_list_kind_filter_identical(tmp_path, monkeypatch, capsys) -> None:
     from superlocalmemory.cli import commands
@@ -326,8 +334,63 @@ def test_list_kind_filter_identical(tmp_path, monkeypatch, capsys) -> None:
 
     cli_out = _cli_json(capsys, commands.cmd_list, Namespace(json=True, limit=10, kind="rule"))
 
+    # HTTP: /list (L3-20, L3-06) reads through the same fake_engine._db.
+    from superlocalmemory.server.unified_daemon import create_app
+
+    app = create_app()
+    app.state.engine = fake_engine
+    http_out = TestClient(app).get("/list", params={"kind": "rule"}).json()
+
     def _by_content(results):
         return {r["content"]: _kind_subset(r) for r in results}
 
     assert set(_by_content(mcp_out["results"])) == {"rule one", "rule two"}
-    assert _by_content(mcp_out["results"]) == _by_content(cli_out["data"]["results"])
+    assert _by_content(mcp_out["results"]) == _by_content(cli_out["data"]["results"]) == \
+        _by_content(http_out["results"])
+
+
+# -- test_search_kind_filter_identical --------------------------------------
+
+
+def test_search_kind_filter_identical(tmp_path, monkeypatch, capsys) -> None:
+    """``search`` (MCP) and POST /api/search (HTTP) share
+    core.kind_query.search_facts / the same post-filter contract. The CLI has
+    no dedicated ``search`` verb (``recall`` is its multi-channel search,
+    covered by test_recall_kind_filter_identical above)."""
+    from superlocalmemory.core import engine as engine_mod
+    from superlocalmemory.storage import schema
+    from superlocalmemory.storage.database import DatabaseManager
+    from superlocalmemory.storage.models import MemoryRecord
+
+    db = DatabaseManager(tmp_path / "memory.db")
+    db.initialize(schema)
+
+    def _save(content, *, kind=None, source=None):
+        memory_id = db.store_memory(MemoryRecord(profile_id="default", content=content))
+        fact = AtomicFact(profile_id="default", memory_id=memory_id, content=content,
+                          fact_type=FactType.SEMANTIC, memory_kind=kind, memory_kind_source=source)
+        return db.store_fact(fact)
+
+    _save("a rule about main", kind="rule", source="user")
+    _save("a decision about main", kind="decision", source="user")
+
+    fake_engine = _FakeEngine(db)
+    monkeypatch.setattr(engine_mod, "MemoryEngine", lambda *a, **k: fake_engine)
+
+    server = _Server()
+    from superlocalmemory.mcp import tools_core
+    tools_core.register_core_tools(server, lambda: fake_engine)
+    mcp_out = asyncio.run(server.captured["search"]("main", limit=10, kind="rule"))
+
+    from superlocalmemory.server.unified_daemon import create_app
+
+    app = create_app()
+    app.state.engine = fake_engine  # .recall() returns None -> degraded-lexical fallback
+    http_out = TestClient(app).post(
+        "/api/search", json={"query": "main", "limit": 10, "kind": "rule"}).json()
+
+    def _by_content(results):
+        return {r["content"]: _kind_subset(r) for r in results}
+
+    assert set(_by_content(mcp_out["results"])) == {"a rule about main"}
+    assert set(_by_content(http_out["results"])) == {"a rule about main"}

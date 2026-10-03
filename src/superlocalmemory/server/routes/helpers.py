@@ -483,6 +483,11 @@ class SearchRequest(BaseModel):
     # ("2026-07-01..2026-07-31"). When empty, date_from/date_to (if both set)
     # are used as the range. Empty + no dates = no time filter.
     window: Optional[str] = None
+    # L3-20 (4.1.19 WP8): the same nine-value kind filter list/search already
+    # take on MCP and the CLI. Validated with core.kind_query.resolve_kind —
+    # empty means "no filter"; an unknown value is refused (422) before any
+    # retrieval, never silently ignored.
+    kind: str = ""
 
 
 class ProfileSwitch(BaseModel):
