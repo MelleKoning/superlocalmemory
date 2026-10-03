@@ -2,7 +2,7 @@
 # Licensed under AGPL-3.0-or-later - see LICENSE file
 # Part of SuperLocalMemory V3 | https://qualixar.com | https://varunpratap.com
 
-"""Summarizer — Mode A heuristic + Mode B Ollama + Mode C OpenRouter.
+"""Summarizer — Mode A heuristic, Mode B/C the configured LLM provider.
 
 Generates cluster summaries and search synthesis. All LLM failures
 fall back to heuristic silently — never crashes the caller.
@@ -13,7 +13,6 @@ Part of Qualixar | Author: Varun Pratap Bhardwaj
 from __future__ import annotations
 
 import logging
-import os
 import re
 
 logger = logging.getLogger(__name__)
@@ -93,87 +92,43 @@ class Summarizer:
     # LLM calls (Mode B/C)
     # ------------------------------------------------------------------
 
-    def _has_llm(self) -> bool:
-        """Check if LLM is available.
+    def _backbone(self):
+        """The configured provider, and only the configured provider.
 
-        Mode B: Ollama assumed running (num_ctx: 4096 caps memory at 5.5 GB).
-        Mode C: Requires API key for cloud provider.
+        Mode B is the local Ollama in ``config.llm``; Mode C is whatever
+        cloud provider the user chose. There is no built-in host and no key
+        borrowed from the environment for another provider: a provider's key
+        only ever goes to that provider. The backbone sends through the
+        outbound gate, so memory text bound for another machine is screened.
         """
-        if self._mode == "b":
-            return True
-        if self._mode == "c":
-            return bool(
-                os.environ.get("OPENROUTER_API_KEY")
-                or getattr(self._config.llm, 'api_key', None)
-            )
-        return False
+        from superlocalmemory.llm.backbone import LLMBackbone
+
+        llm_config = getattr(self._config, "llm", None)
+        if llm_config is None or not getattr(llm_config, "provider", ""):
+            return None
+        try:
+            backbone = LLMBackbone(llm_config)
+        except ValueError as exc:
+            logger.warning("Summarizer: LLM provider not usable: %s", exc)
+            return None
+        return backbone if backbone.is_available() else None
+
+    def _has_llm(self) -> bool:
+        """True in Mode B/C when the configured provider is ready."""
+        return self._mode in ("b", "c") and self._backbone() is not None
 
     def _call_llm(self, prompt: str, max_tokens: int = 200) -> str:
-        """Route to Ollama (B) or OpenRouter (C)."""
-        if self._mode == "b":
-            return self._call_ollama(prompt, max_tokens)
-        return self._call_openrouter(prompt, max_tokens)
+        """One request to the configured provider; raises if there is none.
 
-    def _call_ollama(self, prompt: str, max_tokens: int = 200) -> str:
-        """Call local Ollama for summary generation.
-
-        CRITICAL: num_ctx MUST be set. Without it, Ollama defaults to the
-        model's native context (128K for llama3.1) which allocates ~30 GB
-        of KV cache — fatal on machines with ≤32 GB RAM.
-        SLM prompts are <500 tokens; 4096 context is more than enough.
+        A single attempt: every caller falls back to the heuristic, and the
+        store path must not wait out retries against a provider that is down.
         """
-        import httpx
-        model = getattr(self._config.llm, 'model', None) or "llama3.1:8b"
-        # v3.6.12 (modeb-2): honor the configured endpoint instead of hardcoding
-        # localhost:11434, so a remote/non-default Ollama host works in Mode B.
-        _base = (getattr(self._config.llm, 'api_base', '') or "http://localhost:11434").rstrip("/")
-        with httpx.Client(timeout=httpx.Timeout(30.0)) as client:
-            resp = client.post(f"{_base}/api/generate", json={
-                "model": model,
-                "prompt": prompt,
-                "stream": False,
-                "keep_alive": "30s",
-                "options": {
-                    "num_predict": max_tokens,
-                    "temperature": 0.3,
-                    "num_ctx": 4096,
-                },
-            })
-            resp.raise_for_status()
-            return resp.json().get("response", "").strip()
-
-    def _call_openrouter(self, prompt: str, max_tokens: int = 200) -> str:
-        """Call OpenRouter API for summary generation."""
-        import httpx
-        api_key = (
-            os.environ.get("OPENROUTER_API_KEY")
-            or getattr(self._config.llm, 'api_key', None)
-        )
-        if not api_key:
-            raise RuntimeError("No OpenRouter API key")
-        model = (
-            getattr(self._config.llm, 'model', None)
-            or "meta-llama/llama-3.1-8b-instruct:free"
-        )
-        with httpx.Client(timeout=httpx.Timeout(20.0)) as client:
-            resp = client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": max_tokens,
-                    "temperature": 0.3,
-                },
-            )
-            resp.raise_for_status()
-            choices = resp.json().get("choices", [])
-            if choices:
-                return choices[0].get("message", {}).get("content", "").strip()
-            return ""
+        backbone = self._backbone()
+        if backbone is None:
+            raise RuntimeError("no LLM provider configured")
+        return backbone.generate(
+            prompt, temperature=0.3, max_tokens=max_tokens, attempts=1,
+        ).strip()
 
     # ------------------------------------------------------------------
     # Prompt templates
