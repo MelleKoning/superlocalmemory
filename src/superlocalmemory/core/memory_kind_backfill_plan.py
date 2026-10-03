@@ -6,7 +6,8 @@
 
 Pure decisions plus two read-only queries. No thread, no lock, no write.
 
-The per-fact decision (``decide``) — rules against a model:
+The per-fact decision (``decide``, in encoding/memory_kind_classifier.py so
+saving a memory uses the same rule) — rules against a model:
 
 * A **strong cue** is a rules cue that actually fired on short text
   (``memory_kind_rules.cue_kind``: under 800 characters, an explicit phrase
@@ -34,7 +35,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from superlocalmemory.encoding.memory_kind_classifier import MAX_MODEL_FACTS
+from superlocalmemory.encoding.memory_kind_classifier import (
+    MAX_MODEL_FACTS,
+    MODEL_SOURCES,
+    decide,
+)
 from superlocalmemory.encoding.memory_kind_recipe import KINDS_V1, LLM_RECIPE, RULES_RECIPE
 from superlocalmemory.encoding.memory_kind_rules import suggest_by_rules
 from superlocalmemory.storage.memory_kind_store import KindCandidate, KindChange
@@ -44,9 +49,6 @@ from superlocalmemory.storage.memory_kinds import (
     KindSource,
     MemoryKind,
 )
-
-#: Model sources whose answers the decision weighs against the cue rules.
-MODEL_SOURCES = frozenset({KindSource.MODEL_LAYA, KindSource.MODEL_JEV, KindSource.MODEL_LLM})
 
 #: Plain-language reasons the dashboard and CLI show beside the backend.
 REASONS = {
@@ -125,18 +127,6 @@ def next_batch_size(size: int, recent_ms: Sequence[float], configured: int) -> i
 def recipe_for(backend: str) -> str:
     return {"laya": KINDS_V1.recipe_id, "jev": KINDS_V1.recipe_id,
             "llm": LLM_RECIPE}.get(backend, RULES_RECIPE)
-
-
-def decide(model: KindAssignment | None, rules: KindAssignment,
-           cue: MemoryKind | None) -> KindAssignment | None:
-    """The suggestion stored for one fact (see the module docstring)."""
-    if model is None:
-        return None
-    if model.source not in MODEL_SOURCES or cue is None:
-        return model
-    if cue is MemoryKind.CORRECTION or model.kind is cue:
-        return model
-    return rules
 
 
 def _changed(candidate: KindCandidate, new: KindAssignment) -> bool:

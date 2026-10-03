@@ -46,7 +46,7 @@ from superlocalmemory.encoding.memory_kind_recipe import (
     KindAnswer,
     KindRecipe,
 )
-from superlocalmemory.encoding.memory_kind_rules import suggest_by_rules
+from superlocalmemory.encoding.memory_kind_rules import cue_kind, suggest_by_rules
 from superlocalmemory.storage.memory_kinds import (
     KIND_COLUMNS,
     KindAssignment,
@@ -64,6 +64,37 @@ MAX_MODEL_FACTS = 8
 
 #: The caller's kind needs no recipe; this marks where it came from.
 CALLER_RECIPE = "caller"
+
+#: Model sources whose answers are weighed against the cue rules (``decide``).
+MODEL_SOURCES = frozenset({KindSource.MODEL_LAYA, KindSource.MODEL_JEV, KindSource.MODEL_LLM})
+
+
+def decide(model: KindAssignment | None, rules: KindAssignment,
+           cue: MemoryKind | None) -> KindAssignment | None:
+    """The suggestion kept for one fact when a model answered.
+
+    The same rule when a memory is saved and in a classification run, so a
+    memory gets one kind however it was typed. A **strong cue** is a rules cue
+    that fired on short text (``memory_kind_rules.cue_kind``). On such text the
+    cue rules scored 0.887 on the persona set against 0.48 for the real Laya
+    model, and no model confidence is calibrated yet, so a model answer that
+    disagrees with a strong cue does not replace it. Where no cue fired, the
+    model fills the gap. An agreeing model is kept for its confidence.
+    ``correction`` already went through its own cue-and-verify check, so the
+    model's answer stands there.
+    """
+    if model is None:
+        return None
+    if model.source not in MODEL_SOURCES or cue is None:
+        return model
+    if cue is MemoryKind.CORRECTION or model.kind is cue:
+        return model
+    return rules
+
+
+def _decided(model: KindAssignment | None, rules: KindAssignment,
+             fact: Any) -> KindAssignment | None:
+    return decide(model, rules, cue_kind(getattr(fact, "content", None)))
 
 
 class KindBackend(str, Enum):
@@ -190,11 +221,12 @@ class KindClassifier:
         rules = [_rules_for(f) for f in facts]
         out: list[KindAssignment | None] = list(rules)
         if backend is KindBackend.LLM:
-            return [llm_hint(f) or r for f, r in zip(facts, rules)]
+            return [_decided(llm_hint(f), r, f) or r for f, r in zip(facts, rules)]
         if backend in _MODEL_SOURCE and facts:
             asked = self._ask(backend, judge, facts[:MAX_MODEL_FACTS], rules)
             if asked:
-                out[:len(asked)] = asked
+                out[:len(asked)] = [_decided(a, r, f)
+                                    for a, r, f in zip(asked, rules, facts)]
         return out
 
     def _live_judge(self) -> Any | None:
@@ -249,6 +281,8 @@ def with_kind(fact: AtomicFact, assignment: KindAssignment | None,
 __all__ = [
     "CALLER_RECIPE",
     "MAX_MODEL_FACTS",
+    "MODEL_SOURCES",
+    "decide",
     "KindAnswer",
     "KindBackend",
     "KindClassifier",

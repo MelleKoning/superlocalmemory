@@ -178,6 +178,30 @@ def test_laya_answer_becomes_a_model_suggestion() -> None:
     assert laya.calls[0]["recipe"] is KINDS_V1
 
 
+def test_a_strong_cue_beats_a_disagreeing_model_at_save_as_in_a_run() -> None:
+    # Same decision as a classification run (memory_kind_backfill_plan.decide):
+    # on short text where a cue fired, the rules' kind is kept against a model
+    # that disagrees, so a memory gets the same kind however it was typed.
+    laya = _FakeJudge("laya", answers=lambda docs: [_answer(K.SEMANTIC.value, 0.9)] * len(docs))
+    out = _clf(judge=laya).suggest(_facts("We decided to ship on Friday.", "plain fact text"),
+                                   caller_kind=None)
+    assert out[0].kind is K.DECISION and out[0].source is KindSource.RULES
+    assert out[1] == KindAssignment(K.SEMANTIC, KindSource.MODEL_LAYA, 0.9, KINDS_V1.recipe_id)
+    agreeing = _FakeJudge("laya", answers=[_answer(K.DECISION.value, 0.8)])
+    out = _clf(judge=agreeing).suggest(_facts("We decided to ship on Friday."),
+                                       caller_kind=None)
+    assert out[0].source is KindSource.MODEL_LAYA, "an agreeing model keeps its confidence"
+
+
+def test_a_strong_cue_beats_a_disagreeing_extractor_hint() -> None:
+    hinted = AtomicFact(content="Never run rm -rf with a glob.",
+                        memory_kind=K.PROCEDURE.value,
+                        memory_kind_source=KindSource.MODEL_LLM.value,
+                        memory_kind_recipe="kinds-v1:llm")
+    out = _clf(mode=Mode.B, llm=True).suggest([hinted], caller_kind=None)
+    assert out[0].kind is K.RULE and out[0].source is KindSource.RULES
+
+
 @pytest.mark.parametrize("failure", [
     None, [], RuntimeError("worker died"), TimeoutError(), "not-a-list",
     lambda docs: [_answer(K.OPINION.value)] * (len(docs) + 1),
