@@ -186,14 +186,14 @@ def probe_python() -> Component:
     import sys
 
     v = sys.version_info
-    ok = v >= (3, 11)
+    ok = v >= (3, 12)
     return Component(
         key="python",
         label="Python runtime",
         category=CATEGORY_REQUIRED,
         status=STATUS_OK if ok else STATUS_MISSING,
-        detail=f"{v.major}.{v.minor}.{v.micro}" + ("" if ok else " (need >= 3.11)"),
-        fix_cmd="" if ok else "Install Python 3.11+ from https://python.org/downloads/",
+        detail=f"{v.major}.{v.minor}.{v.micro}" + ("" if ok else " (need >= 3.12)"),
+        fix_cmd="" if ok else "Install Python 3.12+ from https://python.org/downloads/",
         auto_fixable=False,
         last_checked=time.time(),
     )

@@ -2920,11 +2920,11 @@ def cmd_doctor(args: Namespace) -> None:
 
     # 1. Python version
     v = sys.version_info
-    if v >= (3, 11):
-        _check("Python", "PASS", f"{v.major}.{v.minor}.{v.micro} (>= 3.11)")
+    if v >= (3, 12):
+        _check("Python", "PASS", f"{v.major}.{v.minor}.{v.micro} (>= 3.12)")
     else:
-        _check("Python", "FAIL", f"{v.major}.{v.minor}.{v.micro} (need >= 3.11)",
-               "Install Python 3.11+ from https://python.org/downloads/")
+        _check("Python", "FAIL", f"{v.major}.{v.minor}.{v.micro} (need >= 3.12)",
+               "Install Python 3.12+ from https://python.org/downloads/")
 
     # 1b. Version integrity (issue #107). Doctor is what a user runs when
     # something seems wrong, so it is exactly where "the code you are running
