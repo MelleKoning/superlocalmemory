@@ -515,7 +515,7 @@ Hermes users get the same SLM skills and advisor roles through a native
 `plugin.yaml` package, plus `/slm <command>` and generated `/slm-<command>`
 aliases for the public CLI surface. The plugin is intentionally separate from
 the PyPI/npm runtime: install the owning SLM runtime first, then install the
-reviewed pinned pack from the `v4.1.13` GitHub release. It is additive and does
+reviewed pinned pack from the `v4.1.18` GitHub release. It is additive and does
 not replace Hermes's selected memory provider or existing configuration. See
 [the Hermes integration guide](docs/hermes.md).
 
