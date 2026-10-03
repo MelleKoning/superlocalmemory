@@ -32,6 +32,7 @@ from superlocalmemory.core.ingestion_command import (
     IngestionRequest,
     MaterializationResult,
 )
+from superlocalmemory.core.mutation_routing import MutationTarget, classify_target
 from superlocalmemory.core.remember_admission import (
     RememberAdmissionCommand,
     RememberReceipt,
@@ -107,6 +108,35 @@ class DaemonAlreadyServing(RuntimeError):
 
 class CanonicalMutationConflict(WriteCoordinatorError, ValueError):
     """A mutation retry key was reused for different immutable input."""
+
+
+class MutationNotRoutable(CanonicalMutationConflict):
+    """A mutation of a kind that may not leave the active profile named another.
+
+    A refusal by design (``core/mutation_routing.py``), not an outage: retrying
+    can never succeed, so it must not be reported as "temporarily unavailable".
+    """
+
+
+class MutationTargetMissing(WriteCoordinatorError, LookupError):
+    """What a mutation names is not there: a "not found", never an outage.
+
+    Raised, not returned, so the writer commits nothing and the caller's retry
+    key stays unspent for when the target exists. Not a conflict either: the
+    generic HTTP mapping turns it into a 404.
+    """
+
+
+class UnknownMutationProfile(MutationTargetMissing):
+    """A routed mutation named a profile that does not exist (any more)."""
+
+
+class CaseNotInProfile(MutationTargetMissing):
+    """A correction review named a case that is not in the profile reviewed.
+
+    One answer whether the case is missing or another profile's, so review
+    cannot probe other profiles.
+    """
 
 
 _MUTATION_IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9._:-]{1,256}$")
@@ -753,9 +783,9 @@ class CanonicalRememberRuntime:
         )
         try:
             return dict(self.coordinator.submit(command, timeout=2.0).receipt)
-        except CanonicalMutationConflict:
-            # A deterministic lifecycle conflict is not a writer outage.  Let
-            # HTTP/CLI/MCP report the actionable 409/validation result.
+        except (CanonicalMutationConflict, MutationTargetMissing):
+            # A deterministic lifecycle conflict or a missing target is not a
+            # writer outage.  Let HTTP/CLI/MCP report the actionable result.
             raise
         except CommandConflictError as exc:
             raise CanonicalMutationConflict(
@@ -926,12 +956,20 @@ class CanonicalRememberRuntime:
         )
 
     def _handle_mutation(self, conn, capability, command: WriteCommand) -> WriteResult:
-        """Run only deterministic SQLite mutation statements under the writer."""
+        """Run only deterministic SQLite mutation statements under the writer.
+
+        A command for another profile than the active one is refused unless its
+        kind may be routed there (``core/mutation_routing.py``).
+        """
         payload = command.payload
         profile_id = _payload_text(payload, "profile_id")
         with self._binding_lock:
-            if profile_id != self._profile_id:
-                raise ValueError("mutation command targets a different profile")
+            target = classify_target(conn, command.kind, profile_id, self._profile_id)
+            if target is MutationTarget.NOT_ROUTABLE:
+                raise MutationNotRoutable(
+                    f"{command.kind.value} cannot target a profile other than the active one")
+            if target is MutationTarget.UNKNOWN_PROFILE:
+                raise UnknownMutationProfile(f"profile {profile_id!r} does not exist")
             with self._db._bind_coordinator_connection(conn, capability):
                 receipt = _execute_mutation(
                     self._db, command.kind, profile_id, payload, connection=conn
@@ -1242,6 +1280,11 @@ def _transition_correction(
         CommandKind.ROLLBACK_CORRECTION: ("applied", "rolled_back", True),
     }
     from_status, to_status, mutate_temporal = transitions[kind]
+    owner = connection.execute(
+        "SELECT profile_id FROM correction_cases WHERE case_id = ?", (case_id,),
+    ).fetchone()
+    if owner is None or owner[0] != profile_id:
+        raise CaseNotInProfile("correction case not found in this profile")
     case = transition_on_connection(
         connection,
         case_id=case_id,

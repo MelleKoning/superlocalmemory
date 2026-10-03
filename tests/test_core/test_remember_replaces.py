@@ -113,8 +113,8 @@ def test_check_accepts_an_own_fact_and_an_own_memory(env) -> None:
     memory_id = dict(db.execute("SELECT memory_id FROM atomic_facts WHERE fact_id=?",
                                 (fid,))[0])["memory_id"]
     for named in (fid, memory_id):
-        assert check_replaceable(db, replaces=named, active_profile="default",
-                                 write_profile="default", scope="personal") == named
+        assert check_replaceable(db, replaces=named, profile_id="default",
+                                 scope="personal") == named
 
 
 def test_check_refuses_an_unknown_id(env) -> None:
@@ -123,8 +123,8 @@ def test_check_refuses_an_unknown_id(env) -> None:
 
     db, _ = env
     with pytest.raises(ReplacesRejected) as refused:
-        check_replaceable(db, replaces="0123456789abcdef", active_profile="default",
-                          write_profile="default", scope="personal")
+        check_replaceable(db, replaces="0123456789abcdef", profile_id="default",
+                          scope="personal")
     assert refused.value.code == NOT_FOUND
 
 
@@ -139,28 +139,29 @@ def test_check_refuses_another_profiles_fact_without_revealing_private_ones(env)
     private = _fact(db, "Private to the other profile.", profile="other")
     for named, code in ((shown, NOT_ALLOWED), (shared, NOT_ALLOWED), (private, NOT_FOUND)):
         with pytest.raises(ReplacesRejected) as refused:
-            check_replaceable(db, replaces=named, active_profile="default",
-                              write_profile="default", scope="global")
+            check_replaceable(db, replaces=named, profile_id="default", scope="global")
         assert refused.value.code == code, named
     with pytest.raises(ReplacesRejected) as refused:
-        check_replaceable(db, replaces=shown, active_profile="default",
-                          write_profile="default", scope="global")
+        check_replaceable(db, replaces=shown, profile_id="default", scope="global")
     assert "another profile" in refused.value.message
 
 
-def test_check_refuses_a_routed_write_and_a_scope_change(env) -> None:
+def test_check_resolves_in_the_profile_written_and_refuses_a_scope_change(env) -> None:
+    """A write routed to another profile may only name that profile's memories:
+    this profile's private fact is then not found, exactly like a missing id."""
     from superlocalmemory.core.remember_replaces import check_replaceable
-    from superlocalmemory.core.replaces_input import NOT_ALLOWED, ReplacesRejected
+    from superlocalmemory.core.replaces_input import NOT_ALLOWED, NOT_FOUND, ReplacesRejected
 
     db, _ = env
     fid = _fact(db, "Personal decision.")
+    theirs = _fact(db, "Their personal decision.", profile="other")
+    assert check_replaceable(db, replaces=theirs, profile_id="other",
+                             scope="personal") == theirs
     with pytest.raises(ReplacesRejected) as routed:
-        check_replaceable(db, replaces=fid, active_profile="default",
-                          write_profile="other", scope="personal")
-    assert routed.value.code == NOT_ALLOWED
+        check_replaceable(db, replaces=fid, profile_id="other", scope="personal")
+    assert routed.value.code == NOT_FOUND
     with pytest.raises(ReplacesRejected) as scoped:
-        check_replaceable(db, replaces=fid, active_profile="default",
-                          write_profile="default", scope="global")
+        check_replaceable(db, replaces=fid, profile_id="default", scope="global")
     assert scoped.value.code == NOT_ALLOWED and "personal" in scoped.value.message
 
 

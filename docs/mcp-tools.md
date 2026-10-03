@@ -217,25 +217,33 @@ the resident authenticated daemon.
 ### `review_correction`
 
 Apply, reject, or roll back a correction case through the resident canonical
-daemon. The client supplies the case address and expected version only; the
-daemon derives the active profile and reviewer identity. This tool never
-performs a local fallback write.
+daemon. The client supplies the case address and expected version; the daemon
+derives reviewer identity. This tool never performs a local fallback write.
+
+A case belongs to one profile. Leave `profile_id` empty for the active profile.
+To undo a `remember(..., profile_id=..., replaces=...)` saved to another
+profile, pass that same `profile_id`; the `undo` hint in that response names
+it. Routing never moves the active profile. Your role on the named profile is
+what is checked, and an unknown profile returns `unknown_profile`. A case that
+is not in the profile is reported as not found.
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
-| `case_id` | string | Yes | Correction case returned by `update_memory` |
+| `case_id` | string | Yes | Correction case returned by `update_memory` or `remember(..., replaces=...)` |
 | `action` | string | Yes | `apply`, `reject`, or `rollback` |
 | `expected_version` | integer | Yes | Current case version for compare-and-swap |
 | `event_valid_until` | string | No | Reviewer-validated event-time boundary; `apply` only |
+| `profile_id` | string | No | Profile the case belongs to (default: active profile) |
 
 ### `list_corrections`
 
-List bounded, active-profile correction metadata for human or host review. It
-contains identifiers, status, and timing metadata only—never fact text.
+List bounded correction metadata for human or host review. It contains
+identifiers, status, and timing metadata only—never fact text.
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|
 | `limit` | integer | No | 1–500; default 100 |
+| `profile_id` | string | No | Profile to list (default: active profile); same rules as `review_correction` |
 
 ## Active Memory Tools (V3.1)
 
