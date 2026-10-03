@@ -33,6 +33,8 @@ import re
 import sqlite3
 from dataclasses import dataclass
 
+from superlocalmemory.core.ingest_gate import apply_ingest_gate
+
 _MARKER = re.compile(r"\[REDACTED:[A-Z_]+:[^\]]*\]")
 _MISMATCH = "queryable ingestion memory content mismatch"
 #: Reasons written by the automatic checks, never by a person.
@@ -177,16 +179,43 @@ def apply_repair(conn: sqlite3.Connection, plan: RepairPlan) -> RepairResult:
     conn.execute("BEGIN IMMEDIATE")
     try:
         for item in plan.restorable:
-            cur = conn.execute(
-                "UPDATE memories SET content=? WHERE memory_id=? AND content=?",
-                (item.original, item.memory_id, item.blanked))
-            if cur.rowcount != 1:
+            # A memory over the ingest gate's 24k-char cap has a CLAMPED fact
+            # (core/ingest_gate.py): atomic_facts.content is head+tail of the
+            # memory's text, never the memory's full text verbatim. Guarding
+            # the fact UPDATE by ``item.blanked`` (the whole blanked memory)
+            # can never match a clamped row, so the fact stayed blanked and
+            # the write was still counted as a restore. Re-running the same
+            # gate on both sides gets the comparison and the replacement back
+            # onto what was actually stored: unclamped content passes through
+            # unchanged, so short memories behave exactly as before.
+            expected_fact = apply_ingest_gate(item.blanked).fact_content
+            restored_fact = apply_ingest_gate(item.original).fact_content
+            current_facts = {
+                str(row[0]): row[1] for row in conn.execute(
+                    "SELECT fact_id, content FROM atomic_facts WHERE fact_id IN ({})"
+                    .format(",".join("?" for _ in item.fact_ids)),
+                    item.fact_ids,
+                )
+            } if item.fact_ids else {}
+            facts_match = all(current_facts.get(fid) == expected_fact
+                              for fid in item.fact_ids)
+            mem_row = conn.execute(
+                "SELECT content FROM memories WHERE memory_id=?",
+                (item.memory_id,)).fetchone()
+            mem_matches = mem_row is not None and mem_row[0] == item.blanked
+            # Verify every row this item touches before writing any of them:
+            # a restore is reported only for what is actually, fully applied,
+            # never a memory restored with its fact left blanked.
+            if not (mem_matches and facts_match):
                 skipped += 1
                 continue
+            conn.execute(
+                "UPDATE memories SET content=? WHERE memory_id=? AND content=?",
+                (item.original, item.memory_id, item.blanked))
             for fact_id in item.fact_ids:
                 conn.execute(
                     "UPDATE atomic_facts SET content=? WHERE fact_id=? AND content=?",
-                    (item.original, fact_id, item.blanked))
+                    (restored_fact, fact_id, expected_fact))
             conn.execute(
                 "UPDATE ingestion_operations SET state='queryable', attempt_count=0, "
                 "next_retry_at=0, last_error='', lease_owner='', lease_expires_at=0, "

@@ -123,3 +123,23 @@ def test_an_ordinary_write_is_untouched(env) -> None:
     late = _late(db, memory_id, "Another plain fact.")
     assert _temporal(db, late)["system_expired_at"] is None
     assert db.execute("SELECT 1 FROM correction_cases") == []
+
+
+def test_a_late_fact_is_retired_even_when_the_successor_was_rescoped(env) -> None:
+    """L1-14: re-scoping the successor after the whole-memory replacement was
+    applied makes the ledger refuse the late case (its scope check compares
+    against the successor's CURRENT scope). The write must never fail for
+    this -- the fact is retired by the safest available route instead, so a
+    replaced memory's fact is never left current and visible in recall."""
+    db, runtime = env
+    memory_id, _ = _memory(db, "Checkpoint one: migration half done.")
+    new = _fact(db, "Checkpoint two: migration done.")
+    runtime.replace_by_caller("default", memory_id, new, trusted_actor_id=ACTOR,
+                              idempotency_key="k-rescope")
+    db.execute("UPDATE atomic_facts SET scope='global' WHERE fact_id=?", (new,))
+    late = db.store_fact(AtomicFact(profile_id="default", memory_id=memory_id,
+                                    content="Enrichment: the migration touched 3 tables.",
+                                    fact_type=FactType.SEMANTIC))
+    retired = _temporal(db, late)
+    assert retired["system_expired_at"], "late fact must never surface current"
+    assert retired["invalidated_by"] == new

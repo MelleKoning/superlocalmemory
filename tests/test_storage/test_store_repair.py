@@ -121,3 +121,78 @@ def test_wrong_replaced_marks_are_undone_and_a_users_correction_is_kept(conn) ->
         assert reason.startswith("reverted in 4.1.19")      # the old reason is kept
     assert rows["f_user"][1] is not None                     # correction untouched
     assert rows["f_user"][2] == "direct_content_correction"
+
+
+# ---------------------------------------------------------------------------
+# L1-08: a memory over 24,000 chars has a CLAMPED fact (core/ingest_gate.py),
+# so the fact's stored content never equals the memory's blanked text byte
+# for byte. The repair must match and write the clamped forms, not the raw
+# memory text, or the fact stays blanked forever.
+# ---------------------------------------------------------------------------
+
+def _long_blanked_and_original() -> tuple[str, str]:
+    original = ("Build notes. Artifacts live under "
+                "/Users/me/work/repo/build/out/release-4.1.18/x86 "
+                + "lorem ipsum dolor sit amet " * 1200)
+    blanked = original.replace(
+        "/Users/me/work/repo/build/out/release-4.1.18/x86", "[REDACTED:PATH:x86]")
+    return blanked, original
+
+
+@pytest.fixture()
+def long_conn(tmp_path) -> tuple[sqlite3.Connection, str, str]:
+    blanked, original = _long_blanked_and_original()
+    from superlocalmemory.core.ingest_gate import apply_ingest_gate
+    clamped_fact = apply_ingest_gate(blanked).fact_content
+    assert clamped_fact != blanked, "fixture must exercise the >24k clamp"
+
+    c = sqlite3.connect(tmp_path / "long.db", isolation_level=None)
+    c.executescript("""
+        CREATE TABLE memories(memory_id TEXT PRIMARY KEY, content TEXT);
+        CREATE TABLE atomic_facts(fact_id TEXT PRIMARY KEY, memory_id TEXT, content TEXT,
+                                  canonical_entities_json TEXT);
+        CREATE TABLE ingestion_operations(operation_id TEXT PRIMARY KEY, raw_content TEXT,
+            queryable_fact_ids_json TEXT, state TEXT, last_error TEXT, attempt_count INT,
+            next_retry_at REAL, lease_owner TEXT, lease_expires_at REAL, updated_at TEXT);
+        CREATE TABLE canonical_entities(entity_id TEXT PRIMARY KEY, canonical_name TEXT,
+                                        fact_count INT);
+        CREATE TABLE entity_aliases(entity_id TEXT, alias TEXT, source TEXT);
+        CREATE TABLE fact_temporal_validity(fact_id TEXT PRIMARY KEY, valid_until TEXT,
+            system_expired_at TEXT, invalidated_by TEXT, invalidation_reason TEXT);
+    """)
+    c.execute("INSERT INTO memories VALUES ('m1', ?)", (blanked,))
+    c.execute("INSERT INTO atomic_facts VALUES ('f1', 'm1', ?, '[]')", (clamped_fact,))
+    c.execute("INSERT INTO ingestion_operations VALUES ('op1', ?, ?, 'failed', ?, 9, 1e12, "
+              "'', 0, '')", (original, json.dumps(["f1"]), MISMATCH))
+    return c, blanked, original
+
+
+def test_a_clamped_fact_is_matched_and_restored_too(long_conn) -> None:
+    from superlocalmemory.core.ingest_gate import apply_ingest_gate
+
+    c, _blanked, original = long_conn
+    plan = plan_repair(c)
+    assert plan.summary()["memories_to_restore"] == 1
+    result = apply_repair(c, plan)
+    assert (result.memories_restored, result.memories_skipped) == (1, 0)
+    assert c.execute("SELECT content FROM memories WHERE memory_id='m1'"
+                     ).fetchone()[0] == original
+    restored_fact = c.execute("SELECT content FROM atomic_facts WHERE fact_id='f1'"
+                              ).fetchone()[0]
+    assert "[REDACTED:" not in restored_fact
+    assert restored_fact == apply_ingest_gate(original).fact_content
+
+
+def test_a_fact_that_no_longer_matches_its_clamp_is_left_alone(long_conn) -> None:
+    # Something changed the fact's content between planning and apply (or the
+    # clamp assumption does not hold). Report must count it as skipped, and
+    # neither the memory nor the fact may be partially restored.
+    c, blanked, _original = long_conn
+    c.execute("UPDATE atomic_facts SET content='drifted elsewhere' WHERE fact_id='f1'")
+    plan = plan_repair(c)
+    result = apply_repair(c, plan)
+    assert (result.memories_restored, result.memories_skipped) == (0, 1)
+    assert c.execute("SELECT content FROM memories WHERE memory_id='m1'"
+                     ).fetchone()[0] == blanked
+    assert c.execute("SELECT content FROM atomic_facts WHERE fact_id='f1'"
+                     ).fetchone()[0] == "drifted elsewhere"

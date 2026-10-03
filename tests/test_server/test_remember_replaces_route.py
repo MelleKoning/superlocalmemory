@@ -220,3 +220,62 @@ def test_recall_answers_with_the_new_memory(engine_with_mock_deps) -> None:
     ids = [r["fact_id"] for r in after["results"]]
     assert ids and ids[0] == new_id, after
     assert old_id not in ids
+
+
+# ---------------------------------------------------------------------------
+# M1: a per-request profile_id plus replaces must check ownership against the
+# profile actually being written, not the daemon's own default profile
+# (server/unified_daemon.py, check_replaceable's active_profile argument).
+# ---------------------------------------------------------------------------
+
+def test_the_route_checks_replaces_against_the_routed_profile(engine_with_mock_deps,
+                                                               monkeypatch) -> None:
+    """The route must pass the ROUTED write profile as both arguments of
+    check_replaceable, never the daemon's own bound profile. Captured at the
+    call site rather than asserted through a full round trip: a genuinely
+    different routed profile still hits a separate, pre-existing restriction
+    one layer down (mutation commands -- corrections, kind-sets, replaces --
+    are scoped to the daemon's single bound profile, server/remember_runtime.py
+    ``_handle_mutation``), which is its own gap, not this one."""
+    from superlocalmemory.core import remember_replaces
+    from tests.test_server.test_per_request_profile import _daemon
+
+    captured: dict = {}
+    real_check = remember_replaces.check_replaceable
+
+    def _spy(db, **kwargs):
+        captured.update(kwargs)
+        return real_check(db, **kwargs)
+
+    monkeypatch.setattr(remember_replaces, "check_replaceable", _spy)
+
+    with _daemon(engine_with_mock_deps, profiles=("work",)) as (client, _app):
+        old = client.post("/remember", json={"content": OLD, "profile_id": "work",
+                                             "idempotency_key": "m1-spy-old"})
+        assert old.status_code == 200, old.text
+        [old_id] = old.json()["fact_ids"]
+        client.post("/remember", json={"content": NEW, "profile_id": "work",
+                                       "replaces": old_id, "idempotency_key": "m1-spy-new"})
+
+    assert captured, "check_replaceable was never called"
+    assert captured["active_profile"] == "work", captured
+    assert captured["write_profile"] == "work", captured
+
+
+def test_a_routed_write_cannot_replace_another_profiles_memory(engine_with_mock_deps) -> None:
+    """Ownership stays bound to the profile actually written: a caller
+    routed to one profile must not retire a fact that lives in another."""
+    from tests.test_server.test_per_request_profile import _daemon
+
+    with _daemon(engine_with_mock_deps, profiles=("work", "ops")) as (client, app):
+        engine = app.state.engine
+        old = client.post("/remember", json={"content": OLD, "profile_id": "work",
+                                             "idempotency_key": "m1-cross-old"})
+        assert old.status_code == 200, old.text
+        [old_id] = old.json()["fact_ids"]
+        refused = client.post("/remember", json={"content": NEW, "profile_id": "ops",
+                                                  "replaces": old_id,
+                                                  "idempotency_key": "m1-cross-new"})
+        assert refused.status_code == 422, refused.text
+        assert refused.json()["detail"]["code"] == "REPLACES_NOT_FOUND"
+        assert _expired(engine, old_id)["system_expired_at"] is None
