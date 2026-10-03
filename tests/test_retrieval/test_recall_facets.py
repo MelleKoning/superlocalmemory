@@ -77,6 +77,36 @@ def test_list_facets_counts_memories_per_project_and_agent(db) -> None:
     assert out["agents"] == [{"name": "claude", "memories": 2}, {"name": "grok", "memories": 1}]
 
 
+def _save_kind(db, content, *, kind=None, source=None, confidence=None) -> str:
+    memory_id = db.store_memory(MemoryRecord(profile_id="default", content=content))
+    return db.store_fact(AtomicFact(
+        profile_id="default", memory_id=memory_id, content=content,
+        fact_type=FactType.SEMANTIC, memory_kind=kind, memory_kind_source=source,
+        memory_kind_confidence=confidence,
+    ))
+
+
+def test_kind_facet_uses_the_configured_display_threshold(db) -> None:
+    """4.1.19 M3: the kind facet must honour the CONFIGURED
+    ``memory_kinds.display_min_confidence`` everywhere — not the 0.20
+    hard-coded default ``storage.memory_kinds.kind_fields`` falls back to
+    when nobody passes one.
+    """
+    low_conf = _save_kind(db, "maybe a decision", kind="decision",
+                          source="model:llm", confidence=0.15)
+    other = _save_kind(db, "unrelated note")
+    ids = [low_conf, other]
+
+    # Default threshold (0.20): a 0.15-confidence suggestion is not shown.
+    assert matching_fact_ids(db, ids, "default", Facets.of(kind="decision")) == set()
+
+    # A caller-configured LOWER threshold (0.10) surfaces the same row.
+    assert matching_fact_ids(
+        db, ids, "default", Facets.of(kind="decision"),
+        display_min_confidence=0.10,
+    ) == {low_conf}
+
+
 def _response():
     fact = AtomicFact(fact_id="f1", content="x", fact_type=FactType.SEMANTIC)
     return RecallResponse(query="q", results=[RetrievalResult(fact=fact, score=0.5)])

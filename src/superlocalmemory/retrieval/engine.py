@@ -527,6 +527,10 @@ class RetrievalEngine:
             keep = matching_fact_ids(
                 self._db, [fr.fact_id for fr in fused], profile_id, facets,
                 resolver=getattr(self._entity, "_resolver", None),
+                # M3: the configured threshold, not kind_fields' 0.20 default —
+                # so a kind facet agrees with what the recall response itself
+                # displays for the SAME row.
+                display_min_confidence=self._config.memory_kinds.display_min_confidence,
             )
             fused = [fr for fr in fused if fr.fact_id in keep]
             _em("facets")
@@ -1415,13 +1419,20 @@ class RetrievalEngine:
     def recall_facts(
         self, query: str, profile_id: str,
         top_k: int = 20, skip_agentic: bool = True,
+        facets: Any = None,
     ) -> list[tuple[AtomicFact, float]]:
         """Simplified recall returning (fact, score) tuples.
 
-        Used by AgenticRetriever for round-2 re-retrieval.
-        skip_agentic is always True here to prevent infinite recursion.
+        Used by AgenticRetriever for every round (including round 2's
+        re-retrieval). ``skip_agentic`` is always True here to prevent
+        infinite recursion. ``facets`` (4.1.19 L2-08): forwarded to the real
+        ``recall()`` so the caller's hard filter (project / agent / about /
+        kind) still applies when ``fast=False`` triggers the internal
+        verification round — before this fix it was silently dropped here,
+        so a ``fast=False`` recall could return results outside a facet the
+        caller explicitly asked for.
         """
-        response = self.recall(query, profile_id, limit=top_k)
+        response = self.recall(query, profile_id, limit=top_k, facets=facets)
         return [(r.fact, r.score) for r in response.results]
 
     # -- Trust weighting ----------------------------------------------------

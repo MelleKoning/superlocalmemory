@@ -1320,6 +1320,11 @@ def run_recall(
                     llm=llm,
                     top_k=limit,
                     query_type=response.query_type,
+                    # L2-08: the facet the caller asked for must survive the
+                    # internal verification round too — round 2 used to
+                    # re-retrieve with none, then REPLACE the already
+                    # filtered round-1 response with its unfiltered answer.
+                    facets=facets,
                 )
                 # Replace response results with enhanced facts if we got more
                 if len(enhanced_facts) > len(response.results):

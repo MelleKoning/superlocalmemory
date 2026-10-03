@@ -167,6 +167,75 @@ def test_kind_and_project_compose_as_and(tmp_path) -> None:
 # -- (3) a legacy row matches its mapped kind through the facet -----------------
 
 
+def _facet_filtering_agentic_engine(db, facts):
+    """A retrieval_engine stand-in with BOTH ``recall`` (round-1 entry) and
+    ``recall_facts`` (what AgenticRetriever calls on every round) applying
+    the SAME real ``matching_fact_ids`` filter — so this proves facets
+    survive composition through the agentic (``fast=False``) path, not just
+    the plain recall path ``_real_facet_filtering_recall`` above covers.
+    """
+    def _kept(facets):
+        fact_ids = [f.fact_id for f in facts]
+        if facets is not None and not facets.empty:
+            keep = matching_fact_ids(db, fact_ids, "default", facets)
+            return [f for f in facts if f.fact_id in keep]
+        return list(facts)
+
+    class _Engine:
+        def recall(self, query, profile_id, mode=None, limit=10, *, facets=None, **kwargs):
+            kept = _kept(facets)
+            results = [
+                RetrievalResult(fact=f, score=0.9 - i * 0.01, confidence=1.0)
+                for i, f in enumerate(kept)
+            ]
+            return RecallResponse(query=query, results=results, query_type="multi_hop")
+
+        def recall_facts(self, query, profile_id, top_k=20, skip_agentic=True, facets=None):
+            kept = _kept(facets)
+            return [(f, 0.9 - i * 0.01) for i, f in enumerate(kept)]
+
+    return _Engine()
+
+
+def test_facets_survive_the_internal_agentic_round_fast_false(
+    tmp_path, mode_a_config, monkeypatch,
+) -> None:
+    """4.1.19 L2-08: with ``fast=False`` the internal agentic sufficiency
+    round used to re-retrieve with NO facets at all and then REPLACE the
+    already-filtered round-1 response with its unfiltered answer — a caller
+    who asked for ``project=zephyr`` got results from other projects back,
+    and the judge assessed that unfiltered set too. Multi-hop query_type
+    always forces the agentic round regardless of score.
+    """
+    db = _db(tmp_path)
+
+    def _save_with_project(content, *, project):
+        memory_id = db.store_memory(
+            MemoryRecord(profile_id="default", content=content, metadata={"project": project}))
+        fact = AtomicFact(profile_id="default", memory_id=memory_id, content=content,
+                          fact_type=FactType.SEMANTIC)
+        fact_id = db.store_fact(fact)
+        return db.get_facts_by_ids([fact_id], "default")[0]
+
+    zephyr_a = _save_with_project("Zephyr deploy blocked on TLS", project="zephyr")
+    zephyr_b = _save_with_project("Zephyr tabs over spaces", project="zephyr")
+    atlas = _save_with_project("Atlas uses Postgres", project="atlas")
+    facts = [zephyr_a, zephyr_b, atlas]
+
+    engine = _facet_filtering_agentic_engine(db, facts)
+    monkeypatch.setattr(recall_pipeline, "apply_ranking", lambda resp, *a, **k: resp)
+    out = recall_pipeline.run_recall(
+        "Zephyr deploy and Atlas Postgres", "default", fast=False,
+        config=mode_a_config, retrieval_engine=engine,
+        trust_scorer=None, embedder=None, db=db, llm=None, hooks=None,
+        facets=Facets.of(project="zephyr"),
+    )
+
+    projects = {r.fact.content for r in out.results}
+    assert projects == {zephyr_a.content, zephyr_b.content}, projects
+    assert atlas.content not in projects
+
+
 def test_a_legacy_row_matches_its_mapped_kind(tmp_path) -> None:
     db = _db(tmp_path)
     # No memory_kind of its own; kind_fields() maps FactType.EPISODIC -> "episodic".
