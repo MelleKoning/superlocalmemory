@@ -48,10 +48,99 @@ from superlocalmemory.storage.embedding_codec import (
 )
 from superlocalmemory.storage.write_lock import get_write_lock
 from superlocalmemory.storage import projection_outbox
+from superlocalmemory.storage.memory_kinds import KIND_COLUMNS
 
 logger = logging.getLogger(__name__)
 
 _MISSING = object()
+
+# ---------------------------------------------------------------------------
+# Memory-kind upsert SQL (4.1.19 / M052) — generated once at import time.
+#
+# The CASE predicate below is the single authority guard every kind write
+# shares (LLD §4.4, risk R4): a confirmed (user/caller) kind is never
+# overwritten by anything except a `user` value, and a `caller` value is
+# allowed to replace an older `caller` value (a later write of the same
+# authority wins) but not an existing `user` value. Everything below
+# confirmed (model suggestions, rules, legacy) always yields to a new write.
+# `fact_type` is kept in lock-step with whichever kind value survives, so a
+# confirmed row's `fact_type` only ever changes together with its kind (I2).
+# ---------------------------------------------------------------------------
+_KIND_KEEP_OLD_PREDICATE = (
+    "COALESCE(atomic_facts.memory_kind_source, '') IN ('user', 'caller') "
+    "AND COALESCE(excluded.memory_kind_source, '') NOT IN ('user') "
+    "AND NOT (atomic_facts.memory_kind_source = 'caller' "
+    "AND excluded.memory_kind_source = 'caller')"
+)
+
+
+def _kind_case_sql(column: str) -> str:
+    return (
+        f"{column} = CASE WHEN {_KIND_KEEP_OLD_PREDICATE} "
+        f"THEN atomic_facts.{column} ELSE COALESCE(excluded.{column}, atomic_facts.{column}) END"
+    )
+
+
+_FACT_TYPE_KIND_AWARE_SQL = (
+    f"fact_type = CASE WHEN {_KIND_KEEP_OLD_PREDICATE} "
+    "THEN atomic_facts.fact_type ELSE excluded.fact_type END"
+)
+
+#: Column order for the fact upsert/insert, exactly as the pre-4.1.19
+#: statement declared it. Shared by both the legacy and kind-aware variants
+#: below so the two can never drift apart on anything but the kind columns.
+_FACT_UPSERT_COLUMNS: tuple[str, ...] = (
+    "fact_id", "memory_id", "profile_id", "content", "fact_type",
+    "entities_json", "canonical_entities_json",
+    "observation_date", "referenced_date", "interval_start", "interval_end",
+    "confidence", "importance", "evidence_count", "access_count",
+    "source_turn_ids_json", "session_id",
+    "embedding", "fisher_mean", "fisher_variance",
+    "lifecycle", "langevin_position",
+    "emotional_valence", "emotional_arousal", "signal_type", "created_at",
+    "scope", "shared_with",
+)
+_FACT_UPSERT_SET_SIMPLE: tuple[str, ...] = tuple(
+    c for c in _FACT_UPSERT_COLUMNS if c not in ("fact_id", "profile_id", "created_at", "fact_type")
+)
+
+
+def _build_fact_upsert_sql(*, with_kind: bool) -> str:
+    columns = list(_FACT_UPSERT_COLUMNS)
+    set_parts = [f"{c} = excluded.{c}" for c in _FACT_UPSERT_SET_SIMPLE]
+    if with_kind:
+        columns += list(KIND_COLUMNS)
+        set_parts += [_kind_case_sql(c) for c in KIND_COLUMNS]
+        set_parts.append(_FACT_TYPE_KIND_AWARE_SQL)
+    else:
+        set_parts.append("fact_type = excluded.fact_type")
+    col_sql = ", ".join(columns)
+    placeholders = ", ".join(["?"] * len(columns))
+    set_sql = ",\n                   ".join(set_parts)
+    return (
+        "INSERT INTO atomic_facts\n"
+        f"           ({col_sql})\n"
+        f"           VALUES ({placeholders})\n"
+        "           ON CONFLICT(fact_id) DO UPDATE SET\n"
+        f"                   {set_sql}\n"
+        "           WHERE atomic_facts.profile_id = excluded.profile_id\n"
+        "           RETURNING profile_id"
+    )
+
+
+def _build_fact_insert_sql(*, with_kind: bool) -> str:
+    columns = list(_FACT_UPSERT_COLUMNS) + (list(KIND_COLUMNS) if with_kind else [])
+    col_sql = ", ".join(columns)
+    placeholders = ", ".join(["?"] * len(columns))
+    return f"INSERT INTO atomic_facts\n           ({col_sql})\n           VALUES ({placeholders})"
+
+
+#: Without the kind columns, byte-for-byte the pre-4.1.19 statement (modulo
+#: whitespace): no behaviour changes on a store M052 has not reached.
+_FACT_UPSERT_SQL_LEGACY = _build_fact_upsert_sql(with_kind=False)
+_FACT_UPSERT_SQL_WITH_KIND = _build_fact_upsert_sql(with_kind=True)
+_FACT_INSERT_SQL_LEGACY = _build_fact_insert_sql(with_kind=False)
+_FACT_INSERT_SQL_WITH_KIND = _build_fact_insert_sql(with_kind=True)
 
 
 class ProfileOwnershipConflict(ValueError):
@@ -835,60 +924,35 @@ class DatabaseManager:
         _scope = getattr(fact, 'scope', None) or 'personal'
         _shared = _jd(getattr(fact, 'shared_with', None))
         def _insert_with_knowledge_anchor() -> None:
-            written = self.execute(
-                """INSERT INTO atomic_facts
-               (fact_id, memory_id, profile_id, content, fact_type,
-                entities_json, canonical_entities_json,
-                observation_date, referenced_date, interval_start, interval_end,
-                confidence, importance, evidence_count, access_count,
-                source_turn_ids_json, session_id,
-                embedding, fisher_mean, fisher_variance,
-                lifecycle, langevin_position,
-                emotional_valence, emotional_arousal, signal_type, created_at,
-                scope, shared_with)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(fact_id) DO UPDATE SET
-                   memory_id               = excluded.memory_id,
-                   content                 = excluded.content,
-                   fact_type               = excluded.fact_type,
-                   entities_json           = excluded.entities_json,
-                   canonical_entities_json = excluded.canonical_entities_json,
-                   observation_date        = excluded.observation_date,
-                   referenced_date         = excluded.referenced_date,
-                   interval_start          = excluded.interval_start,
-                   interval_end            = excluded.interval_end,
-                   confidence              = excluded.confidence,
-                   importance              = excluded.importance,
-                   evidence_count          = excluded.evidence_count,
-                   access_count            = excluded.access_count,
-                   source_turn_ids_json    = excluded.source_turn_ids_json,
-                   session_id              = excluded.session_id,
-                   embedding               = excluded.embedding,
-                   fisher_mean             = excluded.fisher_mean,
-                   fisher_variance         = excluded.fisher_variance,
-                   lifecycle               = excluded.lifecycle,
-                   langevin_position       = excluded.langevin_position,
-                   emotional_valence       = excluded.emotional_valence,
-                   emotional_arousal       = excluded.emotional_arousal,
-                   signal_type             = excluded.signal_type,
-                   scope                   = excluded.scope,
-                   shared_with             = excluded.shared_with
-               WHERE atomic_facts.profile_id = excluded.profile_id
-               RETURNING profile_id""",
-                (fact.fact_id, fact.memory_id, fact.profile_id, fact.content,
-                 fact.fact_type.value,
-                 json.dumps(fact.entities), json.dumps(fact.canonical_entities),
-                 fact.observation_date, fact.referenced_date,
-                 fact.interval_start, fact.interval_end,
-                 fact.confidence, fact.importance, fact.evidence_count, fact.access_count,
-                 json.dumps(fact.source_turn_ids), fact.session_id,
-                 encode_embedding(fact.embedding),
-                 encode_float_vector(fact.fisher_mean),
-                 encode_float_vector(fact.fisher_variance),
-                 fact.lifecycle.value, _jd(fact.langevin_position),
-                 fact.emotional_valence, fact.emotional_arousal,
-                 fact.signal_type.value, fact.created_at, _scope, _shared),
-            )
+            use_kind = self.has_memory_kind_columns()
+            sql = _FACT_UPSERT_SQL_WITH_KIND if use_kind else _FACT_UPSERT_SQL_LEGACY
+            params: list[Any] = [
+                fact.fact_id, fact.memory_id, fact.profile_id, fact.content,
+                fact.fact_type.value,
+                json.dumps(fact.entities), json.dumps(fact.canonical_entities),
+                fact.observation_date, fact.referenced_date,
+                fact.interval_start, fact.interval_end,
+                fact.confidence, fact.importance, fact.evidence_count, fact.access_count,
+                json.dumps(fact.source_turn_ids), fact.session_id,
+                encode_embedding(fact.embedding),
+                encode_float_vector(fact.fisher_mean),
+                encode_float_vector(fact.fisher_variance),
+                fact.lifecycle.value, _jd(fact.langevin_position),
+                fact.emotional_valence, fact.emotional_arousal,
+                fact.signal_type.value, fact.created_at, _scope, _shared,
+            ]
+            if use_kind:
+                # A caller-built AtomicFact that predates 4.1.19 has no kind
+                # attributes at all; getattr keeps this write from failing on
+                # a kind the same way parse_kind never raises on one (I1).
+                params.extend((
+                    getattr(fact, "memory_kind", None),
+                    getattr(fact, "memory_kind_source", None),
+                    getattr(fact, "memory_kind_confidence", None),
+                    getattr(fact, "memory_kind_recipe", None),
+                    getattr(fact, "memory_kind_at", None),
+                ))
+            written = self.execute(sql, tuple(params))
             if not written:
                 self._refuse_cross_profile_reown(
                     "atomic_facts", fact.fact_id, fact.profile_id,
@@ -947,6 +1011,16 @@ class DatabaseManager:
             pinned=bool(d.get("pinned", 0)),
             scope=d.get("scope", "personal"),
             shared_with=_jl(d.get("shared_with"), None),
+            # 4.1.19 (M052): absent on a row the migration has not reached —
+            # ``dict(row).get(...)`` already returns None for a key ``SELECT
+            # *`` never produced, so this is correct whether or not the
+            # columns exist (old-style hydration of a new row, and new-style
+            # hydration of an old row, both work).
+            memory_kind=d.get("memory_kind"),
+            memory_kind_source=d.get("memory_kind_source"),
+            memory_kind_confidence=d.get("memory_kind_confidence"),
+            memory_kind_recipe=d.get("memory_kind_recipe"),
+            memory_kind_at=d.get("memory_kind_at"),
             created_at=d["created_at"],
         )
 
@@ -960,48 +1034,48 @@ class DatabaseManager:
         """
         scope = getattr(fact, "scope", None) or "personal"
         shared = _jd(getattr(fact, "shared_with", None))
+        use_kind = self.has_memory_kind_columns()
+        params: list[Any] = [
+            fact.fact_id,
+            fact.memory_id,
+            fact.profile_id,
+            fact.content,
+            fact.fact_type.value,
+            json.dumps(fact.entities),
+            json.dumps(fact.canonical_entities),
+            fact.observation_date,
+            fact.referenced_date,
+            fact.interval_start,
+            fact.interval_end,
+            fact.confidence,
+            fact.importance,
+            fact.evidence_count,
+            fact.access_count,
+            json.dumps(fact.source_turn_ids),
+            fact.session_id,
+            encode_embedding(fact.embedding),
+            encode_float_vector(fact.fisher_mean),
+            encode_float_vector(fact.fisher_variance),
+            fact.lifecycle.value,
+            _jd(fact.langevin_position),
+            fact.emotional_valence,
+            fact.emotional_arousal,
+            fact.signal_type.value,
+            fact.created_at,
+            scope,
+            shared,
+        ]
+        if use_kind:
+            params.extend((
+                getattr(fact, "memory_kind", None),
+                getattr(fact, "memory_kind_source", None),
+                getattr(fact, "memory_kind_confidence", None),
+                getattr(fact, "memory_kind_recipe", None),
+                getattr(fact, "memory_kind_at", None),
+            ))
         self.execute(
-            """INSERT INTO atomic_facts
-           (fact_id, memory_id, profile_id, content, fact_type,
-            entities_json, canonical_entities_json,
-            observation_date, referenced_date, interval_start, interval_end,
-            confidence, importance, evidence_count, access_count,
-            source_turn_ids_json, session_id,
-            embedding, fisher_mean, fisher_variance,
-            lifecycle, langevin_position,
-            emotional_valence, emotional_arousal, signal_type, created_at,
-            scope, shared_with)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                fact.fact_id,
-                fact.memory_id,
-                fact.profile_id,
-                fact.content,
-                fact.fact_type.value,
-                json.dumps(fact.entities),
-                json.dumps(fact.canonical_entities),
-                fact.observation_date,
-                fact.referenced_date,
-                fact.interval_start,
-                fact.interval_end,
-                fact.confidence,
-                fact.importance,
-                fact.evidence_count,
-                fact.access_count,
-                json.dumps(fact.source_turn_ids),
-                fact.session_id,
-                encode_embedding(fact.embedding),
-                encode_float_vector(fact.fisher_mean),
-                encode_float_vector(fact.fisher_variance),
-                fact.lifecycle.value,
-                _jd(fact.langevin_position),
-                fact.emotional_valence,
-                fact.emotional_arousal,
-                fact.signal_type.value,
-                fact.created_at,
-                scope,
-                shared,
-            ),
+            _FACT_INSERT_SQL_WITH_KIND if use_kind else _FACT_INSERT_SQL_LEGACY,
+            tuple(params),
         )
         self.store_temporal_validity(fact.fact_id, fact.profile_id)
         projection_outbox.enqueue(self, fact.fact_id, fact.profile_id)
@@ -1095,6 +1169,37 @@ class DatabaseManager:
         )
         if present:
             self._quarantine_col_present = True
+        return present
+
+    def has_memory_kind_columns(self) -> bool:
+        """Whether ``atomic_facts`` carries the five M052 (4.1.19) kind columns.
+
+        Shaped differently from ``_has_quarantine_column`` on purpose
+        (LLD §4.4): True is cached for the life of this instance (a column
+        never disappears), but False is re-probed at most once every 5
+        seconds rather than on every call. A bare ``DatabaseManager`` built
+        before ``apply_all`` runs (the engine-direct path builds its manager
+        before migrations run) would otherwise pay a ``PRAGMA`` on every
+        single fact write until the eager M052 migration completes — this
+        keeps that cost to one probe per 5-second window instead.
+        """
+        if getattr(self, "_kind_columns_present", False):
+            return True
+        last_checked = getattr(self, "_kind_columns_checked_at", 0.0)
+        now = time.monotonic()
+        if last_checked and (now - last_checked) < 5.0:
+            return False
+        self._kind_columns_checked_at = now
+        try:
+            have = {
+                dict(row).get("name")
+                for row in self.execute("PRAGMA table_info(atomic_facts)")
+            }
+        except sqlite3.Error:
+            return False
+        present = set(KIND_COLUMNS).issubset(have)
+        if present:
+            self._kind_columns_present = True
         return present
 
     def _has_temporal_validity_table(self) -> bool:
@@ -1293,6 +1398,10 @@ class DatabaseManager:
         # Multi-scope (M016): allow re-scoping a fact after creation so a memory
         # can be shared with a team or made global from the dashboard.
         "scope", "shared_with",
+        # 4.1.19 (M052): kind columns. A caller still must not pass these
+        # unless ``has_memory_kind_columns()`` is True — this allow-list only
+        # says the name is a legitimate column, not that it currently exists.
+        *KIND_COLUMNS,
     })
 
     def update_fact(self, fact_id: str, updates: dict[str, Any],
