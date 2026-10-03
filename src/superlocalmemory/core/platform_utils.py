@@ -11,10 +11,15 @@ Inspired by community PR #14 (GuillaumeG / Tyrin451).
 
 from __future__ import annotations
 
+import ctypes
 import os
 import subprocess
 import sys
 import threading
+
+# Minimal Win32 access right for OpenThread — enough for CancelSynchronousIo,
+# nothing more (see cancel_blocking_read).
+_WIN32_THREAD_TERMINATE = 0x0001
 
 
 def popen_platform_kwargs() -> dict:
@@ -108,6 +113,41 @@ def kill_process(pid: int) -> bool:
         return True
     except OSError:
         return False
+
+
+def cancel_blocking_read(thread: threading.Thread) -> None:
+    """Unblock a thread wedged in a synchronous read, before closing its fd.
+
+    POSIX: no-op. Closing the fd/stream from another thread already wakes a
+    concurrent blocked ``read()`` there (how the embedding worker's readline
+    timeout unblocks its reader thread on macOS/Linux).
+
+    Windows: closing a pipe HANDLE while another thread has a synchronous
+    ``ReadFile`` in flight on that same handle does **not** cancel the read.
+    The close() call itself blocks until that read completes — forever, for
+    a worker pipe with no writer (confirmed via faulthandler stack dump on
+    GH Actions windows-latest: the closing thread wedged inside ``close()``,
+    the reader thread wedged inside ``readline()``, same handle, deadlock).
+    ``CancelSynchronousIo`` is the documented Win32 call for exactly this: it
+    aborts the pending I/O issued by the given thread, so the blocked read
+    returns immediately and it is then safe to close the handle.
+    """
+    if sys.platform != "win32":
+        return
+    native_id = getattr(thread, "native_id", None)
+    if not native_id:
+        return
+    try:
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenThread(_WIN32_THREAD_TERMINATE, False, native_id)
+        if not handle:
+            return
+        try:
+            kernel32.CancelSynchronousIo(handle)
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        pass
 
 
 def start_parent_watchdog(
