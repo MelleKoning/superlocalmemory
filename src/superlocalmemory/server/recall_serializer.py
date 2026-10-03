@@ -161,6 +161,9 @@ def apply_source_content_discipline(
 # THE shared chokepoint: RecallResponse -> transport dicts (all surfaces)
 # ---------------------------------------------------------------------------
 
+from superlocalmemory.storage.memory_kinds import kind_fields  # noqa: E402
+
+
 def serialize_recall_response(
     response: Any,
     *,
@@ -259,6 +262,8 @@ def serialize_recall_response(
             # weigh recency without doing date math. "" when undated.
             "age_label": relative_age(_created, _now),
             "evidence_chain": list(getattr(r, "evidence_chain", []) or []),
+            # The memory's kind, the same five fields on every surface.
+            **kind_fields(fact),
         }
         # Only when asked, and only when the engine actually produced one —
         # an empty key would be indistinguishable from a marker that failed

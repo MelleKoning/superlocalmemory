@@ -514,6 +514,30 @@ def register_active_tools(server, get_engine: Callable) -> None:
                 ))
                 pinned_seen.add(pf.fact_id)
 
+            # Standing rules and active decisions you or your agents confirmed
+            # (kind declared on save, or set by you) follow the pins, so every
+            # session starts knowing them. Suggested kinds are never used here.
+            try:
+                from superlocalmemory.core import standing_rules
+
+                if standing_rules.enabled(getattr(engine, "config", None)):
+                    for sf in standing_rules.standing_facts(
+                            engine.db, pid, frozenset(pinned_seen)):
+                        if sf.fact_id in pinned_seen:
+                            continue
+                        inj_mems.append(InjectableMemory(
+                            content=sf.content,
+                            score=0.0,
+                            fact_id=sf.fact_id,
+                            importance=sf.importance,
+                            access_count=sf.access_count,
+                            pinned=True,
+                            source_type=f"standing-{sf.kind}",
+                        ))
+                        pinned_seen.add(sf.fact_id)
+            except Exception:  # noqa: BLE001 - session start never fails on this
+                pass
+
             # Then recall results (skip duplicates of pinned).
             for r in relevant[:max_results]:
                 if r.fact.fact_id in pinned_seen:
