@@ -22,6 +22,7 @@ confirmed; here that confirmation is ``--yes``. ``--json`` everywhere.
 
 from __future__ import annotations
 
+import argparse
 import sys
 from argparse import Namespace
 from dataclasses import dataclass
@@ -39,6 +40,23 @@ _BASE = "/api/memory-kinds"
 _NOT_RUNNING = "The SLM daemon is not running. Start it with: slm serve"
 
 
+def _json_flag(parser: Any) -> None:
+    """``--json`` that never clobbers an already-set parent value.
+
+    L3-14: argparse writes every action's default into the namespace before
+    parsing a subparser's own arguments, so a bare ``store_true`` default of
+    False on a nested parser overwrote the top level's True the moment a
+    caller wrote the global flag before the subcommand
+    (``slm kinds --json status``) rather than after it
+    (``slm kinds status --json``) — even though both are documented as
+    equivalent. ``default=SUPPRESS`` means "say nothing" instead of "say
+    False" when this particular parser's own flag was not given, so parsing
+    continues up the chain to whatever the enclosing parser already set.
+    """
+    parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                        help="machine-readable output")
+
+
 def register_kinds_parser(sub: Any) -> None:
     """Attach the ``kinds`` parser. Called from cli/main.py."""
     p = sub.add_parser("kinds", help="Memory kinds: status, settings, classify my memories")
@@ -46,7 +64,7 @@ def register_kinds_parser(sub: Any) -> None:
     ksub = p.add_subparsers(dest="kinds_command", title="kinds subcommands")
 
     s = ksub.add_parser("status", help="kinds per memory, the backend in use, runs")
-    s.add_argument("--json", action="store_true")
+    _json_flag(s)
 
     st = ksub.add_parser("settings", help="show or change the memory-kind settings")
     on_off = st.add_mutually_exclusive_group()
@@ -57,9 +75,14 @@ def register_kinds_parser(sub: Any) -> None:
                     help="allow Jev to type memories (sends memory text online)")
     st.add_argument("--standing-rules", choices=["on", "off"],
                     help="give confirmed standing rules to every new session")
-    st.add_argument("--json", action="store_true")
+    _json_flag(st)
 
     b = ksub.add_parser("backfill", help="classify existing memories (undoable)")
+    # L3-14: ``backfill`` itself had no --json of its own, so
+    # ``slm kinds backfill --json`` (no action word -- _backfill() already
+    # treats a missing one as "status") was an argparse usage error, not a
+    # recognised invocation -- exactly the second argv Hermes generates.
+    _json_flag(b)
     bsub = b.add_subparsers(dest="backfill_command", title="backfill actions")
     start = bsub.add_parser("start", help="start a classification run")
     start.add_argument("--mode", choices=["untyped", "refresh"], default="untyped",
@@ -67,30 +90,30 @@ def register_kinds_parser(sub: Any) -> None:
                             "suggestions (never a kind you confirmed)")
     start.add_argument("--yes", action="store_true",
                        help="confirm a run that sends memory text online")
-    start.add_argument("--json", action="store_true")
+    _json_flag(start)
     for action in ("pause", "resume", "cancel", "revert"):
         a = bsub.add_parser(action, help=f"{action} a classification run")
         a.add_argument("run_id")
-        a.add_argument("--json", action="store_true")
+        _json_flag(a)
     bs = bsub.add_parser("status", help="the run in progress, if any")
-    bs.add_argument("--json", action="store_true")
+    _json_flag(bs)
 
     set_p = ksub.add_parser("set", help="set (confirm) one memory's kind")
     set_p.add_argument("fact_id", help="exact fact id, from recall or list")
     set_p.add_argument("kind", help="one of the nine memory kinds, or a known alias")
-    set_p.add_argument("--json", action="store_true")
+    _json_flag(set_p)
 
     review_p = ksub.add_parser("review", help="suggestions awaiting confirmation")
     review_p.add_argument("--kind", default="", help="only suggestions of this kind")
     review_p.add_argument("--limit", type=int, default=20)
-    review_p.add_argument("--json", action="store_true")
+    _json_flag(review_p)
 
     confirm_p = ksub.add_parser("confirm", help="confirm kinds for 1-200 facts at once")
     confirm_p.add_argument(
         "items", nargs="*",
         help="FACT_ID or FACT_ID=KIND (bare FACT_ID accepts the stored suggestion)",
     )
-    confirm_p.add_argument("--json", action="store_true")
+    _json_flag(confirm_p)
 
 
 @dataclass(frozen=True, slots=True)
