@@ -970,6 +970,19 @@ class DatabaseManager:
             # a call site that forgets would produce a memory that is stored
             # and unrecallable.
             projection_outbox.enqueue(self, fact.fact_id, fact.profile_id)
+            # A memory its caller already replaced keeps no current facts, not
+            # even ones enrichment derives from it afterwards. Same transaction,
+            # same single write path, so no such fact is ever visible un-retired
+            # (storage/replaced_memory.py).
+            if fact.memory_id:
+                from superlocalmemory.storage.replaced_memory import (
+                    retire_if_memory_replaced,
+                )
+
+                retire_if_memory_replaced(
+                    self._txn_state.conn, fact_id=fact.fact_id,
+                    memory_id=fact.memory_id, profile_id=fact.profile_id,
+                )
 
         # The fact and its transaction-time anchor are one logical write. Do
         # not open a nested transaction when an owner already holds one.

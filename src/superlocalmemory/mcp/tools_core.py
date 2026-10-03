@@ -194,15 +194,22 @@ def register_core_tools(server, get_engine: Callable) -> None:
             # stores separate.  Without a session token the key is derived from
             # the remaining call parameters so repeated observations with the
             # same content, agent, and scope are deduplicated across retries.
+            # ``replaces`` is part of what was asked: the same words replacing a
+            # different memory are a different request. Added only when set,
+            # so every key derived for a plain call is unchanged.
+            replaces_part = f"\0replaces={replaces_id}" if replaces_id is not None else ""
             if session_id:
                 material = (
                     f"{agent_id}\0{session_id}\0{scope or ''}\0{shared_with}\0{content}"
+                    + replaces_part
                 )
                 effective_idempotency_key = "mcp:" + hashlib.sha256(
                     material.encode("utf-8")
                 ).hexdigest()
             else:
-                material = f"{agent_id}\0{scope or ''}\0{shared_with}\0{content}"
+                material = (
+                    f"{agent_id}\0{scope or ''}\0{shared_with}\0{content}" + replaces_part
+                )
                 effective_idempotency_key = "mcp:req:" + hashlib.sha256(
                     material.encode("utf-8")
                 ).hexdigest()

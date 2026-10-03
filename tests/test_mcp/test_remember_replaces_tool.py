@@ -137,6 +137,77 @@ def test_the_pool_proxy_reports_a_daemon_refusal(monkeypatch) -> None:
                    "error": "theirs"}
 
 
+def _through_the_daemon(monkeypatch, client) -> None:
+    """Route the tool's daemon calls into a real daemon app."""
+    from superlocalmemory.cli import daemon
+
+    def request(method, path, body=None, **_kwargs):
+        response = client.post(path, json=body)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    monkeypatch.setattr(daemon, "is_daemon_running", lambda: True)
+    monkeypatch.setattr(daemon, "daemon_request", request)
+
+
+def test_same_content_with_a_different_replaces_is_a_different_request(
+        engine_with_mock_deps, monkeypatch) -> None:
+    from tests.test_server.test_canonical_remember_route import _client
+
+    engine = engine_with_mock_deps
+    remember = _tools()["remember"]
+    with _client(engine) as client:
+        [first] = client.post("/remember", json={"content": "Plan A: ship on Monday.",
+                                                 "idempotency_key": "a"}).json()["fact_ids"]
+        [second] = client.post("/remember", json={"content": "Plan B: ship on Tuesday.",
+                                                  "idempotency_key": "b"}).json()["fact_ids"]
+        _through_the_daemon(monkeypatch, client)
+        one = asyncio.run(remember(CONTENT, replaces=first, session_id="s-1"))
+        other = asyncio.run(remember(CONTENT, replaces=second, session_id="s-1"))
+    assert one["replaced"]["ok"] is True and other["replaced"]["ok"] is True, other
+    assert one["operation_id"] != other["operation_id"]
+
+
+def test_the_same_request_with_the_same_replaces_is_still_one_save(
+        engine_with_mock_deps, monkeypatch) -> None:
+    from tests.test_server.test_canonical_remember_route import _client
+
+    engine = engine_with_mock_deps
+    remember = _tools()["remember"]
+    with _client(engine) as client:
+        [old] = client.post("/remember", json={"content": "Plan A: ship on Monday.",
+                                               "idempotency_key": "a"}).json()["fact_ids"]
+        _through_the_daemon(monkeypatch, client)
+        before = len(engine._db.execute("SELECT 1 FROM ingestion_operations"))
+        one = asyncio.run(remember(CONTENT, replaces=old, session_id="s-2"))
+        again = asyncio.run(remember(CONTENT, replaces=old, session_id="s-2"))
+    assert one["operation_id"] == again["operation_id"]
+    assert one["replaced"] == again["replaced"] and one["replaced"]["ok"] is True
+    assert len(engine._db.execute("SELECT 1 FROM ingestion_operations")) == before + 1
+    assert len(engine._db.execute("SELECT 1 FROM correction_cases")) == 1
+
+
+def test_the_derived_key_follows_replaces(monkeypatch) -> None:
+    calls = _daemon(monkeypatch, reply={"ok": True, "fact_ids": ["f"], "count": 1})
+    remember = _tools()["remember"]
+    for target in (OLD_ID, OLD_ID, "4a1b2c3d4e5f6a7b"):
+        asyncio.run(remember(CONTENT, replaces=target, session_id="s-4"))
+    keys = [body["idempotency_key"] for _path, body, _kw in calls]
+    assert keys[0] == keys[1]
+    assert keys[1] != keys[2]
+
+
+def test_a_plain_call_keeps_its_old_retry_key(monkeypatch) -> None:
+    """Without replaces the derived key is what it always was."""
+    import hashlib
+
+    calls = _daemon(monkeypatch, reply={"ok": True, "fact_ids": ["f"], "count": 1})
+    asyncio.run(_tools()["remember"](CONTENT, agent_id="agent-x", session_id="s-3"))
+    material = f"agent-x\0s-3\0\0\0{CONTENT}"
+    assert calls[0][1]["idempotency_key"] == "mcp:" + hashlib.sha256(
+        material.encode("utf-8")).hexdigest()
+
+
 def test_the_pool_proxy_without_replaces_is_unchanged(monkeypatch) -> None:
     from superlocalmemory.mcp._daemon_proxy import DaemonPoolProxy
 

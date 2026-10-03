@@ -404,6 +404,15 @@ def transition_on_connection(
         event_valid_from=case.event_valid_from,
         event_valid_until=case.event_valid_until,
     )
+    if to_status == "rolled_back" and case.reason_code == CALLER_REPLACEMENT_REASON:
+        # Undoing a caller's whole-memory replacement also restores the facts
+        # its enrichment derived after it (storage/replaced_memory.py).
+        from superlocalmemory.storage.replaced_memory import restore_late_facts
+
+        restore_late_facts(
+            conn, case, actor=actor, operation_id=operation_id,
+            is_profile_active=is_profile_active, is_actor_trusted=is_actor_trusted,
+        )
     return _get_case(conn, case_id)
 
 

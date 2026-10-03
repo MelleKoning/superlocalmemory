@@ -49,6 +49,13 @@ own rollback (``review_correction`` with ``action="rollback"``), which restores
 that snapshot exactly and leaves the new memory in place. Store repair undoes
 only marks written by automatic checks, matched by reason, never this one.
 
+A whole memory may still be enriching when it is replaced. Facts enrichment
+derives from it afterwards are retired as they are written, in the write's own
+transaction, and come back when the replacement is undone - see
+``storage/replaced_memory.py``. Its cases are marked as a whole-memory group
+for that reason; a single-fact replacement is not, and leaves later facts of
+the memory alone.
+
 ORDER
 -----
 The id is checked before anything is saved (``check_replaceable``). The old
@@ -66,7 +73,6 @@ import hashlib
 import json
 import logging
 import sqlite3
-import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -85,6 +91,12 @@ from superlocalmemory.storage.correction_cases import (
     CorrectionCaseError,
     propose_on_connection,
     transition_on_connection,
+)
+from superlocalmemory.storage.replaced_memory import (
+    SINGLE_FACT,
+    WHOLE_MEMORY,
+    case_id_for,
+    group_key,
 )
 
 logger = logging.getLogger("superlocalmemory.audit")
@@ -173,24 +185,29 @@ def _stands_for_its_memory(query: Query, fact: _Fact) -> bool:
         return False
 
 
-def named_facts(query: Query, replaces: str, profile_id: str) -> list[_Fact]:
-    """Every fact of ``profile_id`` that ``replaces`` names (module docstring)."""
+def _resolve(query: Query, replaces: str, profile_id: str) -> tuple[list[_Fact], str | None]:
+    """The facts ``replaces`` names, and the memory id when it names a whole memory."""
     by_fact = _facts(query, "fact_id = ?", (replaces,))
     if by_fact:
         fact = by_fact[0]
         if fact.profile_id != profile_id:
             raise _foreign(by_fact, profile_id, replaces)
         if not fact.memory_id or not _stands_for_its_memory(query, fact):
-            return [fact]
+            return [fact], None
         return _facts(query, f"memory_id = ? AND profile_id = ? ORDER BY fact_id "
-                             f"LIMIT {MAX_FACTS + 1}", (fact.memory_id, profile_id))
+                             f"LIMIT {MAX_FACTS + 1}", (fact.memory_id, profile_id)), fact.memory_id
     by_memory = _facts(query, f"memory_id = ? LIMIT {MAX_FACTS + 1}", (replaces,))
     own = [f for f in by_memory if f.profile_id == profile_id]
     if own:
-        return own
+        return own, replaces
     if by_memory:
         raise _foreign(by_memory, profile_id, replaces)
     raise _not_found(replaces)
+
+
+def named_facts(query: Query, replaces: str, profile_id: str) -> list[_Fact]:
+    """Every fact of ``profile_id`` that ``replaces`` names (module docstring)."""
+    return _resolve(query, replaces, profile_id)[0]
 
 
 def _require_scope(facts: list[_Fact], scope: str, replaces: str) -> None:
@@ -251,9 +268,8 @@ def _current(query: Query, facts: list[_Fact], profile_id: str) -> list[_Fact]:
 
 
 def _retire(conn: sqlite3.Connection, fact: _Fact, successor: str,
-            actor: CorrectionActor, profile_id: str) -> CorrectionCase:
-    case_id = uuid.uuid5(uuid.NAMESPACE_URL,
-                         f"slm-replaces:{profile_id}:{fact.fact_id}:{successor}").hex
+            actor: CorrectionActor, profile_id: str, group: str | None) -> CorrectionCase:
+    case_id = case_id_for(profile_id, fact.fact_id, successor)
 
     def is_profile(candidate: str) -> bool:
         return candidate == profile_id
@@ -261,11 +277,14 @@ def _retire(conn: sqlite3.Connection, fact: _Fact, successor: str,
     def is_actor(candidate: CorrectionActor) -> bool:
         return candidate == actor
 
+    # A whole-memory replacement carries its group, so facts the memory's
+    # enrichment writes later are retired with it (storage/replaced_memory.py).
+    key = f"{WHOLE_MEMORY}{group}:{case_id}" if group else f"{SINGLE_FACT}{case_id}"
     propose_on_connection(
         conn, case_id=case_id, profile_id=profile_id, scope=fact.scope,
         predecessor_fact_id=fact.fact_id, successor_fact_id=successor,
         reason_code=CALLER_REPLACEMENT_REASON, actor=actor,
-        idempotency_key=f"replaces:propose:{case_id}",
+        idempotency_key=key,
         is_profile_active=is_profile, is_actor_trusted=is_actor,
     )
     return transition_on_connection(
@@ -295,10 +314,11 @@ def apply_replacement(conn: sqlite3.Connection, profile_id: str,
     if not new:
         raise ReplacementRefused("The new memory is not in this profile, so nothing was replaced.")
     try:
-        facts = named_facts(query, replaces, profile_id)
+        facts, whole_memory = _resolve(query, replaces, profile_id)
         _require_scope(facts, new[0].scope, replaces)
     except ReplacesRejected as exc:
         raise ReplacementRefused(exc.message) from exc
+    group = group_key(profile_id, whole_memory, successor) if whole_memory else None
     facts = [f for f in facts if f.fact_id != successor and f.memory_id != new[0].memory_id]
     if len(facts) > MAX_FACTS:
         raise ReplacementRefused(
@@ -306,10 +326,21 @@ def apply_replacement(conn: sqlite3.Connection, profile_id: str,
     current = _current(query, facts, profile_id)
     if not current:
         raise ReplacementRefused(f"Nothing current to replace: {replaces} was already replaced.")
+    # A fact may hold one open case at a time. One waiting for review blocks
+    # this one; say so, rather than a retry that can never succeed.
+    waiting = query(
+        "SELECT predecessor_fact_id FROM correction_cases WHERE profile_id = ? "
+        "AND status = 'proposed' AND predecessor_fact_id IN ("
+        + ",".join("?" for _ in current) + ") LIMIT 1",
+        (profile_id, *(f.fact_id for f in current)))
+    if waiting:
+        raise ReplacementRefused(
+            f"{waiting[0][0]} has a correction waiting for review, so nothing was replaced. "
+            "Review it (list_corrections, review_correction), then repeat this request.")
     actor = CorrectionActor(actor_id=ledger_actor_id(actor_id),
                             actor_kind="host_authenticated", trust_tier="trusted")
     try:
-        cases = [_retire(conn, fact, successor, actor, profile_id) for fact in current]
+        cases = [_retire(conn, fact, successor, actor, profile_id, group) for fact in current]
     except (CorrectionCaseError, ValueError) as exc:
         raise ReplacementRefused(
             f"The correction ledger refused the replacement ({exc}).") from exc
