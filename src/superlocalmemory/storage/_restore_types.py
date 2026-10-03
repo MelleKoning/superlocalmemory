@@ -126,6 +126,7 @@ class ReimportReport(_AsDict):
     failed: int = 0
     kinds_reapplied: int = 0
     kinds_skipped: int = 0
+    kinds_waiting: int = 0            # its memory is still enriching; tried at next start
     errors: list[str] = field(default_factory=list)
 
 

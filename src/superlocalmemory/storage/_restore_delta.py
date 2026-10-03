@@ -10,7 +10,9 @@ is written out as plain JSON lines (``restore-delta/<ts>/``):
   deleted.jsonl     facts / memories forgotten or   -> deleted again in the copy
                     erased since (a recorded intent;
                     a row merely missing comes back)
-  kind_edits.jsonl  kinds a person confirmed        -> applied again after the restore
+  kind_edits.jsonl  kinds a person confirmed since  -> applied again after the restore
+                    (on new memories: matched by    (the newer confirmation wins)
+                    the fact's words)
   erasures.jsonl    erasure receipts and tombstones -> erased again in the copy
   profiles.jsonl    profiles created since          -> created in the copy
   meta.json         the live profile list and counts
@@ -85,11 +87,34 @@ INTENT_TOMBSTONE = "tombstone"
 
 
 def _kind_edit_sql(conn: sqlite3.Connection) -> str | None:
+    """Confirmed kinds on facts the copy has, where the copy holds something else.
+
+    An unchanged confirmation is not an edit; one the copy lacks the columns for
+    (a copy from before kinds existed) always is.
+    """
+    if "memory_kind_source" not in _cols(conn, "atomic_facts"):
+        return None
+    differs = ""
+    if "memory_kind_source" in _cols(conn, "atomic_facts", "snap"):
+        differs = (" AND (s.memory_kind IS NOT f.memory_kind OR s.memory_kind_source IS NOT "
+                   "f.memory_kind_source OR s.memory_kind_at IS NOT f.memory_kind_at)")
+    return ("FROM main.atomic_facts f WHERE f.memory_kind_source IN ('user','caller') "
+            "AND f.memory_kind IS NOT NULL AND EXISTS "
+            f"(SELECT 1 FROM snap.atomic_facts s WHERE s.fact_id = f.fact_id{differs})")
+
+
+def _added_kind_sql(conn: sqlite3.Connection) -> str | None:
+    """Confirmed kinds on facts of memories added after the copy (L1-09).
+
+    Those memories are re-ingested after the restore and get new fact ids, so
+    each confirmation is carried with its fact's words and matched to the
+    re-ingested fact with the same words (``_restore_reimport``).
+    """
     if "memory_kind_source" not in _cols(conn, "atomic_facts"):
         return None
     return ("FROM main.atomic_facts f WHERE f.memory_kind_source IN ('user','caller') "
-            "AND f.memory_kind IS NOT NULL AND EXISTS "
-            "(SELECT 1 FROM snap.atomic_facts s WHERE s.fact_id = f.fact_id)")
+            "AND f.memory_kind IS NOT NULL AND f.memory_id IN "
+            f"(SELECT m.memory_id {_ADDED_MEMORIES})")
 
 
 def _new_rows_sql(conn: sqlite3.Connection, table: str, keys: Iterable[str]) -> str | None:
@@ -105,6 +130,7 @@ def _new_rows_sql(conn: sqlite3.Connection, table: str, keys: Iterable[str]) -> 
 def delta_counts(conn: sqlite3.Connection) -> dict[str, int]:
     """Counts for the preview. Reads only."""
     kinds = _kind_edit_sql(conn)
+    added_kinds = _added_kind_sql(conn)
     corrections = _new_rows_sql(conn, "correction_cases", ("case_id",))
     receipts = _new_rows_sql(conn, "erasure_receipts", ("erasure_id",))
     tombstones = _new_rows_sql(conn, "projection_tombstones", ("profile_id", "fact_id"))
@@ -118,7 +144,8 @@ def delta_counts(conn: sqlite3.Connection) -> dict[str, int]:
         "deleted_memories": _count(conn, f"SELECT COUNT(*) {deleted_memories_sql(conn)}"),
         "returning_facts": _count(conn, f"SELECT COUNT(*) {returning_facts_sql(conn)}"),
         "returning_memories": _count(conn, f"SELECT COUNT(*) {returning_memories_sql(conn)}"),
-        "kind_edits": _count(conn, f"SELECT COUNT(*) {kinds}") if kinds else 0,
+        "kind_edits": (_count(conn, f"SELECT COUNT(*) {kinds}") if kinds else 0)
+                      + (_count(conn, f"SELECT COUNT(*) {added_kinds}") if added_kinds else 0),
         "corrections_lost": _count(conn, f"SELECT COUNT(*) {corrections}") if corrections else 0,
         "erasures": max(
             _count(conn, "SELECT COUNT(*) " + _and(receipts, "l.state='COMPLETE'"))
@@ -158,9 +185,16 @@ def export_delta(conn: sqlite3.Connection, delta_dir: Path) -> dict[str, int]:
     deleted += [{"type": "memory", "intent": INTENT_TOMBSTONE, **dict(r)} for r in conn.execute(
         f"SELECT s.memory_id, s.profile_id {deleted_memories_sql(conn)}")]
     kinds_sql = _kind_edit_sql(conn)
+    kind_cols = ", ".join("f." + c for c in _KIND_COLS)
     kind_edits = [dict(r) for r in conn.execute(
-        f"SELECT f.fact_id, f.profile_id, f.fact_type, "
-        f"{', '.join('f.' + c for c in _KIND_COLS)} {kinds_sql}")] if kinds_sql else []
+        f"SELECT f.fact_id, f.profile_id, f.fact_type, {kind_cols} {kinds_sql}")
+    ] if kinds_sql else []
+    added_sql = _added_kind_sql(conn)
+    if added_sql:
+        kind_edits += [{**dict(r), "fact_id": None} for r in conn.execute(
+            f"SELECT f.memory_id AS added_memory_id, f.profile_id, f.fact_type, f.content, "
+            f"(SELECT COUNT(*) FROM main.atomic_facts o WHERE o.memory_id = f.memory_id) "
+            f"AS facts_in_memory, {kind_cols} {added_sql}")]
     erasures: list[dict[str, Any]] = []
     receipts = _new_rows_sql(conn, "erasure_receipts", ("erasure_id",))
     if receipts:
