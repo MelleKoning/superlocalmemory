@@ -74,7 +74,7 @@ Look for issues labeled:
 
 ### Prerequisites
 
-- Python >=3.11,<3.15 (3.11, 3.12, 3.13, 3.14)
+- Python >=3.12,<3.15 (3.12, 3.13, 3.14)
 - Supported platforms: Apple Silicon macOS, 64-bit Windows, 64-bit Linux
 - SQLite3 (usually pre-installed)
 - Git

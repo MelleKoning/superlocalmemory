@@ -12,7 +12,7 @@
 :: Exit codes: 0 = venv ready   non-0 = failure (logged to stderr)
 :: All informational output goes to stderr (stdout reserved for MCP stdio protocol).
 ::
-:: Requires: Python 3.11+ on PATH, pip, standard Windows cmd.exe
+:: Requires: Python 3.12+ on PATH, pip, standard Windows cmd.exe
 
 setlocal EnableDelayedExpansion
 
@@ -29,13 +29,13 @@ if not defined CLAUDE_PLUGIN_DATA (
 )
 
 :: ---------------------------------------------------------------------------
-:: Python >= 3.11 guard
+:: Python >= 3.12 guard
 :: ---------------------------------------------------------------------------
-python -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" 2>nul
+python -c "import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)" 2>nul
 if errorlevel 1 (
     for /f "tokens=*" %%v in ('python --version 2^>^&1') do set PY_VER=%%v
-    echo ERROR: SuperLocalMemory plugin requires Python ^>= 3.11, found: !PY_VER! >&2
-    echo Install Python 3.11+ and ensure it is first on PATH. >&2
+    echo ERROR: SuperLocalMemory plugin requires Python ^>= 3.12, found: !PY_VER! >&2
+    echo Install Python 3.12+ and ensure it is first on PATH. >&2
     exit /b 1
 )
 

@@ -28,7 +28,7 @@ if (!fs.existsSync(runtimePython)) {
   console.error(`Expected the package-owned interpreter at: ${runtimePython}`);
   console.error('Repair it without touching system Python by running:');
   console.error('  npm rebuild superlocalmemory');
-  console.error('If Python is missing, install Python 3.11-3.14 first.');
+  console.error('If Python is missing, install Python 3.12-3.14 first.');
   process.exit(1);
 }
 

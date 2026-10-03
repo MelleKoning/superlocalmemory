@@ -28,7 +28,7 @@ Mode A and Mode B work fully offline. Mode C requires internet for the cloud LLM
 
 ### What are the requirements?
 
-- **Python** 3.11 – 3.14 (required for V4 engine)
+- **Python** 3.12 – 3.14 (required for V4 engine)
 - **Node.js** 18+ (if installing via npm)
 - **Platform:** Apple Silicon macOS, 64-bit Windows, or 64-bit Linux (Intel Mac / Win32 not supported)
 - Any supported IDE

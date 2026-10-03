@@ -11,10 +11,10 @@ identity but have different ownership and verification contracts.
 
 | Requirement | Version | Check |
 |:-----------|:--------|:------|
-| **Python** | 3.11 – 3.14 | `python3 --version` |
+| **Python** | 3.12 – 3.14 | `python3 --version` |
 | **Node.js** (for npm install) | 18+ | `node --version` |
 
-Python 3.11+ is required for the V4 engine (built on the V3.8 control plane). Node.js is only needed if you install via npm.
+Python 3.12+ is required for the V4 engine (built on the V3.8 control plane). Node.js is only needed if you install via npm.
 
 > **Platform boundary (V4):** **Apple Silicon macOS, 64-bit Windows, 64-bit Linux.** Intel Mac and 32-bit Windows are **not supported** by the pinned `cryptography==50.0.0` runtime — the package has no wheel for those architectures. `package.json` `os: [darwin, linux, win32]` is the npm publish descriptor and does not hard-block architectures; install will fail where `cryptography==50.0.0` wheels are absent (see `pyproject.toml` `cryptography==50.0.0`). The Python native dependency enforces the narrower boundary above.
 
@@ -140,7 +140,7 @@ npm install -g superlocalmemory
 slm setup
 ```
 
-Use an existing supported Python 3.11–3.14 runtime. The npm installer does not
+Use an existing supported Python 3.12–3.14 runtime. The npm installer does not
 bootstrap Homebrew, uv, pipx, or Python.
 
 > Intel Mac is **not supported** in V4 (pinned `cryptography==50.0.0` has no Intel macOS wheel).
@@ -152,7 +152,7 @@ npm install -g superlocalmemory
 slm setup
 ```
 
-Ensure Python 3.11+ is installed: `sudo apt install python3.11` (Ubuntu) or `sudo dnf install python3.11` (Fedora).
+Ensure Python 3.12+ is installed: `sudo apt install python3.12` (Ubuntu) or `sudo dnf install python3.12` (Fedora).
 
 ### 64-bit Windows (supported)
 
@@ -161,7 +161,7 @@ npm install -g superlocalmemory
 slm setup
 ```
 
-Requires an installed supported Python runtime (3.11–3.14, 64-bit).
+Requires an installed supported Python runtime (3.12–3.14, 64-bit).
 
 > 32-bit Windows (Win32) is **not supported** in V4.
 
@@ -234,7 +234,7 @@ See [Migration from V2](Migration-from-V2) for the full V2→V3 guide.
 - **pip install:** Make sure Python scripts directory is in your PATH.
 
 ### `ModuleNotFoundError: No module named 'superlocalmemory'`
-- Ensure Python 3.11+ is the default: `python3 --version`
+- Ensure Python 3.12+ is the default: `python3 --version`
 - Activate the environment used for SLM, then reinstall with
   `python -m pip install --force-reinstall superlocalmemory`.
 

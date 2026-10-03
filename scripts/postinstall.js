@@ -17,7 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const MIN_PYTHON = Object.freeze([3, 11]);
+const MIN_PYTHON = Object.freeze([3, 12]);
 const MAX_PYTHON_EXCLUSIVE = Object.freeze([3, 15]);
 const INSTALL_TIMEOUT_MS = 15 * 60 * 1000;
 
@@ -43,7 +43,6 @@ function pythonCandidates(platform = os.platform()) {
       ['py', '-3.14'],
       ['py', '-3.13'],
       ['py', '-3.12'],
-      ['py', '-3.11'],
       ['python3'],
       ['python'],
     ];
@@ -142,7 +141,7 @@ function validateRuntimeLocation(venvRoot) {
 
 function printPythonGuidance() {
   console.error('');
-  console.error('SuperLocalMemory requires Python 3.11, 3.12, 3.13, or 3.14.');
+  console.error('SuperLocalMemory requires Python 3.12, 3.13, or 3.14.');
   console.error('Install Python from https://www.python.org/downloads/ and rerun:');
   console.error('  npm rebuild superlocalmemory');
   console.error('The npm installer will create a private virtual environment;');

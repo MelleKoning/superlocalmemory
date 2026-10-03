@@ -43,13 +43,13 @@ cross-client behavior for every product that implements MCP.
 > runtime required for V4.
 
 - **Node.js** 18 or later
-- **Python** 3.11 or later — macOS ships 3.9; use `brew install python@3.11` or a version manager.
-  Ubuntu 22.04 users: `sudo add-apt-repository ppa:deadsnakes/ppa && sudo apt install python3.11 python3.11-venv`
+- **Python** 3.12 or later — macOS ships 3.9; use `brew install python@3.12` or a version manager.
+  Ubuntu 22.04 users: `sudo add-apt-repository ppa:deadsnakes/ppa && sudo apt install python3.12 python3.12-venv`
 - An AI coding tool (Claude Code, Cursor, VS Code, Windsurf, or any MCP-compatible IDE)
 
 > **Linux / Ubuntu 22.04:** Install in a venv to avoid system-Python conflicts:
 > ```bash
-> python3.11 -m venv ~/.slm-venv && source ~/.slm-venv/bin/activate
+> python3.12 -m venv ~/.slm-venv && source ~/.slm-venv/bin/activate
 > python -m pip install superlocalmemory
 > ```
 > Then set `SLM_PYTHON=~/.slm-venv/bin/python` so `slm` uses that interpreter.

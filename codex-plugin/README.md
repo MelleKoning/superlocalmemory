@@ -20,7 +20,7 @@ SuperLocalMemory v4.1.18 · Qualixar · AGPL-3.0-or-later
 
 ## Prerequisites
 
-- **Python 3.11+** on PATH
+- **Python 3.12+** on PATH
 - **SuperLocalMemory installed:**
 
   ```bash

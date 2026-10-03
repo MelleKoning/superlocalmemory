@@ -25,12 +25,12 @@ set -euo pipefail
 exec 1>&2
 
 # ---------------------------------------------------------------------------
-# Python >= 3.11 guard
+# Python >= 3.12 guard
 # ---------------------------------------------------------------------------
-if ! python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" 2>/dev/null; then
+if ! python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)" 2>/dev/null; then
     PY_VER=$(python3 --version 2>&1 || echo "unknown")
-    echo "ERROR: SuperLocalMemory plugin requires Python >= 3.11, found: ${PY_VER}" >&2
-    echo "Install Python 3.11+ and ensure it is first on PATH." >&2
+    echo "ERROR: SuperLocalMemory plugin requires Python >= 3.12, found: ${PY_VER}" >&2
+    echo "Install Python 3.12+ and ensure it is first on PATH." >&2
     exit 1
 fi
 

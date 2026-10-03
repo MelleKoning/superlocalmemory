@@ -18,7 +18,7 @@ multi-session projects coherent. Cost at Mode A: zero.
 
 ## Prerequisites
 
-- **Python:** >=3.11,<3.15 (3.11, 3.12, 3.13, 3.14)
+- **Python:** >=3.12,<3.15 (3.12, 3.13, 3.14)
 - **Platforms:** Apple Silicon macOS, 64-bit Windows, 64-bit Linux
 
 ---

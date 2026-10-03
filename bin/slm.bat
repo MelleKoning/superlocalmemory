@@ -48,7 +48,7 @@ if %ERRORLEVEL% EQU 0 (
     goto :run
 )
 
-echo Error: Python 3.11+ not found.
+echo Error: Python 3.12+ not found.
 echo Install from: https://python.org/downloads/
 exit /b 1
 

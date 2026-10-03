@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "LangGraph BaseStore (long-term memory) backed by a local SuperLocalMemory data root"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
-requires-python = ">=3.11,<3.15"
+requires-python = ">=3.12,<3.15"
 authors = [
     { name = "Varun Pratap Bhardwaj" },
 ]

@@ -17,13 +17,13 @@ behavior.
 | Semantic Kernel | `semantic-kernel-superlocalmemory` | `VectorStoreCollection` | `semantic-kernel >= 1.34.0` |
 | Microsoft Agent Framework | `agent-framework-superlocalmemory` | `ContextProvider` + `HistoryProvider` | `agent-framework-core >= 1.5.0` |
 | LangChain | `langchain-superlocalmemory` | `BaseChatMessageHistory` | `langchain-core >= 1.0.0` |
-| LlamaIndex | `llama-index-storage-chat-store-superlocalmemory` | `BaseChatStore` | Python 3.11+ |
+| LlamaIndex | `llama-index-storage-chat-store-superlocalmemory` | `BaseChatStore` | Python 3.12+ |
 | CrewAI | `crewai-superlocalmemory` | `StorageBackend` | `crewai >= 1.14.6` |
 | AutoGen | `autogen-superlocalmemory` | `Memory` | `autogen-agentchat >= 0.7.5` |
 | Google ADK | `google-adk-superlocalmemory` | `BaseMemoryService` | `google-adk >= 2.5.0` |
 | OpenAI Agents | `openai-agents-superlocalmemory` | `SessionABC` | `openai-agents >= 0.18.3` |
 
-All adapters require Python 3.11+ and SuperLocalMemory V4 installed in the
+All adapters require Python 3.12+ and SuperLocalMemory V4 installed in the
 same virtual environment.
 
 ## Installation

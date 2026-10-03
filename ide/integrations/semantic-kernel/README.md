@@ -10,7 +10,7 @@ SLM providers, connectors, backup, and downloads have separate network behavior.
 
 ## Prerequisites
 
-- Python >=3.11,<3.15 (3.11, 3.12, 3.13, 3.14)
+- Python >=3.12,<3.15 (3.12, 3.13, 3.14)
 - [SuperLocalMemory V4.0.0](https://github.com/qualixar/superlocalmemory) installed in the same environment
 - `semantic-kernel >= 1.34.0` (the post-1.34 vector-store API)
 - Supported platforms: Apple Silicon macOS, 64-bit Windows, 64-bit Linux — Intel Mac and 32-bit Windows (Win32) are outside the V4.0.0 support contract (`cryptography==50.0.0` has no wheel for those architectures).

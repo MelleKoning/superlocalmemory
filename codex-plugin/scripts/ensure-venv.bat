@@ -28,13 +28,13 @@ if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 set "REQ=%SCRIPT_DIR%\..\requirements.txt"
 
 :: ---------------------------------------------------------------------------
-:: Python >= 3.11 guard
+:: Python >= 3.12 guard
 :: ---------------------------------------------------------------------------
-python -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" 2>nul
+python -c "import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)" 2>nul
 if errorlevel 1 (
     for /f "tokens=*" %%v in ('python --version 2^>^&1') do set PY_VER=%%v
-    echo ERROR: SuperLocalMemory plugin requires Python ^>= 3.11, found: !PY_VER! >&2
-    echo Install Python 3.11+ and ensure it is first on PATH. >&2
+    echo ERROR: SuperLocalMemory plugin requires Python ^>= 3.12, found: !PY_VER! >&2
+    echo Install Python 3.12+ and ensure it is first on PATH. >&2
     exit /b 1
 )
 

@@ -161,7 +161,7 @@ def test_wheel_metadata_and_console_entry_point(
     normalized_filename = built_artifacts.wheel.name.replace("-", "_").lower()
     assert metadata["Name"].lower() == "superlocalmemory"
     assert metadata["Version"].replace("-", "_").lower() in normalized_filename
-    assert set(metadata["Requires-Python"].split(",")) == {">=3.11", "<3.15"}
+    assert set(metadata["Requires-Python"].split(",")) == {">=3.12", "<3.15"}
 
     with zipfile.ZipFile(built_artifacts.wheel) as archive:
         entry_names = [n for n in archive.namelist() if n.endswith(".dist-info/entry_points.txt")]

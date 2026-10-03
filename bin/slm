@@ -40,7 +40,7 @@ for cmd in python3 python; do
 done
 
 if [ -z "$PYTHON" ]; then
-    echo "Error: Python 3 not found. Install Python 3.11+ from python.org"
+    echo "Error: Python 3 not found. Install Python 3.12+ from python.org"
     exit 1
 fi
 

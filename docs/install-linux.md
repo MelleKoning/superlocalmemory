@@ -2,7 +2,7 @@
 
 > **V4 Linux support:** SuperLocalMemory V4 supports 64-bit Linux only. Packaging metadata does not hard-block unsupported architectures; unsupported platforms fail at runtime dependency resolution rather than at install metadata.
 
-SuperLocalMemory requires Python 3.11–3.14. Installation code and durable memory
+SuperLocalMemory requires Python 3.12–3.14. Installation code and durable memory
 data have separate ownership: installers manage the executable environment;
 `SLM_DATA_DIR` selects memory data. No supported installer moves or deletes data.
 
@@ -26,7 +26,7 @@ install hooks, start a daemon, or download models during `npm install`.
 Use a dedicated virtual environment for both the `slm` command and Python API:
 
 ```bash
-python3.11 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install superlocalmemory
