@@ -230,8 +230,9 @@ def check_replaceable(db: Any, *, replaces: object, active_profile: str,
     named = normalize_replaces(replaces)
     if write_profile != active_profile:
         raise ReplacesRejected(
-            NOT_ALLOWED, "replaces works only for memories saved to the active profile, "
-                         "and this one is being saved to another profile.")
+            NOT_ALLOWED, f"replaces works only when saving to the active profile "
+                         f"({active_profile!r}); this memory was for {write_profile!r}. "
+                         "Nothing was saved.")
     facts = named_facts(db.execute, named, active_profile)
     _require_scope(facts, scope, named)
     return named
