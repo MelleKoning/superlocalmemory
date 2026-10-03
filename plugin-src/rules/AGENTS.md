@@ -83,15 +83,16 @@ When the SLM MCP server is unavailable, use these CLI equivalents:
 
 ## Tool reference (core profile — 18 tools)
 
-> The MCP config ships `SLM_MCP_PROFILE=code` and `SLM_AGENT_ID=claude_code` (34 tools):
+> The MCP config ships `SLM_MCP_PROFILE=code` and `SLM_AGENT_ID=claude_code` (38 tools):
 > the 18 core tools below **plus** 6 code-graph tools (`build_code_graph`,
 > `get_blast_radius`, `query_graph`, `semantic_search_code`, `get_review_context`,
 > `detect_changes`), 5 portable-evidence tools (`get_brain_evidence_status`,
 > `record_agent_experience`, `record_cognitive_turn`, `finalize_cognitive_turn`,
 > `observe_bounded_loop_evidence`), 3 bounded-loop tools (`slm_loop_run`,
-> `slm_loop_history`, `slm_loop_show`) and 2 usefulness reports (`report_outcome`,
-> `report_feedback`).
-> Use `full` (50 tools) to add mesh coordination. Use `power` (62 tools) for governance
+> `slm_loop_history`, `slm_loop_show`), 2 usefulness reports (`report_outcome`,
+> `report_feedback`) and 4 memory-kind tools (`set_memory_kind`,
+> `memory_kinds_status`, `review_memory_kinds`, `confirm_memory_kinds`).
+> Use `full` (54 tools) to add mesh coordination. Use `power` (66 tools) for governance
 > and audit tools. See slm-profile for profile switching.
 
 | Tool               | Signature (key params)                                                                       | Notes                                  |

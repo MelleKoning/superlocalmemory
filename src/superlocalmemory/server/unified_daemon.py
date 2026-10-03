@@ -1019,12 +1019,21 @@ import asyncio as _asyncio
 _recall_semaphore = _asyncio.Semaphore(3)
 
 
-def _facet_kwargs(project: str, saved_by: str, about: str) -> dict:
+def _facet_kwargs(project: str, saved_by: str, about: str, kind: str | None = None) -> dict:
     """{"facets": ...} when any recall facet was given, else {} (stand-ins
-    of the engine need not know about facets)."""
+    of the engine need not know about facets).
+
+    ``kind`` (4.1.19 WP8) is already validated/normalized by the caller
+    (``core.kind_query.resolve_kind``) — a defect found in 6722466b: kind was
+    originally applied AFTER retrieval (in serialize_recall_response), which
+    let the answer check judge a different, unfiltered top-3 than what the
+    caller was shown. As a facet it is matched inside retrieval, after
+    fusion, before the answer check — exactly where project/saved_by/about
+    already run — so the judge and the caller always see the same memories.
+    """
     from superlocalmemory.retrieval.facets import Facets
 
-    facets = Facets.of(project=project, agent=saved_by, about=about)
+    facets = Facets.of(project=project, agent=saved_by, about=about, kind=kind)
     return {} if facets.empty else {"facets": facets}
 
 
@@ -4645,6 +4654,10 @@ def _register_daemon_routes(application: FastAPI) -> None:
         project: str = "",
         saved_by: str = "",
         about: str = "",
+        # 4.1.19 WP8: only memories whose DISPLAYED kind matches. Refused
+        # before any retrieval when it does not parse (never silently
+        # ignored). See core.kind_query / retrieval.kind_filter.
+        kind: str = "",
     ):
         _update_activity()
         search_query = q or query  # Accept both ?q= and ?query= for compatibility
@@ -4657,6 +4670,14 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 {"error": "invalid_answer_check",
                  "message": "answer_check must be one of: skip, no_reorder, full"},
                 status_code=400,
+            )
+        from superlocalmemory.core.kind_query import InvalidKind, resolve_kind
+        try:
+            _kind = resolve_kind(kind)
+        except InvalidKind as exc:
+            from starlette.responses import JSONResponse
+            return JSONResponse(
+                {"error": "invalid_kind", "message": str(exc)}, status_code=422,
             )
         engine = _get_engine_or_503()
         req_profile = (profile_id or "").strip()
@@ -4803,7 +4824,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
                         known_as_of=known_as_of or None,
                         valid_at=valid_at or None,
                         include_unknown=include_unknown,
-                        **_facet_kwargs(project, saved_by, about),
+                        **_facet_kwargs(project, saved_by, about, _kind),
                         # Only when asked: an engine stand-in need not know it.
                         **({"answer_check": "no_reorder"}
                            if _check_request == "no_reorder" else {}),

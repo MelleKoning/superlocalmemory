@@ -103,3 +103,86 @@ def test_daemon_not_running(monkeypatch, capsys) -> None:
     with pytest.raises(SystemExit):
         kinds_cmd.cmd_kinds(_args(kinds_command="status"))
     assert "slm serve" in capsys.readouterr().out
+
+
+# -- kinds set / review / confirm (4.1.19 WP8) --------------------------------
+
+
+def test_kinds_set_applies_the_kind(tmp_path, monkeypatch, capsys) -> None:
+    tc, app, db = _client(tmp_path, monkeypatch)
+    fid = _fact(db, "We decided to use SQLite.")
+    _bind(monkeypatch, tc)
+    kinds_cmd.cmd_kinds(_args(json=True, kinds_command="set", fact_id=fid, kind="decision"))
+    out = json.loads(capsys.readouterr().out)
+    assert out["success"] is True
+    assert out["data"]["memory_kind"] == "decision"
+    assert out["data"]["memory_kind_state"] == "confirmed"
+
+
+def test_kinds_set_refuses_an_unknown_kind_before_any_request(monkeypatch, capsys) -> None:
+    called = []
+    monkeypatch.setattr(kinds_cmd, "daemon_request",
+                        lambda *a, **k: called.append(1) or None)
+    with pytest.raises(SystemExit) as exited:
+        kinds_cmd.cmd_kinds(_args(kinds_command="set", fact_id="whatever", kind="gossip"))
+    assert exited.value.code == 2
+    assert not called, "the daemon must not be contacted for a kind that never parsed"
+    assert "decision" in capsys.readouterr().err
+
+
+def test_kinds_review_lists_suggestions(tmp_path, monkeypatch, capsys) -> None:
+    tc, app, db = _client(tmp_path, monkeypatch)
+    _fact(db, "Never push to main.", kind="rule", source="rules")
+    _bind(monkeypatch, tc)
+    kinds_cmd.cmd_kinds(_args(json=True, kinds_command="review", kind="", limit=20))
+    out = json.loads(capsys.readouterr().out)
+    assert out["success"] is True and "items" in out["data"]
+
+
+def test_kinds_review_refuses_an_unknown_kind(monkeypatch, capsys) -> None:
+    called = []
+    monkeypatch.setattr(kinds_cmd, "daemon_request",
+                        lambda *a, **k: called.append(1) or None)
+    with pytest.raises(SystemExit) as exited:
+        kinds_cmd.cmd_kinds(_args(kinds_command="review", kind="gossip", limit=20))
+    assert exited.value.code == 2
+    assert not called
+
+
+def test_kinds_confirm_applies_items(tmp_path, monkeypatch, capsys) -> None:
+    tc, app, db = _client(tmp_path, monkeypatch)
+    fid = _fact(db, "We decided to use SQLite.")
+    _bind(monkeypatch, tc)
+    kinds_cmd.cmd_kinds(_args(json=True, kinds_command="confirm", items=[f"{fid}=decision"]))
+    out = json.loads(capsys.readouterr().out)
+    assert out["success"] is True
+    assert out["data"]["items"][0]["ok"] is True
+    assert out["data"]["items"][0]["memory_kind"] == "decision"
+
+
+def test_kinds_confirm_accepts_the_stored_suggestion_without_a_kind(
+    tmp_path, monkeypatch, capsys,
+) -> None:
+    tc, app, db = _client(tmp_path, monkeypatch)
+    fid = _fact(db, "Never push to main.", kind="rule", source="rules")
+    _bind(monkeypatch, tc)
+    kinds_cmd.cmd_kinds(_args(json=True, kinds_command="confirm", items=[fid]))
+    out = json.loads(capsys.readouterr().out)
+    assert out["data"]["items"][0]["ok"] is True
+    assert out["data"]["items"][0]["memory_kind"] == "rule"
+
+
+def test_kinds_confirm_without_items_exits_2(capsys) -> None:
+    with pytest.raises(SystemExit) as exited:
+        kinds_cmd.cmd_kinds(_args(kinds_command="confirm", items=[]))
+    assert exited.value.code == 2
+
+
+def test_kinds_confirm_rejects_a_malformed_item_before_any_request(monkeypatch, capsys) -> None:
+    called = []
+    monkeypatch.setattr(kinds_cmd, "daemon_request",
+                        lambda *a, **k: called.append(1) or None)
+    with pytest.raises(SystemExit) as exited:
+        kinds_cmd.cmd_kinds(_args(kinds_command="confirm", items=["=decision"]))
+    assert exited.value.code == 2
+    assert not called

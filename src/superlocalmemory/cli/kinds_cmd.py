@@ -12,6 +12,9 @@ dashboard uses), so the CLI and the dashboard cannot disagree:
     slm kinds backfill start [--mode untyped|refresh] [--yes]
     slm kinds backfill pause|resume|cancel|revert RUN_ID
     slm kinds backfill status
+    slm kinds set FACT_ID KIND
+    slm kinds review [--kind K] [--limit N]
+    slm kinds confirm FACT_ID[=KIND] ...
 
 A run that would send memory text online is refused by the daemon until it is
 confirmed; here that confirmation is ``--yes``. ``--json`` everywhere.
@@ -25,6 +28,7 @@ from dataclasses import dataclass
 from typing import Any, NoReturn
 
 from superlocalmemory.cli.daemon import DaemonConflict, DaemonNotFound, daemon_request
+from superlocalmemory.core.kind_query import InvalidKind, resolve_kind
 
 _BASE = "/api/memory-kinds"
 _NOT_RUNNING = "The SLM daemon is not running. Start it with: slm serve"
@@ -65,6 +69,23 @@ def register_kinds_parser(sub: Any) -> None:
         a.add_argument("--json", action="store_true")
     bs = bsub.add_parser("status", help="the run in progress, if any")
     bs.add_argument("--json", action="store_true")
+
+    set_p = ksub.add_parser("set", help="set (confirm) one memory's kind")
+    set_p.add_argument("fact_id", help="exact fact id, from recall or list")
+    set_p.add_argument("kind", help="one of the nine memory kinds, or a known alias")
+    set_p.add_argument("--json", action="store_true")
+
+    review_p = ksub.add_parser("review", help="suggestions awaiting confirmation")
+    review_p.add_argument("--kind", default="", help="only suggestions of this kind")
+    review_p.add_argument("--limit", type=int, default=20)
+    review_p.add_argument("--json", action="store_true")
+
+    confirm_p = ksub.add_parser("confirm", help="confirm kinds for 1-200 facts at once")
+    confirm_p.add_argument(
+        "items", nargs="*",
+        help="FACT_ID or FACT_ID=KIND (bare FACT_ID accepts the stored suggestion)",
+    )
+    confirm_p.add_argument("--json", action="store_true")
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,10 +168,109 @@ def _settings_body(args: Namespace) -> dict:
     return body
 
 
+def _invalid_kind_exit(out: "_Out", message: str) -> NoReturn:
+    """Exit 2: the same code `remember`/`recall`/`list` use for a kind that
+    never parsed. Refused before any daemon request — never a reason to
+    retry."""
+    if out.as_json:
+        from superlocalmemory.cli.json_output import json_print
+
+        json_print(out.command, error={"code": "INVALID_KIND", "message": message})
+    else:
+        print(message, file=sys.stderr)
+    sys.exit(2)
+
+
+def _invalid_item_exit(out: "_Out", message: str) -> NoReturn:
+    if out.as_json:
+        from superlocalmemory.cli.json_output import json_print
+
+        json_print(out.command, error={"code": "INVALID_ITEMS", "message": message})
+    else:
+        print(message, file=sys.stderr)
+    sys.exit(2)
+
+
+def _set(args: Namespace) -> None:
+    out = _Out(bool(getattr(args, "json", False)), "kinds set")
+    try:
+        parsed = resolve_kind(args.kind)
+    except InvalidKind as exc:
+        _invalid_kind_exit(out, str(exc))
+    if parsed is None:
+        _invalid_kind_exit(out, "a kind is required")
+    from urllib.parse import quote
+
+    fact = _request(out, "PATCH", "/fact/" + quote(args.fact_id, safe=""), {"kind": parsed})
+    out.emit(fact, "\n".join(f"{k}: {v}" for k, v in sorted(fact.items())))
+
+
+def _review(args: Namespace) -> None:
+    out = _Out(bool(getattr(args, "json", False)), "kinds review")
+    try:
+        parsed = resolve_kind(getattr(args, "kind", ""))
+    except InvalidKind as exc:
+        _invalid_kind_exit(out, str(exc))
+    from urllib.parse import quote
+
+    qs = f"?limit={int(getattr(args, 'limit', 20))}"
+    if parsed:
+        qs += f"&kind={quote(parsed)}"
+    result = _request(out, "GET", "/suggestions" + qs)
+    items = result.get("items") or []
+    lines = [
+        f"{item.get('fact_id')}: {item.get('memory_kind')} ({item.get('memory_kind_state')})"
+        for item in items
+    ]
+    out.emit(result, "\n".join(lines) if lines else "No suggestions.")
+
+
+def _parse_confirm_item(out: "_Out", raw: str) -> dict:
+    fact_id, _, kind_raw = raw.partition("=")
+    fact_id = fact_id.strip()
+    if not fact_id:
+        _invalid_item_exit(out, f"not a FACT_ID[=KIND]: {raw!r}")
+    entry: dict[str, Any] = {"fact_id": fact_id}
+    if kind_raw.strip():
+        try:
+            entry["kind"] = resolve_kind(kind_raw)
+        except InvalidKind as exc:
+            _invalid_kind_exit(out, str(exc))
+    return entry
+
+
+def _confirm(args: Namespace) -> None:
+    out = _Out(bool(getattr(args, "json", False)), "kinds confirm")
+    raw_items = list(getattr(args, "items", None) or [])
+    if not raw_items:
+        _invalid_item_exit(
+            out, "confirm needs at least one FACT_ID or FACT_ID=KIND",
+        )
+    parsed_items = [_parse_confirm_item(out, raw) for raw in raw_items]
+    result = _request(out, "POST", "/confirm", {"items": parsed_items})
+    items = result.get("items") or []
+    lines = [
+        f"{item.get('fact_id')}: "
+        + ("ok (" + str(item.get("memory_kind")) + ")" if item.get("ok")
+           else item.get("error", "failed"))
+        for item in items
+    ]
+    out.emit(result, "\n".join(lines) if lines else "No items.")
+
+
 def cmd_kinds(args: Namespace) -> None:
     sub = getattr(args, "kinds_command", None) or "status"
     if sub == "backfill":
         _backfill(args)
+        return
+    if sub == "set":
+        _set(args)
+        return
+    if sub == "review":
+        _review(args)
+        return
+    if sub == "confirm":
+        _confirm(args)
         return
     out = _Out(bool(getattr(args, "json", False)), f"kinds {sub}")
     if sub == "settings":

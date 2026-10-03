@@ -369,10 +369,10 @@
     // Use textContent — no API data, just static example strings
     codeBlock.textContent =
       '"env": {\n' +
-      '  "SLM_MCP_PROFILE": "core"    // 14 tools — minimal\n' +
-      '  // "SLM_MCP_PROFILE": "code"  // 28 tools — + Brain, code graph, loops\n' +
-      '  // "SLM_MCP_PROFILE": "full"  // 46 tools — + mesh\n' +
-      '  // "SLM_MCP_PROFILE": "power" // 58 tools — + governance\n' +
+      '  "SLM_MCP_PROFILE": "core"    // 18 tools — minimal\n' +
+      '  // "SLM_MCP_PROFILE": "code"  // 38 tools — + Brain, code graph, loops, kinds\n' +
+      '  // "SLM_MCP_PROFILE": "full"  // 54 tools — + mesh\n' +
+      '  // "SLM_MCP_PROFILE": "power" // 66 tools — + governance\n' +
       '  // "SLM_MCP_PROFILE": "mesh"  //  8 tools — mesh only\n' +
       '}';
     body2.appendChild(codeBlock);

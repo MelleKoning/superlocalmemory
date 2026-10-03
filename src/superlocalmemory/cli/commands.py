@@ -1591,8 +1591,19 @@ def cmd_list(args: Namespace) -> None:
     """List recent memories chronologically."""
     from superlocalmemory.core.config import CANONICAL_LIST_LIMIT, SLMConfig
     from superlocalmemory.core.engine import MemoryEngine
+    from superlocalmemory.core.kind_query import InvalidKind, list_recent_facts, resolve_kind
 
     use_json = getattr(args, 'json', False)
+    # 4.1.19 WP8: refused before any engine is even built.
+    try:
+        parsed_kind = resolve_kind(getattr(args, "kind", ""))
+    except InvalidKind as exc:
+        if use_json:
+            from superlocalmemory.cli.json_output import json_print
+            json_print("list", error={"code": "INVALID_KIND", "message": str(exc)})
+        else:
+            print(str(exc), file=sys.stderr)
+        sys.exit(2)
     try:
         config = SLMConfig.load()
         engine = MemoryEngine(_without_answer_check(config))
@@ -1601,7 +1612,7 @@ def cmd_list(args: Namespace) -> None:
         limit = getattr(args, "limit", CANONICAL_LIST_LIMIT)
         # The query already returns newest-first; pushing the bound into SQL
         # keeps this from deserializing the whole table to show twenty rows.
-        facts = engine._db.get_all_facts(engine.profile_id, limit=limit)
+        facts = list_recent_facts(engine._db, engine.profile_id, limit, parsed_kind)
     except Exception as exc:
         if use_json:
             from superlocalmemory.cli.json_output import json_print
@@ -1611,6 +1622,7 @@ def cmd_list(args: Namespace) -> None:
 
     if use_json:
         from superlocalmemory.cli.json_output import json_print
+        from superlocalmemory.storage.memory_kinds import kind_fields
         items = []
         for f in facts:
             ftype_raw = getattr(f, "fact_type", "")
@@ -1618,6 +1630,7 @@ def cmd_list(args: Namespace) -> None:
             items.append({
                 "fact_id": f.fact_id, "content": f.content,
                 "fact_type": ftype, "created_at": (f.created_at or "")[:19],
+                **kind_fields(f),
             })
         json_print("list", data={"results": items, "count": len(items)},
                    next_actions=[
@@ -1766,6 +1779,14 @@ def _answer_check_line(result: dict) -> str:
 def cmd_recall(args: Namespace) -> None:
     """Search memories through the owned daemon without a local engine."""
     use_json = getattr(args, 'json', False)
+    # 4.1.19 WP8: refused before the daemon is even probed — a request that
+    # will be rejected every time is not a reason to retry anything.
+    from superlocalmemory.core.kind_query import InvalidKind, resolve_kind
+    try:
+        _kind = resolve_kind(getattr(args, "kind", ""))
+    except InvalidKind as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(2)
     # v3.6.15: None = "not specified" → daemon/engine resolves the configured
     # default (shared-off). Only an explicit --include-global / --no-global
     # produces True/False here.
@@ -1832,11 +1853,12 @@ def cmd_recall(args: Namespace) -> None:
                                     ("about", getattr(args, "about", "")))
                 if (value or "").strip()
             )
+            kind_qs = f"&kind={quote(_kind)}" if _kind else ""
             result = daemon_request(
                 "GET",
                 f"/recall?q={quote(args.query)}&limit={args.limit}"
                 f"&session_id={quote(session_id)}{fast_qs}{scope_qs}{window_qs}{as_of_qs}"
-                f"{known_as_of_qs}{valid_at_qs}{unknown_qs}{facet_qs}",
+                f"{known_as_of_qs}{valid_at_qs}{unknown_qs}{facet_qs}{kind_qs}",
             )
             if result and "results" in result:
                 # Format daemon response same as engine response
