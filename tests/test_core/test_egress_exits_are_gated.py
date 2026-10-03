@@ -346,3 +346,17 @@ def test_the_hosted_check_transport_screens_what_it_sends() -> None:
     assert len(bodies) == 2
     for body in bodies:
         assert _KEY.encode() not in body and b"Hunt3rTwo" not in body
+
+
+def test_an_incomplete_llm_config_falls_back_to_the_heuristic(wire) -> None:
+    """A config object missing fields must not crash the store path."""
+    from superlocalmemory.core.summarizer import Summarizer
+
+    incomplete = types.SimpleNamespace(
+        mode=types.SimpleNamespace(value="c"),
+        llm=types.SimpleNamespace(provider="azure", api_key=_AZURE_KEY, model="gpt-4o",
+                                  api_base=_AZURE_BASE, timeout_seconds=30),
+    )
+    out = Summarizer(incomplete).summarize_cluster(
+        [{"content": "Atlas ships on Friday. More text."}])
+    assert out == "Atlas ships on Friday." and wire == []

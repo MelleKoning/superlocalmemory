@@ -108,7 +108,7 @@ class Summarizer:
             return None
         try:
             backbone = LLMBackbone(llm_config)
-        except ValueError as exc:
+        except Exception as exc:  # noqa: BLE001 — summaries never crash the caller
             logger.warning("Summarizer: LLM provider not usable: %s", exc)
             return None
         return backbone if backbone.is_available() else None
