@@ -423,6 +423,32 @@ class DaemonNotFound(RuntimeError):
         super().__init__(self.message + (f" for {path}" if path else ""))
 
 
+class DaemonUnprocessable(RuntimeError):
+    """The daemon answered 422: it refused the request itself, before any work.
+
+    Raised only when the caller passes ``preserve_unprocessable=True``. Without
+    it a 422 collapses to ``None``, which callers read as "daemon unavailable"
+    and retry - pointless for a request that will be refused every time.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code or "INVALID_REQUEST"
+        self.message = message or "the daemon refused this request"
+        super().__init__(self.message)
+
+
+def _unprocessable(exc) -> DaemonUnprocessable:
+    """Read ``{"detail": {"code", "message"}}`` or ``{"detail": "text"}``."""
+    try:
+        detail = json.loads(exc.read().decode()).get("detail")
+    except Exception:  # noqa: BLE001 - an unreadable body still means "refused"
+        detail = None
+    if isinstance(detail, dict):
+        return DaemonUnprocessable(str(detail.get("code") or ""),
+                                   str(detail.get("message") or ""))
+    return DaemonUnprocessable("", detail if isinstance(detail, str) else "")
+
+
 def daemon_request(
     method: str,
     path: str,
@@ -434,6 +460,7 @@ def daemon_request(
     verify_health: bool = True,
     preserve_conflict: bool = False,
     preserve_not_found: bool = False,
+    preserve_unprocessable: bool = False,
 ) -> dict | None:
     """Send a request only after validating the owned daemon identity.
 
@@ -545,6 +572,8 @@ def daemon_request(
             except Exception:
                 pass
             raise DaemonNotFound(exc.code, code, message, path) from exc
+        if exc.code == 422 and preserve_unprocessable:
+            raise _unprocessable(exc) from exc
         return None
     except Exception:
         return None

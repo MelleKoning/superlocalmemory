@@ -20,6 +20,12 @@ _SCOPES = frozenset({"personal", "project", "shared", "global"})
 _STATUSES = frozenset({"proposed", "applied", "rejected", "rolled_back"})
 _EVENTS = frozenset({"proposed", "applied", "rejected", "rolled_back"})
 _MAX_FIELD_LENGTH = 128
+#: Reason code of a case the caller recorded by saving a memory with
+#: ``replaces`` (core/remember_replaces.py). Proposed and applied in one
+#: transaction, so it is never pending review; and the caller's new memory
+#: stands on its own, so undoing the case restores the old fact without
+#: withdrawing the new one (see the successor checks in storage/database.py).
+CALLER_REPLACEMENT_REASON = "replaced_by_caller"
 
 
 class CorrectionCaseError(RuntimeError):
@@ -398,6 +404,15 @@ def transition_on_connection(
         event_valid_from=case.event_valid_from,
         event_valid_until=case.event_valid_until,
     )
+    if to_status == "rolled_back" and case.reason_code == CALLER_REPLACEMENT_REASON:
+        # Undoing a caller's whole-memory replacement also restores the facts
+        # its enrichment derived after it (storage/replaced_memory.py).
+        from superlocalmemory.storage.replaced_memory import restore_late_facts
+
+        restore_late_facts(
+            conn, case, actor=actor, operation_id=operation_id,
+            is_profile_active=is_profile_active, is_actor_trusted=is_actor_trusted,
+        )
     return _get_case(conn, case_id)
 
 

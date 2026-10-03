@@ -665,6 +665,9 @@ class RememberRequest(BaseModel):
     #: What sort of memory this is (rule, decision, status, ...). Declared by
     #: the caller, so it is confirmed on every fact of the memory. Empty = none.
     kind: str = ""
+    #: The id of an earlier memory this one replaces (core/remember_replaces.py).
+    #: Absent = none. Present but empty or malformed is refused with 422.
+    replaces: str | None = None
 
     @field_validator("session_date")
     @classmethod
@@ -4988,6 +4991,22 @@ def _register_daemon_routes(application: FastAPI) -> None:
                     "Unknown memory kind. Use one of: "
                     + ", ".join(k.value for k in MemoryKind)))
 
+        # Same for ``replaces``: refused here, before the try below would turn
+        # the 422 into a 500, and before anything is journaled or saved.
+        replaces_id = None
+        if req.replaces is not None:
+            from superlocalmemory.core.remember_replaces import check_replaceable
+            from superlocalmemory.core.replaces_input import ReplacesRejected
+
+            try:
+                replaces_id = await asyncio.to_thread(
+                    check_replaceable, engine._db, replaces=req.replaces,
+                    active_profile=engine._profile_id, write_profile=write_profile,
+                    scope=scope,
+                )
+            except ReplacesRejected as exc:
+                raise HTTPException(422, detail=exc.as_error()) from exc
+
         try:
             from superlocalmemory.core.remember_runtime import (
                 validate_deterministic_admission,
@@ -5090,6 +5109,18 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 raise PermissionError(
                     f"operation policy denied REMEMBER: {_policy_decision.reason}"
                 )
+            if replaces_id is not None:
+                # Retiring a memory is a correction: the same CORRECT policy
+                # review_correction is held to, checked before anything is
+                # saved. REMEMBER alone (open to members) is not enough.
+                _correct_decision = _policy_registry.evaluate(
+                    _OpKind.CORRECT, _http_actor, _policy_mode,
+                )
+                if not _correct_decision.allowed:
+                    raise PermissionError(
+                        "operation policy denied CORRECT for replaces: "
+                        f"{_correct_decision.reason}"
+                    )
 
             admission = RememberRequest(
                 content=req.content,
@@ -5120,6 +5151,18 @@ def _register_daemon_routes(application: FastAPI) -> None:
             )
             payload = dict(receipt.payload)
             fact_ids = list(payload.get("fact_ids") or [])
+            # Only now, with the new memory durably saved, is the old one marked.
+            # Never raises: a failed mark is reported in ``replaced``.
+            replaced = None
+            if replaces_id is not None:
+                from superlocalmemory.core.remember_replaces import replace_after_save
+
+                replaced = await asyncio.to_thread(
+                    replace_after_save, runtime, engine, replaces=replaces_id,
+                    profile_id=write_profile, successor_fact_ids=fact_ids,
+                    operation_id=str(payload["operation_id"]),
+                    trusted_actor_id=trusted_actor_id,
+                )
 
             # The durable receipt is already committed above; nothing below can
             # fail this write. What remains is the window in which the memory can
@@ -5211,7 +5254,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 )
 
             searchable = "meaning" if enriched == len(fact_ids) and fact_ids else "wording"
-            return {
+            response = {
                 "ok": True,
                 # The profile this write actually landed in: the routed
                 # profile when the request named one, else the active one.
@@ -5244,6 +5287,10 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 # guarantee, and still never a block on durability.
                 "wait_ignored": False if wait else True,
             }
+            if replaced is not None:
+                # Only when asked, so a plain remember response is unchanged.
+                response["replaced"] = replaced
+            return response
         except Exception as exc:
             from superlocalmemory.core.remember_admission import AdmissionRejected
             from superlocalmemory.core.remember_runtime import CanonicalRememberUnavailable

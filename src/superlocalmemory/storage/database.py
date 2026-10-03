@@ -49,6 +49,7 @@ from superlocalmemory.storage.embedding_codec import (
 from superlocalmemory.storage.write_lock import get_write_lock
 from superlocalmemory.storage import projection_outbox
 from superlocalmemory.storage.memory_kinds import KIND_COLUMNS
+from superlocalmemory.storage.correction_cases import CALLER_REPLACEMENT_REASON
 
 logger = logging.getLogger(__name__)
 
@@ -969,6 +970,19 @@ class DatabaseManager:
             # a call site that forgets would produce a memory that is stored
             # and unrecallable.
             projection_outbox.enqueue(self, fact.fact_id, fact.profile_id)
+            # A memory its caller already replaced keeps no current facts, not
+            # even ones enrichment derives from it afterwards. Same transaction,
+            # same single write path, so no such fact is ever visible un-retired
+            # (storage/replaced_memory.py).
+            if fact.memory_id:
+                from superlocalmemory.storage.replaced_memory import (
+                    retire_if_memory_replaced,
+                )
+
+                retire_if_memory_replaced(
+                    self._txn_state.conn, fact_id=fact.fact_id,
+                    memory_id=fact.memory_id, profile_id=fact.profile_id,
+                )
 
         # The fact and its transaction-time anchor are one logical write. Do
         # not open a nested transaction when an owner already holds one.
@@ -2654,13 +2668,16 @@ class DatabaseManager:
         for start in range(0, len(fact_ids), 900):
             batch = fact_ids[start:start + 900]
             placeholders = ",".join("?" for _ in batch)
+            # A caller's replacement never withholds the memory the caller
+            # saved: undoing it restores the old fact, nothing more.
             rows = self.execute(
                 "SELECT c.successor_fact_id FROM correction_cases c "
                 "JOIN atomic_facts f ON f.fact_id=c.successor_fact_id "
                 f"WHERE c.successor_fact_id IN ({placeholders}) AND {scope_where} "
                 "AND c.profile_id=f.profile_id "
-                "AND c.status IN ('proposed', 'rejected', 'rolled_back')",
-                (*batch, *scope_params),
+                "AND c.status IN ('proposed', 'rejected', 'rolled_back') "
+                "AND c.reason_code != ?",
+                (*batch, *scope_params, CALLER_REPLACEMENT_REASON),
             )
             inadmissible.update(str(row["successor_fact_id"]) for row in rows)
         return inadmissible
@@ -2726,11 +2743,15 @@ class DatabaseManager:
                         "JOIN atomic_facts f ON f.fact_id=c.successor_fact_id "
                         f"WHERE c.successor_fact_id IN ({placeholders}) AND {scope_where} "
                         "AND c.profile_id=f.profile_id "
-                        "AND c.status IN ('proposed', 'rejected', 'rolled_back')"
+                        "AND c.status IN ('proposed', 'rejected', 'rolled_back') "
+                        # A caller's replacement never withholds the memory
+                        # the caller saved (see get_nonapplied_...).
+                        "AND c.reason_code != ?"
                     )
                     rows = conn.execute(
                         f"{temporal_sql} UNION {correction_sql}",
-                        (*temporal_params, *batch, *scope_params),
+                        (*temporal_params, *batch, *scope_params,
+                         CALLER_REPLACEMENT_REASON),
                     ).fetchall()
                 inadmissible.update(str(row["fact_id"]) for row in rows)
         return inadmissible
