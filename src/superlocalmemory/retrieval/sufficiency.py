@@ -41,6 +41,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from superlocalmemory.core import recall_gate
+from superlocalmemory.encoding.memory_kind_recipe import KindAnswer, KindRecipe
+from superlocalmemory.retrieval import laya_kinds
 from superlocalmemory.retrieval.answer_check_status import (
     JUDGE_FLOOR_S,
     STATUS_BUSY,
@@ -105,6 +108,13 @@ _COOLDOWN_MAX_S = 1800.0
 #: long means the worker is stuck, not slow: it is replaced. Twenty times the
 #: default judgement timeout, so a slow judgement is never mistaken for it.
 _WEDGED_S = 30.0
+#: Memory typing borrows the worker between recalls. It never waits on the
+#: lock (a recall may hold it); it tries this many times, waiting for recalls
+#: to finish in between, then gives up and the rules answer instead.
+_BACKGROUND_ATTEMPTS = 3
+#: Pause after giving the worker back, so a recall blocked on the lock gets it
+#: before typing's next chunk does (the lock itself is not first-come-first-served).
+_BACKGROUND_YIELD_S = 0.005
 
 
 @dataclass(frozen=True)
@@ -501,6 +511,68 @@ class LayaSufficiencyJudge:
         return JudgeOutcome(SufficiencyVerdict(probabilities, self.threshold,
                                                self.calibration_id, self.calibration_status,
                                                self.backend), STATUS_JUDGED)
+
+    # -- memory typing (background only) ------------------------------------
+
+    def ask_kinds(self, documents: Sequence[str], recipe: KindRecipe,
+                  verify_indices: Sequence[int]) -> list[KindAnswer] | None:
+        """One kind answer per document from the running worker, or None.
+
+        Background threads only (``recall_gate.background_work()``); on any
+        other thread nothing is sent. Borrows the worker the answer check
+        already runs and never starts, warms or replaces one: a cold or closed
+        judge answers None. Before each chunk of ``laya_kinds.CHUNK_DOCUMENTS``
+        it waits until no recall is in flight, takes the worker only if it is
+        free, and hands it back after the chunk — so a recall that arrives
+        mid-typing waits for one short chunk, inside its own deadline, instead
+        of going unjudged. All-or-nothing: any refused, late or malformed chunk
+        makes the whole answer None.
+        """
+        if not recall_gate.is_background_work():
+            return None
+        chunks = laya_kinds.build_chunks(documents, recipe, verify_indices)
+        if chunks is None:
+            return None
+        answers: list[KindAnswer] = []
+        for req in chunks:
+            if (self._shutdown.is_set() or not self._ready
+                    or recall_gate.background_preempt_requested()):
+                return None
+            recall_gate.wait_for_foreground_idle()
+            reply = self._background_exchange(
+                req, laya_kinds.chunk_timeout_s(len(req["documents"])))
+            parsed = laya_kinds.parse_reply(reply, req, recipe)
+            if parsed is None:
+                return None
+            answers.extend(parsed)
+            time.sleep(_BACKGROUND_YIELD_S)
+        return answers
+
+    def _background_exchange(self, req: dict, timeout_s: float) -> dict | None:
+        """One request on the live worker if it is free; never spawns, never blocks on it."""
+        for _ in range(_BACKGROUND_ATTEMPTS):
+            if self._lock.acquire(blocking=False):
+                break
+            recall_gate.wait_for_foreground_idle()
+            time.sleep(_BACKGROUND_YIELD_S)
+        else:
+            return None
+        proc = self._proc
+        try:
+            if proc is None or proc.poll() is not None or not self._ready:
+                return None
+            deadline = time.monotonic() + timeout_s
+            if not self._drain_stale(proc, deadline):
+                return None
+            return self._exchange(proc, req, deadline)
+        except (BrokenPipeError, EOFError, OSError, ValueError) as exc:
+            logger.warning("Laya worker transport failed during memory typing: %s",
+                           type(exc).__name__)
+            self._worker_lost()
+            return None
+        finally:
+            self._after_use(proc)
+            self._lock.release()
 
     # -- transport --------------------------------------------------------
 

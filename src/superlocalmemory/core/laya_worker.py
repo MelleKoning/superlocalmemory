@@ -23,7 +23,28 @@ Protocol, JSON lines on stdin/stdout, mirroring the reranker worker:
   {"cmd": "judge", "query": "...", "documents": ["...", ...], "question": "..."}
       -> {"ok": true, "probabilities": [0.91, 0.12, ...]}
       "question" is the recipe's wording; without it the built-in one is asked.
+  {"cmd": "kinds", "documents": [str, ...<=16], "instructions": str<=300,
+   "criteria": {label<=32: description<=120, ...2..10},
+   "verify": {"indices": [int, ...], "instructions": str<=300}}      (verify optional)
+      -> {"ok": true, "answers": [{"choice": str, "probabilities": {label: p},
+                                   "confidence": float, "verify": float | null}, ...]}
+      One answer per document, in order. Each document is asked about on its
+      own as ``{"memory": document}``; ``verify`` adds a yes/no question for
+      the listed documents only.
+  {"cmd": "ask", "items": [{"state": {name: str, ...<=4},
+                            "questions": {qid: {"type": "choice" | "noul",
+                                                "instructions": str<=300,
+                                                "criteria": {...}}, ...<=4}}, ...<=16]}
+      -> {"ok": true, "answers": [{qid: {"type", "choice", "probabilities",
+                                         "confidence"} | {"type", "noul",
+                                         "confidence"}}, ...]}
+      The general form ``kinds`` is built on: any small typed question over a
+      few named texts (for example a question about a pair of memories).
   {"cmd": "quit"}
+
+Any limit breached -> {"ok": false, "error": "invalid kinds request"} (or
+"invalid ask request"); nothing reaches the model. Every text is cut at
+``MAX_DOCUMENT_CHARS``, never refused for length.
 
 Every request may carry an ``"id"``; its reply then echoes it, so a judge that
 gave up on a slow answer never reads that late answer as the reply to its next
@@ -69,6 +90,16 @@ MAX_QUESTION_CHARS = 1000
 #: The English checkpoint reads 512 tokens; longer memories are cut, not refused.
 MAX_DOCUMENT_CHARS = 1800
 MAX_DOCUMENTS = 16
+#: Limits on a typed question (``kinds`` / ``ask``). Small on purpose: the
+#: question must fit the model's prefix budget with room left for the text.
+MAX_INSTRUCTIONS_CHARS = 300
+MAX_LABEL_CHARS = 32
+MAX_CRITERION_CHARS = 120
+MIN_LABELS = 2
+MAX_LABELS = 10
+MAX_STATE_FIELDS = 4
+MAX_QUESTIONS = 4
+_QUESTION_TYPES = ("choice", "noul")
 #: Freed GPU buffers MLX may keep for reuse. See ``_limit_memory``.
 CACHE_LIMIT_MB = 128
 #: How often the watchdog checks that its parent is still the one that started it.
@@ -214,6 +245,150 @@ def _judge(agent, query: str, documents: list[str], question: str) -> list[float
     return probabilities
 
 
+class _Invalid(ValueError):
+    """A typed-question request outside the protocol's limits."""
+
+
+def _short_text(value, limit: int) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value) > limit:
+        raise _Invalid()
+    return value
+
+
+def _name(value) -> str:
+    if (not isinstance(value, str) or not value or len(value) > MAX_LABEL_CHARS
+            or not all(c.islower() or c.isdigit() or c == "_" for c in value)):
+        raise _Invalid()
+    return value
+
+
+def _criteria(value) -> dict:
+    if not isinstance(value, dict) or not MIN_LABELS <= len(value) <= MAX_LABELS:
+        raise _Invalid()
+    out = {}
+    for label, description in value.items():
+        out[_short_text(label, MAX_LABEL_CHARS)] = _short_text(description,
+                                                                MAX_CRITERION_CHARS)
+    return out
+
+
+def _question(value) -> dict:
+    if not isinstance(value, dict) or value.get("type") not in _QUESTION_TYPES:
+        raise _Invalid()
+    question = {"type": value["type"],
+                "instructions": _short_text(value.get("instructions"),
+                                            MAX_INSTRUCTIONS_CHARS)}
+    if value["type"] == "choice":
+        question["criteria"] = _criteria(value.get("criteria"))
+    return question
+
+
+def _item(value) -> dict:
+    """One validated ``ask`` item: named texts (cut, never refused) and questions."""
+    if not isinstance(value, dict):
+        raise _Invalid()
+    state, questions = value.get("state"), value.get("questions")
+    if (not isinstance(state, dict) or not 1 <= len(state) <= MAX_STATE_FIELDS
+            or not isinstance(questions, dict) or not 1 <= len(questions) <= MAX_QUESTIONS):
+        raise _Invalid()
+    clean_state = {}
+    for key, text in state.items():
+        if not isinstance(text, str):
+            raise _Invalid()
+        clean_state[_name(key)] = text[:MAX_DOCUMENT_CHARS]
+    return {"state": clean_state,
+            "questions": {_name(qid): _question(q) for qid, q in questions.items()}}
+
+
+def _items(value) -> list:
+    if not isinstance(value, list) or not 1 <= len(value) <= MAX_DOCUMENTS:
+        raise _Invalid()
+    return [_item(v) for v in value]
+
+
+def _probability(value) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("not a probability")
+    f = float(value)
+    if not 0.0 <= f <= 1.0:  # also false for NaN
+        raise ValueError("not a probability")
+    return f
+
+
+def _answer(raw: dict, question: dict) -> dict:
+    """The library's answer, reduced to the protocol's fields and checked."""
+    if question["type"] == "choice":
+        choice = raw.get("choice")
+        probabilities = raw.get("probabilities") or {}
+        if choice not in question["criteria"] or not isinstance(probabilities, dict):
+            raise ValueError("choice outside the criteria")
+        return {"type": "choice", "choice": choice,
+                "probabilities": {k: _probability(v) for k, v in probabilities.items()
+                                  if k in question["criteria"]},
+                "confidence": _probability(raw.get("confidence"))}
+    noul = _probability(raw.get("noul", raw.get("probability")))
+    return {"type": "noul", "noul": noul,
+            "confidence": _probability(raw.get("confidence", max(noul, 1.0 - noul)))}
+
+
+def _ask_items(agent, items: list) -> list:
+    answers = []
+    with contextlib.redirect_stdout(sys.stderr):
+        for item in items:
+            raw = agent.predict(item["state"], item["questions"])["answers"]
+            answers.append({qid: _answer(raw[qid], q)
+                            for qid, q in item["questions"].items()})
+    return answers
+
+
+def _kinds_items(req: dict) -> list:
+    """``kinds`` as ``ask`` items: one per document, under the field ``memory``."""
+    documents = req.get("documents")
+    if (not isinstance(documents, list) or not 1 <= len(documents) <= MAX_DOCUMENTS
+            or not all(isinstance(d, str) for d in documents)):
+        raise _Invalid()
+    choice = _question({"type": "choice", "instructions": req.get("instructions"),
+                        "criteria": req.get("criteria")})
+    verify_at, verify = set(), None
+    if "verify" in req:
+        spec = req["verify"]
+        indices = spec.get("indices") if isinstance(spec, dict) else None
+        if (not isinstance(indices, list) or not all(
+                isinstance(i, int) and not isinstance(i, bool) and 0 <= i < len(documents)
+                for i in indices)):
+            raise _Invalid()
+        verify = _question({"type": "noul", "instructions": spec.get("instructions")})
+        verify_at = set(indices)
+    return [{"state": {"memory": d[:MAX_DOCUMENT_CHARS]},
+             "questions": ({"kind": choice, "verify": verify} if i in verify_at
+                           else {"kind": choice})}
+            for i, d in enumerate(documents)]
+
+
+def _handle_typed(agent, req: dict, cmd: str) -> None:
+    """``ask`` and ``kinds``: validate everything before the model sees anything."""
+    if agent is None:
+        _respond({"ok": False, "error": "not loaded"})
+        return
+    try:
+        items = _kinds_items(req) if cmd == "kinds" else _items(req.get("items"))
+    except _Invalid:
+        _respond({"ok": False, "error": f"invalid {cmd} request"})
+        return
+    try:
+        answers = _ask_items(agent, items)
+    except Exception as exc:  # noqa: BLE001 — reported, never raised
+        _respond({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+        return
+    if cmd == "kinds":
+        answers = [{"choice": a["kind"]["choice"],
+                    "probabilities": a["kind"]["probabilities"],
+                    "confidence": a["kind"]["confidence"],
+                    "verify": a["verify"]["noul"] if "verify" in a else None}
+                   for a in answers]
+    _respond({"ok": True, "answers": answers})
+
+
 def _handle_load(req: dict):
     """(agent or None, model name). A failed load is reported, never raised."""
     model_name = str(req.get("model") or DEFAULT_MODEL)
@@ -275,6 +450,8 @@ def main() -> None:
             agent, model_name = _handle_load(req)
         elif cmd == "judge":
             _handle_judge(agent, req)
+        elif cmd in ("kinds", "ask"):
+            _handle_typed(agent, req, cmd)
         else:
             _respond({"ok": False, "error": f"unknown command: {cmd}"})
 
