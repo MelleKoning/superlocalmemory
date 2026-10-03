@@ -232,22 +232,22 @@ def test_dispatch_allows_mutation_max_tokens_4000(
     assert record_backend[0]["max_tokens"] == 4000
 
 
-def test_dispatch_calls_redact_secrets_high(
+def test_dispatch_calls_the_hosted_redactor(
     learning_db: Path,
     record_backend: list[dict],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``redact_secrets`` must be called with ``aggression='high'``."""
-    captured: list[dict[str, Any]] = []
-    from superlocalmemory.core import security_primitives as secp
+    """Every prompt passes the strong screen (high aggression, no tails)."""
+    captured: list[str] = []
+    from superlocalmemory.retrieval import hosted_redaction
 
-    real_redact = secp.redact_secrets
+    real_redact = hosted_redaction.redact_for_hosted_judge
 
-    def _spy(text: str, **kwargs: Any) -> str:
-        captured.append(kwargs)
-        return real_redact(text, **kwargs)
+    def _spy(text: str) -> str:
+        captured.append(text)
+        return real_redact(text)
 
-    monkeypatch.setattr(llm_dispatch, "redact_secrets", _spy)
+    monkeypatch.setattr(llm_dispatch, "redact_for_hosted_judge", _spy)
 
     _dispatch_llm(
         "prompt",
@@ -255,8 +255,7 @@ def test_dispatch_calls_redact_secrets_high(
         learning_db=learning_db,
         profile_id="default",
     )
-    assert captured, "redact_secrets was not called"
-    assert captured[0].get("aggression") == "high"
+    assert captured == ["prompt"], "the hosted redactor was not called"
 
 
 def test_dispatch_redaction_canary_not_in_cost_log(
