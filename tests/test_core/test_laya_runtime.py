@@ -741,3 +741,8 @@ class TestSmallHelpers:
     def test_classify_subprocess_error_recognises_network_hints(self):
         assert lr._classify_subprocess_error("ConnectionError: timed out") == "network"
         assert lr._classify_subprocess_error("SyntaxError: invalid syntax") == "other"
+
+
+# Workers start from the interpreter running the suite; on a CI runner whose
+# tool cache is group-writable the Laya safety rule would refuse it.
+pytestmark = pytest.mark.usefixtures("safely_owned_interpreter")
