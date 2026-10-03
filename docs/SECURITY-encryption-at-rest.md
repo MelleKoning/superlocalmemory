@@ -23,7 +23,8 @@ local-first deployment are:
 | Full-disk encryption (macOS FileVault / LUKS / BitLocker) | **Primary control** | Defends threat (1). Verified FileVault ON on the reference machine. This is the recommended encryption-at-rest mechanism for a local-first app. |
 | Data directory `0700` | ✅ enforced | `~/.superlocalmemory/` is owner-only; other users cannot traverse in. |
 | DB files `0600` | ✅ enforced (C4) | `harden_db_perms()` (core/security_primitives.py) sets `0600` on every DB file + its `-wal`/`-shm` sidecars at open. Wired into `DatabaseManager`, the audit chain, and the pending store. Closes threat (2) even if the directory perms are later loosened. Historically the files shipped `0644` (world-readable). |
-| Secret redaction before persistence | ✅ always on | `redact_secrets()` strips API keys/tokens from content. |
+| Credentials you save | **Stored as written** (4.1.19+) | SuperLocalMemory keeps the keys, tokens and passwords you save, so an agent can recall them later. Nothing is stripped on save, import or enrichment. Full-disk encryption and the file permissions above are what protect them at rest. Releases up to 4.1.18 stripped them on save instead. |
+| Credential redaction on egress | ✅ always on | Every request that can carry memory text off this machine goes through one gate (`core/outbound_http.py`), which redacts credentials for any host that is not loopback: LLM providers, cloud embedders, the remote reranker, the Jev answer check, a LAN Ollama, mesh peers. Context injected into an agent session is redacted the same way. A test fails the build if new code opens an outbound request outside the gate. |
 | PII redaction before persistence | ✅ opt-in (C4) | `SLM_PII_REDACTION=1` / `config.pii_redaction` scrubs email/phone/SSN/card/IP at ingest so identifiers never reach disk. |
 
 ## Why not application-level DB encryption by default

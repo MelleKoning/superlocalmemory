@@ -57,15 +57,23 @@ controls in addition to the session: `Origin` must match the daemon,
 - XSS protection via `escapeHtml()` in all UI rendering
 - Security headers: X-Frame-Options, CSP, X-Content-Type-Options
 - CORS whitelist with credential control
-- Secret/PII redaction before persistence and before the remote-reranker
-  trust boundary ( `src/superlocalmemory/retrieval/remote_reranker.py`:
-  `redact_secrets` + `redact_pii_text` as best-effort, not DLP); remote
-  reranker responses are bounded (8 MiB), redirects are not followed, and
-  malformed values suppress bodies without logging them. Remote *embedding*
-  (`core/embeddings.py` `_openai_compatible_embed_batch`) sends raw input
-  text with optional Bearer and does **not** apply the remote-reranker
-  HTTPS/non-loopback, userinfo/query/fragment rejections or body-suppression
-  — scope SSRF claims to the reranker path.
+- Credentials are stored as written (4.1.19+): SuperLocalMemory keeps the
+  keys and passwords you save so an agent can recall them. Releases up to
+  4.1.18 stripped them on save. Opt-in PII redaction at save
+  (`SLM_PII_REDACTION=1`) is unchanged.
+- Credential redaction on egress: every request that can carry memory text
+  off this machine goes through one gate (`core/outbound_http.py`), which
+  redacts credentials for any host that is not loopback. That covers LLM
+  providers, cloud embedders, the remote reranker, the Jev answer check, a
+  LAN Ollama, and mesh peers. Context injected into an agent session uses
+  the same redaction. Requests to loopback do not go through an
+  environment proxy. A test fails the build if new code opens an outbound
+  request outside the gate. Redaction is pattern-based and best-effort, not
+  DLP: a credential with no recognisable shape or label can still pass.
+- Remote reranker responses are bounded (8 MiB), redirects are not
+  followed, and malformed values suppress bodies without logging them. The
+  reranker's HTTPS/non-loopback, userinfo/query/fragment rejections apply to
+  the reranker path only; scope SSRF claims to it.
 
 #### Model Supply Chain (Untrusted Checkpoints)
 
