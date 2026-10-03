@@ -146,6 +146,9 @@ class TestCliRecallScopeClamped:
             args.fast = False
             args.window = ""
             args.as_of = ""
+            # A MagicMock attribute is not a valid kind; recall refuses it
+            # before the scope clamp is reached.
+            args.kind = ""
             try:
                 cmd_mod.cmd_recall(args)
             except (Exception, SystemExit):

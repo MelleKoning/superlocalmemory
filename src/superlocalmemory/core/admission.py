@@ -127,6 +127,9 @@ _REQUIRED_MCP_GATES: frozenset[str] = frozenset({
     "fetch",
     "list_recent",
     "session_init",
+    # Memory kinds (tools_kinds.py) — writes a kind onto an existing memory
+    "set_memory_kind",
+    "confirm_memory_kinds",
 })
 
 
@@ -549,6 +552,8 @@ def admits(kind: OperationKind):
                 return {
                     "success": False,
                     "error": "not_authorized",
+                    "code": "NOT_AUTHORIZED",
+                    "retryable": False,
                     "reason": exc.decision.reason,
                 }
             return await fn(*args, **kwargs)

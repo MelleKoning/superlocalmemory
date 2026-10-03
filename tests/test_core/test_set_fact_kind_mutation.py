@@ -110,8 +110,13 @@ def test_correction_successor_inherits_kind(env) -> None:
     db, runtime = env
     fid = _fact(db, "default", "Recall ceiling is 2 seconds.")
     runtime.set_fact_kinds("default", [(fid, "decision")], idempotency_key="k-corr")
-    runtime.create_correction_successor("default", fid, "succ-1",
-                                        "Recall ceiling is 3 seconds.",
-                                        idempotency_key="corr-1")
+    proposed = runtime.create_correction_successor("default", fid, "succ-1",
+                                                   "Recall ceiling is 3 seconds.",
+                                                   idempotency_key="corr-1")
+    # An edit nobody has reviewed yet is not a decision.
+    assert _kind(db, "succ-1")["memory_kind"] is None
+    runtime.transition_correction("default", proposed["case_id"], action="apply",
+                                  expected_version=0, actor_id="daemon:reviewer",
+                                  idempotency_key="corr-1-apply")
     assert _kind(db, "succ-1")["memory_kind"] == "decision"
     assert _kind(db, "succ-1")["memory_kind_source"] == "user"

@@ -73,6 +73,9 @@ def test_admits_decorator_enterprise_anonymous_denies(tmp_path, monkeypatch):
 
     assert result["success"] is False
     assert result["error"] == "not_authorized"
+    # Same envelope the daemon's 403 maps to: a refusal, never a retry.
+    assert result["code"] == "NOT_AUTHORIZED"
+    assert result["retryable"] is False
     assert "authentication_required" in result["reason"]
 
 

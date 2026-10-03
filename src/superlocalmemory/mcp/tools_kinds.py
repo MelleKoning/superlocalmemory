@@ -24,6 +24,9 @@ from typing import Any, Callable
 
 from mcp.types import ToolAnnotations
 
+from superlocalmemory.core.admission import admits
+from superlocalmemory.core.operation_request import OperationKind
+
 logger = logging.getLogger(__name__)
 
 _BASE = "/api/memory-kinds"
@@ -107,6 +110,7 @@ def register_kind_tools(server, get_engine: Callable) -> None:
     """
 
     @server.tool()
+    @admits(OperationKind.CORRECT)
     async def set_memory_kind(fact_id: str, kind: str) -> dict:
         """Set (confirm) the kind of one memory you already know the type of.
 
@@ -161,6 +165,7 @@ def register_kind_tools(server, get_engine: Callable) -> None:
         return await _kinds_request("GET", "/suggestions" + qs)
 
     @server.tool()
+    @admits(OperationKind.CORRECT)
     async def confirm_memory_kinds(items: list[dict]) -> dict:
         """Confirm kinds for 1-200 facts at once.
 
