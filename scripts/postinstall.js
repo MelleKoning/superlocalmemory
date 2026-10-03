@@ -47,7 +47,15 @@ function pythonCandidates(platform = os.platform()) {
       ['python'],
     ];
   }
+  // Debian 12, Ubuntu 22.04 (with deadsnakes) and RHEL 9 all ship a system
+  // `python3` older than 3.12, with the supported versioned interpreter
+  // installed alongside it, unused. Try the versioned names first so that
+  // interpreter is found before falling back to the bare names and the
+  // fixed absolute paths below.
   return [
+    ['python3.14'],
+    ['python3.13'],
+    ['python3.12'],
     ['python3'],
     ['python'],
     ['/opt/homebrew/bin/python3'],
@@ -56,21 +64,44 @@ function pythonCandidates(platform = os.platform()) {
   ];
 }
 
+function probePython(command, prefixArgs) {
+  try {
+    const result = spawnSync(command, [...prefixArgs, '--version'], {
+      stdio: 'pipe',
+      timeout: 5000,
+      env: process.env,
+    });
+    const output = `${(result.stdout || '').toString()} ${(result.stderr || '').toString()}`;
+    return { status: result.status, version: parsePythonVersion(output) };
+  } catch (error) {
+    return { status: null, version: null, error };
+  }
+}
+
 function findSupportedPython() {
+  const override = String(process.env.SLM_PYTHON || '').trim();
+  if (override) {
+    // The user named this interpreter explicitly (docs/getting-started.md's
+    // escape hatch for a system where no supported `python3` is on PATH, for
+    // example a deadsnakes or pyenv install at a custom path). Honour it,
+    // but still version-check it — and if it fails, say so plainly instead
+    // of silently trying a different interpreter the user did not choose.
+    const probe = probePython(override, []);
+    if (probe.status === 0 && isSupportedPython(probe.version)) {
+      return { command: override, prefixArgs: [], version: probe.version };
+    }
+    const detail = probe.status === 0 && probe.version
+      ? `found Python ${probe.version.join('.')}, which is not supported (need 3.12-3.14)`
+      : 'could not be run (check the path and that it is executable)';
+    console.error(`SuperLocalMemory: SLM_PYTHON=${override} ${detail}.`);
+    console.error('Point SLM_PYTHON at a Python 3.12-3.14 interpreter, or unset it to let the installer search automatically.');
+    return null;
+  }
+
   for (const candidate of pythonCandidates()) {
-    try {
-      const result = spawnSync(candidate[0], [...candidate.slice(1), '--version'], {
-        stdio: 'pipe',
-        timeout: 5000,
-        env: process.env,
-      });
-      const output = `${(result.stdout || '').toString()} ${(result.stderr || '').toString()}`;
-      const version = parsePythonVersion(output);
-      if (result.status === 0 && isSupportedPython(version)) {
-        return { command: candidate[0], prefixArgs: candidate.slice(1), version };
-      }
-    } catch (_error) {
-      // Try the next interpreter without mutating PATH or the machine.
+    const probe = probePython(candidate[0], candidate.slice(1));
+    if (probe.status === 0 && isSupportedPython(probe.version)) {
+      return { command: candidate[0], prefixArgs: candidate.slice(1), version: probe.version };
     }
   }
   return null;
@@ -295,6 +326,7 @@ module.exports = {
   isSupportedPython,
   main,
   parsePythonVersion,
+  probePython,
   pypiSpecifier,
   pythonCandidates,
   runtimePythonPath,
