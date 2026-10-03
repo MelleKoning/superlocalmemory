@@ -1,0 +1,191 @@
+# Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar
+# Licensed under AGPL-3.0-or-later - see LICENSE file
+# Part of SuperLocalMemory V3 | https://qualixar.com | https://varunpratap.com
+
+"""One-time repair of two kinds of damage left by builds before 4.1.19.
+
+1. Memories whose text was blanked when they were saved. Earlier builds
+   replaced anything that looked like a secret with ``[REDACTED:...]`` -
+   including ordinary long paths and links. The original text was kept in the
+   memory's ingestion record, and its background enrichment never finished
+   because the stored copy no longer matched it. A memory is restored only when
+   the stored text is exactly the original with some spans replaced by those
+   markers; anything else is left alone and counted.
+2. Entities that a question created. Asking about an unknown name used to
+   create an empty entity for it. One is removed only when nothing in the store
+   refers to it.
+
+``plan_repair`` reads and changes nothing. ``apply_repair`` runs in one
+transaction, and every write is guarded by the value it expects to replace, so
+a row changed in the meantime is skipped, never overwritten.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import sqlite3
+from dataclasses import dataclass
+
+_MARKER = re.compile(r"\[REDACTED:[A-Z_]+:[^\]]*\]")
+_MISMATCH = "queryable ingestion memory content mismatch"
+
+#: (table, column, is_json_list). Any mention keeps an entity.
+_ENTITY_REFERENCES: tuple[tuple[str, str, bool], ...] = (
+    ("entity_aliases", "entity_id", False),
+    ("entity_profiles", "entity_id", False),
+    ("temporal_events", "entity_id", False),
+    ("entity_communities", "entity_id", False),
+    ("fact_entity_associations", "entity_id", False),
+    ("consolidated_summaries", "entity_id", False),
+    ("memory_scenes", "entity_ids_json", True),
+    ("community_summaries", "entity_ids_json", True),
+    ("atomic_facts", "canonical_entities_json", True),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreItem:
+    operation_id: str
+    memory_id: str
+    fact_ids: tuple[str, ...]
+    blanked: str
+    original: str
+
+
+@dataclass(frozen=True, slots=True)
+class RepairPlan:
+    restorable: tuple[RestoreItem, ...]
+    not_restorable: tuple[str, ...]      # operation ids left alone
+    empty_entities: tuple[str, ...]      # entity ids nothing refers to
+
+    def summary(self) -> dict[str, int]:
+        return {
+            "memories_to_restore": len(self.restorable),
+            "memories_left_alone": len(self.not_restorable),
+            "empty_entities_to_remove": len(self.empty_entities),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RepairResult:
+    memories_restored: int
+    memories_skipped: int
+    entities_removed: int
+
+
+def is_blanked_copy(stored: str, original: str) -> bool:
+    """True when ``stored`` is ``original`` with some spans replaced by markers."""
+    if not isinstance(stored, str) or not isinstance(original, str):
+        return False
+    if stored == original or not _MARKER.search(stored):
+        return False
+    parts = _MARKER.split(stored)
+    pattern = "(?:.+?)".join(re.escape(p) for p in parts)
+    return re.fullmatch(pattern, original, re.DOTALL) is not None
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(r[1]) for r in conn.execute(f"PRAGMA table_info('{table}')")}
+
+
+def _plan_restores(conn: sqlite3.Connection) -> tuple[list[RestoreItem], list[str]]:
+    restorable: list[RestoreItem] = []
+    left: list[str] = []
+    rows = conn.execute(
+        "SELECT operation_id, raw_content, queryable_fact_ids_json "
+        "FROM ingestion_operations WHERE state='failed' AND last_error=?",
+        (_MISMATCH,),
+    ).fetchall()
+    for operation_id, original, ids_json in rows:
+        try:
+            fact_ids = tuple(str(x) for x in json.loads(ids_json or "[]"))
+        except (TypeError, ValueError):
+            fact_ids = ()
+        if not fact_ids:
+            left.append(operation_id)
+            continue
+        found = conn.execute(
+            "SELECT m.memory_id, m.content FROM atomic_facts f "
+            "JOIN memories m ON m.memory_id = f.memory_id WHERE f.fact_id=?",
+            (fact_ids[0],),
+        ).fetchone()
+        if found is None or not is_blanked_copy(found[1], original):
+            left.append(operation_id)
+            continue
+        restorable.append(RestoreItem(operation_id, str(found[0]), fact_ids,
+                                      str(found[1]), str(original)))
+    return restorable, left
+
+
+def _plan_empty_entities(conn: sqlite3.Connection) -> list[str]:
+    candidates = [str(r[0]) for r in conn.execute(
+        "SELECT entity_id FROM canonical_entities WHERE COALESCE(fact_count, 0) = 0")]
+    if not candidates:
+        return []
+    referenced: set[str] = set()
+    for table, column, is_json in _ENTITY_REFERENCES:
+        if column not in _table_columns(conn, table):
+            continue
+        if not is_json:
+            where = f"{column} IS NOT NULL"
+            if table == "entity_aliases" and "source" in _table_columns(conn, table):
+                # Every entity is created with its own name as an alias; that
+                # self-alias is not something else referring to it.
+                where += " AND COALESCE(source, '') != 'canonical'"
+            referenced.update(str(r[0]) for r in conn.execute(
+                f"SELECT DISTINCT {column} FROM {table} WHERE {where}"))
+            continue
+        for (blob,) in conn.execute(
+                f"SELECT {column} FROM {table} WHERE {column} IS NOT NULL AND {column} != ''"):
+            referenced.update(eid for eid in candidates if eid in str(blob))
+    return [eid for eid in candidates if eid not in referenced]
+
+
+def plan_repair(conn: sqlite3.Connection) -> RepairPlan:
+    """What a repair would change. Reads only."""
+    restorable, left = _plan_restores(conn)
+    return RepairPlan(tuple(restorable), tuple(left), tuple(_plan_empty_entities(conn)))
+
+
+def apply_repair(conn: sqlite3.Connection, plan: RepairPlan) -> RepairResult:
+    """Apply ``plan`` in one transaction. Rows changed since planning are skipped."""
+    restored = skipped = removed = 0
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for item in plan.restorable:
+            cur = conn.execute(
+                "UPDATE memories SET content=? WHERE memory_id=? AND content=?",
+                (item.original, item.memory_id, item.blanked))
+            if cur.rowcount != 1:
+                skipped += 1
+                continue
+            for fact_id in item.fact_ids:
+                conn.execute(
+                    "UPDATE atomic_facts SET content=? WHERE fact_id=? AND content=?",
+                    (item.original, fact_id, item.blanked))
+            conn.execute(
+                "UPDATE ingestion_operations SET state='queryable', attempt_count=0, "
+                "next_retry_at=0, last_error='', lease_owner='', lease_expires_at=0, "
+                "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+                "WHERE operation_id=? AND state='failed' AND last_error=?",
+                (item.operation_id, _MISMATCH))
+            restored += 1
+        has_alias_source = "source" in _table_columns(conn, "entity_aliases")
+        for entity_id in plan.empty_entities:
+            if has_alias_source:
+                conn.execute("DELETE FROM entity_aliases WHERE entity_id=? "
+                             "AND source='canonical'", (entity_id,))
+            cur = conn.execute(
+                "DELETE FROM canonical_entities WHERE entity_id=? "
+                "AND COALESCE(fact_count, 0) = 0", (entity_id,))
+            removed += cur.rowcount
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return RepairResult(restored, skipped, removed)
+
+
+__all__ = ["RepairPlan", "RepairResult", "RestoreItem", "apply_repair",
+           "is_blanked_copy", "plan_repair"]
