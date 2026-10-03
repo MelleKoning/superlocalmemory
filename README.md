@@ -549,7 +549,7 @@ slm mode b   # Local Ollama
 slm mode c   # Cloud LLM
 ```
 
-Mode A can run core memory operations without sending memory content to a cloud model provider. This does not disable optional connectors, cloud backup, proxy providers, dependency acquisition, or model downloads; review configuration and network policy for the deployment. The online answer check is the one exception that sends memory content: off unless you turn it on and agree, in any mode, and while it is on each recall sends its question and top memories to the provider you chose — the dashboard and the MCP `get_mode` tool say so.
+Mode A can run core memory operations without sending memory content to a cloud model provider. This does not disable optional connectors, cloud backup, proxy providers, dependency acquisition, or model downloads; review configuration and network policy for the deployment. Memory content leaves the machine in two opt-in cases, not one. The online answer check: off unless you turn it on and agree, in any mode, and while it is on each recall sends its question and top memories to the provider you chose — the dashboard and the MCP `get_mode` tool say so. Jev memory-kind typing: off unless the answer check is already using Jev AND you separately consent to kind typing — both must be the literal boolean `true` — and while it is on, a memory's content (not just the recall question) is sent to Jev to suggest its kind.
 
 SuperLocalMemory provides local storage, export/erasure commands, provenance, policy, and audit features that can support a compliance program. The software is not a legal certification, and compliance depends on the use case, operator, configuration, and surrounding systems.
 
