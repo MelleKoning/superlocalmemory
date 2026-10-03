@@ -1591,7 +1591,12 @@ def cmd_list(args: Namespace) -> None:
     """List recent memories chronologically."""
     from superlocalmemory.core.config import CANONICAL_LIST_LIMIT, SLMConfig
     from superlocalmemory.core.engine import MemoryEngine
-    from superlocalmemory.core.kind_query import InvalidKind, list_recent_facts, resolve_kind
+    from superlocalmemory.core.kind_query import (
+        InvalidKind,
+        engine_display_min_confidence,
+        list_recent_facts,
+        resolve_kind,
+    )
 
     use_json = getattr(args, 'json', False)
     # 4.1.19 WP8: refused before any engine is even built.
@@ -1612,7 +1617,13 @@ def cmd_list(args: Namespace) -> None:
         limit = getattr(args, "limit", CANONICAL_LIST_LIMIT)
         # The query already returns newest-first; pushing the bound into SQL
         # keeps this from deserializing the whole table to show twenty rows.
-        facts = list_recent_facts(engine._db, engine.profile_id, limit, parsed_kind)
+        _truncated: list[bool] = []
+        facts = list_recent_facts(
+            engine._db, engine.profile_id, limit, parsed_kind,
+            display_min_confidence=engine_display_min_confidence(engine),
+            truncated=_truncated,
+        )
+        kind_filter_truncated = bool(_truncated and _truncated[0])
     except Exception as exc:
         if use_json:
             from superlocalmemory.cli.json_output import json_print
@@ -1632,7 +1643,12 @@ def cmd_list(args: Namespace) -> None:
                 "fact_type": ftype, "created_at": (f.created_at or "")[:19],
                 **kind_fields(f),
             })
-        json_print("list", data={"results": items, "count": len(items)},
+        _data = {"results": items, "count": len(items)}
+        # 4.1.19 L2-13/M2: say so rather than returning a silent short answer
+        # when the kind filter's windowed fetch hit its hard cap.
+        if kind_filter_truncated:
+            _data["kind_filter_truncated"] = True
+        json_print("list", data=_data,
                    next_actions=[
                        {"command": "slm recall '<query>' --json", "description": "Search memories"},
                        {"command": "slm delete <fact_id> --json --yes", "description": "Delete a memory"},
@@ -1649,6 +1665,11 @@ def cmd_list(args: Namespace) -> None:
             ftype = ftype_raw.value if hasattr(ftype_raw, "value") else str(ftype_raw)
             content = f.content[:100] + ("..." if len(f.content) > 100 else "")
             print(f"  {i:3d}. [{date}] ({ftype}) {content}")
+    if kind_filter_truncated:
+        print(
+            "\nNote: the kind filter stopped at its search cap before "
+            "--limit was filled; more matches may exist.",
+        )
 
     # V3.3.21: Show pending memories (store-first pattern)
     try:

@@ -653,7 +653,12 @@ def register_core_tools(server, get_engine: Callable) -> None:
         including memories SLM only mapped from their legacy type. Refused
         (``INVALID_KIND``) before anything is retrieved if it does not parse.
         """
-        from superlocalmemory.core.kind_query import InvalidKind, resolve_kind, search_facts
+        from superlocalmemory.core.kind_query import (
+            InvalidKind,
+            engine_display_min_confidence,
+            resolve_kind,
+            search_facts,
+        )
         from superlocalmemory.storage.memory_kinds import kind_fields
         try:
             parsed_kind = resolve_kind(kind)
@@ -663,7 +668,12 @@ def register_core_tools(server, get_engine: Callable) -> None:
         try:
             engine = get_engine()
             pid = await _runtime_profile(get_engine)
-            facts = search_facts(engine._db, query, pid, limit, parsed_kind)
+            _truncated: list[bool] = []
+            facts = search_facts(
+                engine._db, query, pid, limit, parsed_kind,
+                display_min_confidence=engine_display_min_confidence(engine),
+                truncated=_truncated,
+            )
             items = []
             for f in facts:
                 items.append({
@@ -674,7 +684,13 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     "date": f.observation_date,
                     **kind_fields(f),
                 })
-            return {"success": True, "results": items, "count": len(items)}
+            result = {"success": True, "results": items, "count": len(items)}
+            # 4.1.19 L2-13/M2: told, never a silent short answer, when the
+            # kind filter's windowed fetch hit its hard cap before `limit`
+            # was filled and the store was not exhausted.
+            if _truncated and _truncated[0]:
+                result["kind_filter_truncated"] = True
+            return result
         except Exception as exc:
             logger.exception("search failed")
             return {"success": False, "error": str(exc)}
@@ -747,7 +763,12 @@ def register_core_tools(server, get_engine: Callable) -> None:
         including memories SLM only mapped from their legacy type. Refused
         (``INVALID_KIND``) before anything is retrieved if it does not parse.
         """
-        from superlocalmemory.core.kind_query import InvalidKind, list_recent_facts, resolve_kind
+        from superlocalmemory.core.kind_query import (
+            InvalidKind,
+            engine_display_min_confidence,
+            list_recent_facts,
+            resolve_kind,
+        )
         from superlocalmemory.storage.memory_kinds import kind_fields
         try:
             parsed_kind = resolve_kind(kind)
@@ -760,7 +781,12 @@ def register_core_tools(server, get_engine: Callable) -> None:
             # v3.6.12 (search-2): push the limit into the query — was loading the
             # ENTIRE facts table (deserializing every 768-float embedding) just
             # to return the top N. get_all_facts preserves created_at DESC order.
-            facts = list_recent_facts(engine._db, pid, limit, parsed_kind)
+            _truncated: list[bool] = []
+            facts = list_recent_facts(
+                engine._db, pid, limit, parsed_kind,
+                display_min_confidence=engine_display_min_confidence(engine),
+                truncated=_truncated,
+            )
             items = []
             for f in facts:
                 items.append({
@@ -771,7 +797,11 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     "session_id": f.session_id,
                     **kind_fields(f),
                 })
-            return {"success": True, "results": items, "count": len(items)}
+            result = {"success": True, "results": items, "count": len(items)}
+            # 4.1.19 L2-13/M2: see the matching note in search() above.
+            if _truncated and _truncated[0]:
+                result["kind_filter_truncated"] = True
+            return result
         except Exception as exc:
             logger.exception("list_recent failed")
             return {"success": False, "error": str(exc)}

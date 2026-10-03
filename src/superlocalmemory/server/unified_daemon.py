@@ -1111,12 +1111,14 @@ def _recall_keyword_fallback(
         candidates = [dict(r) for r in rows]
         if has_facets:
             try:
+                from superlocalmemory.core.kind_query import (
+                    engine_display_min_confidence,
+                )
                 from superlocalmemory.retrieval.facets import matching_fact_ids
                 keep = matching_fact_ids(
                     db, [c["fact_id"] for c in candidates], pid, facets,
                     # M3: the configured threshold, same as full recall.
-                    display_min_confidence=(
-                        engine._config.memory_kinds.display_min_confidence),
+                    display_min_confidence=engine_display_min_confidence(engine),
                 )
                 candidates = [c for c in candidates if c["fact_id"] in keep]
             except Exception as exc:  # noqa: BLE001 - a filter that cannot
