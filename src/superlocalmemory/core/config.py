@@ -18,6 +18,8 @@ from pathlib import Path
 
 from superlocalmemory.core import answer_check_state as _answer_check_state
 from superlocalmemory.core import config_upgrades as _config_upgrades
+from superlocalmemory.core import memory_kind_config as _memory_kind_config
+from superlocalmemory.core.memory_kind_config import MemoryKindConfig
 from superlocalmemory.infra.data_root import DynamicStatePath, canonical_data_root
 from superlocalmemory.storage.models import Mode
 
@@ -1237,6 +1239,9 @@ class SLMConfig:
     health: HealthConfig = field(default_factory=HealthConfig)
     # v3.8.4-G: Graph thinning parameters (#84)
     graph_pruning: GraphPruningConfig = field(default_factory=GraphPruningConfig)
+    # 4.1.19: memory kinds. Stored in memory_kinds.json (one file for every
+    # mode, like the answer check), see core/memory_kind_config.py.
+    memory_kinds: MemoryKindConfig = field(default_factory=MemoryKindConfig)
 
     # v3.4.3: Daemon configuration
     daemon_idle_timeout: int = 0       # 0 = 24/7 (no auto-kill). >0 = seconds before auto-kill.
@@ -1468,6 +1473,8 @@ class SLMConfig:
         # file this is (config.json or a mode_<x>.json) — see
         # core/answer_check_state.py. Nothing stored yet = this file's values.
         config.retrieval = _answer_check_state.overlay_safely(config.retrieval, path.parent)
+        config.memory_kinds = _memory_kind_config.load_memory_kind_config(
+            path.parent, data.get("memory_kinds"))
 
         # 4.1.0 (#124): restore the two sections save() now writes. This runs
         # AFTER for_mode() has applied its presets, so a value someone chose
@@ -1883,6 +1890,7 @@ class SLMConfig:
         """
         config = cls._mode_template(mode, base_dir, **overrides)
         config.retrieval = _answer_check_state.overlay_safely(config.retrieval, config.base_dir)
+        config.memory_kinds = _memory_kind_config.load_memory_kind_config(config.base_dir)
         _answer_check_state.remember_baseline(config)
         return config
 

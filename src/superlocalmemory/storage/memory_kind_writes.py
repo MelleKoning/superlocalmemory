@@ -15,6 +15,9 @@ literal: every kind in or out is a ``MemoryKind`` member or its ``.value``.
 from __future__ import annotations
 
 import sqlite3
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Sequence
 
@@ -47,9 +50,54 @@ _HISTORY_INSERT_SQL = (
 )
 
 
+def _autocheckpoint(conn: sqlite3.Connection) -> int:
+    try:
+        row = conn.execute("PRAGMA wal_autocheckpoint").fetchone()
+        return int(row[0]) if row is not None else 0
+    except (sqlite3.Error, TypeError, ValueError):
+        return 0
+
+
+@contextmanager
+def _batch_connection(db: "DatabaseManager") -> Iterator[sqlite3.Connection]:
+    """A write connection whose automatic checkpoint waits until after the batch.
+
+    SQLite runs its automatic checkpoint inside COMMIT — after the write lock
+    is released, but while this process still holds the manager's lock (the
+    ``raw_connection`` block). Measured on a copy of a real store, it was most
+    of that time (50 rows: 13.7 ms with it, 1.1 ms without). So a batch
+    pauses it on its own connection and ``_checkpoint_after`` runs the same
+    passive checkpoint once both locks are free. Other connections keep
+    checkpointing exactly as before.
+    """
+    with db.raw_connection() as conn:
+        previous = _autocheckpoint(conn)
+        if previous:
+            conn.execute("PRAGMA wal_autocheckpoint=0")
+        try:
+            yield conn
+        finally:
+            if previous:
+                try:
+                    conn.execute(f"PRAGMA wal_autocheckpoint={int(previous)}")
+                except sqlite3.Error:
+                    pass
+
+
+def _checkpoint_after(db: "DatabaseManager") -> None:
+    try:
+        db.execute("PRAGMA wal_checkpoint(PASSIVE)")
+    except sqlite3.Error:
+        pass
+
+
+def _held_ms(started: float) -> float:
+    return (time.perf_counter() - started) * 1000.0
+
+
 def apply_batch(
     db: "DatabaseManager", run_id: str, profile_id: str, changes: Sequence["KindChange"],
-    *, new_cursor: int, actor: str,
+    *, new_cursor: int, actor: str, examined: int | None = None,
 ) -> "BatchResult":
     """Apply a batch of kind changes and advance the run cursor, atomically.
 
@@ -57,6 +105,10 @@ def apply_batch(
     concurrent writer touched since selection is skipped, not clobbered. If
     the run is no longer `running` (paused/cancelled meanwhile) the whole
     batch is rolled back and reported inactive, never raised.
+
+    ``examined`` (facts the batch looked at, changed or not) lets the run's
+    ``processed``/``skipped`` counters move in this same transaction; without
+    it ``processed`` grows by ``len(changes)`` and ``skipped`` is left alone.
     """
     from superlocalmemory.storage.memory_kind_store import BatchResult
 
@@ -70,7 +122,8 @@ def apply_batch(
     now = _now_iso()
     applied = 0
     skipped = 0
-    with db.raw_connection() as conn:
+    with _batch_connection(db) as conn:
+        started = time.perf_counter()
         conn.execute("BEGIN IMMEDIATE")
         try:
             for change in changes:
@@ -103,21 +156,29 @@ def apply_batch(
                 else:
                     skipped += 1
 
+            looked_at = len(changes) if examined is None else max(examined, len(changes))
+            not_changed = 0 if examined is None else looked_at - applied
             run_cur = conn.execute(
                 "UPDATE memory_kind_runs SET cursor_rowid = ?, processed = processed + ?, "
-                "changed = changed + ?, updated_at = ? WHERE run_id = ? AND status = 'running'",
-                (new_cursor, len(changes), applied, now, run_id),
+                "changed = changed + ?, skipped = skipped + ?, updated_at = ? "
+                "WHERE run_id = ? AND status = 'running'",
+                (new_cursor, looked_at, applied, not_changed, now, run_id),
             )
             if run_cur.rowcount != 1:
                 conn.execute("ROLLBACK")
-                return BatchResult(
+                result = BatchResult(
                     applied=0, skipped=len(changes), cursor=new_cursor, run_still_active=False,
+                    write_ms=_held_ms(started),
                 )
-            conn.commit()
+            else:
+                conn.commit()
+                result = BatchResult(applied=applied, skipped=skipped, cursor=new_cursor,
+                                     run_still_active=True, write_ms=_held_ms(started))
         except Exception:
             conn.rollback()
             raise
-    return BatchResult(applied=applied, skipped=skipped, cursor=new_cursor, run_still_active=True)
+    _checkpoint_after(db)
+    return result
 
 
 def revert_batch(
@@ -135,7 +196,8 @@ def revert_batch(
         return BatchResult(applied=0, skipped=0, cursor=0, run_still_active=False)
 
     now = _now_iso()
-    with db.raw_connection() as conn:
+    with _batch_connection(db) as conn:
+        started = time.perf_counter()
         conn.execute("BEGIN IMMEDIATE")
         try:
             run_row = conn.execute(
@@ -162,13 +224,17 @@ def revert_batch(
             for row in rows:
                 d = _row_dict(row)
                 last_history_id = d["history_id"]
+                # Undoing onto an untyped row restores it exactly: all five
+                # columns NULL again, not an untyped row with a timestamp.
                 cur = conn.execute(
                     "UPDATE atomic_facts SET memory_kind = ?, memory_kind_source = ?, "
                     "memory_kind_confidence = ?, memory_kind_recipe = NULL, "
-                    "memory_kind_at = ? WHERE fact_id = ? AND profile_id = ? "
+                    "memory_kind_at = CASE WHEN ? IS NULL THEN NULL ELSE ? END "
+                    "WHERE fact_id = ? AND profile_id = ? "
                     "AND memory_kind IS ? AND memory_kind_source IS ?",
                     (
-                        d["old_kind"], d["old_source"], d["old_confidence"], now,
+                        d["old_kind"], d["old_source"], d["old_confidence"],
+                        d["old_kind"], now,
                         d["fact_id"], profile_id, d["new_kind"], d["new_source"],
                     ),
                 )
@@ -199,11 +265,14 @@ def revert_batch(
             )
             conn.execute(status_sql, status_params)
             conn.commit()
+            held = _held_ms(started)
         except Exception:
             conn.rollback()
             raise
+    _checkpoint_after(db)
     return BatchResult(
         applied=applied, skipped=skipped, cursor=last_history_id, run_still_active=not finished,
+        write_ms=held,
     )
 
 

@@ -1027,6 +1027,11 @@ def main() -> None:
 
     register_summary_parser(sub)
 
+    # 4.1.19: memory kinds (status, settings, undoable classification runs).
+    from superlocalmemory.cli.kinds_cmd import register_kinds_parser
+
+    register_kinds_parser(sub)
+
     # V4.0.6: GDPR subject-rights CLI (Art.15/17/20)
     gdpr_p = sub.add_parser(
         "gdpr",

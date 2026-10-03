@@ -3216,6 +3216,12 @@ async def lifespan(application: FastAPI):
         global _engine, _profile_runtime
         _profile_runtime = profile_runtime
         _engine = engine
+        # "Classify my memories" runs (user-started; a run left running resumes).
+        try:
+            from superlocalmemory.server.routes.memory_kinds import start_backfill
+            start_backfill(application)
+        except Exception as exc:  # pragma: no cover — optional feature
+            logger.warning("memory kind runner not started: %s", type(exc).__name__)
 
         # Boot sweep for wedged enrichment leases (#131): a killed daemon
         # leaves rows stuck in enriching; the materializer loop reclaims
@@ -3485,7 +3491,12 @@ async def lifespan(application: FastAPI):
     except Exception as exc:  # pragma: no cover — defensive
         logger.warning("enrichment pool shutdown failed (non-fatal): %s", exc)
 
-    materializer_stopped = _stop_pending_materializer()
+    try:
+        from superlocalmemory.server.routes.memory_kinds import stop_backfill
+        kind_runner_stopped = stop_backfill(application)
+    except Exception:  # pragma: no cover — defensive
+        kind_runner_stopped = True
+    materializer_stopped = _stop_pending_materializer() and kind_runner_stopped
     canonical_writer_stopped = _release_canonical_remember_runtime(application)
     _profile_runtime = None
     _engine = None
@@ -4210,6 +4221,10 @@ def _register_dashboard_routes(application: FastAPI) -> None:
     # Answer-check settings (4.1.18): on-device Laya, hosted Jev, or off.
     from superlocalmemory.server.routes.answer_check import router as answer_check_router
     application.include_router(answer_check_router)
+
+    # Memory kinds (4.1.19): status, settings, review, classification runs.
+    from superlocalmemory.server.routes import memory_kinds as _memory_kinds_routes
+    _memory_kinds_routes.register(application)
 
     # Task #47: dashboard-editable rate limits (GET/PUT /api/v3/ratelimit)
     from superlocalmemory.server.routes.ratelimit import router as ratelimit_router

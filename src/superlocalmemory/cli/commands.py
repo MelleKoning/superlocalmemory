@@ -477,6 +477,12 @@ def _cmd_summary_dispatch(args: Namespace) -> None:
     cmd_summary(args)
 
 
+def _cmd_kinds_dispatch(args: Namespace) -> None:
+    """4.1.19: memory kinds through the daemon (cli/kinds_cmd.py)."""
+    from superlocalmemory.cli.kinds_cmd import cmd_kinds
+    cmd_kinds(args)
+
+
 # ---- end SLM v3.6 Optimize dispatch functions ----
 
 
@@ -610,6 +616,7 @@ def dispatch(args: Namespace) -> None:
         # V4.0.6: GDPR subject-rights CLI (Art.15/17/20)
         "gdpr": _cmd_gdpr_dispatch,
         "summary": _cmd_summary_dispatch,
+        "kinds": _cmd_kinds_dispatch,
     }
     handler = handlers.get(args.command)
     if handler:
@@ -2507,6 +2514,7 @@ _COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("trace", "Recall with a per-channel score breakdown"),
         ("ingest", "Ingest external observations / documents"),
         ("summary", "Readable summaries: session, day, or project"),
+        ("kinds", "Memory kinds: status, settings, classify (undoable)"),
     ]),
     ("Privacy & compliance", [
         # gdpr shipped in 4.0.6 but was never listed here, so `slm help` did not
