@@ -202,6 +202,31 @@ def test_a_strong_cue_beats_a_disagreeing_extractor_hint() -> None:
     assert out[0].kind is K.RULE and out[0].source is KindSource.RULES
 
 
+def test_llm_hint_cannot_grant_correction_without_a_cue_or_a_verify_check() -> None:
+    # L2-11: the Mode B/C extraction call gets no separate yes/no check and no
+    # verify score (unlike Laya/Jev's `_merge`), so its own say-so is never
+    # enough - "correction" must fall back to the rules suggestion exactly
+    # like any other model trouble (test_model_failure_falls_back_to_rules).
+    hinted = AtomicFact(content="The office wifi network is called Orion-5G.",
+                        memory_kind=K.CORRECTION.value,
+                        memory_kind_source=KindSource.MODEL_LLM.value,
+                        memory_kind_recipe="kinds-v1:llm")
+    out = _clf(mode=Mode.B, llm=True).suggest([hinted], caller_kind=None)
+    assert out[0].kind is K.SEMANTIC and out[0].source is KindSource.RULES
+
+
+def test_llm_hint_of_correction_on_a_genuine_cue_still_shows_as_rules_correction() -> None:
+    # A real correction cue types the fact as `correction` on its own (the
+    # rules suggestion, computed independently of the model). The LLM's
+    # agreement changes nothing: it is still never the credited source.
+    hinted = AtomicFact(content="Correction: the API limit is 100 per minute.",
+                        memory_kind=K.CORRECTION.value,
+                        memory_kind_source=KindSource.MODEL_LLM.value,
+                        memory_kind_recipe="kinds-v1:llm")
+    out = _clf(mode=Mode.B, llm=True).suggest([hinted], caller_kind=None)
+    assert out[0].kind is K.CORRECTION and out[0].source is KindSource.RULES
+
+
 @pytest.mark.parametrize("failure", [
     None, [], RuntimeError("worker died"), TimeoutError(), "not-a-list",
     lambda docs: [_answer(K.OPINION.value)] * (len(docs) + 1),
