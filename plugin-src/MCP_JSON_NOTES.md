@@ -18,10 +18,11 @@ losing every memory. Omitted, SLM resolves its canonical data root, which is the
 same store every other surface uses — and on a fresh machine that is a new store
 anyway, so nothing is lost either way.
 
-**`SLM_MCP_PROFILE: code` narrowed the tool set.** `code` is 31 tools; it drops
+**`SLM_MCP_PROFILE: code` narrowed the tool set.** `code` (38 tools) drops
 the 8 mesh tools among others. Forcing it overrode a wider profile the user had
-deliberately configured. Omitted, the server uses whatever the environment says,
-which is the user's decision to make and not the plugin's.
+deliberately configured. Omitted, the server falls back to the same no-profile
+default as every other install — the 54-tool `full` surface — which is the
+user's decision to narrow or not, not the plugin's.
 
 `SLM_AGENT_ID` stays: it is attribution, not configuration, and it is what lets
 memories written from Claude Code be told apart from every other agent.

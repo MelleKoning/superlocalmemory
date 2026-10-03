@@ -83,17 +83,27 @@ When the SLM MCP server is unavailable, use these CLI equivalents:
 
 ## Tool reference (core profile — 18 tools)
 
-> The MCP config ships `SLM_MCP_PROFILE=code` and `SLM_AGENT_ID=claude_code` (38 tools):
-> the 18 core tools below **plus** 6 code-graph tools (`build_code_graph`,
-> `get_blast_radius`, `query_graph`, `semantic_search_code`, `get_review_context`,
-> `detect_changes`), 5 portable-evidence tools (`get_brain_evidence_status`,
-> `record_agent_experience`, `record_cognitive_turn`, `finalize_cognitive_turn`,
-> `observe_bounded_loop_evidence`), 3 bounded-loop tools (`slm_loop_run`,
-> `slm_loop_history`, `slm_loop_show`), 2 usefulness reports (`report_outcome`,
-> `report_feedback`) and 4 memory-kind tools (`set_memory_kind`,
-> `memory_kinds_status`, `review_memory_kinds`, `confirm_memory_kinds`).
-> Use `full` (54 tools) to add mesh coordination. Use `power` (66 tools) for governance
-> and audit tools. See slm-profile for profile switching.
+> The MCP config ships only `SLM_AGENT_ID=claude_code` — no `SLM_MCP_PROFILE` —
+> so it falls back to the same no-profile default every install gets: the
+> 54-tool `full` surface. That is the 18 core tools below **plus** mesh
+> coordination (8: `mesh_summary`, `mesh_peers`, `mesh_send`, `mesh_inbox`,
+> `mesh_state`, `mesh_lock`, `mesh_events`, `mesh_status`), portable-evidence
+> tools (5: `get_brain_evidence_status`, `record_agent_experience`,
+> `record_cognitive_turn`, `finalize_cognitive_turn`,
+> `observe_bounded_loop_evidence`), memory-kind tools (4: `set_memory_kind`,
+> `memory_kinds_status`, `review_memory_kinds`, `confirm_memory_kinds`),
+> bounded-loop tools (3: `slm_loop_run`, `slm_loop_history`, `slm_loop_show`),
+> usefulness reports (2: `report_outcome`, `report_feedback`) and 14 more
+> administration/learning tools (`delete_memory`, `get_status`, `observe`,
+> `run_maintenance`, `consolidate_cognitive`, `get_soft_prompts`, `set_mode`,
+> `log_tool_event`, `get_assertions`, `reinforce_assertion`,
+> `contradict_assertion`, `evolve_skill`, `skill_health`, `skill_lineage`).
+> Set `SLM_MCP_PROFILE=code` yourself for the narrower 38-tool `code` surface,
+> which trades mesh and administration tools for 6 code-graph tools
+> (`build_code_graph`, `get_blast_radius`, `query_graph`,
+> `semantic_search_code`, `get_review_context`, `detect_changes`). Use
+> `power` (66 tools) for governance and audit tools. See slm-profile for
+> profile switching.
 
 | Tool               | Signature (key params)                                                                       | Notes                                  |
 |--------------------|----------------------------------------------------------------------------------------------|----------------------------------------|

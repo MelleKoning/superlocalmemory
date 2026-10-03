@@ -54,3 +54,35 @@ def test_every_named_profile_is_quoted_in_the_setup_snippet() -> None:
     assert quoted == set(_PROFILE_DEFINITIONS), (
         f"snippet lists {sorted(quoted)}, real profiles are {sorted(_PROFILE_DEFINITIONS)}"
     )
+
+
+# The file-header example response (an illustration of what GET
+# /api/v3/mcp/profiles returns), e.g.:
+#   core:  { count: 14, tools: [...], description: "..." },
+_HEADER_EXAMPLE_CLAIM = re.compile(r"(\w+):\s*\{\s*count:\s*(\d+),")
+
+
+def test_the_header_example_response_matches_the_real_profile_counts() -> None:
+    """od-mcp.js opens with a worked example of the endpoint's JSON shape.
+    It is documentation, not live code, so nothing re-derives it from the
+    real profile sets — it drifted to core 14 / code 28 / full 46 / power 58
+    while the live snippet below it (checked above) was already correct.
+    """
+    text = OD_MCP_JS.read_text(encoding="utf-8")
+    header = text.split("// CSP-safe", 1)[0]
+    claims = [
+        (name, int(count))
+        for name, count in _HEADER_EXAMPLE_CLAIM.findall(header)
+        if name in _PROFILE_DEFINITIONS
+    ]
+    assert claims, (
+        f"{OD_MCP_JS.name}'s header example no longer states a tool count per "
+        f"profile; if that was deliberate, delete this test rather than "
+        f"leaving it passing vacuously"
+    )
+    for name, advertised in claims:
+        real = len(_PROFILE_DEFINITIONS[name])
+        assert advertised == real, (
+            f"{OD_MCP_JS.name} header example says {name!r} is {advertised} "
+            f"tools; it actually holds {real}"
+        )

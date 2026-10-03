@@ -11,7 +11,7 @@ SuperLocalMemory v4.1.18 · Qualixar · AGPL-3.0-or-later
 | Capability         | How                                            |
 |--------------------|------------------------------------------------|
 | Agent rules        | `AGENTS.md` — loaded automatically per project |
-| MCP memory tools   | `.codex/config.toml` — 29-tool code profile with portable Brain evidence |
+| MCP memory tools   | `.codex/config.toml` — 38-tool code profile with portable Brain evidence |
 | Lifecycle hooks    | `hooks/hooks.json` — session start/stop/prompt |
 | Slash skills       | `skills/*/SKILL.md` — 11 skills via `/skills`  |
 | Venv launcher      | `scripts/slm-launch` — optional isolated mode  |
@@ -72,8 +72,9 @@ args = ["mcp"]
 env = { SLM_MCP_PROFILE = "code", SLM_AGENT_ID = "codex", SLM_DATA_DIR = "~/.superlocalmemory" }
 ```
 
-This registers the `superlocalmemory` MCP server with `SLM_MCP_PROFILE=code` (the 28-tool
-code profile: memory, portable Brain evidence, code graph, profile switching, and bounded loops).
+This registers the `superlocalmemory` MCP server with `SLM_MCP_PROFILE=code` (the 38-tool
+code profile: memory, portable Brain evidence, code graph, profile switching, memory-kind
+management, and bounded loops).
 
 ### 3 — Append lifecycle hooks (optional)
 

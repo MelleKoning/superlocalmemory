@@ -6,12 +6,12 @@
 //
 // Endpoint: GET /api/v3/mcp/profiles
 //   {
-//     current: "core",
+//     current: "full",
 //     profiles: {
-//       core:  { count: 14, tools: [...], description: "..." },
-//       code:  { count: 28, tools: [...], description: "..." },
-//       full:  { count: 46, tools: [...], description: "..." },
-//       power: { count: 58, tools: [...], description: "..." },
+//       core:  { count: 18, tools: [...], description: "..." },
+//       code:  { count: 38, tools: [...], description: "..." },
+//       full:  { count: 54, tools: [...], description: "..." },
+//       power: { count: 66, tools: [...], description: "..." },
 //       mesh:  { count:  8, tools: [...], description: "..." },
 //     },
 //     aliases: { "code21": "code", ... },

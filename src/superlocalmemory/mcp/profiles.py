@@ -59,17 +59,19 @@ _PROFILE_KINDS: frozenset[str] = frozenset({
 _PROFILE_CODE: frozenset[str] = _PROFILE_CORE | _PROFILE_BRAIN | _PROFILE_KINDS | frozenset({  # 38
     "build_code_graph", "get_blast_radius", "query_graph",
     "semantic_search_code", "get_review_context", "detect_changes",
-    # switch_profile lets a plugin/IDE session change the active workspace over
-    # MCP (the plugin ships SLM_MCP_PROFILE=code, so it must be here). The
-    # underlying route is RBAC member-gated, so company-mode isolation holds.
+    # switch_profile lets a plugin/IDE session change the active workspace
+    # over MCP (already in _PROFILE_CORE; listed again here for readability
+    # of this profile's composition). The underlying route is RBAC
+    # member-gated, so company-mode isolation holds.
     "switch_profile",
-    # v3.8.0: bounded loops on the MCP surface. Coding agents (the /slm-loop
-    # command's audience) run gated, bounded loops and inspect the ledger.
+    # v3.8.0: bounded loops on the MCP surface. Coding agents — the
+    # audience that opts into SLM_MCP_PROFILE=code for the code-graph tools
+    # above — also run gated, bounded loops and inspect the ledger.
     "slm_loop_run", "slm_loop_history", "slm_loop_show",
     # Retrieval ranks a memory partly on whether it has actually helped, and
-    # the only evidence of that comes from the assistant that used it. The
-    # plugin ships SLM_MCP_PROFILE=code, so without these two the ranker has
-    # no input at all for the audience it exists to serve.
+    # the only evidence of that comes from the assistant that used it. A
+    # session running SLM_MCP_PROFILE=code needs these two or the ranker has
+    # no input at all for that audience.
     "report_outcome", "report_feedback",
 })
 
