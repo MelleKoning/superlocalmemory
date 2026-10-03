@@ -306,12 +306,12 @@ def test_errors_never_leak_a_traceback(tmp_path, monkeypatch) -> None:
     tc, app, db = _client(tmp_path, monkeypatch)
 
     def boom(*a, **k):
-        raise RuntimeError("/Users/secret/path memory text")
+        raise RuntimeError("/Users/alice/private-notes memory text")
 
     monkeypatch.setattr(app.state.memory_kind_backfill, "status", boom)
     r = tc.get("/api/memory-kinds/status")
     assert r.status_code == 500
-    assert "secret" not in r.text and "Traceback" not in r.text
+    assert "private-notes" not in r.text and "Traceback" not in r.text
 
 
 def test_start_and_stop_backfill_own_one_thread(tmp_path, monkeypatch) -> None:
