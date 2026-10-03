@@ -400,6 +400,29 @@ def main() -> None:
         action="store_true",
         help="Daemon must be stopped. Allows delete_unverified. Use for a leaked store.",
     )
+    db_points_p = db_sub.add_parser(
+        "restore-points", help="List the copies of your memories you can go back to",
+    )
+    db_points_p.add_argument("--json", action="store_true", help="Output JSON")
+    db_restore_p = db_sub.add_parser(
+        "restore", help="Go back to a restore point (applied when SLM next starts)",
+    )
+    db_restore_p.add_argument("point_id", nargs="?", default=None,
+                              help="Restore point id from `slm db restore-points`")
+    db_restore_p.add_argument("--yes", action="store_true", help="Confirm without asking")
+    db_restore_p.add_argument("--cancel", action="store_true",
+                              help="Cancel a restore that has not run yet")
+    db_restore_p.add_argument("--no-reimport", dest="no_reimport", action="store_true",
+                              help="Do not re-add memories saved after the restore point")
+    db_restore_p.add_argument("--json", action="store_true", help="Output JSON")
+    db_downgrade_p = db_sub.add_parser(
+        "prepare-downgrade",
+        help="Get your memories ready to run on the previous SLM version",
+    )
+    db_downgrade_p.add_argument("--yes", action="store_true", help="Confirm without asking")
+    db_downgrade_p.add_argument("--cancel", action="store_true",
+                                help="Cancel a prepared downgrade")
+    db_downgrade_p.add_argument("--json", action="store_true", help="Output JSON")
 
     # -- Mesh inspection (v3.7.9, M-03) --------------------------------
     mesh_p = sub.add_parser("mesh", help="Inspect the local agent mesh (status/peers)")

@@ -99,6 +99,15 @@ def _cmd_db_dispatch(args: Namespace) -> None:
         if rc:
             sys.exit(rc)
         return
+    if sub in ("restore-points", "restore", "prepare-downgrade"):
+        from superlocalmemory.cli import upgrade_cmd
+        handler = {"restore-points": upgrade_cmd.cmd_db_restore_points,
+                   "restore": upgrade_cmd.cmd_db_restore,
+                   "prepare-downgrade": upgrade_cmd.cmd_db_prepare_downgrade}[sub]
+        rc = handler(args)
+        if rc:
+            sys.exit(rc)
+        return
     print(
         "Usage: slm db migrate [--status] [--dry-run] "
         "| slm db scale <action> "

@@ -2085,10 +2085,35 @@ async def lifespan(application: FastAPI):
             _path_config = _SLMFallback.for_mode(_ModeFallback.A)
         _learning_db = _learning_db_for_config(_path_config)
         _memory_db = _memory_db_for_config(_path_config)
+        _data_root = Path(_memory_db).parent
+        application.state.upgrade_data_root = _data_root
+        # 4.1.19 step 0: a restore the user asked for runs before migrations
+        # (their clean-up could otherwise delete the restore point) and
+        # before anything opens the store.
+        try:
+            from superlocalmemory.storage._restore_boot import perform_pending_restore
+
+            _restored = perform_pending_restore(
+                _data_root, Path(_memory_db), Path(_learning_db), config=_path_config,
+            )
+            if _restored is not None:
+                logger.info("restore point applied at start-up: %s", _restored)
+        except Exception as _restore_exc:  # never block start-up; the request stays pending
+            logger.error("requested restore did not run: %s", _restore_exc)
         import time as _time_mod
         _t0 = _time_mod.monotonic()
         _result = apply_all(_learning_db, _memory_db)
         _elapsed = _time_mod.monotonic() - _t0
+        # 4.1.19: one-time repair of damage from earlier builds. Runs only after
+        # a verified pre-upgrade copy exists and M052 completed; records itself.
+        try:
+            from superlocalmemory.storage.upgrade_repair import run_store_repair_once
+
+            _repair = run_store_repair_once(_data_root, Path(_memory_db))
+            if _repair:
+                logger.info("one-time store repair: %s", _repair)
+        except Exception as _repair_exc:  # never block start-up
+            logger.error("one-time store repair skipped: %s", _repair_exc)
         _applied = _result.get("applied", [])
         _failed = _result.get("failed", [])
         _backup_dir = _result.get("details", {}).get("_backup")
@@ -2274,6 +2299,20 @@ async def lifespan(application: FastAPI):
         # subprocess per engine, so warming from wiring would have every `slm
         # status` spawn one and load a model it will never use.
         _start_embedder_warmup(engine)
+
+        # 4.1.19: memories saved after the restored copy are re-added now that
+        # the engine can admit them (no-op when no restore happened).
+        try:
+            from superlocalmemory.storage._restore_reimport import run_pending_reimport
+
+            _reimport = run_pending_reimport(
+                engine, getattr(application.state, "upgrade_data_root", None)
+                or Path(_memory_db_for_config(config)).parent,
+            )
+            if _reimport is not None:
+                logger.info("re-imported after restore: %s", _reimport)
+        except Exception as _reimport_exc:  # never block start-up
+            logger.error("re-import after restore did not run: %s", _reimport_exc)
 
         # Tell the hook subprocesses that skill evolution is on. The hook reads
         # this env var as its fast-path signal and nothing ever set it, so the
@@ -4221,6 +4260,8 @@ def _register_dashboard_routes(application: FastAPI) -> None:
     application.include_router(answer_check_router)
     from superlocalmemory.server.routes.facets import router as facets_router
     application.include_router(facets_router)
+    from superlocalmemory.server.routes.upgrade_restore import register as register_upgrade
+    register_upgrade(application)
 
     # Task #47: dashboard-editable rate limits (GET/PUT /api/v3/ratelimit)
     from superlocalmemory.server.routes.ratelimit import router as ratelimit_router
