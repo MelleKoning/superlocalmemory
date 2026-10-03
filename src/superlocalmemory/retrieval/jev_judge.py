@@ -38,7 +38,10 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from superlocalmemory import __version__ as _SLM_VERSION
+from superlocalmemory.core import recall_gate
 from superlocalmemory.core.judge_keys import JudgeKeyStore
+from superlocalmemory.encoding.memory_kind_recipe import KindAnswer, KindRecipe
+from superlocalmemory.retrieval import jev_kinds
 from superlocalmemory.retrieval.answer_check_status import (
     STATUS_JUDGED,
     STATUS_OFF,
@@ -400,6 +403,38 @@ class JevSufficiencyJudge:
             )
             return None
         return probabilities
+
+    # -- memory typing (background only, separate consent) -----------------
+
+    def ask_kinds(self, documents: Sequence[str], recipe: KindRecipe,
+                  verify_indices: Sequence[int], *, consent: bool) -> list[KindAnswer] | None:
+        """One kind answer per memory from ONE request, or None. Never retried.
+
+        ``consent`` is the typing consent (``memory_kinds.jev_consent``), separate
+        from the answer check's: typing sends every memory, not a recall's top
+        three. Only the literal ``True`` counts. Background threads only, and
+        only while the answer check itself is still Jev with its own consent.
+        """
+        if consent is not True or not recall_gate.is_background_work():
+            return None
+        if self._hosted.closed or not self._still_chosen(rerank=False):
+            return None
+        key = self._usable_key()
+        if not key:
+            return None
+        body = jev_kinds.build_request(self._model, documents, recipe, verify_indices)
+        if body is None:
+            return None
+        recall_gate.wait_for_foreground_idle()
+        raw = self._send(key, None, json=body)
+        if raw is None:
+            return None
+        answers = jev_kinds.parse_response(
+            raw, body, recipe, lambda returned: _is_requested_model(returned, self._model))
+        if answers is None:
+            logger.warning("jev kinds: malformed response from %s; ignoring it",
+                           self._provider)
+        return answers
 
     # -- the optional reordering -------------------------------------------
 

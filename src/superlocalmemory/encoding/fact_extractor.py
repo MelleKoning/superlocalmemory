@@ -34,6 +34,7 @@ import uuid
 from typing import Any, Protocol, runtime_checkable
 
 from superlocalmemory.core.config import EncodingConfig
+from superlocalmemory.encoding import llm_kind_hint
 from superlocalmemory.encoding.prospective_markers import looks_prospective
 from superlocalmemory.storage.models import AtomicFact, FactType, Mode, SignalType
 
@@ -445,11 +446,15 @@ class FactExtractor:
         llm: LLMBackboneProtocol | None = None,
         embedder: EmbedderProtocol | None = None,
         mode: Mode = Mode.A,
+        *,
+        llm_extract_kinds: bool = True,
     ) -> None:
         self._config = config
         self._llm = llm
         self._embedder = embedder
         self._mode = mode
+        #: memory_kinds.llm_extract_kinds — off sends exactly the 4.1.18 prompt.
+        self._extract_kinds = llm_extract_kinds is True
 
     # ------------------------------------------------------------------
     # Public API
@@ -692,7 +697,7 @@ class FactExtractor:
             # every other caller and any model that ignores the flag.
             raw = self._llm.generate(  # type: ignore[union-attr]
                 prompt=prompt,
-                system=_SYSTEM_PROMPT,
+                system=llm_kind_hint.system_prompt(_SYSTEM_PROMPT, self._extract_kinds),
                 temperature=0.0,
                 max_tokens=1024,
                 think=False,
@@ -796,7 +801,8 @@ class FactExtractor:
                     continue
                 fact = self._item_to_fact(item, session_id, session_date)
                 if fact is not None:
-                    built.append(fact)
+                    built.append(llm_kind_hint.with_hint(fact, item)
+                                 if self._extract_kinds else fact)
             if not built:
                 continue
             # 4.1.14 audit: score with the same keys the parser accepts —
