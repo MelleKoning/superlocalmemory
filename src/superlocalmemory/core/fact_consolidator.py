@@ -666,9 +666,7 @@ def _generate_summary(
         if result:
             generated_by = "ollama"
     elif mode == "c":
-        # Mode C uses the configured provider only. The Ollama fallback that
-        # used to follow posted Ollama-format requests to the CLOUD host in
-        # config.llm.api_base; when the provider fails, extractive follows.
+        # The configured provider only: no Ollama-format fallback to the cloud host.
         result = _vet(_summarize_with_cloud_llm(entity_name, facts, config), "Cloud LLM")
         if result:
             generated_by = "cloud"
