@@ -20,6 +20,12 @@ _SCOPES = frozenset({"personal", "project", "shared", "global"})
 _STATUSES = frozenset({"proposed", "applied", "rejected", "rolled_back"})
 _EVENTS = frozenset({"proposed", "applied", "rejected", "rolled_back"})
 _MAX_FIELD_LENGTH = 128
+#: Reason code of a case the caller recorded by saving a memory with
+#: ``replaces`` (core/remember_replaces.py). Proposed and applied in one
+#: transaction, so it is never pending review; and the caller's new memory
+#: stands on its own, so undoing the case restores the old fact without
+#: withdrawing the new one (see the successor checks in storage/database.py).
+CALLER_REPLACEMENT_REASON = "replaced_by_caller"
 
 
 class CorrectionCaseError(RuntimeError):

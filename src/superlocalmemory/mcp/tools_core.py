@@ -89,6 +89,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
         session_date: str = "",
         profile_id: str = "",
         kind: str = "",
+        replaces: str | None = None,
     ) -> dict:
         """Store content to memory with intelligent indexing.
 
@@ -120,6 +121,16 @@ def register_core_tools(server, get_engine: Callable) -> None:
         fact). A declared kind is confirmed: rules and decisions you save this
         way are loaded at the start of later sessions. Leave it empty when
         unsure; SLM may suggest one later, and a suggestion changes nothing.
+
+        ``replaces`` is the id of an earlier memory this one replaces - set it
+        when you are updating something you saved before (a status, a
+        decision, a rule). Use the ``fact_id`` remember returned for it, or a
+        ``fact_id`` / ``memory_id`` from recall. The old memory is then no
+        longer returned by recall or loaded at session start; nothing is
+        deleted. The response's ``replaced`` says what was retired, or why
+        nothing was; the memory itself is saved either way. An unknown id, or
+        another profile's memory, is refused before anything is saved. Undo
+        with ``review_correction(case_id, "rollback", version)``.
         """
         # v3.6.10: resolve "mcp_client" sentinel → URL path (HTTP) or env var (stdio)
         if agent_id == "mcp_client":
@@ -163,6 +174,18 @@ def register_core_tools(server, get_engine: Callable) -> None:
                              + ", ".join(k.value for k in MemoryKind),
                 }
             meta[METADATA_KEY] = parsed_kind.value
+        replaces_id = None
+        if replaces is not None:
+            from superlocalmemory.core.replaces_input import (
+                ReplacesRejected,
+                normalize_replaces,
+            )
+
+            try:
+                replaces_id = normalize_replaces(replaces)
+            except ReplacesRejected as exc:
+                return {"success": False, "code": exc.code, "retryable": False,
+                        "error": exc.message}
         effective_idempotency_key = idempotency_key
         if not effective_idempotency_key:
             # Derive a stable key before the first attempt so every retry of
@@ -223,11 +246,18 @@ def register_core_tools(server, get_engine: Callable) -> None:
                         # 4.1.14 audit: stripped — whitespace-only is legacy,
                         # padded ids travel canonical.
                         body["profile_id"] = profile_id.strip()
+                    request_flags = {"preserve_not_found": True}
+                    if replaces_id is not None:
+                        # Sent only when set, so a plain call is unchanged. The
+                        # daemon refuses an id it cannot honour with a 422,
+                        # which must surface, not read as an outage.
+                        body["replaces"] = replaces_id
+                        request_flags["preserve_unprocessable"] = True
                     resp = None
                     try:
                         resp = await _asyncio.to_thread(
                             daemon_request, "POST", "/remember", body,
-                            preserve_not_found=True,
+                            **request_flags,
                         )
                     except Exception as exc:
                         # 4.1.14 audit: a live daemon's unknown-profile 404
@@ -240,6 +270,22 @@ def register_core_tools(server, get_engine: Callable) -> None:
                                 "retryable": False,
                                 "error": getattr(exc, "message", "daemon returned 404"),
                             }
+                        if type(exc).__name__ == "DaemonUnprocessable" and hasattr(exc, "code"):
+                            return {
+                                "success": False,
+                                "code": getattr(exc, "code"),
+                                "retryable": False,
+                                "error": getattr(exc, "message", str(exc)),
+                            }
+                        if type(exc).__name__ == "DaemonRefused":
+                            # A refusal (401/403) is an answer, not an outage:
+                            # reporting it as retryable invited endless retries.
+                            return {
+                                "success": False,
+                                "code": "NOT_AUTHORIZED",
+                                "retryable": False,
+                                "error": str(exc),
+                            }
                         raise
                     if resp and (resp.get("fact_ids") is not None or resp.get("ok")):
                         fids = resp.get("fact_ids") or []
@@ -249,7 +295,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
                                 "complete" if resp.get("status") == "stored" else "queryable"
                             )
                         pending = materialization_state != "complete"
-                        return {
+                        stored_reply = {
                             "success": True,
                             "fact_ids": fids,
                             "count": int(resp.get("count", len(fids))),
@@ -263,6 +309,9 @@ def register_core_tools(server, get_engine: Callable) -> None:
                                 else "Queryable now; canonical enrichment is still running."
                             ),
                         }
+                        if resp.get("replaced") is not None:
+                            stored_reply["replaced"] = resp["replaced"]
+                        return stored_reply
                     if attempt < 2:
                         await _asyncio.sleep(0.05 * (attempt + 1))
                 return {
@@ -306,6 +355,10 @@ def register_core_tools(server, get_engine: Callable) -> None:
                 # of the metadata entirely when unset so the legacy fallback
                 # call stays byte-identical. 4.1.14 audit: stripped.
                 worker_meta["profile_id"] = profile_id.strip()
+            if replaces_id is not None:
+                # DaemonPoolProxy.store lifts this out of the metadata into
+                # the request's own ``replaces`` field.
+                worker_meta["replaces"] = replaces_id
 
             def _store_via_daemon_pool():
                 pool = choose_pool()
@@ -355,7 +408,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
             pending_id = stored.get("pending_id")
             if pending and pending_id is None:
                 pending_id = operation_id
-            return {
+            pool_reply = {
                 "success": True,
                 "fact_ids": fact_ids,
                 "count": int(stored.get("count", len(fact_ids))),
@@ -369,6 +422,9 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     else "Queryable now; canonical enrichment is still running."
                 ),
             }
+            if stored.get("replaced") is not None:
+                pool_reply["replaced"] = stored["replaced"]
+            return pool_reply
         except Exception:
             logger.exception("remember failed")
             return {

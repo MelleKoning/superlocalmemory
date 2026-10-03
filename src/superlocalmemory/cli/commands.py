@@ -1671,7 +1671,7 @@ def cmd_remember(args: Namespace) -> None:
 
     try:
         from superlocalmemory.cli.daemon import (
-            daemon_request, ensure_daemon, is_daemon_running,
+            DaemonUnprocessable, daemon_request, ensure_daemon, is_daemon_running,
         )
         kind = (getattr(args, "kind", "") or "").strip()
         if kind:
@@ -1681,19 +1681,36 @@ def cmd_remember(args: Namespace) -> None:
                 print("Unknown memory kind. Use one of: "
                       + ", ".join(k.value for k in MemoryKind), file=sys.stderr)
                 sys.exit(2)
+        replaces = getattr(args, "replaces", None)
+        if replaces is not None:
+            from superlocalmemory.core.replaces_input import (
+                ReplacesRejected, normalize_replaces,
+            )
+
+            try:
+                replaces = normalize_replaces(replaces)
+            except ReplacesRejected as exc:
+                print(exc.message, file=sys.stderr)
+                sys.exit(2)
         if not (is_daemon_running() or ensure_daemon()):
             _daemon_unavailable("remember", use_json)
         path = "/remember?wait=true" if sync_mode else "/remember"
-        result = daemon_request(
-            "POST", path, {
-                "content": args.content,
-                "tags": args.tags or "",
-                "scope": scope,
-                "shared_with": shared_with,
-                "kind": kind,
-            },
-            timeout_seconds=30,
-        )
+        body = {
+            "content": args.content,
+            "tags": args.tags or "",
+            "scope": scope,
+            "shared_with": shared_with,
+            "kind": kind,
+        }
+        extra = {}
+        if replaces is not None:
+            body["replaces"] = replaces
+            extra["preserve_unprocessable"] = True
+        try:
+            result = daemon_request("POST", path, body, timeout_seconds=30, **extra)
+        except DaemonUnprocessable as exc:
+            print(exc.message, file=sys.stderr)
+            sys.exit(2)
         if result and "fact_ids" in result:
             if use_json:
                 from superlocalmemory.cli.json_output import json_print
@@ -1705,6 +1722,13 @@ def cmd_remember(args: Namespace) -> None:
                     f"{state.capitalize()} \u2713 {result['count']} facts "
                     f"(operation={operation_id})."
                 )
+                replaced = result.get("replaced")
+                if isinstance(replaced, dict) and replaced.get("ok"):
+                    print(f"Replaced \u2713 {len(replaced.get('fact_ids') or [])} fact(s) "
+                          f"of {replaced.get('replaces')}. {replaced.get('undo', '')}".rstrip())
+                elif isinstance(replaced, dict):
+                    print(f"Saved, but {replaced.get('replaces')} was NOT replaced: "
+                          f"{replaced.get('reason')}", file=sys.stderr)
             return
     except SystemExit:
         raise

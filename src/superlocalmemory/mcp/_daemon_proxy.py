@@ -189,38 +189,62 @@ class DaemonPoolProxy:
     ) -> dict[str, Any]:
         if self._unavailable:
             return self._unavailable_response()
-        tags = (metadata or {}).get("tags", "")
+        meta = dict(metadata or {})
+        # ``replaces`` is a field of the request, not memory metadata: lifted
+        # out so it is never stored with the memory itself.
+        replaces = meta.pop("replaces", None)
+        tags = meta.get("tags", "")
         if isinstance(tags, (list, tuple, set)):
             tags = ",".join(str(tag) for tag in tags)
         body = {
             "content": content,
             "tags": tags,
-            "metadata": metadata or {},
-            "session_id": (metadata or {}).get("session_id", ""),
-            "idempotency_key": (metadata or {}).get("idempotency_key") or None,
-            "profile_id": (metadata or {}).get("profile_id", ""),
+            "metadata": meta,
+            "session_id": meta.get("session_id", ""),
+            "idempotency_key": meta.get("idempotency_key") or None,
+            "profile_id": meta.get("profile_id", ""),
         }
+        flags = {"preserve_conflict": True, "preserve_not_found": True}
+        if replaces is not None:
+            body["replaces"] = replaces
+            flags["preserve_unprocessable"] = True
         # One identity-aware daemon client owns descriptor validation,
         # capability delivery, and exact-instance targeting. A raw urllib POST
         # here previously became unauthenticated when /remember was hardened
         # and could also attach to a stale/foreign port.
         try:
-            from superlocalmemory.cli.daemon import DaemonConflict, daemon_request
+            from superlocalmemory.cli.daemon import (
+                DaemonConflict,
+                DaemonRefused,
+                DaemonUnprocessable,
+                daemon_request,
+            )
         except Exception as exc:
             logger.warning("daemon client import failed: %s", exc)
             return self._unavailable_response()
         try:
-            data = daemon_request(
-                "POST",
-                "/remember",
-                body,
-                preserve_conflict=True,
-                preserve_not_found=True,
-            )
+            data = daemon_request("POST", "/remember", body, **flags)
         except DaemonConflict as exc:
             return {
                 "ok": False,
                 "code": "PROFILE_MISMATCH",
+                "retryable": False,
+                "error": str(exc),
+            }
+        except DaemonUnprocessable as exc:
+            # The daemon refused the request itself (e.g. a ``replaces`` it
+            # cannot honour). Retrying cannot change that answer.
+            return {
+                "ok": False,
+                "code": exc.code,
+                "retryable": False,
+                "error": exc.message,
+            }
+        except DaemonRefused as exc:
+            # 401/403 is an answer, not an outage; retrying cannot change it.
+            return {
+                "ok": False,
+                "code": "NOT_AUTHORIZED",
                 "retryable": False,
                 "error": str(exc),
             }

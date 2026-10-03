@@ -373,6 +373,9 @@ class CanonicalRememberRuntime:
             self.coordinator.register_handler(CommandKind.MERGE_FACT, self._handle_mutation)
             self.coordinator.register_handler(CommandKind.SET_FACT_SCOPE, self._handle_mutation)
             self.coordinator.register_handler(CommandKind.SET_FACT_KIND, self._handle_mutation)
+            self.coordinator.register_handler(
+                CommandKind.REPLACE_BY_CALLER, self._handle_mutation,
+            )
             self.coordinator.start()
             self.replay_pending()
         except BaseException:
@@ -687,6 +690,31 @@ class CanonicalRememberRuntime:
             idempotency_key=idempotency_key,
         )
 
+    def replace_by_caller(
+        self,
+        profile_id: str,
+        replaces: str,
+        successor_fact_id: str,
+        *,
+        trusted_actor_id: str,
+        idempotency_key: str,
+    ) -> Mapping[str, Any]:
+        """Retire what ``replaces`` names in favour of a just-saved fact.
+
+        One writer transaction proposes and applies a correction case per
+        retired fact (see ``core/remember_replaces.py``).
+        """
+        return _thaw_command_value(self._submit_mutation(
+            CommandKind.REPLACE_BY_CALLER,
+            profile_id,
+            {
+                "replaces": replaces,
+                "successor_fact_id": successor_fact_id,
+                "trusted_actor_id": trusted_actor_id,
+            },
+            idempotency_key=idempotency_key,
+        ))
+
     def _submit_mutation(
         self,
         kind: CommandKind,
@@ -965,6 +993,10 @@ def _execute_mutation(
         return _transition_correction(db, kind, profile_id, payload, connection=connection)
     if kind is CommandKind.SET_FACT_KIND:
         return _set_fact_kinds(db, profile_id, payload, connection=connection)
+    if kind is CommandKind.REPLACE_BY_CALLER:
+        from superlocalmemory.core.remember_replaces import apply_replacement
+
+        return apply_replacement(connection, profile_id, payload)
     fact_id = _payload_text(payload, "fact_id")
     if kind is CommandKind.DELETE_FACT:
         return _delete_fact(db, fact_id, profile_id)

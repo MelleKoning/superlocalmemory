@@ -442,6 +442,12 @@ def main() -> None:
              "prospective (plan/to-do), opinion, correction, episodic or semantic. "
              "Rules and decisions saved this way load at the start of later sessions.",
     )
+    remember_p.add_argument(
+        "--replaces", default=None,
+        help="Id of an earlier memory this one replaces (a fact_id or memory_id "
+             "from remember or recall). The old one stops being returned; undo "
+             "with review_correction.",
+    )
     remember_p.add_argument("--json", action="store_true", help="Output structured JSON (agent-native)")
     remember_p.add_argument(
         "--sync", dest="sync_mode", action="store_true",

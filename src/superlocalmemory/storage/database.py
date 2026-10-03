@@ -49,6 +49,7 @@ from superlocalmemory.storage.embedding_codec import (
 from superlocalmemory.storage.write_lock import get_write_lock
 from superlocalmemory.storage import projection_outbox
 from superlocalmemory.storage.memory_kinds import KIND_COLUMNS
+from superlocalmemory.storage.correction_cases import CALLER_REPLACEMENT_REASON
 
 logger = logging.getLogger(__name__)
 
@@ -2654,13 +2655,16 @@ class DatabaseManager:
         for start in range(0, len(fact_ids), 900):
             batch = fact_ids[start:start + 900]
             placeholders = ",".join("?" for _ in batch)
+            # A caller's replacement never withholds the memory the caller
+            # saved: undoing it restores the old fact, nothing more.
             rows = self.execute(
                 "SELECT c.successor_fact_id FROM correction_cases c "
                 "JOIN atomic_facts f ON f.fact_id=c.successor_fact_id "
                 f"WHERE c.successor_fact_id IN ({placeholders}) AND {scope_where} "
                 "AND c.profile_id=f.profile_id "
-                "AND c.status IN ('proposed', 'rejected', 'rolled_back')",
-                (*batch, *scope_params),
+                "AND c.status IN ('proposed', 'rejected', 'rolled_back') "
+                "AND c.reason_code != ?",
+                (*batch, *scope_params, CALLER_REPLACEMENT_REASON),
             )
             inadmissible.update(str(row["successor_fact_id"]) for row in rows)
         return inadmissible
@@ -2726,11 +2730,15 @@ class DatabaseManager:
                         "JOIN atomic_facts f ON f.fact_id=c.successor_fact_id "
                         f"WHERE c.successor_fact_id IN ({placeholders}) AND {scope_where} "
                         "AND c.profile_id=f.profile_id "
-                        "AND c.status IN ('proposed', 'rejected', 'rolled_back')"
+                        "AND c.status IN ('proposed', 'rejected', 'rolled_back') "
+                        # A caller's replacement never withholds the memory
+                        # the caller saved (see get_nonapplied_...).
+                        "AND c.reason_code != ?"
                     )
                     rows = conn.execute(
                         f"{temporal_sql} UNION {correction_sql}",
-                        (*temporal_params, *batch, *scope_params),
+                        (*temporal_params, *batch, *scope_params,
+                         CALLER_REPLACEMENT_REASON),
                     ).fetchall()
                 inadmissible.update(str(row["fact_id"]) for row in rows)
         return inadmissible
