@@ -391,6 +391,9 @@ def register_core_tools(server, get_engine: Callable) -> None:
         valid_at: str | None = None,
         include_unknown: bool = False,
         profile_id: str = "",
+        project: str = "",
+        saved_by: str = "",
+        about: str = "",
     ) -> dict:
         """Search memories through hybrid retrieval, RRF fusion, and reranking.
 
@@ -433,6 +436,13 @@ def register_core_tools(server, get_engine: Callable) -> None:
         serves this one recall against that profile (which must already
         exist); empty = the active profile, byte-identical to the legacy
         call. The active-profile pointer is never read or moved by it.
+        
+        Narrowing (4.1.19): ``project`` keeps only memories saved under that
+        project, ``saved_by`` only those saved by that agent (e.g.
+        ``claude-desktop``), ``about`` only those that mention that name (a
+        person, project or tool). Each is a hard filter. Questions phrased as
+        "what did we decide", "how do I", "what is the current status of" get
+        decisions, how-tos and the newest current-state memory first.
         """
         # v3.6.10: resolve "mcp_client" sentinel → URL path (HTTP) or env var (stdio)
         if agent_id == "mcp_client":
@@ -509,6 +519,9 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     # parameter are never asked for it. 4.1.14 audit:
                     # stripped (whitespace-only is legacy).
                     **({"profile_id": profile_id.strip()} if (profile_id or "").strip() else {}),
+                    # 4.1.19 facets, only when set.
+                    **{k: v.strip() for k, v in (("project", project), ("saved_by", saved_by),
+                                                 ("about", about)) if (v or "").strip()},
                 )
 
             result = await asyncio.to_thread(

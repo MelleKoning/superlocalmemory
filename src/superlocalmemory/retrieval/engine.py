@@ -214,6 +214,7 @@ class RetrievalEngine:
         known_as_of: str | None = None,
         valid_at: str | None = None,
         include_unknown: bool = False,
+        facets: Any = None,
     ) -> RecallResponse:
         """Full retrieval pipeline: strategy -> channels -> RRF -> rerank.
 
@@ -517,6 +518,18 @@ class RetrievalEngine:
                 if windowed or _explicit_window:
                     fused = windowed
                 _em("time_window")
+
+        # Facets (project / agent / about): explicit, so a hard filter -
+        # honoured even when it leaves nothing (retrieval/facets.py).
+        if facets is not None and not getattr(facets, "empty", True) and fused:
+            from superlocalmemory.retrieval.facets import matching_fact_ids
+
+            keep = matching_fact_ids(
+                self._db, [fr.fact_id for fr in fused], profile_id, facets,
+                resolver=getattr(self._entity, "_resolver", None),
+            )
+            fused = [fr for fr in fused if fr.fact_id in keep]
+            _em("facets")
 
         # 4. Load facts for rerank pool
         pool = min(len(fused), max(effective_limit * 3, 30))

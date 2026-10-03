@@ -449,6 +449,12 @@ def main() -> None:
              "(24h, 7d, 30d, 1y) or an explicit range (2026-07-01..2026-07-31). "
              "Default: no time filter.",
     )
+    recall_p.add_argument("--project", default="",
+                          help="Only memories saved under this project.")
+    recall_p.add_argument("--saved-by", dest="saved_by", default="",
+                          help="Only memories saved by this agent (e.g. claude-desktop).")
+    recall_p.add_argument("--about", default="",
+                          help="Only memories that mention this name (a person, project or tool).")
     recall_p.add_argument(
         "--as-of", dest="as_of", default="",
         help="Point-in-time recall: an ISO-8601 timestamp "

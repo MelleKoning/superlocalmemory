@@ -1016,6 +1016,15 @@ import asyncio as _asyncio
 _recall_semaphore = _asyncio.Semaphore(3)
 
 
+def _facet_kwargs(project: str, saved_by: str, about: str) -> dict:
+    """{"facets": ...} when any recall facet was given, else {} (stand-ins
+    of the engine need not know about facets)."""
+    from superlocalmemory.retrieval.facets import Facets
+
+    facets = Facets.of(project=project, agent=saved_by, about=about)
+    return {} if facets.empty else {"facets": facets}
+
+
 def _recall_budget_s() -> float:
     """Generous latency budget for a recall before the keyword fallback (v3.8.3).
 
@@ -4210,6 +4219,8 @@ def _register_dashboard_routes(application: FastAPI) -> None:
     # Answer-check settings (4.1.18): on-device Laya, hosted Jev, or off.
     from superlocalmemory.server.routes.answer_check import router as answer_check_router
     application.include_router(answer_check_router)
+    from superlocalmemory.server.routes.facets import router as facets_router
+    application.include_router(facets_router)
 
     # Task #47: dashboard-editable rate limits (GET/PUT /api/v3/ratelimit)
     from superlocalmemory.server.routes.ratelimit import router as ratelimit_router
@@ -4570,6 +4581,11 @@ def _register_daemon_routes(application: FastAPI) -> None:
         # "no_reorder": the answer check without the opt-in reorder (the loop
         # gate). Empty or "full": every other recall. Anything else is a 400.
         answer_check: str = "",
+        # 4.1.19 facets: only memories saved under this project, saved by this
+        # agent, or about this name (person, project, tool). Hard filters.
+        project: str = "",
+        saved_by: str = "",
+        about: str = "",
     ):
         _update_activity()
         search_query = q or query  # Accept both ?q= and ?query= for compatibility
@@ -4728,6 +4744,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
                         known_as_of=known_as_of or None,
                         valid_at=valid_at or None,
                         include_unknown=include_unknown,
+                        **_facet_kwargs(project, saved_by, about),
                         # Only when asked: an engine stand-in need not know it.
                         **({"answer_check": "no_reorder"}
                            if _check_request == "no_reorder" else {}),

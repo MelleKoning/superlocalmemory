@@ -1222,6 +1222,7 @@ def run_recall(
     valid_at: str | None = None,
     include_unknown: bool = False,
     answer_check: str | None = None,
+    facets: Any = None,
 ) -> RecallResponse:
     """Recall relevant facts for a query.
 
@@ -1287,6 +1288,8 @@ def run_recall(
         known_as_of=known_as_of,
         valid_at=valid_at,
         include_unknown=include_unknown,
+        # Only when asked: a retrieval stand-in need not know about facets.
+        **({"facets": facets} if facets is not None and not facets.empty else {}),
     )
     _mark("retrieval(chan+rerank)")
 

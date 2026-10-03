@@ -1785,11 +1785,18 @@ def cmd_recall(args: Namespace) -> None:
             known_as_of_qs = _strict_time_qs("known_as_of", "known_as_of")
             valid_at_qs = _strict_time_qs("valid_at", "valid_at")
             unknown_qs = "&include_unknown=true" if getattr(args, "include_unknown", False) else ""
+            facet_qs = "".join(
+                f"&{name}={quote(str(value).strip())}"
+                for name, value in (("project", getattr(args, "project", "")),
+                                    ("saved_by", getattr(args, "saved_by", "")),
+                                    ("about", getattr(args, "about", "")))
+                if (value or "").strip()
+            )
             result = daemon_request(
                 "GET",
                 f"/recall?q={quote(args.query)}&limit={args.limit}"
                 f"&session_id={quote(session_id)}{fast_qs}{scope_qs}{window_qs}{as_of_qs}"
-                f"{known_as_of_qs}{valid_at_qs}{unknown_qs}",
+                f"{known_as_of_qs}{valid_at_qs}{unknown_qs}{facet_qs}",
             )
             if result and "results" in result:
                 # Format daemon response same as engine response
