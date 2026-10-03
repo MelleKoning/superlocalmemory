@@ -110,3 +110,13 @@ def test_import_recovery_key_from_stdin(key_env, monkeypatch) -> None:
 def test_no_option_accepts_a_key_on_the_command_line() -> None:
     with pytest.raises(SystemExit):
         _parse(["backup", "decrypt", "f", "--recovery-key", "SLMBK1-AAAA"])
+
+
+def test_restoring_on_a_new_computer_does_not_start_the_setup_wizard(monkeypatch) -> None:
+    from superlocalmemory.cli import setup_wizard
+
+    def wizard_would_run() -> bool:
+        raise AssertionError("first-use setup ran before `slm backup`")
+
+    monkeypatch.setattr(setup_wizard, "is_setup_complete", wizard_would_run)
+    setup_wizard.check_first_use("backup")
