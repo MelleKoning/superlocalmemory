@@ -11,9 +11,21 @@ first (``retrieval.hosted_redaction``, the screen the online answer check
 already uses). A service on this machine - a local Ollama, a local
 OpenAI-compatible server - sees the text as it is.
 
-"On this machine" means a loopback host: ``localhost`` (or a name under it),
-``127.0.0.0/8`` or ``::1``. Anything else, including a LAN address or a URL
-that cannot be read, is treated as another machine.
+"On this machine" means a loopback host: ``localhost``, ``127.0.0.0/8`` or
+``::1``. Anything else, including a LAN address or a URL that cannot be read,
+is treated as another machine.
+
+A name *under* ``localhost`` (``box.localhost``) is treated as another machine
+too. RFC 6761 says such names should resolve to loopback, but nothing makes a
+resolver, a hosts file or a VPN's DNS honour that. Resolving the name here
+would not settle it either: the HTTP client resolves it again when it
+connects, so the answer can change in between (DNS rebinding). Treating the
+name as remote fails closed — the worst case is that a local service under
+such a name receives screened text — and needs no lookup at all.
+
+Every request that carries memory text is built by ``core.outbound_http``,
+which applies :func:`for_endpoint` to its body and never sends text for this
+machine through a proxy.
 """
 
 from __future__ import annotations
@@ -34,7 +46,7 @@ def is_local_endpoint(url: str) -> bool:
         return False
     if not host:
         return False
-    if host == "localhost" or host.endswith(".localhost"):
+    if host == "localhost":
         return True
     try:
         return ipaddress.ip_address(host).is_loopback

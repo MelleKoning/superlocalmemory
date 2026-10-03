@@ -27,7 +27,6 @@ _TEXT = f"deploy uses the AWS key {_KEY} from the vault"
     "http://localhost:11434/api/chat",
     "http://127.0.0.1:8080/v1",
     "http://[::1]:9000/v1/embeddings",
-    "http://my-box.localhost:1234",
 ])
 def test_an_endpoint_on_this_machine_is_local(url: str) -> None:
     assert is_local_endpoint(url)
@@ -37,6 +36,9 @@ def test_an_endpoint_on_this_machine_is_local(url: str) -> None:
     "", "https://api.openai.com/v1/chat/completions", "https://x.openai.azure.com",
     "http://192.168.1.20:11434/api/chat", "https://localhost.evil.example/v1",
     "not a url",
+    # A name under .localhost is only conventionally loopback; a resolver or
+    # hosts file can point it anywhere, so it is treated as another machine.
+    "http://my-box.localhost:1234",
 ])
 def test_anything_else_is_remote(url: str) -> None:
     assert not is_local_endpoint(url)
