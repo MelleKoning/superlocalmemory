@@ -52,7 +52,7 @@ def _assert_bounded_and_sanitized(output: str) -> None:
     assert output.count(UNTRUSTED_CONTEXT_END) == 1
     assert "[SLM BOUNDARY TEXT ESCAPED]" in output
     assert _SECRET not in output
-    assert "[REDACTED:OPENAI" in output
+    assert "[redacted]" in output and "[REDACTED:" not in output
 
 
 def test_core_renderer_enforces_boundary_redaction_and_provenance() -> None:
@@ -182,7 +182,7 @@ def test_session_init_bounds_context_and_marks_structured_memory_untrusted() -> 
     assert structured["source_type"] == "recall"
     assert structured["fact_id"] == "fact-mcp"
     assert _SECRET not in structured["content"]
-    assert "[REDACTED:OPENAI" in structured["content"]
+    assert "[redacted]" in structured["content"] and "[REDACTED:" not in structured["content"]
     assert UNTRUSTED_CONTEXT_BEGIN not in structured["content"]
     assert UNTRUSTED_CONTEXT_END not in structured["content"]
 

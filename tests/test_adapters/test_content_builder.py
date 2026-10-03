@@ -32,13 +32,13 @@ def test_payload_redacts_secrets():
     payload = build_payload("default", "project", Path("/tmp"),
                             recall_fn=recall_fn)
     # AWS key pattern
-    assert any("REDACTED" in t for t, _ in payload.topics)
+    assert any("[redacted]" in t for t, _ in payload.topics)
     # GitHub PAT pattern
-    assert any("REDACTED" in n for n, _ in payload.entities)
+    assert any("[redacted]" in n for n, _ in payload.entities)
     # Anthropic key pattern
-    assert any("REDACTED" in d for d in payload.recent_decisions)
+    assert any("[redacted]" in d for d in payload.recent_decisions)
     # OpenAI key pattern
-    assert any("REDACTED" in m for m in payload.project_memories)
+    assert any("[redacted]" in m for m in payload.project_memories)
 
 
 def test_payload_capped_to_K_per_section(fake_recall):

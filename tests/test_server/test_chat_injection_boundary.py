@@ -104,7 +104,7 @@ async def test_mode_bc_contains_recalled_attack_in_untrusted_user_evidence(
     assert user_content.count(UNTRUSTED_CONTEXT_END) == 1
     assert user_content.count("[SLM BOUNDARY TEXT ESCAPED]") == 2
     assert _SECRET not in user_content
-    assert "[REDACTED:OPENAI" in user_content
+    assert "[redacted]" in user_content and "[REDACTED:" not in user_content
     assert "fact_id=fact-attack-7" in user_content
     assert "source_type=chat-recall" in user_content
     assert "source_id=MEM-1" in user_content
@@ -127,7 +127,7 @@ async def test_mode_a_redacts_raw_results_without_recreating_boundaries() -> Non
     rendered = "".join(events)
 
     assert _SECRET not in rendered
-    assert "[REDACTED:OPENAI" in rendered
+    assert "[redacted]" in rendered and "[REDACTED:" not in rendered
     assert UNTRUSTED_CONTEXT_BEGIN not in rendered
     assert UNTRUSTED_CONTEXT_END not in rendered
     assert rendered.count("[SLM BOUNDARY TEXT ESCAPED]") == 2
@@ -154,5 +154,5 @@ async def test_citation_preview_is_sanitized_before_sse_serialization(
     preview = citation_data["content_preview"]
     assert citation_data["fact_id"] == "fact-citation-9"
     assert _SECRET not in preview
-    assert "[REDACTED:OPENAI" in preview
+    assert "[redacted]" in preview and "[REDACTED:" not in preview
     assert UNTRUSTED_CONTEXT_END not in preview
