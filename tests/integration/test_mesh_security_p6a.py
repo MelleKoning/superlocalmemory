@@ -8,9 +8,17 @@ TDD test file — written RED first, implemented GREEN.
 Covers:
   3a-1  Authenticated peer/tenant identity (HMAC sign/verify, replay defense,
           strict_identity mode, loopback trust)
-  3a-2  Inbound admission + content-scrub parity (redact_secrets before storage,
-          admission gate for remote inbound)
+  3a-2  Inbound admission parity for remote inbound sends
   3a-3  Restart-safe monotonic fencing (counter seeded from DB on restart)
+
+4.1.19 meshredact (Option A): ``broker.send_message`` no longer scrubs content
+before storage. Local storage — sent or received — keeps a message exactly as
+written, same as any other SLM memory; credentials stay in SLM on purpose.
+The network boundary is screened at egress instead: see
+``mesh/remote_sync.py`` and ``tests/test_security/test_mesh_egress_redaction.py``.
+The old ``broker_security.scrub_message_content`` helper is gone — it was the
+wrong place for this control, kept last-4 tails, and ran at default
+aggression instead of the hosted-strength screen egress now uses.
 
 Backward-compat invariant: with strict_identity=False (default), unsigned legacy
 remote messages and loopback calls behave exactly as before.
@@ -280,30 +288,24 @@ class TestCheckMeshMessageSignature:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3a-2: Content redaction before storage
+# 3a-2 (superseded 4.1.19): local mesh storage is verbatim — Option A
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestContentScrub:
-    """Verify secrets are redacted before message storage."""
+class TestLocalStorageIsVerbatim:
+    """``broker.send_message`` never redacts — local storage keeps everything.
 
-    def test_scrub_message_content_redacts_api_keys(self):
-        from superlocalmemory.mesh.broker_security import scrub_message_content
+    ``broker_security.scrub_message_content`` is gone: it redacted at
+    storage time, at default aggression, and left a ``[REDACTED:TYPE:last4]``
+    tail — the wrong control in the wrong place. A mesh message is a memory
+    like any other SLM memory: SLM keeps it exactly as written. The network
+    boundary is screened instead, at egress — see
+    ``tests/test_security/test_mesh_egress_redaction.py``.
+    """
 
-        # An Anthropic key pattern (from security_primitives._SECRET_PATTERNS)
-        dangerous = "Here is my key: sk-ant-api03-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxx"
-        scrubbed = scrub_message_content(dangerous)
-        assert "sk-ant" not in scrubbed
-        assert "[" in scrubbed  # redacted placeholder
-
-    def test_scrub_message_content_leaves_safe_content_unchanged(self):
-        from superlocalmemory.mesh.broker_security import scrub_message_content
-
-        safe = "Agent A finished task 42 — results in /tmp/results.json"
-        assert scrub_message_content(safe) == safe
-
-    def test_send_message_redacts_secret_before_storage(self, broker):
-        """broker.send_message must NOT store raw secrets in mesh_messages."""
+    def test_send_message_stores_secret_verbatim(self, broker):
+        """The local copy of a sent message is never touched, even when it
+        contains a credential-shaped string — same rule as any other memory."""
         sender = broker.register_peer("sender-session")
         receiver = broker.register_peer("receiver-session")
 
@@ -316,8 +318,9 @@ class TestContentScrub:
         inbox = broker.get_inbox(receiver["peer_id"])
         assert len(inbox) == 1
         stored_content = inbox[0]["content"]
-        assert "sk-ant" not in stored_content, (
-            f"Secret leaked into storage: {stored_content!r}"
+        assert stored_content == dangerous_content, (
+            f"local storage must keep the message verbatim (Option A), "
+            f"got: {stored_content!r}"
         )
 
     def test_send_message_safe_content_not_corrupted(self, broker):

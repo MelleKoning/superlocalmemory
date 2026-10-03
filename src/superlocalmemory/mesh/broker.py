@@ -25,7 +25,7 @@ logger = logging.getLogger("superlocalmemory.mesh")
 import os as _os
 
 from .broker_security import (  # noqa: E501
-    apply_security_schema, check_cross_profile_sender, ensure_db_healthy, get_or_create_peer_key, reject_secret_state, scrub_message_content, seed_fencing_counter, _set_nonce_db_path, validate_lock_fence_query,  # noqa: E501
+    apply_security_schema, check_cross_profile_sender, ensure_db_healthy, get_or_create_peer_key, reject_secret_state, seed_fencing_counter, _set_nonce_db_path, validate_lock_fence_query,  # noqa: E501
 )
 
 # Remote sync support (optional, try/except to avoid import issues)
@@ -397,7 +397,12 @@ class MeshBroker:
                          count - MAX_QUEUED_PER_TARGET + 1),
                     )
 
-            _content = scrub_message_content(content)  # 3a-2: redact before storage
+            # Option A (4.1.19 meshredact): local storage keeps the message
+            # exactly as sent or received. Credentials stay in SLM the same
+            # way any other memory does; the network boundary is screened at
+            # egress by mesh/remote_sync.py, which is the only place a mesh
+            # payload can leave this machine.
+            _content = content
             cursor = conn.execute(
                 "INSERT INTO mesh_messages (from_peer, to_peer, msg_type, content, read, "
                 "created_at, expires_at, target_type, project_path, profile_id) "

@@ -37,6 +37,8 @@ from typing import Any
 
 import httpx
 
+from superlocalmemory.core.outbound_redaction import for_endpoint
+
 logger = logging.getLogger("superlocalmemory.mesh.remote_sync")
 
 _PRODUCTION_TRUTHY = frozenset({"1", "true", "yes", "on", "production", "prod"})
@@ -163,6 +165,24 @@ except ImportError:
 #: slow/black-holing peer can monopolize the shared 30s sync thread (audit
 #: P1); remaining due rows are deferred to the next cycle.
 _DRAIN_BUDGET_SECONDS: float = 8.0
+
+
+def _screened_mesh_payload(payload: dict[str, Any], url: str) -> dict[str, Any]:
+    """The mesh send body as it may actually be posted to ``url``.
+
+    ``content`` is the only field that can carry agent/memory text, so it is
+    the only one screened. ``core.outbound_redaction.for_endpoint`` applies
+    the SAME hosted-strength screen (``redact_for_hosted_judge``) used by
+    every other outbound request: unchanged for a loopback peer, every
+    recognized credential replaced by the bare ``[redacted]`` marker (no
+    type/last-4 tail) for anything else. The caller's dict is never mutated;
+    a new dict is returned only when the content actually changed.
+    """
+    content = payload.get("content", "")
+    screened = for_endpoint(content, url)
+    if screened == content:
+        return payload
+    return {**payload, "content": screened}
 
 
 class RemoteSyncClient:
@@ -467,15 +487,25 @@ class RemoteSyncClient:
                 outbox.mark_retry(row_id, now)
                 continue
 
-            # Rebuild fresh headers: auth bearer + fresh HMAC signature
+            # The outbox keeps the row exactly as enqueued (Option A — local
+            # storage is verbatim); the gate is applied here, on the final
+            # peer URL, right before the retry actually leaves the machine.
+            send_url = f"{peer_url}/mesh/send"
+            screened_payload = _screened_mesh_payload(payload, send_url)
+
+            # Rebuild fresh headers: auth bearer + fresh HMAC signature over
+            # the payload actually being sent, so the receiver's signature
+            # check matches the bytes it receives.
             base_headers = self._auth_headers()
-            full_headers = self._build_signed_headers(payload, to_peer, base_headers)
+            full_headers = self._build_signed_headers(
+                screened_payload, to_peer, base_headers,
+            )
 
             try:
                 with self._http_client(timeout=10) as client:
                     resp = client.post(
-                        f"{peer_url}/mesh/send",
-                        json=payload,
+                        send_url,
+                        json=screened_payload,
                         headers=full_headers,
                         timeout=10,
                     )
@@ -677,6 +707,12 @@ class RemoteSyncClient:
             "content": content,
             "type": message_data.get("type", "text"),
         }
+        send_url = f"{self._peer_url}/mesh/send"
+        # The one door this message's content leaves the machine through: for
+        # any peer that is not loopback, every recognized credential in
+        # `content` is replaced before anything is signed or sent (Option A —
+        # the local copy stays verbatim; only this egress hop is screened).
+        screened_payload = _screened_mesh_payload(payload, send_url)
         # Everything below (pin pre-flight, signing, POST) runs INSIDE the try
         # so any error returns the stable {"ok": False, ...} contract instead
         # of propagating into the broker / route handler (audit P1 — restores
@@ -695,14 +731,17 @@ class RemoteSyncClient:
                 )
                 return {"ok": False, "error": f"certificate pin failure: {pin_err}"}
 
+            # Sign the SAME bytes that are about to go on the wire so the
+            # receiver's signature check matches the (possibly screened)
+            # content it actually gets.
             signed_headers = self._build_signed_headers(
-                payload, to_peer, self._auth_headers()
+                screened_payload, to_peer, self._auth_headers()
             )
 
             with self._http_client(timeout=10) as client:
                 resp = client.post(
-                    f"{self._peer_url}/mesh/send",
-                    json=payload,
+                    send_url,
+                    json=screened_payload,
                     headers=signed_headers,
                     timeout=10,
                 )
