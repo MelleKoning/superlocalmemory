@@ -83,15 +83,30 @@ def _by_memory_metadata(db: Any, fact_ids: list[str], profile_id: str,
     return keep
 
 
-def _about(db: Any, fact_ids: list[str], profile_id: str, name: str, resolver: Any) -> set[str]:
-    entity_ids: set[str] = set()
+def entity_ids_named(db: Any, names: Iterable[str], profile_id: str,
+                     resolver: Any = None) -> set[str]:
+    """The known entities these names refer to, read-only.
+
+    Exact name, alias, or a spelling close enough to merge automatically (the
+    resolver's ``lookup``); without a resolver, the exact name only. Never
+    creates an entity or saves an alias. Raises what the store raises.
+    """
+    wanted = [n for n in names if isinstance(n, str) and n.strip()]
+    if not wanted:
+        return set()
     lookup = getattr(resolver, "lookup", None)
     if lookup is not None:
-        entity_ids.update(lookup([name], profile_id).values())
-    else:
+        return {str(e) for e in lookup(wanted, profile_id).values()}
+    found: set[str] = set()
+    for name in wanted:
         entity = db.get_entity_by_name(name, profile_id)
         if entity is not None:
-            entity_ids.add(entity.entity_id)
+            found.add(str(entity.entity_id))
+    return found
+
+
+def _about(db: Any, fact_ids: list[str], profile_id: str, name: str, resolver: Any) -> set[str]:
+    entity_ids = entity_ids_named(db, [name], profile_id, resolver)
     if not entity_ids:
         return set()
     keep: set[str] = set()
@@ -170,4 +185,4 @@ def list_facets(db: Any, profile_id: str, *, limit: int = 50) -> dict[str, list[
     return out
 
 
-__all__ = ["Facets", "list_facets", "matching_fact_ids"]
+__all__ = ["Facets", "entity_ids_named", "list_facets", "matching_fact_ids"]
