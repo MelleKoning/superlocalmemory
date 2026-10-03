@@ -89,6 +89,9 @@ class DaemonPoolProxy:
         include_unknown: bool = False,
         profile_id: str = "",
         answer_check: bool | str = True,
+        project: str = "",
+        saved_by: str = "",
+        about: str = "",
     ) -> dict[str, Any]:
         if self._unavailable:
             return self._unavailable_response()
@@ -118,6 +121,11 @@ class DaemonPoolProxy:
             _params["include_shared"] = "true" if include_shared else "false"
         if window:
             _params["window"] = window
+        # 4.1.19 facets, sent only when set.
+        for _facet_name, _facet_value in (("project", project), ("saved_by", saved_by),
+                                          ("about", about)):
+            if (_facet_value or "").strip():
+                _params[_facet_name] = _facet_value.strip()
         if as_of:
             _params["as_of"] = as_of
         if known_as_of:

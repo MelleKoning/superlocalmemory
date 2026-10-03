@@ -1222,6 +1222,7 @@ def run_recall(
     valid_at: str | None = None,
     include_unknown: bool = False,
     answer_check: str | None = None,
+    facets: Any = None,
 ) -> RecallResponse:
     """Recall relevant facts for a query.
 
@@ -1287,6 +1288,8 @@ def run_recall(
         known_as_of=known_as_of,
         valid_at=valid_at,
         include_unknown=include_unknown,
+        # Only when asked: a retrieval stand-in need not know about facets.
+        **({"facets": facets} if facets is not None and not facets.empty else {}),
     )
     _mark("retrieval(chan+rerank)")
 
@@ -1408,6 +1411,24 @@ def run_recall(
         )
 
     _preserve_exact_lexical_evidence(response, query)
+
+    # Kind-aware ordering: "what did we decide" favours decisions, "current
+    # status" puts the newest current-state memory first. Bounded, read-only,
+    # no model; a question with no intent keeps its order (retrieval/kind_aware).
+    if response.results:
+        from superlocalmemory.core.working_memory import ADMIT_TOP_N as _KTOP
+        from superlocalmemory.retrieval.kind_aware import DEFAULT_BOOST, apply_kind_awareness
+
+        _rc = getattr(config, "retrieval", None)
+        _shown_before_kind = [r.fact.fact_id for r in response.results[:_KTOP]
+                              if getattr(r, "fact", None) is not None]
+        response.results = apply_kind_awareness(
+            response.results, query,
+            enabled=getattr(_rc, "kind_aware", True) is not False,
+            boost=getattr(_rc, "kind_aware_boost", DEFAULT_BOOST),
+        )
+        _resettle_shown_after_bias(play_sink, profile_id, response.results,
+                                   _shown_before_kind)
     _mark("learning+ranking")
     # Deliberately no trust, Fisher, retention, lifecycle, popularity, or graph
     # mutation here.  Those state transitions require a separately authenticated

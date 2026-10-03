@@ -1109,6 +1109,7 @@ class MemoryEngine:
         valid_at: str | None = None,
         include_unknown: bool = False,
         answer_check: str | None = None,
+        facets: Any = None,
     ) -> RecallResponse:
         """Recall relevant facts for a query.
 
@@ -1183,6 +1184,7 @@ class MemoryEngine:
                 valid_at=valid_at,
                 include_unknown=include_unknown,
                 answer_check=answer_check,
+                facets=facets,
             )
         except Exception:
             # Diagnostics are intentionally not recorded here.  A recall is a
