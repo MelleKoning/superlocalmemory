@@ -12,7 +12,19 @@ const CHECK = process.argv.includes('--check');
 const managed = new Map();
 const read = (file) => fs.readFileSync(file, 'utf8').replace(/\r\n?/g, '\n').replace(/\n*$/, '\n');
 const put = (relative, content) => managed.set(path.join(OUT, relative), content);
-for (const name of ['plugin.yaml', 'README.md', '__init__.py', 'command-inventory.json']) put(name, read(path.join(SRC, name)));
+// The plugin runs only with the SLM release it ships with, so that release is
+// stamped from pyproject.toml here rather than kept by hand (it went stale).
+const VERSION = (read(path.join(ROOT, 'pyproject.toml')).match(/^version = "(\d+)\.(\d+)\.(\d+)"$/m) || []).slice(1);
+if (VERSION.length !== 3) { console.error('pyproject.toml has no x.y.z version'); process.exit(2); }
+const stamp = (name, text) => {
+  const rule = name === '__init__.py'
+    ? [/^_RELEASE_SLM_VERSION = \(\d+, \d+, \d+\)$/m, `_RELEASE_SLM_VERSION = (${VERSION.join(', ')})`]
+    : name === 'plugin.yaml' ? [/^version: .*$/m, `version: ${VERSION.join('.')}`] : null;
+  if (!rule) return text;
+  if (!rule[0].test(text)) { console.error(`${name}: no version line to stamp`); process.exit(2); }
+  return text.replace(rule[0], rule[1]);
+};
+for (const name of ['plugin.yaml', 'README.md', '__init__.py', 'command-inventory.json']) put(name, stamp(name, read(path.join(SRC, name))));
 for (const group of ['skills', 'agents']) {
   const source = path.join(ROOT, group === 'skills' ? 'plugin-src/skills' : 'plugin-src/agents');
   for (const entry of fs.readdirSync(source, { withFileTypes: true })) {

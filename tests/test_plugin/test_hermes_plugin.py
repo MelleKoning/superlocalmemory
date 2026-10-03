@@ -24,6 +24,22 @@ def _runtime() -> str:
     return (PLUGIN / "__init__.py").read_text(encoding="utf-8")
 
 
+def _product_version() -> str:
+    match = re.search(r'(?m)^version = "(\d+\.\d+\.\d+)"',
+                      (REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    assert match, "pyproject.toml has no version"
+    return match.group(1)
+
+
+def test_the_plugin_is_built_for_this_release() -> None:
+    """The plugin only runs with the SLM release it was built with, so the
+    build must stamp that release; a hand-kept number went stale (4.1.12)."""
+    version = _product_version()
+    pinned = re.search(r"_RELEASE_SLM_VERSION = \((\d+), (\d+), (\d+)\)", _runtime())
+    assert pinned and ".".join(pinned.groups()) == version
+    assert re.search(r"(?m)^version: (.+)$", _manifest()).group(1) == version
+
+
 def test_native_hermes_plugin_declares_additive_contract() -> None:
     manifest = _manifest()
     assert "name: superlocalmemory" in manifest
@@ -256,7 +272,9 @@ def test_subagent_handle_round_trips_and_cli_refuses_stale_slm(monkeypatch) -> N
     assert plugin.agent_cancel_tool(handle)["accepted"] is True
     assert plugin.agent_result_tool(handle)["ready"] is True
     monkeypatch.setattr(module.shutil, "which", lambda _: "/tmp/slm")
-    monkeypatch.setattr(module, "_slm_version", lambda _: "4.1.11")
-    assert "requires exactly SLM CLI 4.1.12" in plugin.slash_router("status")
-    monkeypatch.setattr(module, "_slm_version", lambda _: "4.1.13")
-    assert "requires exactly SLM CLI 4.1.12" in plugin.slash_router("status")
+    major, minor, patch = (int(p) for p in _product_version().split("."))
+    expected = f"requires exactly SLM CLI {major}.{minor}.{patch}"
+    monkeypatch.setattr(module, "_slm_version", lambda _: f"{major}.{minor}.{patch - 1}")
+    assert expected in plugin.slash_router("status")
+    monkeypatch.setattr(module, "_slm_version", lambda _: f"{major}.{minor}.{patch + 1}")
+    assert expected in plugin.slash_router("status")

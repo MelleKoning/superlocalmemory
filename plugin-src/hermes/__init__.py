@@ -30,7 +30,8 @@ ROLES = {
     "loop": "slm-loop-runner.md",
 }
 _MAX_TEXT = 8_000
-_RELEASE_SLM_VERSION = (4, 1, 12)
+# Stamped by scripts/build-hermes-plugin.mjs from pyproject.toml at build time.
+_RELEASE_SLM_VERSION = (4, 1, 18)
 _SECRET_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{12,}\b"),
     re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
@@ -281,7 +282,8 @@ class SlmHermesPlugin:
         if not binary:
             return "SLM CLI is unavailable. Install the owning runtime; the Hermes plugin never installs Python packages."
         if not _supported_slm(binary):
-            return "Hermes SLM plugin requires exactly SLM CLI 4.1.12 from the owning runtime; refusing an incompatible or unverifiable executable."
+            release = ".".join(str(part) for part in _RELEASE_SLM_VERSION)
+            return f"Hermes SLM plugin requires exactly SLM CLI {release} from the owning runtime; refusing an incompatible or unverifiable executable."
         argv[0] = command
         if "--json" not in argv and command not in {"mcp", "dashboard", "serve", "proxy", "warmup", "setup"}:
             argv.append("--json")
