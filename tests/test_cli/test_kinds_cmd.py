@@ -28,7 +28,18 @@ def _bind(monkeypatch, tc) -> None:
         if response.status_code == 409 and preserve_conflict:
             raise DaemonConflict(response.json().get("detail", ""))
         if response.status_code == 404 and preserve_not_found:
-            raise DaemonNotFound(404, "not_found", "daemon returned 404", path)
+            # Matches cli.daemon.daemon_request (L3-11): the real reason,
+            # read from the response body, not a fixed placeholder — every
+            # 404 in this codebase is {"detail": "..."} or {"detail": {...,
+            # "message": ...}}, never {"error": ...}.
+            detail = None
+            try:
+                detail = response.json().get("detail")
+            except Exception:
+                pass
+            message = (detail.get("message") if isinstance(detail, dict)
+                      else detail if isinstance(detail, str) else None)
+            raise DaemonNotFound(404, "not_found", message or "daemon returned 404", path)
         if response.status_code >= 400:
             return None
         return response.json()

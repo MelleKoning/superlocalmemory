@@ -22,16 +22,39 @@ confirmed; here that confirmation is ``--yes``. ``--json`` everywhere.
 
 from __future__ import annotations
 
+import argparse
 import sys
 from argparse import Namespace
 from dataclasses import dataclass
 from typing import Any, NoReturn
 
-from superlocalmemory.cli.daemon import DaemonConflict, DaemonNotFound, daemon_request
+from superlocalmemory.cli.daemon import (
+    DaemonConflict,
+    DaemonNotFound,
+    DaemonUnprocessable,
+    daemon_request,
+)
 from superlocalmemory.core.kind_query import InvalidKind, resolve_kind
 
 _BASE = "/api/memory-kinds"
 _NOT_RUNNING = "The SLM daemon is not running. Start it with: slm serve"
+
+
+def _json_flag(parser: Any) -> None:
+    """``--json`` that never clobbers an already-set parent value.
+
+    L3-14: argparse writes every action's default into the namespace before
+    parsing a subparser's own arguments, so a bare ``store_true`` default of
+    False on a nested parser overwrote the top level's True the moment a
+    caller wrote the global flag before the subcommand
+    (``slm kinds --json status``) rather than after it
+    (``slm kinds status --json``) — even though both are documented as
+    equivalent. ``default=SUPPRESS`` means "say nothing" instead of "say
+    False" when this particular parser's own flag was not given, so parsing
+    continues up the chain to whatever the enclosing parser already set.
+    """
+    parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                        help="machine-readable output")
 
 
 def register_kinds_parser(sub: Any) -> None:
@@ -41,7 +64,7 @@ def register_kinds_parser(sub: Any) -> None:
     ksub = p.add_subparsers(dest="kinds_command", title="kinds subcommands")
 
     s = ksub.add_parser("status", help="kinds per memory, the backend in use, runs")
-    s.add_argument("--json", action="store_true")
+    _json_flag(s)
 
     st = ksub.add_parser("settings", help="show or change the memory-kind settings")
     on_off = st.add_mutually_exclusive_group()
@@ -52,9 +75,14 @@ def register_kinds_parser(sub: Any) -> None:
                     help="allow Jev to type memories (sends memory text online)")
     st.add_argument("--standing-rules", choices=["on", "off"],
                     help="give confirmed standing rules to every new session")
-    st.add_argument("--json", action="store_true")
+    _json_flag(st)
 
     b = ksub.add_parser("backfill", help="classify existing memories (undoable)")
+    # L3-14: ``backfill`` itself had no --json of its own, so
+    # ``slm kinds backfill --json`` (no action word -- _backfill() already
+    # treats a missing one as "status") was an argparse usage error, not a
+    # recognised invocation -- exactly the second argv Hermes generates.
+    _json_flag(b)
     bsub = b.add_subparsers(dest="backfill_command", title="backfill actions")
     start = bsub.add_parser("start", help="start a classification run")
     start.add_argument("--mode", choices=["untyped", "refresh"], default="untyped",
@@ -62,30 +90,30 @@ def register_kinds_parser(sub: Any) -> None:
                             "suggestions (never a kind you confirmed)")
     start.add_argument("--yes", action="store_true",
                        help="confirm a run that sends memory text online")
-    start.add_argument("--json", action="store_true")
+    _json_flag(start)
     for action in ("pause", "resume", "cancel", "revert"):
         a = bsub.add_parser(action, help=f"{action} a classification run")
         a.add_argument("run_id")
-        a.add_argument("--json", action="store_true")
+        _json_flag(a)
     bs = bsub.add_parser("status", help="the run in progress, if any")
-    bs.add_argument("--json", action="store_true")
+    _json_flag(bs)
 
     set_p = ksub.add_parser("set", help="set (confirm) one memory's kind")
     set_p.add_argument("fact_id", help="exact fact id, from recall or list")
     set_p.add_argument("kind", help="one of the nine memory kinds, or a known alias")
-    set_p.add_argument("--json", action="store_true")
+    _json_flag(set_p)
 
     review_p = ksub.add_parser("review", help="suggestions awaiting confirmation")
     review_p.add_argument("--kind", default="", help="only suggestions of this kind")
     review_p.add_argument("--limit", type=int, default=20)
-    review_p.add_argument("--json", action="store_true")
+    _json_flag(review_p)
 
     confirm_p = ksub.add_parser("confirm", help="confirm kinds for 1-200 facts at once")
     confirm_p.add_argument(
         "items", nargs="*",
         help="FACT_ID or FACT_ID=KIND (bare FACT_ID accepts the stored suggestion)",
     )
-    confirm_p.add_argument("--json", action="store_true")
+    _json_flag(confirm_p)
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,12 +143,20 @@ def _request(out: _Out, method: str, path: str, body: dict | None = None) -> dic
     """The daemon's answer; prints and exits on a refusal or when it is absent."""
     try:
         result = daemon_request(method, _BASE + path, body, preserve_conflict=True,
-                                preserve_not_found=True)
+                                preserve_not_found=True, preserve_unprocessable=True)
     except DaemonConflict as exc:
         needs_yes = path == "/backfill" and "Confirm to continue" in exc.detail
         out.fail(exc.detail + (" Run again with --yes to confirm." if needs_yes else ""))
-    except DaemonNotFound:
-        out.fail("No such classification run in this profile.")
+    except DaemonNotFound as exc:
+        # L3-11: say what was actually not found (e.g. "Memory not found" for
+        # an unknown fact_id) -- not a fixed phrase written for one caller
+        # (an unknown classification run) and reused for every 404 here.
+        out.fail(exc.message)
+    except DaemonUnprocessable as exc:
+        # L3-11: a 422 is invalid input, refused before any work -- exit 2,
+        # never collapsed to None and reported as "the daemon is not
+        # running" (exit 1).
+        _unprocessable_exit(out, exc.code, exc.message)
     if result is None:
         out.fail(_NOT_RUNNING)
     return result
@@ -186,6 +222,19 @@ def _invalid_item_exit(out: "_Out", message: str) -> NoReturn:
         from superlocalmemory.cli.json_output import json_print
 
         json_print(out.command, error={"code": "INVALID_ITEMS", "message": message})
+    else:
+        print(message, file=sys.stderr)
+    sys.exit(2)
+
+
+def _unprocessable_exit(out: "_Out", code: str, message: str) -> NoReturn:
+    """Exit 2: the daemon's own 422 (L3-11) — invalid input, refused before
+    any work, never "the daemon is not running" (what a collapsed-to-None
+    422 used to print, exit 1)."""
+    if out.as_json:
+        from superlocalmemory.cli.json_output import json_print
+
+        json_print(out.command, error={"code": code or "INVALID_REQUEST", "message": message})
     else:
         print(message, file=sys.stderr)
     sys.exit(2)

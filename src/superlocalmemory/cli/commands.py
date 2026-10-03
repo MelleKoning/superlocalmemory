@@ -638,11 +638,19 @@ def dispatch(args: Namespace) -> None:
             # do this. A refusal is an answer: say so and stop, rather than
             # printing a traceback or -- worse -- letting a command fall back to
             # writing locally what the workspace has just declined.
-            print(
+            message = (
                 f"[slm] {refusal}. This workspace requires authentication; "
-                "set SLM_USER_SESSION or log in, then try again.",
-                flush=True,
+                "set SLM_USER_SESSION or log in, then try again."
             )
+            # L3-14: this handler answers for every command, so a command run
+            # with --json must still get a JSON error body here, not the
+            # plain-text message every non-JSON caller gets.
+            if getattr(args, "json", False):
+                from superlocalmemory.cli.json_output import json_print
+                json_print(str(args.command), error={"code": "NOT_AUTHORIZED",
+                                                      "message": message})
+            else:
+                print(message, flush=True)
             sys.exit(1)
     else:
         print(f"Unknown command: {args.command}")
@@ -1712,8 +1720,15 @@ def cmd_remember(args: Namespace) -> None:
             from superlocalmemory.storage.memory_kinds import MemoryKind, parse_kind
 
             if parse_kind(kind) is None:
-                print("Unknown memory kind. Use one of: "
-                      + ", ".join(k.value for k in MemoryKind), file=sys.stderr)
+                message = ("Unknown memory kind. Use one of: "
+                          + ", ".join(k.value for k in MemoryKind))
+                # L3-14: every --json path prints valid JSON, on success AND
+                # on error -- this one printed nothing to stdout before.
+                if use_json:
+                    from superlocalmemory.cli.json_output import json_print
+                    json_print("remember", error={"code": "INVALID_KIND", "message": message})
+                else:
+                    print(message, file=sys.stderr)
                 sys.exit(2)
         replaces = getattr(args, "replaces", None)
         if replaces is not None:
@@ -1724,7 +1739,11 @@ def cmd_remember(args: Namespace) -> None:
             try:
                 replaces = normalize_replaces(replaces)
             except ReplacesRejected as exc:
-                print(exc.message, file=sys.stderr)
+                if use_json:
+                    from superlocalmemory.cli.json_output import json_print
+                    json_print("remember", error={"code": exc.code, "message": exc.message})
+                else:
+                    print(exc.message, file=sys.stderr)
                 sys.exit(2)
         if not (is_daemon_running() or ensure_daemon()):
             _daemon_unavailable("remember", use_json)
@@ -1743,7 +1762,11 @@ def cmd_remember(args: Namespace) -> None:
         try:
             result = daemon_request("POST", path, body, timeout_seconds=30, **extra)
         except DaemonUnprocessable as exc:
-            print(exc.message, file=sys.stderr)
+            if use_json:
+                from superlocalmemory.cli.json_output import json_print
+                json_print("remember", error={"code": exc.code, "message": exc.message})
+            else:
+                print(exc.message, file=sys.stderr)
             sys.exit(2)
         if result and "fact_ids" in result:
             if use_json:
@@ -1806,7 +1829,13 @@ def cmd_recall(args: Namespace) -> None:
     try:
         _kind = resolve_kind(getattr(args, "kind", ""))
     except InvalidKind as exc:
-        print(str(exc), file=sys.stderr)
+        # L3-14: --json must still print valid JSON on this (refused-before-
+        # any-request) error path.
+        if use_json:
+            from superlocalmemory.cli.json_output import json_print
+            json_print("recall", error={"code": "INVALID_KIND", "message": str(exc)})
+        else:
+            print(str(exc), file=sys.stderr)
         sys.exit(2)
     # v3.6.15: None = "not specified" → daemon/engine resolves the configured
     # default (shared-off). Only an explicit --include-global / --no-global

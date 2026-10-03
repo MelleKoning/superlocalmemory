@@ -195,9 +195,18 @@ class DaemonPoolProxy:
         if self._unavailable:
             return self._unavailable_response()
         meta = dict(metadata or {})
-        # ``replaces`` is a field of the request, not memory metadata: lifted
-        # out so it is never stored with the memory itself.
+        # ``replaces``, ``scope``, ``shared_with`` and ``session_date`` are
+        # fields of the /remember request, not memory metadata (L3-24): the
+        # daemon-owned path (tools_core.remember's main branch) sends them as
+        # top-level body fields, never nested inside "metadata". Before this
+        # fix they stayed inside ``meta`` here, so RememberRequest never saw
+        # them as scope/shared_with/session_date at all -- a remember() call
+        # that fell back to this proxy silently lost its scope, its
+        # shared_with list, and its "when this memory is about" date.
         replaces = meta.pop("replaces", None)
+        scope = meta.pop("scope", None)
+        shared_with = meta.pop("shared_with", None)
+        session_date = meta.pop("session_date", "")
         tags = meta.get("tags", "")
         if isinstance(tags, (list, tuple, set)):
             tags = ",".join(str(tag) for tag in tags)
@@ -205,7 +214,10 @@ class DaemonPoolProxy:
             "content": content,
             "tags": tags,
             "metadata": meta,
+            "scope": scope,
+            "shared_with": shared_with,
             "session_id": meta.get("session_id", ""),
+            "session_date": session_date,
             "idempotency_key": meta.get("idempotency_key") or None,
             "profile_id": meta.get("profile_id", ""),
         }

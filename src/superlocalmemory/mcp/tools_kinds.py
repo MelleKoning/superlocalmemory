@@ -54,6 +54,7 @@ async def _kinds_request(method: str, path: str, body: dict | None = None) -> di
     from superlocalmemory.cli.daemon import (
         DaemonConflict,
         DaemonNotFound,
+        DaemonRefused,
         DaemonUnprocessable,
         daemon_request,
         is_daemon_running,
@@ -76,6 +77,14 @@ async def _kinds_request(method: str, path: str, body: dict | None = None) -> di
     except DaemonUnprocessable as exc:
         return {"success": False, "code": exc.code or "INVALID_REQUEST", "retryable": False,
                 "error": exc.message}
+    except DaemonRefused as exc:
+        # 401/403 is an answer, not an outage (L3-04): the daemon refused this
+        # caller, every retry will refuse it the same way, and reporting it as
+        # DAEMON_UNAVAILABLE/retryable=True — as the bare except below used to,
+        # since DaemonRefused is a RuntimeError — invited an endless retry loop
+        # instead of surfacing the refusal, the same fix `remember`'s daemon
+        # path and `_daemon_proxy.store()` already apply.
+        return {"success": False, "code": "NOT_AUTHORIZED", "retryable": False, "error": str(exc)}
     except Exception:
         logger.exception("memory-kinds request failed: %s %s", method, path)
         return {"success": False, "code": "DAEMON_UNAVAILABLE", "retryable": True,

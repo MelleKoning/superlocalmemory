@@ -351,6 +351,11 @@ def register_core_tools(server, get_engine: Callable) -> None:
                 "tags": tags,
                 "scope": scope or "personal",
                 "shared_with": _shared_list or [],
+                # L3-24: carried through the same way the daemon-owned branch
+                # above always has (its "session_date": session_date body
+                # field) -- DaemonPoolProxy.store lifts this back out of
+                # metadata into the request's own field.
+                "session_date": session_date,
                 "idempotency_key": (
                     effective_idempotency_key
                     or "mcp:" + hashlib.sha256(content.encode("utf-8")).hexdigest()

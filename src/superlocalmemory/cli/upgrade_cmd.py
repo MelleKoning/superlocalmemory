@@ -73,7 +73,13 @@ def _confirmed(args: Namespace, word: str) -> bool:
     if getattr(args, "yes", False):
         return True
     if not sys.stdin.isatty():
-        print(f"Nothing was changed. Add --yes to confirm (or type {word} when asked).")
+        # L3-14: this is a refusal, not a prompt -- --json must still get
+        # valid JSON here, not plain text with no stdout for a caller parsing
+        # it as JSON.
+        _emit(args, {"confirmed": False,
+                     "message": f"Nothing was changed. Add --yes to confirm "
+                               f"(or type {word} when asked)."},
+              f"Nothing was changed. Add --yes to confirm (or type {word} when asked).")
         return False
     return input(f"Type {word} to continue: ").strip() == word
 
@@ -136,13 +142,14 @@ def cmd_db_restore(args: Namespace) -> int:
               "The waiting restore was cancelled." if cancelled else "No restore was waiting.")
         return 0
     point_id = getattr(args, "point_id", None)
+    usage = "Usage: slm db restore <restore point> [--yes] [--no-reimport] | --cancel"
     if not point_id:
-        print("Usage: slm db restore <restore point> [--yes] [--no-reimport] | --cancel")
+        _emit(args, {"error": "point_id is required", "usage": usage}, usage)
         return 2
     try:
         preview = ur.preview_restore(point_id, data_root=root, memory_db=memory_db)
     except RestoreRefusedError as exc:
-        print(str(exc))
+        _emit(args, {"restored": False, "message": str(exc)}, str(exc))
         return 1
     if not getattr(args, "json", False):
         print(_describe(preview))
@@ -156,7 +163,7 @@ def cmd_db_restore(args: Namespace) -> int:
                            reimport=not getattr(args, "no_reimport", False),
                            data_root=root, memory_db=memory_db)
     except RestoreRefusedError as exc:
-        print(str(exc))
+        _emit(args, {"restored": False, "message": str(exc)}, str(exc))
         return 1
     if _daemon_running() and (not _stop_daemon() or _daemon_running()):
         _emit(args, {"status": "waiting_for_restart"},

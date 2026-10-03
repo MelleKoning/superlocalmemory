@@ -38,7 +38,9 @@ from superlocalmemory.core.memory_kind_config import (
     save_memory_kind_settings,
     settings_dict,
 )
+from superlocalmemory.core.kind_query import InvalidKind
 from superlocalmemory.server import write_identity
+from superlocalmemory.server.kind_error import invalid_kind_http
 from superlocalmemory.storage.memory_kind_store import MemoryKindStore
 from superlocalmemory.storage.memory_kinds import is_confirmed, parse_kind
 
@@ -71,7 +73,15 @@ class BackfillRequest(BaseModel):
 class ConfirmItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    fact_id: str = Field(..., min_length=1, max_length=128)
+    # L3-11: no upper length bound here. A fact_id this field itself rejects
+    # (Pydantic validates the whole ``items`` list before the route ever
+    # runs) 422s the ENTIRE batch -- contradicting this route's own contract
+    # ("one bad item does not abort the rest"), since a real id this long
+    # simply will not be found and already comes back a graceful per-item
+    # {"ok": false, "error": "not found"} (storage.memory_kind_writes.set_kinds).
+    # The generous cap still exists -- at the request-body size limit the
+    # ingest gate enforces, not a per-field one.
+    fact_id: str = Field(..., min_length=1)
     kind: str | None = Field(None, max_length=64)
 
 
@@ -208,7 +218,7 @@ def _set_kinds(request: Request, profile_id: str, pairs: list[tuple[str, str]]) 
         receipt = runtime.set_fact_kinds(profile_id, pairs,
                                          idempotency_key=_mutation_idempotency_key(request))
     except ValueError as exc:
-        raise HTTPException(422, detail="Not a memory kind.") from exc
+        raise invalid_kind_http(InvalidKind(str(exc))) from exc
     except Exception as exc:  # noqa: BLE001 — typed mapping, never a traceback
         raise _canonical_mutation_error(exc, "Could not change the memory kind") from exc
     if not receipt.get("ok", False) and not receipt.get("facts"):
@@ -217,9 +227,21 @@ def _set_kinds(request: Request, profile_id: str, pairs: list[tuple[str, str]]) 
 
 
 def _authorize(request: Request, fact_id: str) -> tuple[Any, str]:
+    """Authorize a kind change: WRITE on a fact the active profile owns.
+
+    Passes ``admission_kind=OperationKind.REMEMBER`` so the admission layer
+    evaluates this as the WRITE-level operation the route is documented as
+    (same policy tier as ``remember(kind=...)``), not the owner/admin-only
+    CORRECT contract ``operation="update"`` would otherwise default to for a
+    content edit. The RBAC permission check and the hook name are unaffected
+    — both still key off ``operation="update"`` (Permission.WRITE; the
+    trust-gate pre-hook still fires under its existing "update" name).
+    """
+    from superlocalmemory.core.operation_request import OperationKind
     from superlocalmemory.server.routes.memories import _authorize_memory_mutation
 
-    engine, profile_id, _context = _authorize_memory_mutation(request, "update", fact_id)
+    engine, profile_id, _context = _authorize_memory_mutation(
+        request, "update", fact_id, admission_kind=OperationKind.REMEMBER)
     return engine, profile_id
 
 
@@ -301,7 +323,7 @@ def get_suggestions(request: Request, kind: str | None = Query(None, max_length=
     _read_gate(request)
     parsed = parse_kind(kind) if kind else None
     if kind and parsed is None:
-        raise HTTPException(422, detail="Not a memory kind.")
+        raise invalid_kind_http(InvalidKind(kind))
     try:
         engine = _engine(request)
         db = getattr(engine, "db", None) or getattr(engine, "_db", None)
@@ -331,6 +353,13 @@ def _stored_suggestion(engine: Any, profile_id: str, fact_id: str) -> str | None
 
 @router.post("/confirm")
 def post_confirm(request: Request, body: ConfirmRequest):
+    """Confirm (or set) the kind of 1-200 facts at once.
+
+    Permission: WRITE on the active profile, and the caller must own each
+    fact (``_authorize`` -> ``_authorize_memory_mutation``, admitted as
+    OperationKind.REMEMBER) — the same tier ``remember(kind=...)`` runs
+    under, not the owner/admin-only CORRECT tier a content edit requires.
+    """
     results: list[dict[str, Any] | None] = [None] * len(body.items)
     pairs: list[tuple[str, str]] = []
     slots: list[int] = []
@@ -361,9 +390,16 @@ def post_confirm(request: Request, body: ConfirmRequest):
 
 @router.patch("/fact/{fact_id}")
 def patch_fact_kind(request: Request, fact_id: str, body: KindEdit):
+    """Set one fact's kind.
+
+    Permission: WRITE on the active profile, and the caller must own the
+    fact (``_authorize`` -> ``_authorize_memory_mutation``, admitted as
+    OperationKind.REMEMBER) — the same tier ``remember(kind=...)`` runs
+    under, not the owner/admin-only CORRECT tier a content edit requires.
+    """
     parsed = parse_kind(body.kind)
     if parsed is None:
-        raise HTTPException(422, detail="Not a memory kind.")
+        raise invalid_kind_http(InvalidKind(body.kind))
     _engine_obj, profile_id = _authorize(request, fact_id)
     applied = _set_kinds(request, profile_id, [(fact_id, parsed.value)])
     if not applied or not applied[0].get("ok"):

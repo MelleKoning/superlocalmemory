@@ -119,12 +119,26 @@ def _mutation_runtime_or_missing_fact(
     raise HTTPException(503, detail="canonical mutation writer is not ready; retry shortly")
 
 
-def _admit_http_mutation(request: Request, operation: str) -> None:
+def _admit_http_mutation(
+    request: Request, operation: str, *, admission_kind: "OperationKind | None" = None,
+) -> None:
     """Route a memory HTTP mutation through OperationPolicyRegistry.evaluate().
 
     Called from _authorize_memory_mutation after RBAC passes. Raises HTTP 403
     if the policy registry denies the actor. Maps "delete" → FORGET,
-    "update" → CORRECT. Uses the server-derived principal and roles.
+    "update" → CORRECT (owner/admin only — this is a content *correction*,
+    which is why ``/replaces`` stays on CORRECT). Uses the server-derived
+    principal and roles.
+
+    ``admission_kind`` lets a caller that passes operation="update" for its
+    RBAC permission (WRITE) and hook name (unchanged, so the trust-gate
+    pre-hook still fires) override which OperationKind the policy registry
+    actually evaluates. Memory-kinds' set/confirm routes use this: they are
+    documented as a WRITE-level operation on a fact the active profile owns
+    (consistent with ``remember(kind=...)``), not the owner/admin-only
+    CORRECT contract a content edit requires — so they pass
+    ``admission_kind=OperationKind.REMEMBER`` instead of letting "update"
+    default to CORRECT.
     """
     from fastapi import HTTPException as _HTTPException
 
@@ -161,7 +175,10 @@ def _admit_http_mutation(request: Request, operation: str) -> None:
         principal=principal,
         roles=actor_roles,
     )
-    kind = OperationKind.FORGET if operation == "delete" else OperationKind.CORRECT
+    if admission_kind is not None:
+        kind = admission_kind
+    else:
+        kind = OperationKind.FORGET if operation == "delete" else OperationKind.CORRECT
     try:
         admit(kind, actor, mode=mode)
     except AdmissionDenied as exc:
@@ -178,8 +195,15 @@ def _authorize_memory_mutation(
     *,
     content_preview: str = "",
     run_pre_hook: bool = True,
+    admission_kind: "OperationKind | None" = None,
 ):
-    """Authenticate a mutation, optionally gating route-owned direct SQL."""
+    """Authenticate a mutation, optionally gating route-owned direct SQL.
+
+    ``admission_kind`` is forwarded to ``_admit_http_mutation`` unchanged; see
+    its docstring. It does not affect the RBAC permission (still keyed off
+    ``operation``) or the hook name run below (still ``operation``) — only
+    which ``OperationKind`` the policy registry evaluates.
+    """
     from superlocalmemory.server.write_identity import require_write_actor
 
     actor_id = require_write_actor(
@@ -196,7 +220,7 @@ def _authorize_memory_mutation(
         _Perm.DELETE if operation == "delete" else _Perm.WRITE,
     )
     # Phase 1: admission gateway — policy registry decision for this route.
-    _admit_http_mutation(request, operation)
+    _admit_http_mutation(request, operation, admission_kind=admission_kind)
     engine = _get_engine(request)
     if engine is None:
         raise HTTPException(503, detail="Engine not initialized")
@@ -641,7 +665,17 @@ async def search_memories(request: Request, body: SearchRequest):
     search from >15s timeout to <1s warm.
 
     Falls back to direct DB LIKE search if engine is unavailable.
+
+    ``kind`` (L3-20) narrows to one of the nine memory kinds, the same
+    filter MCP's ``search`` and ``list_recent`` already take. Refused
+    (422, INVALID_KIND) before any retrieval if it does not parse.
     """
+    from superlocalmemory.core.kind_query import InvalidKind, resolve_kind
+    try:
+        parsed_kind = resolve_kind(getattr(body, "kind", ""))
+    except InvalidKind as exc:
+        from superlocalmemory.server.kind_error import invalid_kind_http
+        raise invalid_kind_http(exc)
     from superlocalmemory.core.recall_gate import begin_recall, end_recall
     begin_recall()
     try:
@@ -675,10 +709,17 @@ async def search_memories(request: Request, body: SearchRequest):
             # and the browser aborts the fetch. If it exceeds the budget we
             # fall through to the fast keyword search below, so the dashboard
             # ALWAYS returns instead of failing with an abort.
+            # A kind filter narrows AFTER retrieval (below), so ask for more
+            # than ``body.limit`` up front — the same over-fetch contract
+            # core.kind_query's list/search helpers use for the other two
+            # doors — or a kind-filtered search could come back with fewer
+            # than ``limit`` results even when enough actually exist.
+            from superlocalmemory.retrieval.kind_filter import overfetch_limit
+            _search_limit = overfetch_limit(body.limit) if parsed_kind else body.limit
             _recall_future = loop.run_in_executor(
                 None,
                 lambda: engine.recall(
-                    body.query, limit=body.limit, fast=True,
+                    body.query, limit=_search_limit, fast=True,
                     window=_window or None,
                     # Name the surface. A recall with no name leaves no record
                     # an outcome can be matched to, and a search typed into the
@@ -718,10 +759,13 @@ async def search_memories(request: Request, body: SearchRequest):
                 )
                 results, no_confident_match = serialize_recall_response(
                     response,
-                    limit=body.limit,
+                    limit=_search_limit,
                     per_fact_max=300,
                     total_max=max(300, body.limit * 300),
                 )
+                if parsed_kind:
+                    results = [r for r in results
+                              if r.get("memory_kind") == parsed_kind][:body.limit]
                 return {
                     "query": body.query,
                     "results": results,
@@ -738,13 +782,28 @@ async def search_memories(request: Request, body: SearchRequest):
         conn.row_factory = dict_factory
         cursor = conn.cursor()
         active_profile = get_active_profile()
-        cursor.execute("""
+        # Degraded-lexical fallback: a plain equality filter, not the
+        # over-fetch-then-trim windowing core.kind_query's helpers use for
+        # list/search's primary paths (this is a raw connection, not a
+        # DatabaseManager, and this path only runs when the main engine is
+        # unavailable or over its time budget). Stores without the M052 kind
+        # columns (has_kind_columns False) ignore the filter rather than
+        # erroring on an unknown column.
+        has_kind_columns = any(
+            row.get("name") == "memory_kind" for row in cursor.execute(
+                "PRAGMA table_info(atomic_facts)").fetchall()
+        )
+        apply_kind_filter = bool(parsed_kind) and has_kind_columns
+        kind_clause = " AND memory_kind = ?" if apply_kind_filter else ""
+        kind_params = (parsed_kind,) if apply_kind_filter else ()
+        kind_select = ", memory_kind" if has_kind_columns else ""
+        cursor.execute(f"""
             SELECT fact_id, content, confidence as memory_confidence,
-                   fact_type as category, created_at
+                   fact_type as category, created_at{kind_select}
             FROM atomic_facts
-            WHERE profile_id = ? AND content LIKE ?
+            WHERE profile_id = ? AND content LIKE ?{kind_clause}
             ORDER BY confidence DESC LIMIT ?
-        """, (active_profile, f'%{body.query}%', body.limit))
+        """, (active_profile, f'%{body.query}%', *kind_params, body.limit))
         rows = cursor.fetchall()
         conn.close()
 

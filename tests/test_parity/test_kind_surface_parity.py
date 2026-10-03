@@ -19,10 +19,12 @@ import json
 from argparse import Namespace
 from types import SimpleNamespace
 
+from fastapi.testclient import TestClient
+
 from superlocalmemory.cli import kinds_cmd
 from superlocalmemory.cli.daemon import DaemonConflict, DaemonNotFound
 from superlocalmemory.storage.models import AtomicFact, FactType
-from tests.test_server.test_memory_kinds_routes import _client, _fact
+from tests.test_server.test_memory_kinds_routes import _client, _fact, _session
 
 KIND_KEYS = ("memory_kind", "memory_kind_label", "memory_kind_state",
             "memory_kind_source", "memory_kind_confidence")
@@ -61,7 +63,21 @@ def _bind_daemon_request(monkeypatch, tc) -> None:
 
     def fake_daemon_request(method, path, body=None, *, preserve_conflict=False,
                             preserve_not_found=False, preserve_unprocessable=False, **_kw):
-        response = tc.request(method, path, json=body)
+        import os
+
+        # Matches cli.daemon.daemon_request: an opted-in caller session rides
+        # along as a header, never silently dropped (needed so an MCP call
+        # made under SLM_USER_SESSION is authenticated the same way the real
+        # client would authenticate it).
+        session = os.environ.get("SLM_USER_SESSION", "").strip()
+        headers = {"X-SLM-User-Session": session} if session else {}
+        response = tc.request(method, path, json=body, headers=headers)
+        if response.status_code in (401, 403):
+            # Matches cli.daemon.daemon_request: a refusal is an answer, not an
+            # outage, on every door (L3-04) — never collapsed to None here.
+            from superlocalmemory.cli.daemon import DaemonRefused
+
+            raise DaemonRefused(response.status_code, path)
         if response.status_code == 409 and preserve_conflict:
             raise DaemonConflict(response.json().get("detail", ""))
         if response.status_code == 404 and preserve_not_found:
@@ -108,6 +124,34 @@ def test_set_kind_identical(tmp_path, monkeypatch, capsys) -> None:
 
     assert _kind_subset(mcp_out) == _kind_subset(cli_out["data"]) == _kind_subset(http_out.json())
     assert mcp_out["memory_kind"] == "decision"
+
+
+# -- test_daemon_refusal_identical (L3-04) ---------------------------------
+
+
+def test_daemon_refusal_identical(tmp_path, monkeypatch) -> None:
+    """A role without WRITE is refused identically on HTTP and MCP.
+
+    Before L3-04, MCP mapped this 403 to DAEMON_UNAVAILABLE/retryable=True —
+    an outage a caller might retry forever — while HTTP correctly answered
+    403. Both doors now agree: not authorized, not retryable.
+    """
+    monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path))
+    tc, app, db = _client(tmp_path, monkeypatch)
+    fid = _fact(db, "Never push to main.")
+    viewer = _session(app, "vera", "viewer")
+    app.state.rbac.set_require_login(True)
+    monkeypatch.setenv("SLM_USER_SESSION", viewer["X-SLM-User-Session"])
+    _bind_daemon_request(monkeypatch, tc)
+
+    http_out = tc.patch(f"/api/memory-kinds/fact/{fid}", json={"kind": "rule"},
+                        headers=viewer)
+    assert http_out.status_code == 403, http_out.text
+
+    mcp_out = asyncio.run(_kind_tools()["set_memory_kind"](fid, "rule"))
+    assert mcp_out["success"] is False
+    assert mcp_out["code"] == "NOT_AUTHORIZED"
+    assert mcp_out["retryable"] is False
 
 
 # -- test_status_identical -------------------------------------------------------
@@ -253,6 +297,12 @@ class _FakeEngine:
     def initialize(self) -> None:
         pass
 
+    def recall(self, *args, **kwargs):
+        """None (not raising) is exactly how /api/search reads a recall that
+        timed out or came back empty-handed -- it falls through to the
+        degraded-lexical DB fallback deterministically, with no timing race."""
+        return None
+
 
 def test_list_kind_filter_identical(tmp_path, monkeypatch, capsys) -> None:
     from superlocalmemory.cli import commands
@@ -284,8 +334,63 @@ def test_list_kind_filter_identical(tmp_path, monkeypatch, capsys) -> None:
 
     cli_out = _cli_json(capsys, commands.cmd_list, Namespace(json=True, limit=10, kind="rule"))
 
+    # HTTP: /list (L3-20, L3-06) reads through the same fake_engine._db.
+    from superlocalmemory.server.unified_daemon import create_app
+
+    app = create_app()
+    app.state.engine = fake_engine
+    http_out = TestClient(app).get("/list", params={"kind": "rule"}).json()
+
     def _by_content(results):
         return {r["content"]: _kind_subset(r) for r in results}
 
     assert set(_by_content(mcp_out["results"])) == {"rule one", "rule two"}
-    assert _by_content(mcp_out["results"]) == _by_content(cli_out["data"]["results"])
+    assert _by_content(mcp_out["results"]) == _by_content(cli_out["data"]["results"]) == \
+        _by_content(http_out["results"])
+
+
+# -- test_search_kind_filter_identical --------------------------------------
+
+
+def test_search_kind_filter_identical(tmp_path, monkeypatch, capsys) -> None:
+    """``search`` (MCP) and POST /api/search (HTTP) share
+    core.kind_query.search_facts / the same post-filter contract. The CLI has
+    no dedicated ``search`` verb (``recall`` is its multi-channel search,
+    covered by test_recall_kind_filter_identical above)."""
+    from superlocalmemory.core import engine as engine_mod
+    from superlocalmemory.storage import schema
+    from superlocalmemory.storage.database import DatabaseManager
+    from superlocalmemory.storage.models import MemoryRecord
+
+    db = DatabaseManager(tmp_path / "memory.db")
+    db.initialize(schema)
+
+    def _save(content, *, kind=None, source=None):
+        memory_id = db.store_memory(MemoryRecord(profile_id="default", content=content))
+        fact = AtomicFact(profile_id="default", memory_id=memory_id, content=content,
+                          fact_type=FactType.SEMANTIC, memory_kind=kind, memory_kind_source=source)
+        return db.store_fact(fact)
+
+    _save("a rule about main", kind="rule", source="user")
+    _save("a decision about main", kind="decision", source="user")
+
+    fake_engine = _FakeEngine(db)
+    monkeypatch.setattr(engine_mod, "MemoryEngine", lambda *a, **k: fake_engine)
+
+    server = _Server()
+    from superlocalmemory.mcp import tools_core
+    tools_core.register_core_tools(server, lambda: fake_engine)
+    mcp_out = asyncio.run(server.captured["search"]("main", limit=10, kind="rule"))
+
+    from superlocalmemory.server.unified_daemon import create_app
+
+    app = create_app()
+    app.state.engine = fake_engine  # .recall() returns None -> degraded-lexical fallback
+    http_out = TestClient(app).post(
+        "/api/search", json={"query": "main", "limit": 10, "kind": "rule"}).json()
+
+    def _by_content(results):
+        return {r["content"]: _kind_subset(r) for r in results}
+
+    assert set(_by_content(mcp_out["results"])) == {"a rule about main"}
+    assert set(_by_content(http_out["results"])) == {"a rule about main"}
