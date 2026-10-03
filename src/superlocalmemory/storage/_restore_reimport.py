@@ -142,8 +142,10 @@ def _settle(data_root: Path, delta_dir: Path, report: ReimportReport, passes: in
         write_json_atomic(Path(data_root) / OUTCOME_NAME, {
             **outcome, "reimport_pending": pending, "reimport": report.as_dict(),
             "reimport_passes": passes})
-    if pending or report.skipped_rejected:
-        return                  # it still holds a memory that is not in the store
+    if pending or report.skipped_rejected or report.skipped_unknown_profile:
+        # It still holds a memory that is not in the store. Kept, under the
+        # bounded retention of ``_restore_retention`` (and erasure scrubs it).
+        return
     try:
         from superlocalmemory.storage._restore_retention import (
             discard_delta, prune_restore_artifacts,

@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from superlocalmemory.compliance.gdpr import GDPRCompliance
 from superlocalmemory.infra.backup_obligations import BackupObligationStore
 from superlocalmemory.storage import _restore_retention as rr
@@ -51,12 +53,14 @@ def test_the_delta_goes_once_everything_is_back(tmp_path, monkeypatch) -> None:
     assert not any((tmp_path / "restore-delta").iterdir())
 
 
-def test_a_delta_with_a_failure_is_kept(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("result", ["failed", "skipped_rejected", "skipped_unknown_profile"])
+def test_a_delta_holding_a_memory_not_in_the_store_is_kept(tmp_path, monkeypatch,
+                                                           result) -> None:
     _l, memory_db, delta = _restored_with_one_new_memory(tmp_path)
     from superlocalmemory.storage import _restore_reimport as ri
 
     def fail(_engine, rows, _db, counts):
-        counts["failed"] += len(rows)
+        counts[result] += len(rows)
     monkeypatch.setattr(ri, "_reimport_memories", fail)
 
     ur.reimport_delta(SimpleNamespace(_db=SimpleNamespace(db_path=memory_db)), delta,
