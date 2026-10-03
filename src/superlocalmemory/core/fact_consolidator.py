@@ -666,13 +666,10 @@ def _generate_summary(
         if result:
             generated_by = "ollama"
     elif mode == "c":
+        # The configured provider only: no Ollama-format fallback to the cloud host.
         result = _vet(_summarize_with_cloud_llm(entity_name, facts, config), "Cloud LLM")
         if result:
             generated_by = "cloud"
-        else:
-            result = _vet(_summarize_with_ollama(entity_name, facts, config), "Ollama")
-            if result:
-                generated_by = "ollama"
 
     if not result:
         # Extractive is assembled from the facts' own sentences, so it has no
@@ -699,9 +696,11 @@ def _summarize_with_ollama(
     facts: list,
     config: object | None = None,
 ) -> str | None:
-    """Mode B: Summarize using local Ollama LLM."""
+    """Mode B: Summarize using the configured Ollama (through the outbound gate)."""
     try:
         import urllib.request
+
+        from superlocalmemory.core import outbound_http
 
         api_base = "http://localhost:11434"
         model = "llama3.2"
@@ -734,7 +733,7 @@ def _summarize_with_ollama(
             data=payload,
             headers={"Content-Type": "application/json"},
         )
-        resp = urllib.request.urlopen(req, timeout=timeout)
+        resp = outbound_http.urlopen(req, timeout=timeout)
         result = json.loads(resp.read().decode())
         text = result.get("response", "").strip()
         return text if text and len(text) > 50 else None

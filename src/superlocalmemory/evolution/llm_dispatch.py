@@ -6,7 +6,8 @@
 
 Enforces MASTER-PLAN D2 (no top-tier "O-family" Claude models, no
 ``gpt-4-turbo``) and LLD-00 §5 (every LLM-bound prompt passes through
-``redact_secrets(aggression='high')`` FIRST).
+``redact_for_hosted_judge`` FIRST: the high-aggression scan with every
+credential replaced by ``[redacted]`` — no type and no last four characters).
 
 Every evolution LLM call funnels through :func:`_dispatch_llm`. Writes an
 audit row to ``evolution_llm_cost_log`` after the dispatch succeeds — the
@@ -37,10 +38,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
-from superlocalmemory.core.security_primitives import (
-    redact_secrets,
-    run_subprocess_safe,
-)
+from superlocalmemory.core import outbound_http
+from superlocalmemory.core.security_primitives import run_subprocess_safe
+from superlocalmemory.retrieval.hosted_redaction import redact_for_hosted_judge
 
 logger = logging.getLogger(__name__)
 
@@ -260,7 +260,8 @@ def _call_ollama_backend(
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=120) as resp:  # noqa: S310
+        # Through the gate: a local Ollama is never reached through a proxy.
+        with outbound_http.urlopen(req, timeout=120) as resp:
             data = _json.loads(resp.read())
             return data.get("response", "") or ""
     except Exception as exc:  # noqa: BLE001
@@ -477,7 +478,7 @@ def _dispatch_llm(
     """Central choke-point for every evolution LLM call.
 
     Validates model against allow/deny lists, caps ``max_tokens``, runs the
-    prompt through ``redact_secrets(aggression='high')``, dispatches, and
+    prompt through ``redact_for_hosted_judge``, dispatches, and
     logs a redacted cost row. Raises ``ValueError`` on any contract breach.
     """
     _validate_model(model)
@@ -502,8 +503,10 @@ def _dispatch_llm(
             f"(got {profile_id!r})"
         )
 
-    # LLD-00 §5 — redact BEFORE dispatch. Never log the raw prompt.
-    safe_prompt = redact_secrets(prompt, aggression="high")
+    # LLD-00 §5 — redact BEFORE dispatch. Never log the raw prompt. Every
+    # backend but a local Ollama is another machine (Anthropic, OpenAI, the
+    # claude CLI), so the prompt keeps no part of any credential.
+    safe_prompt = redact_for_hosted_judge(prompt)
 
     # S9-defer H-P-10: per-cycle retry-cost DoS guard. If the caller
     # (or an orchestrator layer) keeps retrying a failing dispatch on

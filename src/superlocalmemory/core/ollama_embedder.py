@@ -218,9 +218,13 @@ class OllamaEmbedder:
         """
         import httpx
 
-        resp = httpx.post(
+        from superlocalmemory.core import outbound_http
+
+        # Through the gate: an Ollama on another machine (a LAN host) never
+        # receives a credential, and this machine is never reached via a proxy.
+        resp = outbound_http.post_json(
             f"{self._base_url}/api/embed",
-            json={"model": self._model, "input": [text], "keep_alive": -1},
+            {"model": self._model, "input": [text], "keep_alive": -1},
             timeout=httpx.Timeout(_RESPONSE_TIMEOUT, connect=_CONNECT_TIMEOUT),
         )
         resp.raise_for_status()
@@ -237,9 +241,13 @@ class OllamaEmbedder:
         """
         import httpx
 
-        resp = httpx.post(
+        from superlocalmemory.core import outbound_http
+
+        # Through the gate: an Ollama on another machine (a LAN host) never
+        # receives a credential, and this machine is never reached via a proxy.
+        resp = outbound_http.post_json(
             f"{self._base_url}/api/embed",
-            json={"model": self._model, "input": texts, "keep_alive": -1},
+            {"model": self._model, "input": texts, "keep_alive": -1},
             timeout=httpx.Timeout(_RESPONSE_TIMEOUT, connect=_CONNECT_TIMEOUT),
         )
         resp.raise_for_status()

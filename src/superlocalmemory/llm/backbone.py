@@ -4,7 +4,8 @@
 
 """LLM backbone — unified interface for LLM providers.
 
-Supports OpenAI, Anthropic, Azure OpenAI, and Ollama via raw HTTP (httpx).
+Supports OpenAI, Anthropic, Azure OpenAI, and Ollama via raw HTTP (httpx),
+sent through the outbound gate (``core.outbound_http``).
 Falls back gracefully when no API key is configured — Mode A still works.
 
 Providers:
@@ -29,6 +30,7 @@ from typing import Any
 import httpx
 
 from superlocalmemory.core.config import LLMConfig
+from superlocalmemory.core import outbound_http
 from superlocalmemory.core.outbound_redaction import for_endpoint, is_local_endpoint
 
 logger = logging.getLogger(__name__)
@@ -169,6 +171,8 @@ class LLMBackbone:
         temperature: float | None = None,
         max_tokens: int | None = None,
         think: bool | None = None,
+        *,
+        attempts: int | None = None,
     ) -> str:
         """Send prompt to the LLM and return generated text.
 
@@ -180,6 +184,10 @@ class LLMBackbone:
         sends ``think: false`` (content-only answers from thinking
         models); ``None``/``True`` omit the key and keep model defaults.
         ``True`` is never sent: non-thinking models reject it.
+
+        ``attempts`` caps the tries (default three, with backoff). A caller on
+        a write path that has its own fallback passes 1, so a provider that is
+        down costs one failed request, not seconds of retries.
         """
         if not self.is_available():
             raise LLMUnavailableError(
@@ -199,7 +207,8 @@ class LLMBackbone:
 
         last_error: Exception | None = None
         think_downgraded = False
-        for attempt in range(_MAX_RETRIES):
+        tries = _MAX_RETRIES if attempts is None else max(1, int(attempts))
+        for attempt in range(tries):
             try:
                 response = self._send(url, headers, payload)
                 return self._extract_text(response)
@@ -229,18 +238,23 @@ class LLMBackbone:
             except (httpx.TimeoutException, httpx.ConnectError, ValueError) as exc:
                 last_error = exc
 
-            if attempt < _MAX_RETRIES - 1:
+            if attempt < tries - 1:
                 delay = _RETRY_BASE_DELAY * (2 ** attempt)
-                logger.info("Retry %d/%d after %.1fs", attempt + 1, _MAX_RETRIES, delay)
+                logger.info("Retry %d/%d after %.1fs", attempt + 1, tries, delay)
                 time.sleep(delay)
 
-        logger.error("All %d retries exhausted: %s", _MAX_RETRIES, last_error)
+        logger.error("All %d retries exhausted: %s", tries, last_error)
         return ""
 
     # -- HTTP transport -----------------------------------------------------
 
     def _send(self, url: str, headers: dict, payload: dict) -> dict:
-        """Execute HTTP POST with socket-level SSL backstop."""
+        """Execute HTTP POST with socket-level SSL backstop.
+
+        Through ``core.outbound_http``: the body is screened again on the
+        final URL, a local model is never reached through a proxy, and a
+        redirect is never followed.
+        """
         old_default = socket.getdefaulttimeout()
         socket.setdefaulttimeout(self._timeout + 30)
         try:
@@ -250,17 +264,17 @@ class LLMBackbone:
                 write=10.0,
                 pool=10.0,
             )
-            with httpx.Client(timeout=timeout) as client:
-                resp = client.post(url, headers=headers, json=payload)
-                resp.raise_for_status()
-                try:
-                    return resp.json()
-                except Exception as exc:
-                    raise ValueError(
-                        f"LLM endpoint returned HTTP {resp.status_code} with "
-                        f"non-JSON body (Content-Length="
-                        f"{resp.headers.get('content-length', '?')}): {exc}"
-                    ) from exc
+            resp = outbound_http.post_json(url, payload, headers=headers,
+                                           timeout=timeout)
+            resp.raise_for_status()
+            try:
+                return resp.json()
+            except Exception as exc:
+                raise ValueError(
+                    f"LLM endpoint returned HTTP {resp.status_code} with "
+                    f"non-JSON body (Content-Length="
+                    f"{resp.headers.get('content-length', '?')}): {exc}"
+                ) from exc
         finally:
             socket.setdefaulttimeout(old_default)
 

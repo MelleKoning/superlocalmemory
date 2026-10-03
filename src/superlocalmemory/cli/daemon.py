@@ -540,7 +540,8 @@ def daemon_request(
         if user_session:
             headers["X-SLM-User-Session"] = user_session
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
-        resp = urllib.request.urlopen(req, timeout=timeout_seconds)
+        from superlocalmemory.core import outbound_http  # never via a proxy
+        resp = outbound_http.urlopen(req, timeout=timeout_seconds)
         return json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
         # A refusal is an answer, not a failure to get one. Returning None here

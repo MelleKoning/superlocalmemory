@@ -12,6 +12,7 @@ model or embedder running on this machine sees the text as it is.
 from __future__ import annotations
 
 import json
+import types
 
 import pytest
 
@@ -27,7 +28,6 @@ _TEXT = f"deploy uses the AWS key {_KEY} from the vault"
     "http://localhost:11434/api/chat",
     "http://127.0.0.1:8080/v1",
     "http://[::1]:9000/v1/embeddings",
-    "http://my-box.localhost:1234",
 ])
 def test_an_endpoint_on_this_machine_is_local(url: str) -> None:
     assert is_local_endpoint(url)
@@ -37,6 +37,9 @@ def test_an_endpoint_on_this_machine_is_local(url: str) -> None:
     "", "https://api.openai.com/v1/chat/completions", "https://x.openai.azure.com",
     "http://192.168.1.20:11434/api/chat", "https://localhost.evil.example/v1",
     "not a url",
+    # A name under .localhost is only conventionally loopback; a resolver or
+    # hosts file can point it anywhere, so it is treated as another machine.
+    "http://my-box.localhost:1234",
 ])
 def test_anything_else_is_remote(url: str) -> None:
     assert not is_local_endpoint(url)
@@ -85,35 +88,31 @@ def test_a_model_on_this_machine_sees_the_text_as_written(monkeypatch) -> None:
     assert _KEY in json.dumps(sent[0]["payload"])
 
 
-class _Response:
-    status_code = 200
-
-    def __init__(self, n: int) -> None:
-        self._n = n
-
-    def raise_for_status(self) -> None:
-        return None
-
-    def json(self) -> dict:
-        return {"data": [{"embedding": [0.0, 1.0], "index": i} for i in range(self._n)]}
-
-
-class _Client:
-    def __init__(self) -> None:
-        self.bodies: list[dict] = []
-
-    def post(self, url, headers=None, json=None, timeout=None, **_):  # noqa: A002
-        self.bodies.append(json)
-        return _Response(len(json["input"]))
-
-
 def _embedder(monkeypatch, **cfg):
+    """The real embedding client, with only the wire replaced: whatever the
+    service's own client lets through is what the transport records."""
+    import httpx
+
     from superlocalmemory.core.embeddings import EmbeddingService
 
     service = EmbeddingService(EmbeddingConfig(dimension=2, **cfg))
-    client = _Client()
-    monkeypatch.setattr(service, "_get_http_client", lambda: client)
-    return service, client
+    bodies: list[dict] = []
+    options: list[dict] = []
+    real_client = httpx.Client
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        bodies.append(body)
+        return httpx.Response(200, json={"data": [
+            {"embedding": [0.0, 1.0], "index": i} for i in range(len(body["input"]))]})
+
+    def _factory(**kwargs):
+        options.append(dict(kwargs))
+        kwargs.pop("transport", None)
+        return real_client(transport=httpx.MockTransport(_handler), **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", _factory)
+    return service, types.SimpleNamespace(bodies=bodies, options=options)
 
 
 def test_a_cloud_embedder_never_receives_a_credential(monkeypatch) -> None:
@@ -136,3 +135,5 @@ def test_an_embedder_on_this_machine_sees_the_text_as_written(monkeypatch) -> No
                                 api_endpoint="http://localhost:8080/v1", api_key="")
     service._openai_compatible_embed_batch([_TEXT])
     assert _KEY in json.dumps(client.bodies)
+    # This machine is reached directly, never through an environment proxy.
+    assert client.options and client.options[-1].get("trust_env") is False

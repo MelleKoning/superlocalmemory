@@ -343,7 +343,9 @@ def _try_llm(
         result = _call_cloud_llm(prompt, tool_rows, facts_rows, config)
         if result:
             return result, GENERATED_BY_LLM_C
-    if mode in ("b", "c"):
+    # Mode C uses the configured provider only: the Ollama path below
+    # would post to the cloud host in config.llm.api_base.
+    if mode == "b":
         result = _call_ollama(prompt, tool_rows, facts_rows, config)
         if result:
             return result, GENERATED_BY_LLM_B
@@ -360,6 +362,8 @@ def _call_ollama(
     try:
         import json
         import urllib.request
+
+        from superlocalmemory.core import outbound_http
 
         api_base = "http://localhost:11434"
         model = "llama3.2"
@@ -396,7 +400,7 @@ def _call_ollama(
             data=payload,
             headers={"Content-Type": "application/json"},
         )
-        resp = urllib.request.urlopen(req, timeout=timeout)
+        resp = outbound_http.urlopen(req, timeout=timeout)
         data = json.loads(resp.read().decode())
         text = clean_llm_summary(data.get("response", ""))
         return text if text and len(text) > 20 else None

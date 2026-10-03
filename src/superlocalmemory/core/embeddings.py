@@ -31,7 +31,6 @@ from typing import TYPE_CHECKING, Iterator
 import numpy as np
 
 from superlocalmemory.core.config import EmbeddingConfig
-from superlocalmemory.core.outbound_redaction import for_endpoint
 
 # Track all live embedding services for atexit cleanup
 _live_embedding_services: set[weakref.ref] = set()
@@ -863,10 +862,18 @@ class EmbeddingService:
     # ------------------------------------------------------------------
 
     def _get_http_client(self):
-        """Reusable httpx client for OpenAI-compatible endpoints."""
+        """Reusable client for remote embedding endpoints.
+
+        The outbound gate's client: every body is screened on the URL it is
+        sent to (credentials never reach an embedder on another machine), a
+        local endpoint is never reached through a proxy, and redirects are
+        never followed.
+        """
         if self._http_client is None:
             import httpx
-            self._http_client = httpx.Client(
+
+            from superlocalmemory.core.outbound_http import GatedClient
+            self._http_client = GatedClient(
                 timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
             )
         return self._http_client
@@ -886,11 +893,8 @@ class EmbeddingService:
         headers = {"Content-Type": "application/json"}
         if self._config.api_key:
             headers["Authorization"] = f"Bearer {self._config.api_key}"
-        body = {
-            # Credentials never reach an embedder on another machine.
-            "input": [for_endpoint(t, endpoint) for t in texts],
-            "model": self._config.model_name,
-        }
+        # Screened by the gated client on the final URL.
+        body = {"input": list(texts), "model": self._config.model_name}
 
         client = self._get_http_client()
         last_error: Exception | None = None
@@ -977,9 +981,8 @@ class EmbeddingService:
             "Content-Type": "application/json",
             "api-key": self._config.api_key,
         }
-        # Credentials never reach a cloud embedder.
-        body = {"input": [for_endpoint(t, url) for t in texts],
-                "model": self._config.deployment_name}
+        # Screened by the gated client on the final URL.
+        body = {"input": list(texts), "model": self._config.deployment_name}
         client = self._get_http_client()
         last_error: Exception | None = None
         for attempt in range(max_retries):

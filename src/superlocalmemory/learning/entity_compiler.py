@@ -195,7 +195,7 @@ class EntityCompiler:
         # ── Phase 3: generate compiled truth — NO write lock held ────────────
         # Mode B calls Ollama (up to 30 s) — write lock MUST NOT be held here.
         if self._mode in ("b", "c") and len(facts) > 3:
-            compiled = self._compile_mode_b(entity_name, facts)
+            compiled = self._compile_with_llm(entity_name, facts)
             if not compiled:
                 compiled = self._compile_mode_a(entity_name, entity_type, facts)
         else:
@@ -299,12 +299,56 @@ class EntityCompiler:
         body = " ".join(sentences)
         return header + body
 
-    # -- Mode B: LLM via Ollama --
+    # -- Mode B/C: LLM --
+
+    def _compile_with_llm(self, entity_name: str, facts: list) -> str | None:
+        """Mode B: the configured Ollama. Mode C: the configured provider.
+
+        Mode C used to reuse the Ollama path, which posted the facts to
+        ``{cloud api_base}/api/generate``. Both paths send through the
+        outbound gate, so a host other than this machine never receives a
+        credential.
+        """
+        if self._mode == "c":
+            return self._compile_mode_c(entity_name, facts)
+        return self._compile_mode_b(entity_name, facts)
+
+    def _compile_mode_c(self, entity_name: str, facts: list) -> str | None:
+        """Summarize via the configured cloud provider. None on failure."""
+        try:
+            from superlocalmemory.llm.backbone import LLMBackbone
+
+            llm_config = getattr(self._config, "llm", None)
+            if llm_config is None or not getattr(llm_config, "provider", ""):
+                return None
+            llm = LLMBackbone(llm_config)
+            if not llm.is_available():
+                return None
+            text = llm.generate(
+                prompt=self._compile_prompt(entity_name, facts),
+                max_tokens=500, attempts=1,
+            )
+            return text.strip() or None
+        except Exception as exc:
+            logger.debug("Mode C compilation failed, falling back to Mode A: %s", exc)
+            return None
+
+    @staticmethod
+    def _compile_prompt(entity_name: str, facts: list) -> str:
+        top_facts = "\n".join(f"- {f['content']}" for f in facts[:20])
+        return (
+            f"Summarize these facts about {entity_name} into a concise profile. "
+            f"Maximum 2000 characters. Include key relationships, decisions, status. "
+            f"Organize by topic, not chronology. Flag contradictions.\n\n"
+            f"Facts (by importance):\n{top_facts}"
+        )
 
     def _compile_mode_b(self, entity_name: str, facts: list) -> str | None:
-        """Summarize via local LLM (Ollama). Returns None on failure."""
+        """Summarize via the configured Ollama. Returns None on failure."""
         try:
             import urllib.request
+
+            from superlocalmemory.core import outbound_http
             api_base = "http://localhost:11434"
             if self._config and hasattr(self._config, 'llm'):
                 api_base = getattr(self._config.llm, 'api_base', api_base) or api_base
@@ -312,15 +356,7 @@ class EntityCompiler:
             if self._config and hasattr(self._config, 'llm'):
                 model = getattr(self._config.llm, 'model', model) or model
 
-            top_facts = "\n".join(
-                f"- {f['content']}" for f in facts[:20]
-            )
-            prompt = (
-                f"Summarize these facts about {entity_name} into a concise profile. "
-                f"Maximum 2000 characters. Include key relationships, decisions, status. "
-                f"Organize by topic, not chronology. Flag contradictions.\n\n"
-                f"Facts (by importance):\n{top_facts}"
-            )
+            prompt = self._compile_prompt(entity_name, facts)
 
             payload = json.dumps({
                 "model": model,
@@ -334,7 +370,7 @@ class EntityCompiler:
                 data=payload,
                 headers={"Content-Type": "application/json"},
             )
-            resp = urllib.request.urlopen(req, timeout=30)
+            resp = outbound_http.urlopen(req, timeout=30)
             result = json.loads(resp.read().decode())
             text = result.get("response", "").strip()
             return text if text else None

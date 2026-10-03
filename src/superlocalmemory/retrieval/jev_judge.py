@@ -51,6 +51,7 @@ from superlocalmemory.retrieval.answer_check_status import (
     effective_deadline,
 )
 from superlocalmemory.retrieval.hosted_redaction import redact_for_hosted_judge, redact_or_none
+from superlocalmemory.core.outbound_http import GatedClient
 from superlocalmemory.retrieval.jev_transport import HostedTransport
 from superlocalmemory.retrieval.judge_recipe import (
     ACTIVE_RECIPE,
@@ -558,7 +559,7 @@ def check_connection(provider: str, key: str, *, timeout_s: float = 10.0,
         return False, "The service returned an error (invalid example)."
     keys = list(body["questions"])
 
-    client = httpx.Client(transport=transport)
+    client = GatedClient(transport=transport)
     try:
         try:
             response = client.post(

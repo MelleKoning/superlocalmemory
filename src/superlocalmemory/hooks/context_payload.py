@@ -4,7 +4,7 @@
 
 """Shared content builder — single source for every adapter body.
 
-passed through ``redact_secrets`` before entering the dataclass, so no
+passed through ``redact_for_hosted_judge`` before entering the dataclass, so no
 adapter ever writes an unredacted secret.
 
 Hard rule A9: secret redaction applied to payload before write.
@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from superlocalmemory import __version__
-from superlocalmemory.core.security_primitives import redact_secrets
+from superlocalmemory.retrieval.hosted_redaction import redact_for_hosted_judge
 
 
 VERSION = __version__
@@ -59,7 +59,9 @@ def _now_iso() -> str:
 
 
 def _redact_str(s: str) -> str:
-    return redact_secrets(s) if isinstance(s, str) else ""
+    # These files are injected into an agent's context and can be committed
+    # with a repository: the strong screen, with no tail of any credential.
+    return redact_for_hosted_judge(s) if isinstance(s, str) else ""
 
 
 def _redact_seq(items: Iterable[str], limit: int) -> tuple[str, ...]:

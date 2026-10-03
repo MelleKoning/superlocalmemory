@@ -143,6 +143,43 @@ _TRAILING = ".,;)]}>"
 _WEAK_PROSE = frozenset({"key", "secret"})
 _SHELL_DIR_VARS = frozenset({"pwd", "oldpwd"})
 
+#: An identifier with a credential word anywhere in it, not only at the end:
+#: ``SLM_SECRET_KEY_2024``, ``DB_PASS``, ``api_token_v2``, ``STRIPE_SECRET_PROD``.
+#: Bounded segments, and a start only where an identifier starts, keep it linear.
+_SEGMENTED = re.compile(
+    r"(?<![A-Za-z0-9_.\-])"
+    r"(?P<label>[A-Za-z][A-Za-z0-9]{0,40}(?:[_.\-][A-Za-z0-9]{1,40}){1,8})"
+    r"(?![A-Za-z0-9_.\-])(?P<sep>[\"']?\s{0,4}(?:=>|[:=])\s{0,4})"
+    r"(?P<value>\"[^\"\n]{1,512}\"|'[^'\n]{1,512}'|[^\s'\"`]{1,512})"
+)
+_SEGMENT_SPLIT = re.compile(r"[_.\-]")
+#: A segment equal to one of these makes the identifier a credential label.
+#: Plurals and compounds (``tokens``, ``tokenizer``) are deliberately absent.
+_SEGMENT_WORDS = frozenset({
+    "password", "passwd", "passphrase", "passcode", "pass", "pwd", "secret",
+    "secrets", "token", "apikey", "credential", "credentials", "creds", "privatekey",
+})
+#: Prose labels after which a plain word, ending its clause, is the password
+#: itself: "my password is sunshine." The words below are what a sentence
+#: says ABOUT a password ("the password is correct, but…"), not one.
+_PLAIN_WORD_LABELS = ("password", "passwd", "passphrase", "passcode")
+_STATE_WORDS = frozenset({
+    "required", "optional", "needed", "necessary", "mandatory", "correct", "incorrect",
+    "wrong", "right", "invalid", "valid", "expired", "expiring", "missing", "empty",
+    "blank", "weak", "strong", "short", "long", "secure", "insecure", "set", "unset",
+    "stored", "saved", "encrypted", "hashed", "salted", "protected", "changed", "reset",
+    "updated", "rotated", "same", "different", "known", "unknown", "hidden", "visible",
+    "disabled", "enabled", "locked", "unlocked", "compromised", "leaked", "shared",
+    "private", "public", "good", "bad", "fine", "ok", "okay", "here", "there", "below",
+    "above", "attached", "ready", "pending", "new", "old", "temporary", "permanent",
+    "default", "generated", "random", "managed", "handled", "sensitive", "complex",
+    "simple", "easy", "hard", "obvious", "unchanged", "lost", "forgotten", "accepted",
+    "rejected", "revoked", "active", "inactive", "nothing", "unavailable", "available",
+    "configured", "provided", "supplied", "specified", "listed", "given", "removed",
+    "deleted", "gone", "secret", "confidential", "safe", "unsafe", "case-sensitive",
+    "it", "this", "that", "mine", "yours", "his", "hers", "ours", "theirs",
+})
+
 
 def local_marker(label: str, value: str) -> str:
     """``[REDACTED:<LABEL>:<tail>]`` — the shape ``redact_secrets`` emits."""
@@ -191,14 +228,37 @@ def _split_value(raw: str) -> tuple[str, str, str]:
     return "", core, raw[len(core):]
 
 
-def _value_sub(*, strict: Callable[[str, str, bool], bool]) -> Callable[[re.Match[str]], str]:
+def _ends_clause(match: re.Match[str], rest: str) -> bool:
+    """The value is the last word of its clause: punctuation, a line end or
+    the end of the text follows it ("…is sunshine." / "…is sunshine")."""
+    if rest:
+        return True
+    return match.string[match.end():match.end() + 1] in ("", "\n", "\r")
+
+
+def _plain_password(label: str, value: str, rest: str, match: re.Match[str]) -> bool:
+    """A plain word that IS the password: "my password is sunshine."
+
+    Only after a password-type label, only when the word ends its clause, and
+    never a word that describes a password ("is correct", "is stored in…").
+    """
+    return (label.lower().endswith(_PLAIN_WORD_LABELS)
+            and value.replace("-", "").isalpha()
+            and value.lower() not in _STATE_WORDS
+            and _ends_clause(match, rest))
+
+
+def _value_sub(*, strict: Callable[[str, str, bool], bool],
+               plain_words: bool = False) -> Callable[[re.Match[str]], str]:
     def _sub(match: re.Match[str]) -> str:
         quote, value, rest = _split_value(match.group("value"))
         name = match.group("label")
         if (len(value) < 3 or _is_placeholder(match.group("value"), value) or "://" in value
                 or value.startswith(("/", "~/", "./", "../"))
-                or name.lower() in _SHELL_DIR_VARS
-                or not strict(match.group("sep"), value, bool(quote))):
+                or name.lower() in _SHELL_DIR_VARS):
+            return match.group(0)
+        if not (strict(match.group("sep"), value, bool(quote))
+                or (plain_words and _plain_password(name, value, rest, match))):
             return match.group(0)
         return f"{name}{match.group('sep')}{quote}{local_marker('SECRET', value)}{rest}"
     return _sub
@@ -215,19 +275,50 @@ def _weak_ok(_sep: str, value: str, _quoted: bool) -> bool:
     return _is_key_shaped(value)
 
 
-_STRONG_SUB = _value_sub(strict=_strong_ok)
+_STRONG_SUB = _value_sub(strict=_strong_ok, plain_words=True)
 _WEAK_SUB = _value_sub(strict=_weak_ok)
 
 
+def _segment_sub(match: re.Match[str]) -> str:
+    """``SLM_SECRET_KEY_2024=…``: a credential word anywhere in the name.
+
+    Stricter about the value than an end-of-name label, because a word in the
+    middle of a name is weaker evidence: ``PASSWORD_MIN_LENGTH=12``,
+    ``TOKEN_LIMIT=4096`` and ``token_type: bearer`` are configuration.
+    """
+    label = match.group("label")
+    segments = {part.lower() for part in _SEGMENT_SPLIT.split(label)}
+    strong = not segments.isdisjoint(_SEGMENT_WORDS)
+    if not strong and "key" not in segments:
+        return match.group(0)
+    raw = match.group("value")
+    quote, value, rest = _split_value(raw)
+    if (len(value) < 6 or value.isdigit() or _is_placeholder(raw, value)
+            or "://" in value or value.startswith(("/", "~/", "./", "../"))):
+        return match.group(0)
+    sep = match.group("sep")
+    if not strong or ("=" not in sep and not quote):
+        ok = _is_key_shaped(value) or (
+            len(value) >= 8 and any(c.isdigit() for c in value)
+            and any(c.isalpha() for c in value))
+    else:
+        ok = _looks_secret(value)
+    if not ok:
+        return match.group(0)
+    return f"{label}{sep}{quote}{local_marker('SECRET', value)}{rest}"
+
+
 def _prose_sub(match: re.Match[str]) -> str:
-    quote, value, _rest = _split_value(match.group("value"))
+    quote, value, rest = _split_value(match.group("value"))
     if len(value) < 3 or _is_placeholder(match.group("value"), value):
         return match.group(0)
-    if not match.group("sep").strip() or match.group("label").lower() in _WEAK_PROSE:
+    label = match.group("label")
+    if not match.group("sep").strip() or label.lower() in _WEAK_PROSE:
         # "the api key 0123…": no "is" / ":" between, so only a key shape counts.
         ok = _is_key_shaped(value)
     else:
-        ok = bool(quote) or _looks_secret(value)
+        ok = (bool(quote) or _looks_secret(value)
+              or _plain_password(label, value, rest, match))
     if not ok:
         return match.group(0)
     start = match.start("value") - match.start(0) + len(quote)
@@ -288,6 +379,7 @@ def _connection_secrets(text: str) -> str:
 def _labelled_values(text: str) -> str:
     out = _LABELLED.sub(_STRONG_SUB, text)
     out = _WEAK_LABELLED.sub(_WEAK_SUB, out)
+    out = _SEGMENTED.sub(_segment_sub, out)
     return _PROSE.sub(_prose_sub, out)
 
 

@@ -24,6 +24,7 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
+from superlocalmemory.core import outbound_http
 from superlocalmemory.core.injection import (
     InjectableMemory,
     render_context,
@@ -249,21 +250,24 @@ async def _stream_ollama(
         "options": {"num_predict": 1024, "temperature": 0.3, "num_ctx": 4096},
     }
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
-        async with client.stream("POST", url, json=payload) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if not line:
-                    continue
-                try:
-                    chunk = json.loads(line)
-                    if chunk.get("done"):
-                        break
-                    token = chunk.get("message", {}).get("content", "")
-                    if token:
-                        yield token
-                except json.JSONDecodeError:
-                    continue
+    # Through the outbound gate: a LAN or remote Ollama never receives a
+    # credential, and a local one is never reached through a proxy.
+    async with outbound_http.astream_json(
+        "POST", url, payload, timeout=httpx.Timeout(120.0),
+    ) as resp:
+        resp.raise_for_status()
+        async for line in resp.aiter_lines():
+            if not line:
+                continue
+            try:
+                chunk = json.loads(line)
+                if chunk.get("done"):
+                    break
+                token = chunk.get("message", {}).get("content", "")
+                if token:
+                    yield token
+            except json.JSONDecodeError:
+                continue
 
 
 # ── OpenAI-Compatible Streaming ──────────────────────────────────
@@ -299,22 +303,25 @@ async def _stream_openai_compat(
         "temperature": 0.3,
     }
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
-        async with client.stream("POST", url, json=payload, headers=headers) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                data = line[6:]
-                if data == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data)
-                    token = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                    if token:
-                        yield token
-                except json.JSONDecodeError:
-                    continue
+    # Through the outbound gate: the provider receives the question and the
+    # recalled memories with every credential replaced.
+    async with outbound_http.astream_json(
+        "POST", url, payload, headers=headers, timeout=httpx.Timeout(120.0),
+    ) as resp:
+        resp.raise_for_status()
+        async for line in resp.aiter_lines():
+            if not line.startswith("data: "):
+                continue
+            data = line[6:]
+            if data == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data)
+                token = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                if token:
+                    yield token
+            except json.JSONDecodeError:
+                continue
 
 
 # ── Retrieval Helper ─────────────────────────────────────────────

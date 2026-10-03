@@ -159,11 +159,15 @@ from superlocalmemory.retrieval.remote_reranker_config import (  # noqa: E402,F4
 
 
 def _redact_remote_text(text: str) -> str:
-    """Remove recognized secrets and PII before a remote trust boundary."""
-    from superlocalmemory.core.pii import redact_pii_text
-    from superlocalmemory.core.security_primitives import redact_secrets
+    """Remove recognized secrets and PII before a remote trust boundary.
 
-    return redact_pii_text(redact_secrets(str(text), aggression="high"))
+    The hosted screen: every credential becomes ``[redacted]`` with no type
+    and no last four characters (the high-aggression scan alone kept both).
+    """
+    from superlocalmemory.core.pii import redact_pii_text
+    from superlocalmemory.retrieval.hosted_redaction import redact_for_hosted_judge
+
+    return redact_pii_text(redact_for_hosted_judge(str(text)))
 
 
 # ---------------------------------------------------------------------------
@@ -608,17 +612,21 @@ class RemoteReranker:
     def _get_client(self) -> Any:
         import httpx
 
+        from superlocalmemory.core.outbound_http import GatedClient
+
         with self._client_lock:
             if self._client is None:
                 # Per-request timeouts (see _post) override these; they are
                 # only the ceiling for a request that somehow sets none.
+                # The gated client never follows a redirect, screens the body
+                # on the final URL and never sends a local endpoint's request
+                # through a proxy.
                 bound = self.deadline_seconds
-                self._client = httpx.Client(
+                self._client = GatedClient(
                     timeout=httpx.Timeout(
                         connect=min(_CONNECT_TIMEOUT_S, bound),
                         read=bound, write=bound, pool=bound,
                     ),
-                    follow_redirects=False,
                 )
             return self._client
 

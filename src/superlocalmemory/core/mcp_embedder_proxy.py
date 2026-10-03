@@ -59,10 +59,11 @@ class McpEmbedderProxy:
         if not texts:
             return []
         try:
-            import httpx
-            resp = httpx.post(
+            from superlocalmemory.core import outbound_http
+            # The daemon is on this machine: never through a proxy.
+            resp = outbound_http.post_json(
                 f"{self._base_url}/api/v3/embed",
-                json={"texts": texts},
+                {"texts": texts},
                 timeout=self._timeout,
             )
             resp.raise_for_status()

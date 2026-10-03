@@ -16,7 +16,7 @@ import os
 import re
 from dataclasses import dataclass
 
-from superlocalmemory.core.security_primitives import redact_secrets
+from superlocalmemory.retrieval.hosted_redaction import redact_for_hosted_judge
 
 UNTRUSTED_CONTEXT_BEGIN = "[BEGIN UNTRUSTED SLM EVIDENCE v1]"
 UNTRUSTED_CONTEXT_END = "[END UNTRUSTED SLM EVIDENCE v1]"
@@ -324,8 +324,14 @@ def clamp_content(content: str, cfg) -> str:
 
 
 def sanitize_untrusted_content(content: str) -> str:
-    """Redact secrets and neutralize attempts to forge context boundaries."""
-    redacted = redact_secrets(content or "")
+    """Redact secrets and neutralize attempts to forge context boundaries.
+
+    Context SLM injects on its own (session start, standing rules, hooks, the
+    dashboard chat) is screened at the strength used for text leaving the
+    machine: every credential becomes ``[redacted]``, with no type and no last
+    four characters. An explicit recall still returns the memory as stored.
+    """
+    redacted = redact_for_hosted_judge(content or "")
     return redacted.replace(
         UNTRUSTED_CONTEXT_BEGIN, _ESCAPED_BOUNDARY,
     ).replace(UNTRUSTED_CONTEXT_END, _ESCAPED_BOUNDARY)

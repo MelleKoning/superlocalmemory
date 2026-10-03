@@ -58,7 +58,7 @@ def test_redaction_applied_to_memories():
     def _secrets(_q, _l, _p):
         return [{"id": "x", "text": "sk-" + "a" * 40, "score": 0.5}]
     out = prestage_context("any", recall_fn=_secrets)
-    assert "REDACTED" in out["memories"][0]["text"]
+    assert "[redacted]" in out["memories"][0]["text"]
 
 
 def test_empty_query_rejected():
