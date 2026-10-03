@@ -174,19 +174,13 @@ def build_immediate_admission_handler(
         from datetime import UTC, datetime
 
         from superlocalmemory.core.ingest_gate import apply_ingest_gate
-        from superlocalmemory.core.ingest_policy import scrub_secrets_for_ingest
         from superlocalmemory.storage.models import AtomicFact, FactType, MemoryRecord
 
-        # Secrets are ALWAYS scrubbed at this shared queryable-write chokepoint,
-        # which both the canonical HTTP /remember runtime and the canonical_store
-        # Python/CLI path funnel through. A credential must never persist verbatim
-        # in any durable representation (memory rows, fact rows), regardless of
-        # ingress surface. The scrub is idempotent: content already scrubbed by an
-        # upstream caller is returned unchanged.
-        scrub = scrub_secrets_for_ingest(request.content)
-        content = scrub.content
-        if scrub.redacted:
-            logger.info("secret scrub: redacted credential material on queryable write")
+        # A memory is stored exactly as written, credentials included: keeping
+        # them is part of what SLM is for. They are stripped only where text
+        # leaves this machine (core/outbound_redaction.py). The stored text must
+        # also equal the request, which background enrichment re-checks.
+        content = request.content
 
         metadata = dict(request.metadata)
         metadata["ingestion_operation_id"] = operation_id
@@ -351,15 +345,8 @@ def canonical_store(
             error=ValueError("content rejected by local admission policy"),
         )
         return []
-    # Secrets are ALWAYS scrubbed pre-admission (not opt-in): a credential must
-    # never persist verbatim in any durable or queryable representation
-    # (facts, receipts, journal, exports, backups, mesh).
-    from superlocalmemory.core.ingest_policy import scrub_secrets_for_ingest
-
-    _secret_scrub = scrub_secrets_for_ingest(content)
-    if _secret_scrub.redacted:
-        content = _secret_scrub.content
-        logger.info("secret scrub: redacted credential material on ingest")
+    # Credentials are kept as written (see write_queryable); only text that
+    # leaves this machine is screened (core/outbound_redaction.py).
     # C4: opt-in PII redaction. When enabled (config.pii_redaction or
     # SLM_PII_REDACTION), scrub personal identifiers BEFORE the content is
     # extracted, embedded, or persisted — nothing sensitive ever reaches disk.

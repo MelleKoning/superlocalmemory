@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Iterator
 import numpy as np
 
 from superlocalmemory.core.config import EmbeddingConfig
+from superlocalmemory.core.outbound_redaction import for_endpoint
 
 # Track all live embedding services for atexit cleanup
 _live_embedding_services: set[weakref.ref] = set()
@@ -886,7 +887,8 @@ class EmbeddingService:
         if self._config.api_key:
             headers["Authorization"] = f"Bearer {self._config.api_key}"
         body = {
-            "input": texts,
+            # Credentials never reach an embedder on another machine.
+            "input": [for_endpoint(t, endpoint) for t in texts],
             "model": self._config.model_name,
         }
 
@@ -975,7 +977,9 @@ class EmbeddingService:
             "Content-Type": "application/json",
             "api-key": self._config.api_key,
         }
-        body = {"input": texts, "model": self._config.deployment_name}
+        # Credentials never reach a cloud embedder.
+        body = {"input": [for_endpoint(t, url) for t in texts],
+                "model": self._config.deployment_name}
         client = self._get_http_client()
         last_error: Exception | None = None
         for attempt in range(max_retries):

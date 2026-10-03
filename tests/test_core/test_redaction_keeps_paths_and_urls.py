@@ -4,8 +4,9 @@
 
 """The secret scan must not destroy a link or a file path.
 
-The same scan cleans a memory before it is stored, so anything it wrongly
-removes is lost for good. A mixed-case URL or path as a whole clears the
+The same scan cleans memory text before it is sent to another machine (a
+hosted model, a cloud embedder, the online answer check), so anything it wrongly
+removes is missing from what that service reads. A mixed-case URL or path as a whole clears the
 randomness bar a key clears; judged one segment at a time it does not.
 """
 
@@ -50,15 +51,15 @@ def test_a_base64_key_with_slashes_is_still_redacted_whole(aggression: str) -> N
     assert "K7MDENG" not in out
 
 
-def test_a_webhook_url_is_still_scrubbed_before_it_is_stored():
+def test_a_webhook_url_is_still_scrubbed_before_it_leaves_the_machine():
     """Judging a URL by segment must not let a webhook's secret path through:
-    its vendor shape is caught at storage time too."""
+    its vendor shape is still caught."""
     secret = "".join(("FAKEfake", "FAKEfake", "FAKEfake"))
     url = "".join(("https://hooks.slack.com/services/", "T00000000/B00000000/", secret))
     assert secret not in redact_secrets(f"alerts go to {url}")
 
 
-def test_a_private_key_body_is_never_stored():
+def test_a_private_key_body_never_leaves_the_machine():
     body = "MIIE" + "FAKE" * 15
     pem = "".join(("-----BEGIN RSA ", "PRIVATE KEY-----\n", body, "\n-----END RSA ",
                    "PRIVATE KEY-----"))

@@ -29,6 +29,7 @@ from typing import Any
 import httpx
 
 from superlocalmemory.core.config import LLMConfig
+from superlocalmemory.core.outbound_redaction import for_endpoint, is_local_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +190,12 @@ class LLMBackbone:
         temp = temperature if temperature is not None else self._default_temperature
         tokens = max_tokens if max_tokens is not None else self._default_max_tokens
         url, headers, payload = self._build_request(prompt, system, tokens, temp, think)
+        if not is_local_endpoint(url):
+            # Memories keep their credentials; a model on another machine
+            # never receives them. Decided on the final URL, for every provider.
+            url, headers, payload = self._build_request(
+                for_endpoint(prompt, url), for_endpoint(system, url), tokens, temp, think,
+            )
 
         last_error: Exception | None = None
         think_downgraded = False

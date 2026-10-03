@@ -1,12 +1,12 @@
-"""F-68 regression: the canonical write chokepoint must scrub secrets.
+"""A memory is stored exactly as written, credentials included.
 
-The canonical HTTP ``/remember`` path routes through ``CanonicalRememberRuntime``
-into ``build_immediate_admission_handler.write_queryable``. Before this fix, that
-writer persisted ``request.content`` verbatim, so a credential sent to ``/remember``
-reached the durable store unscrubbed even though the ``canonical_store()`` Python/CLI
-path scrubbed. This pins the invariant that ``write_queryable`` scrubs
-unconditionally, so BOTH ingress paths share the same secret-scrub guarantee
-before anything is written to ``memories`` or ``atomic_facts``.
+Keeping credentials is what SLM is for (the owner's rule, 2026-10-03): saving
+never strips them. They are stripped only where text leaves this machine (see
+tests/test_core/test_credentials_never_leave_the_machine.py).
+
+The stored text must also equal the text the save was asked for, because the
+background enrichment step re-checks the stored memory against the original
+request; a stripped copy never matched, so those memories never finished.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from __future__ import annotations
 _AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
 
 
-def test_write_queryable_scrubs_secret_before_durable_store(tmp_path) -> None:
+def test_write_queryable_keeps_the_memory_exactly_as_written(tmp_path) -> None:
     from superlocalmemory.core.engine_ingestion import build_immediate_admission_handler
     from superlocalmemory.core.ingestion_command import IngestionRequest
     from superlocalmemory.storage import schema
@@ -28,15 +28,16 @@ def test_write_queryable_scrubs_secret_before_durable_store(tmp_path) -> None:
     )
 
     writer = build_immediate_admission_handler(db, profile_id="p1")
+    content = f"Please store my AWS access key {_AWS_KEY} for the deploy pipeline."
     request = IngestionRequest(
-        content=f"Please store my AWS access key {_AWS_KEY} for the deploy pipeline.",
+        content=content,
         profile_id="p1",
         source_type="http-remember",
-        idempotency_key="op-f68",
+        idempotency_key="op-keep",
         trusted_actor_id="local-capability:test",
     )
 
-    fact_ids = writer(request, "op-f68")
+    fact_ids = writer(request, "op-keep")
     assert fact_ids, "write_queryable should persist a queryable fact"
 
     fact_rows = db.execute(
@@ -46,12 +47,7 @@ def test_write_queryable_scrubs_secret_before_durable_store(tmp_path) -> None:
         "SELECT content FROM memories WHERE profile_id = ?", ("p1",)
     )
     assert fact_rows and memory_rows
-
-    fact_content = str(fact_rows[0]["content"])
-    memory_content = str(memory_rows[0]["content"])
-
-    # The raw credential must never reach the durable queryable representation.
-    assert _AWS_KEY not in fact_content, "raw credential leaked into atomic_facts"
-    assert _AWS_KEY not in memory_content, "raw credential leaked into memories"
-    # And the scrub must be observable (redaction marker present).
-    assert "[REDACTED:" in memory_content, "expected a redaction marker in stored memory"
+    assert _AWS_KEY in str(fact_rows[0]["content"])
+    # Byte-for-byte: the enrichment step compares exactly this.
+    assert str(memory_rows[0]["content"]) == content
+    assert "[REDACTED" not in str(memory_rows[0]["content"])
