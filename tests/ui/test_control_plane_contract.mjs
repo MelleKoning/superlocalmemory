@@ -37,6 +37,9 @@ describe('control-plane dashboard contracts', function () {
     assert.doesNotMatch(backup, /AES-256|encrypted with your local key|enable encrypted cloud|every snapshot is restorable/);
     assert.doesNotMatch(backup, /restoreBtn|>Restore</);
     assert.match(backup, /Plain SQLite/);
+    assert.match(backup, /encrypted on this computer before upload/);
+    assert.doesNotMatch(backup, /does not encrypt backup files|Plain SQLite copies upload/);
+    assert.match(backup, /window\.odRenderBackupEncryption\(authMutation, toast\)/);
     assert.match(backup, /last_sync_status/);
   });
 
