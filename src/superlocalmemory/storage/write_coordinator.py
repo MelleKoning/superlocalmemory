@@ -103,6 +103,7 @@ class CommandKind(StrEnum):
     ARCHIVE_FACT = "archive_fact"
     MERGE_FACT = "merge_fact"
     SET_FACT_SCOPE = "set_fact_scope"
+    SET_FACT_KIND = "set_fact_kind"
 
 
 JsonValue = None | bool | int | float | str | tuple["JsonValue", ...] | Mapping[str, "JsonValue"]

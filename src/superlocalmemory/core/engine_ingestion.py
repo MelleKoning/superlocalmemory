@@ -117,7 +117,8 @@ def _prebuilt_fact_payload(fact: AtomicFact) -> dict:
         "source_turn_ids", "session_id", "embedding", "fisher_mean",
         "fisher_variance", "lifecycle", "langevin_position",
         "emotional_valence", "emotional_arousal", "signal_type", "pinned",
-        "created_at",
+        "created_at", "memory_kind", "memory_kind_source", "memory_kind_confidence",
+        "memory_kind_recipe", "memory_kind_at",
     )
     payload = {}
     for name in fields:
@@ -229,6 +230,12 @@ def build_immediate_admission_handler(
                 importance=0.5,
                 created_at=now,
             )
+
+        from superlocalmemory.core.kind_assignment import assign_kinds
+
+        # A kind declared on the save is confirmed on the searchable fact now.
+        fact = assign_kinds([fact], metadata=metadata, source_type=request.source_type,
+                            classifier=None, db=db)[0]
 
         # A receipt is queryable through FTS immediately, but model-derived
         # values cannot participate in its write transaction.  The materializer
@@ -713,6 +720,7 @@ def build_engine_ingestion_command(
             trusted_actor_id=operation.trusted_actor_id,
             pre_authorized=True,
             ingestion_source_type=operation.source_type,
+            kind_classifier=getattr(engine, "_kind_classifier", None),
             ingestion_operation_id=operation.operation_id,
             derivation_report=pipeline_state,
             precompleted_derivation_stages=frozenset({
@@ -837,6 +845,7 @@ def build_engine_ingestion_command(
                 trusted_actor_id=operation.trusted_actor_id,
                 pre_authorized=True,
                 ingestion_source_type=operation.source_type,
+                kind_classifier=getattr(engine, "_kind_classifier", None),
                 ingestion_operation_id=operation.operation_id,
                 derivation_report=pipeline_state,
                 precompleted_derivation_stages=(

@@ -342,6 +342,10 @@ def enrich_fact(
         emotional_valence=emotion.valence, emotional_arousal=emotion.arousal,
         signal_type=signal, created_at=fact.created_at,
         pinned=getattr(fact, 'pinned', False),
+        # 4.1.19: the memory kind travels with the fact through enrichment.
+        memory_kind=fact.memory_kind, memory_kind_source=fact.memory_kind_source,
+        memory_kind_confidence=fact.memory_kind_confidence,
+        memory_kind_recipe=fact.memory_kind_recipe, memory_kind_at=fact.memory_kind_at,
         # v3.6.15 multi-scope: scope is a per-MEMORY property — every fact
         # derived from a memory inherits the memory's scope. The record is
         # authoritative; fact-extractor output never carries scope, so reading
@@ -570,6 +574,7 @@ def run_store(
     precompleted_derivation_stages: frozenset[str] = frozenset(),
     materialization_progress: dict[str, Any] | None = None,
     materialization_checkpoint: Any = None,
+    kind_classifier: Any = None,
 ) -> list[str]:
     """Store content and extract structured facts. Returns fact_ids.
 
@@ -783,6 +788,11 @@ def run_store(
     if type_router:
         facts = type_router.route_facts(facts)
 
+    # Kinds: the caller's declared kind (confirmed) or a suggestion (label only).
+    from superlocalmemory.core.kind_assignment import assign_kinds, kind_update_columns
+    facts = assign_kinds(facts, metadata=metadata, source_type=ingestion_source_type,
+                         classifier=kind_classifier, db=db)
+
     stored_ids: list[str] = []
     for fact in facts:
         try:
@@ -853,6 +863,7 @@ def run_store(
                 "emotional_valence": fact.emotional_valence,
                 "emotional_arousal": fact.emotional_arousal,
                 "signal_type": fact.signal_type,
+                **kind_update_columns(fact, db),
             })
             if fact.embedding:
                 _deferred_canonical_embedding = (

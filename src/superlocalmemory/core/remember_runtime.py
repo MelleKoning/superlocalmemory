@@ -22,7 +22,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from superlocalmemory.core.ingestion_command import (
     IngestionCommand,
@@ -110,6 +110,8 @@ class CanonicalMutationConflict(WriteCoordinatorError, ValueError):
 
 
 _MUTATION_IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9._:-]{1,256}$")
+#: Most facts one kind change may cover.
+_MAX_KIND_ITEMS = 200
 
 # 4.1.14 audit: bound on cached per-profile admission handlers. Profile
 # counts are small; the cap is a backstop against unbounded growth, not a
@@ -370,6 +372,7 @@ class CanonicalRememberRuntime:
             self.coordinator.register_handler(CommandKind.ARCHIVE_FACT, self._handle_mutation)
             self.coordinator.register_handler(CommandKind.MERGE_FACT, self._handle_mutation)
             self.coordinator.register_handler(CommandKind.SET_FACT_SCOPE, self._handle_mutation)
+            self.coordinator.register_handler(CommandKind.SET_FACT_KIND, self._handle_mutation)
             self.coordinator.start()
             self.replay_pending()
         except BaseException:
@@ -654,6 +657,36 @@ class CanonicalRememberRuntime:
             idempotency_key=idempotency_key,
         )
 
+    def set_fact_kinds(
+        self,
+        profile_id: str,
+        items: Sequence[tuple[str, str]],
+        *,
+        idempotency_key: str | None = None,
+    ) -> Mapping[str, Any]:
+        """Set the kind of 1-200 facts in this profile, as the user's choice.
+
+        Every kind is checked before anything is submitted: one unknown kind
+        rejects the whole request rather than changing some of the facts.
+        """
+        from superlocalmemory.storage.memory_kinds import parse_kind
+
+        pairs = list(items or ())
+        if not 1 <= len(pairs) <= _MAX_KIND_ITEMS:
+            raise ValueError(f"set between 1 and {_MAX_KIND_ITEMS} facts at a time")
+        checked: list[list[str]] = []
+        for fact_id, value in pairs:
+            kind = parse_kind(value)
+            if not isinstance(fact_id, str) or not fact_id or kind is None:
+                raise ValueError(f"not a fact id and memory kind: {fact_id!r}, {value!r}")
+            checked.append([fact_id, kind.value])
+        return self._submit_mutation(
+            CommandKind.SET_FACT_KIND,
+            profile_id,
+            {"items": checked},
+            idempotency_key=idempotency_key,
+        )
+
     def _submit_mutation(
         self,
         kind: CommandKind,
@@ -930,6 +963,8 @@ def _execute_mutation(
         CommandKind.ROLLBACK_CORRECTION,
     }:
         return _transition_correction(db, kind, profile_id, payload, connection=connection)
+    if kind is CommandKind.SET_FACT_KIND:
+        return _set_fact_kinds(db, profile_id, payload, connection=connection)
     fact_id = _payload_text(payload, "fact_id")
     if kind is CommandKind.DELETE_FACT:
         return _delete_fact(db, fact_id, profile_id)
@@ -942,6 +977,32 @@ def _execute_mutation(
     if kind is CommandKind.SET_FACT_SCOPE:
         return _set_fact_scope(db, fact_id, profile_id, payload)
     raise ValueError(f"unsupported mutation command {kind.value}")
+
+
+def _set_fact_kinds(
+    db: DatabaseManager,
+    profile_id: str,
+    payload: Mapping[str, Any],
+    *,
+    connection: Any,
+) -> dict[str, Any]:
+    """Apply a user's kind choice inside the coordinator's transaction."""
+    from superlocalmemory.storage.memory_kind_store import MemoryKindStore
+    from superlocalmemory.storage.memory_kinds import parse_kind
+
+    if not db.has_memory_kind_columns():
+        return {"ok": False, "operation_id": "set_fact_kind", "changed": 0,
+                "reason": "memory kinds are not available on this store yet"}
+    items = []
+    for pair in payload.get("items") or ():
+        kind = parse_kind(pair[1]) if len(pair) == 2 else None
+        if kind is not None:
+            items.append((str(pair[0]), kind))
+    results = MemoryKindStore(db).set_kinds(connection, profile_id, items, actor="user")
+    # A fact owned by another profile comes back "not found" and is untouched.
+    return {"ok": True, "operation_id": "set_fact_kind",
+            "changed": sum(1 for r in results if r.get("ok")),
+            "facts": [dict(r) for r in results]}
 
 
 def _delete_fact(db: DatabaseManager, fact_id: str, profile_id: str) -> dict[str, Any]:
@@ -1072,6 +1133,12 @@ def _propose_correction_successor(
         emotional_arousal=float(source.get("emotional_arousal") or 0.0),
         signal_type=SignalType(str(source.get("signal_type") or "factual")),
         created_at=now,
+        # A corrected fact keeps its kind: a corrected decision is a decision.
+        memory_kind=source.get("memory_kind"),
+        memory_kind_source=source.get("memory_kind_source"),
+        memory_kind_confidence=source.get("memory_kind_confidence"),
+        memory_kind_recipe=source.get("memory_kind_recipe"),
+        memory_kind_at=source.get("memory_kind_at"),
     )
     persisted_id = db.insert_fact_immutable(successor)
     from superlocalmemory.storage.correction_cases import (
