@@ -220,3 +220,61 @@ def test_recall_answers_with_the_new_memory(engine_with_mock_deps) -> None:
     ids = [r["fact_id"] for r in after["results"]]
     assert ids and ids[0] == new_id, after
     assert old_id not in ids
+
+
+# ---------------------------------------------------------------------------
+# M1: a per-request profile_id plus replaces must check ownership against the
+# profile actually being written, not the daemon's own default profile
+# (server/unified_daemon.py, check_replaceable's active_profile argument).
+# ---------------------------------------------------------------------------
+
+def test_a_routed_replaces_is_refused_before_anything_is_saved(engine_with_mock_deps) -> None:
+    """``replaces`` works only when saving to the daemon's active profile.
+
+    The writer records replacements for that one profile only, so a request
+    routed to another profile is refused up front: nothing is saved and nothing
+    is retired, rather than saving the new memory and then failing to replace.
+    """
+    from tests.test_server.test_per_request_profile import _daemon
+
+    with _daemon(engine_with_mock_deps, profiles=("work",)) as (client, app):
+        engine = app.state.engine
+        old = client.post("/remember", json={"content": OLD, "profile_id": "work",
+                                             "idempotency_key": "m1-old"})
+        assert old.status_code == 200, old.text
+        [old_id] = old.json()["fact_ids"]
+        before = _count(engine, "memories")
+        refused = client.post("/remember", json={"content": NEW, "profile_id": "work",
+                                                 "replaces": old_id,
+                                                 "idempotency_key": "m1-new"})
+        after = _count(engine, "memories")
+
+    assert refused.status_code == 422, refused.text
+    assert "REPLACES_NOT_ALLOWED" in refused.text
+    assert "active profile" in refused.text
+    assert after == before, "a refused replaces must not save the new memory"
+    assert _expired(engine, old_id)["system_expired_at"] is None
+
+
+def test_a_routed_write_cannot_replace_another_profiles_memory(engine_with_mock_deps) -> None:
+    """Ownership stays bound to the profile actually written: a caller
+    routed to one profile must not retire a fact that lives in another."""
+    from tests.test_server.test_per_request_profile import _daemon
+
+    with _daemon(engine_with_mock_deps, profiles=("work", "ops")) as (client, app):
+        engine = app.state.engine
+        old = client.post("/remember", json={"content": OLD, "profile_id": "work",
+                                             "idempotency_key": "m1-cross-old"})
+        assert old.status_code == 200, old.text
+        [old_id] = old.json()["fact_ids"]
+        before = _count(engine, "memories")
+        refused = client.post("/remember", json={"content": NEW, "profile_id": "ops",
+                                                  "replaces": old_id,
+                                                  "idempotency_key": "m1-cross-new"})
+        after = _count(engine, "memories")
+        assert refused.status_code == 422, refused.text
+        # Refused at the profile check, before any lookup: the answer is the
+        # same whether or not the id exists elsewhere, so it reveals nothing.
+        assert refused.json()["detail"]["code"] == "REPLACES_NOT_ALLOWED"
+        assert after == before
+        assert _expired(engine, old_id)["system_expired_at"] is None

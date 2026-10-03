@@ -5020,6 +5020,10 @@ def _register_daemon_routes(application: FastAPI) -> None:
             from superlocalmemory.core.replaces_input import ReplacesRejected
 
             try:
+                # The writer records replacements for the daemon's own profile
+                # only, so a write routed to another profile is refused here,
+                # before anything is saved, instead of saving the new memory
+                # and then failing to replace.
                 replaces_id = await asyncio.to_thread(
                     check_replaceable, engine._db, replaces=req.replaces,
                     active_profile=engine._profile_id, write_profile=write_profile,

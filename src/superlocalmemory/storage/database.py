@@ -889,10 +889,21 @@ class DatabaseManager:
             # content correctly re-learns it as a fresh fact. Matching only
             # 'active' (pre-3.6.4) re-opened the duplication window for every
             # fact that aged to warm/cold (the bulk of the KB).
+            #
+            # Also excludes a RETIRED fact — one with fact_temporal_validity.
+            # system_expired_at set, by a caller replacement (L1-10) or any
+            # other invalidation. Matching a retired fact would fold a brand
+            # new statement back onto dead history instead of giving it its
+            # own current copy, so something the successor's enrichment
+            # re-derives would only ever exist as a fact recall never shows.
             existing = self.execute(
                 "SELECT fact_id FROM atomic_facts "
                 "WHERE profile_id = ? AND content = ? "
                 "AND lifecycle IN ('active', 'warm', 'cold') "
+                "AND fact_id NOT IN ("
+                "    SELECT fact_id FROM fact_temporal_validity "
+                "    WHERE system_expired_at IS NOT NULL"
+                ") "
                 "ORDER BY created_at LIMIT 1",
                 (fact.profile_id, fact.content),
             )

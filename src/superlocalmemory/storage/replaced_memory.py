@@ -34,17 +34,25 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import uuid
+from datetime import UTC, datetime
 from typing import Callable
 
 from superlocalmemory.storage.correction_cases import (
     CALLER_REPLACEMENT_REASON,
     CorrectionActor,
+    CorrectionAuthorizationError,
     CorrectionCase,
     propose_on_connection,
     transition_on_connection,
 )
 
 WHOLE_MEMORY = "replaces:memory:"
+#: Reason recorded when the ledger itself refuses a late retirement (for
+#: example the successor was re-scoped after the whole-memory case was
+#: applied) and this module falls back to retiring the fact directly,
+#: without a correction case. Distinct from CALLER_REPLACEMENT_REASON so a
+#: reader can tell the two routes apart.
+DIRECT_RETIRE_REASON = "replaced_by_caller:direct (ledger refused the late case)"
 LATE = "replaces:late:"
 SINGLE_FACT = "replaces:fact:"
 
@@ -78,6 +86,31 @@ def _owner_checks(profile_id: str, actor: CorrectionActor):
     return is_profile, is_actor
 
 
+def _direct_retire(conn: sqlite3.Connection, *, fact_id: str, profile_id: str,
+                   successor_fact_id: str) -> None:
+    """Retire ``fact_id`` on its temporal row directly, bypassing the ledger.
+
+    Used only when the ledger itself refuses the late case -- for example the
+    successor was re-scoped after the whole-memory replacement was applied,
+    so the case's recorded scope no longer matches. No correction case is
+    recorded for this retirement (there is nothing a reviewer could roll
+    back to a different outcome), but the fact still carries
+    ``system_expired_at`` and so is excluded from recall and session
+    context, which is the one guarantee this module exists to make: a fact
+    of a replaced memory is never left current.
+
+    ``store_temporal_validity`` always runs before this hook in the same
+    transaction (``DatabaseManager.store_fact``), so the row this updates
+    already exists with ``system_expired_at IS NULL``.
+    """
+    now = datetime.now(UTC).isoformat()
+    conn.execute(
+        "UPDATE fact_temporal_validity SET system_expired_at=?, invalidated_by=?, "
+        "invalidation_reason=? WHERE fact_id=? AND profile_id=? AND system_expired_at IS NULL",
+        (now, successor_fact_id, DIRECT_RETIRE_REASON, fact_id, profile_id),
+    )
+
+
 def _whole_memory_case(conn: sqlite3.Connection, fact_id: str, memory_id: str,
                        profile_id: str) -> sqlite3.Row | None:
     # Cheap first: does any other fact of this memory carry a caller's mark?
@@ -105,9 +138,10 @@ def retire_if_memory_replaced(conn: sqlite3.Connection, *, fact_id: str, memory_
     """Retire a just-written fact if its memory was replaced by its caller.
 
     Runs inside the transaction that wrote the fact, so it commits or rolls
-    back with it. Returns the applied case, or None when nothing applies. A
-    ledger refusal raises, failing the write: a fact of a replaced memory is
-    never left current.
+    back with it. Returns the applied case, or None when nothing applies, or
+    when the ledger refused the case and the fact was retired directly
+    instead (L1-14): a ledger refusal must never fail the write, and a fact
+    of a replaced memory is never left current either way.
     """
     if not memory_id:
         return None
@@ -125,19 +159,44 @@ def retire_if_memory_replaced(conn: sqlite3.Connection, *, fact_id: str, memory_
                             actor_kind="host_authenticated", trust_tier="trusted")
     is_profile, is_actor = _owner_checks(profile_id, actor)
     case_id = case_id_for(profile_id, fact_id, successor)
-    propose_on_connection(
-        conn, case_id=case_id, profile_id=profile_id, scope=str(row["scope"]),
-        predecessor_fact_id=fact_id, successor_fact_id=successor,
-        reason_code=CALLER_REPLACEMENT_REASON, actor=actor,
-        idempotency_key=f"{LATE}{group}:{case_id}",
-        is_profile_active=is_profile, is_actor_trusted=is_actor,
-    )
-    return transition_on_connection(
-        conn, case_id=case_id, expected_version=0, actor=actor,
-        operation_id=f"replaces:late-apply:{case_id}", from_status="proposed",
-        to_status="applied", mutate_temporal=True,
-        is_profile_active=is_profile, is_actor_trusted=is_actor,
-    )
+    try:
+        propose_on_connection(
+            conn, case_id=case_id, profile_id=profile_id, scope=str(row["scope"]),
+            predecessor_fact_id=fact_id, successor_fact_id=successor,
+            reason_code=CALLER_REPLACEMENT_REASON, actor=actor,
+            idempotency_key=f"{LATE}{group}:{case_id}",
+            is_profile_active=is_profile, is_actor_trusted=is_actor,
+        )
+    except CorrectionAuthorizationError:
+        # Nothing was proposed; retire the fact directly and stop.
+        _direct_retire(conn, fact_id=fact_id, profile_id=profile_id,
+                       successor_fact_id=successor)
+        return None
+    try:
+        return transition_on_connection(
+            conn, case_id=case_id, expected_version=0, actor=actor,
+            operation_id=f"replaces:late-apply:{case_id}", from_status="proposed",
+            to_status="applied", mutate_temporal=True,
+            is_profile_active=is_profile, is_actor_trusted=is_actor,
+        )
+    except CorrectionAuthorizationError:
+        # The case was proposed but the ledger refused to apply it -- most
+        # commonly the successor was re-scoped after the whole-memory
+        # replacement, so the case's recorded scope no longer matches
+        # (correction_cases.py:_apply_predecessor_temporal). Close the
+        # orphaned 'proposed' case cleanly (no temporal mutation, so this
+        # transition cannot hit the same scope check) rather than leaving it
+        # stuck forever, then retire the fact by the one route that does
+        # not depend on the ledger's scope agreement.
+        transition_on_connection(
+            conn, case_id=case_id, expected_version=0, actor=actor,
+            operation_id=f"replaces:late-reject:{case_id}", from_status="proposed",
+            to_status="rejected", mutate_temporal=False,
+            is_profile_active=is_profile, is_actor_trusted=is_actor,
+        )
+        _direct_retire(conn, fact_id=fact_id, profile_id=profile_id,
+                       successor_fact_id=successor)
+        return None
 
 
 def restore_late_facts(conn: sqlite3.Connection, case: CorrectionCase, *,
