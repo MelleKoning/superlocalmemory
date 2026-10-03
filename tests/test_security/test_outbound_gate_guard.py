@@ -99,7 +99,13 @@ REVIEWED: dict[tuple[str, str, str], tuple[int, str]] = {
      "googleapiclient.discovery.build"):
         (1, "INBOUND: reads the user's mailbox over the Gmail API"),
     (_S + "mesh/remote_sync.py", "RemoteSyncClient._http_client", "httpx.Client"):
-        (2, "MESH: peer sync with a configured SLM peer (shared-secret auth)"),
+        (2, "MESH: builds the shared-secret-authed client for peer-list sync, "
+            "state/lock delta reads, AND mesh/send delivery. The reads carry "
+            "no message content. The sends (send_to_remote, _drain_outbox) "
+            "screen `content` through core.outbound_redaction.for_endpoint, "
+            "keyed on the peer's resolved URL, before it is signed or handed "
+            "to this client — loopback peers are exempt, same rule as the "
+            "gate everywhere else."),
     (_S + "mesh/remote_sync.py", "_get_cert_sha256", "socket.create_connection"):
         (1, "MESH: reads the peer's TLS certificate for pinning; sends nothing"),
     (_S + "optimize/proxy/lifecycle.py", "ensure_proxy_running", "urllib.request.urlopen"):

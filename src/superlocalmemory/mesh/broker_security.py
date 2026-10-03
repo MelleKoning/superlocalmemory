@@ -249,25 +249,6 @@ def check_mesh_message_signature(
 
 
 # ---------------------------------------------------------------------------
-# 3a-2  Content scrub helper
-# ---------------------------------------------------------------------------
-
-
-def scrub_message_content(content: str) -> str:
-    """Redact known secret patterns from message content before durable storage.
-
-    Fail-open: on any import/runtime error the original content is returned
-    unchanged so a storage failure never loses a message.
-    """
-    try:
-        from superlocalmemory.core.security_primitives import redact_secrets
-
-        return redact_secrets(content)
-    except Exception:
-        return content
-
-
-# ---------------------------------------------------------------------------
 # 3a-3  Restart-safe fencing counter seed
 # ---------------------------------------------------------------------------
 
