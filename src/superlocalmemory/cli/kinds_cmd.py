@@ -27,7 +27,12 @@ from argparse import Namespace
 from dataclasses import dataclass
 from typing import Any, NoReturn
 
-from superlocalmemory.cli.daemon import DaemonConflict, DaemonNotFound, daemon_request
+from superlocalmemory.cli.daemon import (
+    DaemonConflict,
+    DaemonNotFound,
+    DaemonUnprocessable,
+    daemon_request,
+)
 from superlocalmemory.core.kind_query import InvalidKind, resolve_kind
 
 _BASE = "/api/memory-kinds"
@@ -115,12 +120,20 @@ def _request(out: _Out, method: str, path: str, body: dict | None = None) -> dic
     """The daemon's answer; prints and exits on a refusal or when it is absent."""
     try:
         result = daemon_request(method, _BASE + path, body, preserve_conflict=True,
-                                preserve_not_found=True)
+                                preserve_not_found=True, preserve_unprocessable=True)
     except DaemonConflict as exc:
         needs_yes = path == "/backfill" and "Confirm to continue" in exc.detail
         out.fail(exc.detail + (" Run again with --yes to confirm." if needs_yes else ""))
-    except DaemonNotFound:
-        out.fail("No such classification run in this profile.")
+    except DaemonNotFound as exc:
+        # L3-11: say what was actually not found (e.g. "Memory not found" for
+        # an unknown fact_id) -- not a fixed phrase written for one caller
+        # (an unknown classification run) and reused for every 404 here.
+        out.fail(exc.message)
+    except DaemonUnprocessable as exc:
+        # L3-11: a 422 is invalid input, refused before any work -- exit 2,
+        # never collapsed to None and reported as "the daemon is not
+        # running" (exit 1).
+        _unprocessable_exit(out, exc.code, exc.message)
     if result is None:
         out.fail(_NOT_RUNNING)
     return result
@@ -186,6 +199,19 @@ def _invalid_item_exit(out: "_Out", message: str) -> NoReturn:
         from superlocalmemory.cli.json_output import json_print
 
         json_print(out.command, error={"code": "INVALID_ITEMS", "message": message})
+    else:
+        print(message, file=sys.stderr)
+    sys.exit(2)
+
+
+def _unprocessable_exit(out: "_Out", code: str, message: str) -> NoReturn:
+    """Exit 2: the daemon's own 422 (L3-11) — invalid input, refused before
+    any work, never "the daemon is not running" (what a collapsed-to-None
+    422 used to print, exit 1)."""
+    if out.as_json:
+        from superlocalmemory.cli.json_output import json_print
+
+        json_print(out.command, error={"code": code or "INVALID_REQUEST", "message": message})
     else:
         print(message, file=sys.stderr)
     sys.exit(2)

@@ -438,7 +438,13 @@ class DaemonUnprocessable(RuntimeError):
 
 
 def _unprocessable(exc) -> DaemonUnprocessable:
-    """Read ``{"detail": {"code", "message"}}`` or ``{"detail": "text"}``."""
+    """Read ``{"detail": {"code", "message"}}``, ``{"detail": "text"}``, or
+    FastAPI's own list-shaped validation-error body —
+    ``{"detail": [{"type": ..., "loc": [...], "msg": "..."}, ...]}`` — which a
+    request that fails Pydantic's own field validation (e.g. a fact_id over
+    the field's max_length) gets before any route code runs (L3-11). Without
+    this branch the message silently went empty for exactly that shape.
+    """
     try:
         detail = json.loads(exc.read().decode()).get("detail")
     except Exception:  # noqa: BLE001 - an unreadable body still means "refused"
@@ -446,6 +452,12 @@ def _unprocessable(exc) -> DaemonUnprocessable:
     if isinstance(detail, dict):
         return DaemonUnprocessable(str(detail.get("code") or ""),
                                    str(detail.get("message") or ""))
+    if isinstance(detail, list):
+        messages = [
+            str(item.get("msg", "")) for item in detail
+            if isinstance(item, dict) and item.get("msg")
+        ]
+        return DaemonUnprocessable("", "; ".join(messages) or "the request was invalid")
     return DaemonUnprocessable("", detail if isinstance(detail, str) else "")
 
 
@@ -561,14 +573,20 @@ def daemon_request(
                 pass
             raise DaemonConflict(detail) from exc
         if exc.code == 404 and preserve_not_found:
+            # L3-11: every 404 in this codebase is a plain FastAPI
+            # HTTPException(404, detail="...") -- {"detail": "..."}, never
+            # {"error": {...}}. Reading "error" here always found nothing, so
+            # the real reason (e.g. "Memory not found") was discarded in
+            # favour of the generic fallback below on every single 404.
             code, message = "not_found", "daemon returned 404"
             try:
                 payload = json.loads(exc.read().decode())
-                if isinstance(payload, dict):
-                    err = payload.get("error", {})
-                    if isinstance(err, dict):
-                        code = str(err.get("code", code))
-                        message = str(err.get("message", message))
+                detail = payload.get("detail") if isinstance(payload, dict) else None
+                if isinstance(detail, dict):
+                    code = str(detail.get("code", code))
+                    message = str(detail.get("message", message))
+                elif isinstance(detail, str) and detail:
+                    message = detail
             except Exception:
                 pass
             raise DaemonNotFound(exc.code, code, message, path) from exc

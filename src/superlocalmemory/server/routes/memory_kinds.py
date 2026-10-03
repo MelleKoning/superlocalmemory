@@ -73,7 +73,15 @@ class BackfillRequest(BaseModel):
 class ConfirmItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    fact_id: str = Field(..., min_length=1, max_length=128)
+    # L3-11: no upper length bound here. A fact_id this field itself rejects
+    # (Pydantic validates the whole ``items`` list before the route ever
+    # runs) 422s the ENTIRE batch -- contradicting this route's own contract
+    # ("one bad item does not abort the rest"), since a real id this long
+    # simply will not be found and already comes back a graceful per-item
+    # {"ok": false, "error": "not found"} (storage.memory_kind_writes.set_kinds).
+    # The generous cap still exists -- at the request-body size limit the
+    # ingest gate enforces, not a per-field one.
+    fact_id: str = Field(..., min_length=1)
     kind: str | None = Field(None, max_length=64)
 
 
