@@ -35,21 +35,43 @@ REM Find Python 3
 where python3 >nul 2>&1
 if %ERRORLEVEL% EQU 0 (
     set PYTHON_CMD=python3
-    goto :run
+    goto :version_check
 )
 where python >nul 2>&1
 if %ERRORLEVEL% EQU 0 (
     set PYTHON_CMD=python
-    goto :run
+    goto :version_check
 )
 where py >nul 2>&1
 if %ERRORLEVEL% EQU 0 (
     set PYTHON_CMD=py -3
-    goto :run
+    goto :version_check
 )
 
 echo Error: Python 3.12+ not found.
 echo Install from: https://python.org/downloads/
+exit /b 1
+
+:version_check
+REM L3-22: this is the repository-clone launcher — the npm-packaged runtime
+REM goes through its own .slm-venv, guaranteed 3.12+ by scripts/postinstall.js.
+REM Without this check, a `python`/`python3`/`py` on PATH that is too old ran
+REM anyway and failed later with a cryptic error instead of one clear message.
+set "PY_VER_STR="
+set "PY_MAJOR="
+set "PY_MINOR="
+for /f "tokens=2 delims= " %%v in ('%PYTHON_CMD% --version 2^>^&1') do set "PY_VER_STR=%%v"
+for /f "tokens=1,2 delims=." %%a in ("%PY_VER_STR%") do (
+    set "PY_MAJOR=%%a"
+    set "PY_MINOR=%%b"
+)
+if not defined PY_MAJOR goto :version_unsupported
+if %PY_MAJOR% LSS 3 goto :version_unsupported
+if %PY_MAJOR% EQU 3 if %PY_MINOR% LSS 12 goto :version_unsupported
+goto :run
+
+:version_unsupported
+echo Error: Python 3.12+ required ^(found: %PY_VER_STR%^ via %PYTHON_CMD%^). Install from https://python.org/downloads/ 1>&2
 exit /b 1
 
 :show_version

@@ -53,6 +53,14 @@ def _fake_python_env(tmp_path: Path) -> tuple[dict, Path]:
     fake_py = tmp_path / "fakepy.sh"
     fake_py.write_text(textwrap.dedent("""\
         #!/usr/bin/env bash
+        # bin/slm's Python-version gate (L3-22) calls `--version` before
+        # dispatching; answer with a supported version so these dispatcher
+        # tests exercise dispatch, not the version gate (covered separately
+        # by tests/test_binary/test_bin_slm_python_version_gate.py).
+        if [ "$1" = "--version" ]; then
+            echo "Python 3.14.0"
+            exit 0
+        fi
         echo "PYFALLBACK $*"
         exit 0
     """))
