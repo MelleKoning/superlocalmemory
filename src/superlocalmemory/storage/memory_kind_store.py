@@ -84,6 +84,9 @@ class BatchResult:
     skipped: int
     cursor: int
     run_still_active: bool
+    #: How long the batch held the store's write lock (BEGIN IMMEDIATE to
+    #: COMMIT), in milliseconds; 0.0 when nothing was written.
+    write_ms: float = 0.0
 
 
 def _row_dict(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
@@ -240,10 +243,11 @@ class MemoryKindStore:
 
     def apply_batch(
         self, run_id: str, profile_id: str, changes: Sequence[KindChange],
-        *, new_cursor: int, actor: str,
+        *, new_cursor: int, actor: str, examined: int | None = None,
     ) -> BatchResult:
         return _writes.apply_batch(
             self.db, run_id, profile_id, changes, new_cursor=new_cursor, actor=actor,
+            examined=examined,
         )
 
     def revert_batch(self, run_id: str, profile_id: str, *, limit: int = 200) -> BatchResult:

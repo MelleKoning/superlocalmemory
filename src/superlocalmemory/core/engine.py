@@ -160,6 +160,8 @@ class MemoryEngine:
         self._scene_builder = None
         self._entropy_gate = None
         self._retrieval_engine = None
+        # 4.1.19: suggests a memory kind per new fact (core/memory_kind_wiring).
+        self._kind_classifier = None
         self._trust_scorer = None
         self._ann_index = None
         self._sheaf_checker = None
@@ -412,6 +414,9 @@ class MemoryEngine:
             self._entity_resolver, self._trust_scorer,
             vector_store=self._vector_store,
         )
+        # Reads the live answer-check judge and settings; never starts a model.
+        from superlocalmemory.core.memory_kind_wiring import build_kind_classifier
+        self._kind_classifier = build_kind_classifier(self)
 
         self._provenance = ProvenanceTracker(self._db)
         # self._adaptive_learner is initialized in _init_db_layer() because

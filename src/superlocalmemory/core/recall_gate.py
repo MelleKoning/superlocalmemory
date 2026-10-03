@@ -14,6 +14,7 @@ recall.
 from __future__ import annotations
 
 import threading
+import time
 from contextlib import contextmanager
 from typing import Callable, Iterator
 
@@ -86,10 +87,31 @@ def background_preempt_requested() -> bool:
         return False
 
 
+@contextmanager
+def idle_wait_deadline(deadline: float) -> Iterator[None]:
+    """Bound ``wait_for_foreground_idle`` on this thread to ``deadline``.
+
+    ``deadline`` is a ``time.monotonic()`` value. Opt-in: callers that never
+    enter this context wait exactly as before. A job that may yield for a
+    long time under steady recall load (memory-kind backfill) uses it so its
+    thread is never stuck inside a wait it cannot leave; it gives that batch
+    up and tries again later instead.
+    """
+    previous = getattr(_work_context, "idle_deadline", None)
+    _work_context.idle_deadline = deadline
+    try:
+        yield
+    finally:
+        _work_context.idle_deadline = previous
+
+
 def wait_for_foreground_idle() -> None:
     """Block background inference while an interactive recall is active."""
     if not is_background_work():
         return
+    deadline = getattr(_work_context, "idle_deadline", None)
     with _condition:
         while _active > 0:
+            if deadline is not None and time.monotonic() >= deadline:
+                return
             _condition.wait(timeout=0.1)
