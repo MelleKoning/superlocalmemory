@@ -29,13 +29,17 @@ WHO MAY REPLACE WHAT
 --------------------
 The rule every memory mutation follows (``_authorize_memory_mutation`` in
 ``server/routes/memories.py`` and the canonical mutation writer): an
-authenticated writer with WRITE permission on the active profile, acting only
-on facts that profile owns. A global or shared memory of another profile is
-visible to this one but is refused with a plain message; a private memory of
-another profile is reported as not found, exactly like an id that does not
-exist, so ``replaces`` cannot be used to probe other profiles. The new memory
-must be saved to the active profile and in the same scope as what it replaces,
-because a correction case never crosses a profile or a scope.
+authenticated writer with WRITE permission -- and, for a replacement, the
+CORRECT policy -- on the profile being written, acting only on facts that
+profile owns. That profile is the one the request names with ``profile_id``,
+or the active one when it names none; the writer accepts a replacement routed
+to another profile (``core/mutation_routing.py``), and its undo through
+``review_correction`` is routed the same way. A global or shared memory of
+another profile is visible to this one but is refused with a plain message; a
+private memory of another profile is reported as not found, exactly like an id
+that does not exist, so ``replaces`` cannot be used to probe other profiles.
+The new memory must be saved to the same profile and in the same scope as what
+it replaces, because a correction case never crosses a profile or a scope.
 
 HOW IT IS RECORDED
 ------------------
@@ -77,7 +81,10 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from superlocalmemory.core.remember_runtime import CanonicalMutationConflict
+from superlocalmemory.core.remember_runtime import (
+    CanonicalMutationConflict,
+    UnknownMutationProfile,
+)
 from superlocalmemory.core.replaces_input import (
     NOT_ALLOWED,
     NOT_FOUND,
@@ -107,6 +114,10 @@ logger = logging.getLogger("superlocalmemory.audit")
 MAX_FACTS = 200
 UNDO_HINT = ("To undo, call review_correction with each case_id, action='rollback' "
              "and that case's version.")
+#: The same, for a replacement saved to a profile named by ``profile_id``: the
+#: undo must name it too, or it would look in the active profile.
+ROUTED_UNDO_HINT = ("To undo, call review_correction with profile_id={profile!r}, each "
+                    "case_id, action='rollback' and that case's version.")
 
 Query = Callable[[str, tuple[Any, ...]], Sequence[Any]]
 _COLUMNS = "fact_id, memory_id, profile_id, scope, shared_with"
@@ -219,21 +230,17 @@ def _require_scope(facts: list[_Fact], scope: str, replaces: str) -> None:
                          "scope, or leave replaces out.")
 
 
-def check_replaceable(db: Any, *, replaces: object, active_profile: str,
-                      write_profile: str, scope: str) -> str:
+def check_replaceable(db: Any, *, replaces: object, profile_id: str, scope: str) -> str:
     """Refuse a ``replaces`` value before anything is saved; return the clean id.
 
-    Read-only. Whether the named facts are still current is decided at mark
-    time instead: a replayed request must not be refused because its own first
-    attempt already retired them.
+    ``profile_id`` is the profile the new memory is being saved to, routed or
+    active: what ``replaces`` names must belong to it. Read-only. Whether the
+    named facts are still current is decided at mark time instead: a replayed
+    request must not be refused because its own first attempt already retired
+    them.
     """
     named = normalize_replaces(replaces)
-    if write_profile != active_profile:
-        raise ReplacesRejected(
-            NOT_ALLOWED, f"replaces works only when saving to the active profile "
-                         f"({active_profile!r}); this memory was for {write_profile!r}. "
-                         "Nothing was saved.")
-    facts = named_facts(db.execute, named, active_profile)
+    facts = named_facts(db.execute, named, profile_id)
     _require_scope(facts, scope, named)
     return named
 
@@ -337,7 +344,8 @@ def apply_replacement(conn: sqlite3.Connection, profile_id: str,
     if waiting:
         raise ReplacementRefused(
             f"{waiting[0][0]} has a correction waiting for review, so nothing was replaced. "
-            "Review it (list_corrections, review_correction), then repeat this request.")
+            f"Review it (list_corrections, review_correction) in profile {profile_id!r}, "
+            "then repeat this request.")
     actor = CorrectionActor(actor_id=ledger_actor_id(actor_id),
                             actor_kind="host_authenticated", trust_tier="trusted")
     try:
@@ -377,11 +385,12 @@ def _undone_since(engine: Any, cases: list[dict[str, Any]]) -> bool:
 
 def replace_after_save(runtime: Any, engine: Any, *, replaces: str, profile_id: str,
                        successor_fact_ids: Sequence[str], operation_id: str,
-                       trusted_actor_id: str) -> dict[str, Any]:
+                       trusted_actor_id: str, routed: bool = False) -> dict[str, Any]:
     """Mark what ``replaces`` names, after the new memory is durably saved.
 
     Never raises: the save has already happened and must be reported as such.
-    The result is the ``replaced`` field of the remember response.
+    The result is the ``replaced`` field of the remember response. ``routed``
+    says the request named ``profile_id``, so the undo hint names it as well.
     """
     if not successor_fact_ids:
         return _not_replaced(replaces, "The new memory produced nothing searchable, "
@@ -394,6 +403,10 @@ def replace_after_save(runtime: Any, engine: Any, *, replaces: str, profile_id: 
             trusted_actor_id=trusted_actor_id, idempotency_key=key)
     except ReplacementRefused as exc:
         return _not_replaced(replaces, str(exc))
+    except UnknownMutationProfile:
+        # No retry hint: a deleted profile does not come back.
+        return _not_replaced(replaces, f"Profile {profile_id!r} no longer exists, so "
+                                       "nothing was replaced.")
     except CanonicalMutationConflict:
         return _not_replaced(replaces, "This request was already saved replacing something "
                                        "else; nothing more was replaced.")
@@ -412,9 +425,11 @@ def replace_after_save(runtime: Any, engine: Any, *, replaces: str, profile_id: 
     from superlocalmemory.core.mutations import purge_profile_context_cache
 
     purge_profile_context_cache(engine, profile_id)
+    undo = ROUTED_UNDO_HINT.format(profile=profile_id) if routed else UNDO_HINT
     return {"ok": True, "replaces": replaces, "fact_ids": list(receipt.get("fact_ids") or ()),
-            "cases": cases, "undo": UNDO_HINT}
+            "cases": cases, "undo": undo}
 
 
-__all__ = ["MAX_FACTS", "ReplacementRefused", "apply_replacement", "check_replaceable",
+__all__ = ["MAX_FACTS", "ROUTED_UNDO_HINT", "ReplacementRefused", "UNDO_HINT",
+           "apply_replacement", "check_replaceable",
            "ledger_actor_id", "named_facts", "replace_after_save"]

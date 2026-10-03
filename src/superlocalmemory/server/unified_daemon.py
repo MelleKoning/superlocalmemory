@@ -741,22 +741,12 @@ def _daemon_profile_exists(engine, profile_id: str) -> bool:
 def _unknown_profile_body(profile_id: str) -> dict:
     """Error body for a per-request route to a profile that does not exist.
 
-    Spec section 3/5: unknown means 404, no implicit creation, no engine call.
-    This is the daemon's existing route-local structured-error shape (same
-    pattern as the ``invalid_as_of`` 400 on /recall) — the global FastAPI
-    ``{"detail": ...}`` format is deliberately untouched.
+    Spec section 3/5. Shared with the correction routes, which route the same
+    way (``server/routed_profile.py``).
     """
-    return {
-        "success": False,
-        "error": {
-            "code": "unknown_profile",
-            "profile_id": profile_id,
-            "message": (
-                f"profile {profile_id!r} does not exist; per-request routing "
-                "never creates a profile implicitly"
-            ),
-        },
-    }
+    from superlocalmemory.server.routed_profile import unknown_profile_body
+
+    return unknown_profile_body(profile_id)
 
 
 class SessionOpenRequest(BaseModel):
@@ -5020,14 +5010,14 @@ def _register_daemon_routes(application: FastAPI) -> None:
             from superlocalmemory.core.replaces_input import ReplacesRejected
 
             try:
-                # The writer records replacements for the daemon's own profile
-                # only, so a write routed to another profile is refused here,
-                # before anything is saved, instead of saving the new memory
-                # and then failing to replace.
+                # What ``replaces`` names must belong to the profile this write
+                # targets: the routed one, or the active one on the legacy
+                # path. The writer accepts a replacement routed to another
+                # profile (core/mutation_routing.py); WRITE and the CORRECT
+                # policy are checked on that same profile.
                 replaces_id = await asyncio.to_thread(
                     check_replaceable, engine._db, replaces=req.replaces,
-                    active_profile=engine._profile_id, write_profile=write_profile,
-                    scope=scope,
+                    profile_id=write_profile, scope=scope,
                 )
             except ReplacesRejected as exc:
                 raise HTTPException(422, detail=exc.as_error()) from exc
@@ -5187,6 +5177,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
                     profile_id=write_profile, successor_fact_ids=fact_ids,
                     operation_id=str(payload["operation_id"]),
                     trusted_actor_id=trusted_actor_id,
+                    routed=bool(req_profile),
                 )
 
             # The durable receipt is already committed above; nothing below can

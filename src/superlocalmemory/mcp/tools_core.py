@@ -1249,12 +1249,16 @@ def register_core_tools(server, get_engine: Callable) -> None:
         action: str,
         expected_version: int,
         event_valid_until: str | None = None,
+        profile_id: str = "",
     ) -> dict:
         """Apply, reject, or roll back a review-gated correction case.
 
-        The active daemon derives reviewer identity and profile from its local
-        authenticated MCP boundary.  Clients provide only a case address, a
-        CAS version, and an optional reviewer-approved event-time boundary.
+        The active daemon derives reviewer identity from its local
+        authenticated MCP boundary.  Clients provide a case address, a CAS
+        version, and an optional reviewer-approved event-time boundary.
+        ``profile_id`` names the profile the case belongs to -- the one a
+        ``remember(..., profile_id=..., replaces=...)`` was saved to; empty =
+        the active profile. Routing never moves the active-profile pointer.
         """
         if action not in {"apply", "reject", "rollback"}:
             return {"success": False, "error": "action must be apply, reject, or rollback"}
@@ -1277,6 +1281,9 @@ def register_core_tools(server, get_engine: Callable) -> None:
             payload: dict[str, object] = {"expected_version": expected_version}
             if event_valid_until is not None:
                 payload["event_valid_until"] = event_valid_until
+            if (profile_id or "").strip():
+                # Only when set, so a legacy call stays byte-identical.
+                payload["profile_id"] = profile_id.strip()
             path = "/api/corrections/" + urllib.parse.quote(case_id, safe="") + "/" + action
             result = await asyncio.to_thread(daemon_request, "POST", path, payload)
             if isinstance(result, dict) and result.get("success"):
@@ -1291,8 +1298,12 @@ def register_core_tools(server, get_engine: Callable) -> None:
             return {"success": False, "retryable": True, "error": "correction review unavailable"}
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
-    async def list_corrections(limit: int = 100) -> dict:
-        """List active-profile correction cases for a human or host reviewer."""
+    async def list_corrections(limit: int = 100, profile_id: str = "") -> dict:
+        """List correction cases for a human or host reviewer.
+
+        ``profile_id`` lists another profile's cases (empty = the active
+        profile), for a client routed to its own profile with ``remember``.
+        """
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 500:
             return {"success": False, "error": "limit must be an integer from 1 to 500"}
         try:
@@ -1306,7 +1317,12 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     "retryable": True,
                     "error": "correction review requires the resident canonical daemon",
                 }
-            result = await asyncio.to_thread(daemon_request, "GET", f"/api/corrections?limit={limit}")
+            import urllib.parse
+
+            path = f"/api/corrections?limit={limit}"
+            if (profile_id or "").strip():
+                path += "&profile_id=" + urllib.parse.quote(profile_id.strip(), safe="")
+            result = await asyncio.to_thread(daemon_request, "GET", path)
             if isinstance(result, dict) and result.get("success"):
                 return result
             return {

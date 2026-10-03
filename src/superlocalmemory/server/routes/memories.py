@@ -91,8 +91,13 @@ def _canonical_mutation_error(exc: Exception, detail: str) -> HTTPException:
     from superlocalmemory.core.remember_runtime import (
         CanonicalMutationConflict,
         CanonicalRememberUnavailable,
+        MutationTargetMissing,
     )
 
+    if isinstance(exc, MutationTargetMissing):
+        # Generic on purpose: the caller has already passed authorization, and
+        # the specific routes say what was missing.
+        return HTTPException(404, detail="Not found")
     if isinstance(exc, CanonicalMutationConflict):
         return HTTPException(409, detail=str(exc))
     if isinstance(exc, CanonicalRememberUnavailable):
@@ -119,12 +124,16 @@ def _mutation_runtime_or_missing_fact(
     raise HTTPException(503, detail="canonical mutation writer is not ready; retry shortly")
 
 
-def _admit_http_mutation(request: Request, operation: str) -> None:
+def _admit_http_mutation(
+    request: Request, operation: str, *, profile: str | None = None,
+) -> None:
     """Route a memory HTTP mutation through OperationPolicyRegistry.evaluate().
 
     Called from _authorize_memory_mutation after RBAC passes. Raises HTTP 403
     if the policy registry denies the actor. Maps "delete" → FORGET,
-    "update" → CORRECT. Uses the server-derived principal and roles.
+    "update" → CORRECT. Uses the server-derived principal and its roles on
+    ``profile`` (default: the active profile) -- the same profile RBAC just
+    checked, so a role held elsewhere never stands in for it.
     """
     from fastapi import HTTPException as _HTTPException
 
@@ -153,7 +162,7 @@ def _admit_http_mutation(request: Request, operation: str) -> None:
 
     principal_info = resolve_principal(request)
     principal = str(principal_info.get("user_id") or "")
-    actor_roles = resolve_actor_roles(request)
+    actor_roles = resolve_actor_roles(request, profile=profile)
     actor = resolve_actor(
         Transport.HTTP,
         tier=tier,
@@ -171,6 +180,33 @@ def _admit_http_mutation(request: Request, operation: str) -> None:
         ) from exc
 
 
+class _UnknownRoutedProfile(LookupError):
+    """A request routed to a profile that does not exist."""
+
+    def __init__(self, profile_id: str) -> None:
+        super().__init__(profile_id)
+        self.profile_id = profile_id
+
+
+def _unknown_profile_response(profile_id: str):
+    """The same 404 body POST /remember gives for an unknown routed profile."""
+    from starlette.responses import JSONResponse
+
+    from superlocalmemory.server.routed_profile import unknown_profile_body
+
+    return JSONResponse(unknown_profile_body(profile_id), status_code=404)
+
+
+def _routed_profile(value) -> str | None:
+    """A request's ``profile_id``: None means the active profile; not text is a 422."""
+    from superlocalmemory.server.routed_profile import RoutedProfileError, routed_profile_id
+
+    try:
+        return routed_profile_id(value)
+    except RoutedProfileError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+
+
 def _authorize_memory_mutation(
     request: Request,
     operation: str,
@@ -178,8 +214,15 @@ def _authorize_memory_mutation(
     *,
     content_preview: str = "",
     run_pre_hook: bool = True,
+    profile: str | None = None,
 ):
-    """Authenticate a mutation, optionally gating route-owned direct SQL."""
+    """Authenticate a mutation, optionally gating route-owned direct SQL.
+
+    ``profile`` is a per-request routed profile, or None for the active one.
+    Routed, the caller's role and the operation policy are checked on THAT
+    profile, and only then is its existence revealed (``_UnknownRoutedProfile``),
+    so a caller without access cannot probe which profiles exist.
+    """
     from superlocalmemory.server.write_identity import require_write_actor
 
     actor_id = require_write_actor(
@@ -187,20 +230,28 @@ def _authorize_memory_mutation(
         getattr(request.app.state, "daemon_descriptor", None),
         actor_kind="dashboard",
     )
-    # RBAC (C3): on top of machine auth, enforce the caller's role on the active
-    # profile. delete → DELETE; every other mutation → WRITE.
+    # RBAC (C3): on top of machine auth, enforce the caller's role on the
+    # profile acted on. delete → DELETE; every other mutation → WRITE.
     from superlocalmemory.access.rbac import Permission as _Perm
     from superlocalmemory.server.rbac_enforce import require_permission as _rbac_require
     _rbac_require(
         request,
         _Perm.DELETE if operation == "delete" else _Perm.WRITE,
+        profile=profile,
     )
     # Phase 1: admission gateway — policy registry decision for this route.
-    _admit_http_mutation(request, operation)
+    _admit_http_mutation(request, operation, profile=profile)
     engine = _get_engine(request)
     if engine is None:
         raise HTTPException(503, detail="Engine not initialized")
-    profile_id = engine.profile_id
+    if profile is not None:
+        if not engine._db.execute(
+            "SELECT 1 AS one FROM profiles WHERE profile_id = ?", (profile,),
+        ):
+            raise _UnknownRoutedProfile(profile)
+        logger.info("per-request profile routing: %s %s profile=%s",
+                    request.method, request.url.path, profile)
+    profile_id = profile or engine.profile_id
     context = {
         "operation": operation,
         "agent_id": actor_id,
@@ -1486,12 +1537,16 @@ async def edit_memory(request: Request, fact_id: str):
 
 @router.post("/api/corrections/{case_id}/{action}")
 async def review_correction(request: Request, case_id: str, action: str):
-    """Apply, reject, or roll back an active-profile correction case.
+    """Apply, reject, or roll back a correction case.
 
     The caller authenticates through the daemon boundary.  It cannot select a
-    profile, fact scope, or trust tier; the canonical writer rechecks all of
-    those fields in its one SQLite transaction.
+    fact scope or trust tier; the canonical writer rechecks those in its one
+    SQLite transaction.  It may name a ``profile_id``, authorized exactly like
+    a routed remember: its role and the correction policy on THAT profile,
+    before the profile's existence is revealed.  Without one, the case is
+    looked up in the active profile.
     """
+    profile = None
     try:
         body = await request.json()
         if action not in {"apply", "reject", "rollback"}:
@@ -1506,11 +1561,12 @@ async def review_correction(request: Request, case_id: str, action: str):
             raise HTTPException(422, detail="event_valid_until must be an RFC3339 timestamp")
         if event_valid_until is not None and action != "apply":
             raise HTTPException(422, detail="event_valid_until is permitted only for apply")
-        engine, active_profile, hook_context = _authorize_memory_mutation(
-            request, "update", case_id, run_pre_hook=False
+        profile = _routed_profile(body.get("profile_id") if isinstance(body, dict) else None)
+        engine, target_profile, hook_context = _authorize_memory_mutation(
+            request, "update", case_id, run_pre_hook=False, profile=profile,
         )
         result = _canonical_mutation_runtime(request).transition_correction(
-            active_profile,
+            target_profile,
             case_id,
             action=action,
             expected_version=expected_version,
@@ -1523,12 +1579,24 @@ async def review_correction(request: Request, case_id: str, action: str):
         if action in {"apply", "rollback"}:
             from superlocalmemory.core.mutations import purge_profile_context_cache
 
-            purge_profile_context_cache(engine, active_profile)
+            purge_profile_context_cache(engine, target_profile)
         engine._hooks.run_post("update", hook_context)
         return {"success": True, "correction_case": result}
     except HTTPException:
         raise
+    except _UnknownRoutedProfile as exc:
+        return _unknown_profile_response(exc.profile_id)
     except Exception as exc:
+        from superlocalmemory.core.remember_runtime import (
+            CaseNotInProfile,
+            UnknownMutationProfile,
+        )
+
+        # Deleted between the route's check and the writer's own.
+        if isinstance(exc, UnknownMutationProfile) and profile is not None:
+            return _unknown_profile_response(profile)
+        if isinstance(exc, CaseNotInProfile):
+            raise HTTPException(404, detail="Correction case not found") from exc
         raise _canonical_mutation_error(exc, "Correction review error")
 
 
@@ -1566,35 +1634,49 @@ def _correction_store_for(engine, active_profile: str):
 
 
 @router.get("/api/corrections")
-async def list_corrections(request: Request, limit: int = 100):
-    """List bounded review metadata for the active owning profile."""
+async def list_corrections(request: Request, limit: int = 100, profile_id: str = ""):
+    """List bounded review metadata for one profile: the routed one when
+    ``profile_id`` names it (authorized like a routed review), else the active one."""
     try:
-        engine, active_profile, _context = _authorize_memory_mutation(
-            request, "update", "correction-list", run_pre_hook=False
+        profile = _routed_profile(profile_id)
+        engine, target_profile, _context = _authorize_memory_mutation(
+            request, "update", "correction-list", run_pre_hook=False, profile=profile,
         )
-        cases = _correction_store_for(engine, active_profile).list_cases(active_profile, limit=limit)
+        cases = _correction_store_for(engine, target_profile).list_cases(
+            target_profile, limit=limit)
         return {"success": True, "corrections": [_correction_case_response(case) for case in cases]}
     except HTTPException:
         raise
+    except _UnknownRoutedProfile as exc:
+        return _unknown_profile_response(exc.profile_id)
     except Exception as exc:
         raise _canonical_mutation_error(exc, "Correction list error")
 
 
 @router.get("/api/corrections/{case_id}")
-async def get_correction(request: Request, case_id: str):
-    """Get one active-profile correction case without exposing raw memory text."""
+async def get_correction(request: Request, case_id: str, profile_id: str = ""):
+    """Get one correction case without exposing raw memory text, from the
+    routed profile when ``profile_id`` names it, else from the active one."""
     try:
-        engine, active_profile, _context = _authorize_memory_mutation(
-            request, "update", case_id, run_pre_hook=False
+        profile = _routed_profile(profile_id)
+        engine, target_profile, _context = _authorize_memory_mutation(
+            request, "update", case_id, run_pre_hook=False, profile=profile,
         )
-        case = _correction_store_for(engine, active_profile).get_case(case_id)
+        case = _correction_store_for(engine, target_profile).get_case(case_id)
         return {"success": True, "correction": _correction_case_response(case)}
     except HTTPException:
         raise
+    except _UnknownRoutedProfile as exc:
+        return _unknown_profile_response(exc.profile_id)
     except Exception as exc:
-        from superlocalmemory.storage.correction_cases import CorrectionNotFoundError
+        from superlocalmemory.storage.correction_cases import (
+            CorrectionAuthorizationError,
+            CorrectionNotFoundError,
+        )
 
-        if isinstance(exc, CorrectionNotFoundError):
+        # Another profile's case is "not found" here, exactly like a missing
+        # one, so a lookup cannot tell which ids exist elsewhere.
+        if isinstance(exc, (CorrectionNotFoundError, CorrectionAuthorizationError)):
             raise HTTPException(404, detail="Correction case not found") from exc
         raise _canonical_mutation_error(exc, "Correction lookup error")
 
