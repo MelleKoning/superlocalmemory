@@ -123,7 +123,9 @@ def _post(body: dict, token: str) -> None:
             },
             method="POST",
         )
-        resp = urllib.request.urlopen(req, timeout=DAEMON_TIMEOUT)
+        # Stdlib urllib through the outbound gate: never via a proxy.
+        from superlocalmemory.core import outbound_http
+        resp = outbound_http.urlopen(req, timeout=DAEMON_TIMEOUT)
         try:
             resp.read()
         except Exception:  # pragma: no cover — partial response flush

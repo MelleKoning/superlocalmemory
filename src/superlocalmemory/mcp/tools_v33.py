@@ -50,7 +50,8 @@ def _try_daemon_post(path: str, body: dict, timeout_s: float = 60.0) -> dict | N
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with _urq.urlopen(req, timeout=timeout_s) as resp:
+        from superlocalmemory.core import outbound_http
+        with outbound_http.urlopen(req, timeout=timeout_s) as resp:
             raw = resp.read().decode() or "{}"
         return _json.loads(raw)
     except Exception as exc:

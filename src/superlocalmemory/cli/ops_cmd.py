@@ -33,6 +33,8 @@ import urllib.request as _urq
 from argparse import Namespace
 from typing import Any
 
+from superlocalmemory.core import outbound_http as _outbound
+
 
 _VALID_ACTIONS = ("retry", "force_reconcile", "cancel")
 
@@ -55,7 +57,7 @@ def _daemon_get(path: str, timeout_s: float = 10.0) -> dict | None:
     port = _get_daemon_port()
     url = f"http://127.0.0.1:{port}{path}"
     try:
-        with _urq.urlopen(url, timeout=timeout_s) as resp:  # noqa: S310
+        with _outbound.urlopen(url, timeout=timeout_s) as resp:
             raw = resp.read().decode()
         return _json.loads(raw)
     except _uerr.HTTPError as exc:
@@ -85,7 +87,7 @@ def _daemon_post(path: str, body: dict, timeout_s: float = 10.0) -> dict | None:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with _urq.urlopen(req, timeout=timeout_s) as resp:  # noqa: S310
+        with _outbound.urlopen(req, timeout=timeout_s) as resp:
             raw = resp.read().decode()
         return _json.loads(raw)
     except _uerr.HTTPError as exc:
