@@ -22,6 +22,16 @@ The marker holds only while NO other build has run: it records the exact
 written. Any other build that starts rewrites that file, and the next start of
 this build then drops the marker and stamps normally -- refusing an old build
 again is the safe direction.
+
+THE HOLD SURVIVES RESTARTS OF THIS BUILD, ON PURPOSE (L1-11). Between
+"prepare" and "install the older version" the daemon may restart on its own
+(login items, a crash, ``ensure_daemon`` from a client). If such a restart
+undid the preparation, the older version would then refuse the store and the
+person would be stranded on it. Holding is safe: preparation is only allowed
+when every change since the target version is one the older build ignores, and
+this build keeps writing the same schema. It is undone by Cancel (``slm db
+prepare-downgrade --cancel`` or the dashboard), taking effect at the next start,
+or by any other version starting. The message says exactly that.
 """
 
 from __future__ import annotations
@@ -134,7 +144,9 @@ def prepare_downgrade(*, target_schema: int = 51, requested_by: str, data_root: 
         prepared=True, target_schema=int(target_schema), point_id=point_id,
         marker=str(marker),
         message="Ready to go back. Install the older version now; your memories were "
-                "copied first. Starting this version again undoes the preparation.")
+                "copied first. Restarting this version keeps the preparation; to undo it, "
+                "choose Cancel (slm db prepare-downgrade --cancel) and it is undone at the "
+                "next start.")
 
 
 def cancel_downgrade(data_root: Path) -> bool:

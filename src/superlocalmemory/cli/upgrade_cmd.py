@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from superlocalmemory.storage import upgrade_restore as ur
+from superlocalmemory.storage._restore_public import public_view
 from superlocalmemory.storage._restore_types import DowngradeRefusedError, RestoreRefusedError
 
 
@@ -60,8 +61,12 @@ def _start_daemon() -> bool:
     return ensure_daemon()
 
 
-def _emit(args: Namespace, payload: dict[str, Any], text: str) -> None:
-    print(json.dumps(payload, default=str) if getattr(args, "json", False) else text)
+def _emit(args: Namespace, payload: dict[str, Any], text: str, root: Path | None = None) -> None:
+    """JSON paths are data-directory-relative (L3-21)."""
+    if getattr(args, "json", False):
+        print(json.dumps(public_view(payload, root) if root else payload, default=str))
+    else:
+        print(text)
 
 
 def _confirmed(args: Namespace, word: str) -> bool:
@@ -85,10 +90,12 @@ def cmd_db_restore_points(args: Namespace) -> int:
     for p in points:
         versions = f"{p.from_version or '?'} -> {p.to_version or '?'}"
         note = "  (older copy, no checksum)" if p.legacy else ""
+        if not p.restorable:
+            note += "  (made by a newer version: cannot be restored by this one)"
         lines.append(f"  {p.point_id}  {p.created_at or ''}  {p.reason:<13} {versions:<18} "
                      f"{_mb(p.size_bytes):>9}  {p.facts if p.facts is not None else '?'} "
                      f"memories{note}")
-    _emit(args, {"restore_points": [p.as_dict() for p in points]}, "\n".join(lines))
+    _emit(args, {"restore_points": [p.as_dict() for p in points]}, "\n".join(lines), root)
     return 0
 
 
@@ -99,6 +106,12 @@ def _describe(preview: ur.RestorePreview) -> str:
              f"  deleted since (stay deleted): {preview.deleted_facts:,}",
              f"  erased since (stay erased): {preview.erasures:,}",
              f"  kinds you confirmed (applied again): {preview.kind_edits:,}"]
+    if preview.returning_facts:
+        lines.append(f"  missing now with no deletion recorded (come back): "
+                     f"{preview.returning_facts:,}")
+    if preview.learning_records_lost:
+        lines.append(f"  learning records since the copy (not carried over): "
+                     f"{preview.learning_records_lost:,}")
     if preview.corrections_lost:
         lines.append(f"  corrections opened since (cannot be carried over): "
                      f"{preview.corrections_lost:,}")
@@ -106,6 +119,7 @@ def _describe(preview: ur.RestorePreview) -> str:
         lines.append(f"  also undoes the one-time repair after the update: "
                      f"{preview.repair.get('memories_restored', 0)} memories' text, "
                      f"{preview.repair.get('replaced_marks_undone', 0)} wrong 'replaced' marks")
+    lines += [f"  warning: {w}" for w in preview.warnings]
     lines += [f"  problem: {p}" for p in preview.problems]
     return "\n".join(lines)
 
@@ -113,7 +127,11 @@ def _describe(preview: ur.RestorePreview) -> str:
 def cmd_db_restore(args: Namespace) -> int:
     root, memory_db, learning_db = _paths(args)
     if getattr(args, "cancel", False):
-        cancelled = ur.cancel_restore(root)
+        try:
+            cancelled = ur.cancel_restore(root)
+        except RestoreRefusedError as exc:          # part-way through (L1-03)
+            _emit(args, {"cancelled": False, "message": str(exc)}, str(exc), root)
+            return 1
         _emit(args, {"cancelled": cancelled},
               "The waiting restore was cancelled." if cancelled else "No restore was waiting.")
         return 0
@@ -128,8 +146,8 @@ def cmd_db_restore(args: Namespace) -> int:
         return 1
     if not getattr(args, "json", False):
         print(_describe(preview))
-    if not preview.verified or not preview.disk_ok:
-        _emit(args, preview.as_dict(), "Nothing was changed.")
+    if not preview.verified or not preview.disk_ok or not preview.restorable:
+        _emit(args, preview.as_dict(), "Nothing was changed.", root)
         return 1
     if not _confirmed(args, "RESTORE"):
         return 2
@@ -151,7 +169,7 @@ def cmd_db_restore(args: Namespace) -> int:
     text = outcome.message if outcome else "No restore was waiting."
     if outcome and outcome.reimport_pending and not started:
         text += " Newer memories are added back the next time SuperLocalMemory starts."
-    _emit(args, payload, text)
+    _emit(args, payload, text, root)
     return 0 if outcome and outcome.status == "restored" else 1
 
 
@@ -171,7 +189,7 @@ def cmd_db_prepare_downgrade(args: Namespace) -> int:
     except DowngradeRefusedError as exc:
         _emit(args, {"prepared": False, "message": str(exc)}, str(exc))
         return 1
-    _emit(args, report.as_dict(), report.message)
+    _emit(args, report.as_dict(), report.message, root)
     return 0
 
 

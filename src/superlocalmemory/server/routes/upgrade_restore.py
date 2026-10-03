@@ -29,6 +29,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from superlocalmemory.storage import upgrade_restore as ur
+from superlocalmemory.storage._restore_public import public_view
 from superlocalmemory.storage._restore_types import (
     OUTCOME_NAME, REPAIR_RECORD, DowngradeRefusedError, RestoreRefusedError,
 )
@@ -142,7 +143,7 @@ def upgrade_status(request: Request):
         root, _memory_db, _learning = _paths(request)
         intent = ur.pending_restore(root)
         last = root / ".last_version"
-        return {
+        return public_view({
             "version": package_version(),
             "last_version": last.read_text(encoding="utf-8").strip() if last.exists() else None,
             "restore_points": len(ur.list_restore_points(root)),
@@ -152,7 +153,7 @@ def upgrade_status(request: Request):
             "last_restore": _read(root / OUTCOME_NAME),
             "downgrade": ur.downgrade_status(root),
             "repair": _read(root / REPAIR_RECORD),
-        }
+        }, root)
     except Exception:  # noqa: BLE001
         logger.exception("upgrade status failed")
         return _internal_error()
@@ -163,7 +164,8 @@ def restore_points(request: Request):
     _require_read(request)
     try:
         root, _m, _l = _paths(request)
-        return {"restore_points": [p.as_dict() for p in ur.list_restore_points(root)],
+        return {"restore_points": public_view(
+                    [p.as_dict() for p in ur.list_restore_points(root)], root),
                 "kept": "Copies from the last two updates are kept."}
     except Exception:  # noqa: BLE001
         logger.exception("listing restore points failed")
@@ -175,10 +177,10 @@ def restore_preview(request: Request, body: _PointBody):
     _gate(request)
     root, memory_db, _l = _paths(request)
     try:
-        return ur.preview_restore(body.restore_point_id, data_root=root,
-                                  memory_db=memory_db).as_dict()
+        return public_view(ur.preview_restore(body.restore_point_id, data_root=root,
+                                              memory_db=memory_db).as_dict(), root)
     except RestoreRefusedError as exc:
-        return _error(str(exc), 404)
+        return _error(public_view(str(exc), root), 404)
     except Exception:  # noqa: BLE001
         logger.exception("restore preview failed")
         return _internal_error()
@@ -195,7 +197,7 @@ def restore(request: Request, body: _RestoreBody):
                                     reimport=body.reimport, data_root=root,
                                     memory_db=memory_db)
     except RestoreRefusedError as exc:
-        return _error(str(exc), 409)
+        return _error(public_view(str(exc), root), 409)
     except Exception:  # noqa: BLE001
         logger.exception("restore request failed")
         return _internal_error()
@@ -205,7 +207,7 @@ def restore(request: Request, body: _RestoreBody):
         "status": "restarting" if started else "waiting_for_restart",
         "message": ("SuperLocalMemory is restarting to restore your memories."
                     if started else "Restart SuperLocalMemory to finish the restore."),
-        "intent": intent.as_dict(),
+        "intent": public_view(intent.as_dict(), root),
     }
 
 
@@ -215,6 +217,8 @@ def restore_cancel(request: Request):
     root, _m, _l = _paths(request)
     try:
         return {"cancelled": ur.cancel_restore(root)}
+    except RestoreRefusedError as exc:      # part-way through: it must finish (L1-03)
+        return _error(public_view(str(exc), root), 409)
     except Exception:  # noqa: BLE001
         logger.exception("restore cancel failed")
         return _internal_error()
@@ -227,10 +231,11 @@ def prepare_downgrade(request: Request, body: _ConfirmBody):
         return _error(f"Type {DOWNGRADE_WORD} to confirm.")
     root, memory_db, learning_db = _paths(request)
     try:
-        return ur.prepare_downgrade(requested_by=actor, data_root=root, memory_db=memory_db,
-                                    learning_db=learning_db).as_dict()
+        return public_view(ur.prepare_downgrade(
+            requested_by=actor, data_root=root, memory_db=memory_db,
+            learning_db=learning_db).as_dict(), root)
     except DowngradeRefusedError as exc:
-        return _error(str(exc), 409)
+        return _error(public_view(str(exc), root), 409)
     except Exception:  # noqa: BLE001
         logger.exception("prepare downgrade failed")
         return _internal_error()

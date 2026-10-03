@@ -87,16 +87,43 @@ def add_memory(memory_db: Path, memory_id: str, facts: list[str], *,
     return ids
 
 
+def _tombstone(conn: sqlite3.Connection, fact_ids: list[tuple[str, str, str | None]]) -> None:
+    """What the product's delete path writes before it deletes (erasure.remove)."""
+    for fid, profile, mid in fact_ids:
+        conn.execute(
+            "INSERT INTO projection_tombstones (profile_id, fact_id, erasure_id, memory_id, "
+            "created_at) VALUES (?, ?, ?, ?, 2.0) ON CONFLICT(profile_id, fact_id) DO NOTHING",
+            (profile, fid, uuid.uuid4().hex, mid))
+
+
 def delete_fact(memory_db: Path, fact_id: str) -> None:
+    """A person forgets one fact: tombstone first, then the delete (as the product does)."""
     with closing(_conn(memory_db)) as conn:
         conn.execute("PRAGMA foreign_keys=ON")
+        _tombstone(conn, [tuple(r) for r in conn.execute(
+            "SELECT fact_id, profile_id, memory_id FROM atomic_facts WHERE fact_id=?",
+            (fact_id,))])
         conn.execute("DELETE FROM atomic_facts WHERE fact_id=?", (fact_id,))
 
 
 def delete_memory(memory_db: Path, memory_id: str) -> None:
+    """A person forgets every fact of a memory; the memory goes with them."""
     with closing(_conn(memory_db)) as conn:
         conn.execute("PRAGMA foreign_keys=ON")
+        _tombstone(conn, [tuple(r) for r in conn.execute(
+            "SELECT fact_id, profile_id, memory_id FROM atomic_facts WHERE memory_id=?",
+            (memory_id,))])
         conn.execute("DELETE FROM memories WHERE memory_id=?", (memory_id,))
+
+
+def lose_rows(memory_db: Path, *, fact_ids: list[str] = (), memory_ids: list[str] = ()) -> None:
+    """Rows vanish with NO recorded intent: a bug, a bad merge, a sync client."""
+    with closing(_conn(memory_db)) as conn:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        for fid in fact_ids:
+            conn.execute("DELETE FROM atomic_facts WHERE fact_id=?", (fid,))
+        for mid in memory_ids:
+            conn.execute("DELETE FROM memories WHERE memory_id=?", (mid,))
 
 
 def confirm_kind(memory_db: Path, fact_id: str, kind: str, source: str = "user") -> None:
@@ -123,7 +150,8 @@ def record_erasure(memory_db: Path, *, profile_id: str, subject_type: str,
         for fid in fact_ids:
             conn.execute(
                 "INSERT INTO projection_tombstones (profile_id, fact_id, erasure_id, memory_id, "
-                "created_at) VALUES (?, ?, ?, ?, 2.0)",
+                "created_at) VALUES (?, ?, ?, ?, 2.0) ON CONFLICT(profile_id, fact_id) "
+                "DO UPDATE SET erasure_id=excluded.erasure_id",
                 (profile_id, fid, erasure_id, memory_ids.get(fid)))
     return erasure_id
 

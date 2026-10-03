@@ -62,6 +62,9 @@ class RestorePoint(_AsDict):
     facts: int | None
     legacy: bool                      # True = no manifest (taken by an older build)
     repair: dict[str, Any] | None = None   # one-time repair that ran after this copy
+    schema_version: int | None = None      # the store version stamped in the copy
+    restorable: bool = True                # False: this build cannot open the copy
+    not_restorable_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -73,7 +76,7 @@ class RestorePreview(_AsDict):
     memories_in_snapshot: int
     memories_now: int
     added_memories: int               # kept aside, added back after the restore
-    deleted_facts: int                # deleted after the copy; stay deleted
+    deleted_facts: int                # forgotten or erased after the copy; stay deleted
     deleted_memories: int
     kind_edits: int                   # confirmed kinds; applied again
     corrections_lost: int             # cannot be replayed: shown before confirming
@@ -82,7 +85,13 @@ class RestorePreview(_AsDict):
     disk_needed_bytes: int
     disk_free_bytes: int
     disk_ok: bool
-    problems: list[str] = field(default_factory=list)
+    problems: list[str] = field(default_factory=list)   # any of these blocks the restore
+    returning_facts: int = 0          # missing now, no deletion recorded: they come back
+    returning_memories: int = 0
+    restorable: bool = True           # False: the copy is newer than this build
+    live_store_readable: bool = True  # False: full restore, nothing carried over
+    learning_records_lost: int = 0    # learning recorded since the copy; not carried over
+    warnings: list[str] = field(default_factory=list)   # shown; do not block
 
 
 @dataclass(frozen=True)

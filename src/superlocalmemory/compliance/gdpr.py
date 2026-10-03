@@ -1359,6 +1359,17 @@ class GDPRCompliance:
                 # Still include in pending count (fail-closed).
                 recorded += 1
 
+        # A restore's leftovers hold the same words: the deltas (memories written
+        # after a copy, verbatim) lose this profile's rows now, and every
+        # pre-restore copy that still holds it is registered like a backup.
+        # Raises on failure, which blocks the completeness claim (fail-closed).
+        from superlocalmemory.storage._restore_retention import cover_profile_erasure
+
+        covered = cover_profile_erasure(data_root, profile_id, erasure_id=erasure_id,
+                                        store=store, retention_days=retention_days)
+        counts.update(covered)
+        recorded += covered["pre_restore_copies_registered"]
+
         counts["backup_obligations_recorded"] = recorded
         # Return the authoritative pending count (includes obligations from prior
         # erasure passes for the same profile that were not yet discharged).

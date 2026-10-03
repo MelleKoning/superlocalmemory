@@ -32,7 +32,9 @@ from pathlib import Path
 
 from superlocalmemory.storage import _snapshot_manifest as sm
 from superlocalmemory.storage._durable_json import read_json, write_json_atomic
-from superlocalmemory.storage._restore_delta import delta_counts, export_delta, open_compare
+from superlocalmemory.storage._restore_delta import (
+    export_delta, export_empty_delta, open_compare,
+)
 from superlocalmemory.storage._restore_types import (
     DELTA_DIR, INTENT_NAME, SNAPSHOTS_DIR, DowngradeReport, ReimportReport,
     RestoreIntent, RestoreOutcome, RestorePoint, RestorePreview, RestoreRefusedError,
@@ -71,10 +73,16 @@ def _stamp_time(point_id: str) -> str:
 
 def _point_from(root: Path, point_id: str, memory: Path, learning: Path | None,
                 manifest: dict | None) -> RestorePoint:
+    from superlocalmemory.storage._restore_preview import (
+        copy_schema_version, not_restorable_reason,
+    )
+
     files = (manifest or {}).get("files") or []
     sha = {f["snapshot"]: f["sha256"] for f in files if f.get("snapshot") and f.get("sha256")}
     size = memory.stat().st_size + (learning.stat().st_size if learning else 0)
     counts = (manifest or {}).get("counts") or {}
+    schema = copy_schema_version([memory, *([learning] if learning else [])])
+    reason = not_restorable_reason(schema)
     return RestorePoint(
         point_id=point_id,
         created_at=(manifest or {}).get("created_at") or _stamp_time(point_id),
@@ -83,7 +91,8 @@ def _point_from(root: Path, point_id: str, memory: Path, learning: Path | None,
         to_version=(manifest or {}).get("to_version"),
         memory_snapshot=memory, learning_snapshot=learning, size_bytes=size,
         sha256=sha or None, facts=counts.get("facts"), legacy=manifest is None,
-        repair=(manifest or {}).get("repair"),
+        repair=(manifest or {}).get("repair"), schema_version=schema,
+        restorable=reason is None, not_restorable_reason=reason,
     )
 
 
@@ -152,31 +161,10 @@ def free_bytes(data_root: Path) -> int:
 
 def preview_restore(point_id: str, *, data_root: Path, memory_db: Path) -> RestorePreview:
     """What restoring ``point_id`` would change. Changes no byte of anything."""
-    from superlocalmemory.storage.backup import SnapshotUnusableError
+    from superlocalmemory.storage._restore_preview import build_preview
 
     point = find_restore_point(point_id, data_root)
-    learning_db = Path(memory_db).parent / "learning.db"
-    problems: list[str] = []
-    counts = dict.fromkeys(
-        ("facts_in_snapshot", "facts_now", "memories_in_snapshot", "memories_now",
-         "added_memories", "deleted_facts", "deleted_memories", "kind_edits",
-         "corrections_lost", "erasures"), 0)
-    verified = True
-    try:
-        verify_point(point)
-        with closing(open_compare(Path(memory_db), point.memory_snapshot)) as conn:
-            counts.update(delta_counts(conn))
-    except SnapshotUnusableError as exc:
-        verified = False
-        problems.append(str(exc))
-    needed = disk_needed(point, Path(memory_db), learning_db if learning_db.exists() else None)
-    free = free_bytes(Path(data_root))
-    if free < needed:
-        problems.append(f"Not enough free disk space: the restore needs {needed:,} bytes "
-                        f"and {free:,} are free. Nothing has been changed.")
-    return RestorePreview(point_id=point.point_id, verified=verified, repair=point.repair,
-                          disk_needed_bytes=needed, disk_free_bytes=free,
-                          disk_ok=free >= needed, problems=problems, **counts)
+    return build_preview(point, data_root=Path(data_root), memory_db=Path(memory_db))
 
 
 def _remove_delta_dir(data_root: Path, delta_dir: Path | str | None) -> None:
@@ -204,7 +192,7 @@ def request_restore(point_id: str, *, requested_by: str, reimport: bool = True,
     intact or the disk is too full.
     """
     preview = preview_restore(point_id, data_root=data_root, memory_db=memory_db)
-    if not preview.verified or not preview.disk_ok:
+    if not preview.verified or not preview.disk_ok or not preview.restorable:
         raise RestoreRefusedError(" ".join(preview.problems) or "This copy cannot be used.")
     point = find_restore_point(point_id, data_root)
     data_root = Path(data_root)
@@ -214,8 +202,11 @@ def request_restore(point_id: str, *, requested_by: str, reimport: bool = True,
                                   "SuperLocalMemory to let it finish first.")
     stamp = _now_stamp()
     delta_dir = data_root / DELTA_DIR / stamp
-    with closing(open_compare(Path(memory_db), point.memory_snapshot)) as conn:
-        export_delta(conn, delta_dir)
+    if preview.live_store_readable:
+        with closing(open_compare(Path(memory_db), point.memory_snapshot)) as conn:
+            export_delta(conn, delta_dir)
+    else:
+        export_empty_delta(delta_dir)       # nothing can be read, so nothing is carried
     requested_at = datetime.now(UTC).isoformat(timespec="seconds")
     intent_path = write_json_atomic(data_root / INTENT_NAME, {
         "format": 1, "point_id": point.point_id, "requested_by": str(requested_by)[:200],
@@ -236,17 +227,30 @@ def pending_restore(data_root: Path) -> dict | None:
     return read_json(Path(data_root) / INTENT_NAME)
 
 
+_PART_WAY = (
+    "A restore is part-way through, so it cannot be cancelled now: your memory store may "
+    "already hold the restored copy, and the memories written after the copy are kept "
+    "aside until it finishes. Restart SuperLocalMemory to let it finish; those memories "
+    "are added back then. Nothing was changed.")
+
+
 def cancel_restore(data_root: Path) -> bool:
-    """Withdraw a waiting request. True when there was one."""
+    """Withdraw a waiting request. True when there was one.
+
+    Refused (``RestoreRefusedError``) once the restore has started writing: the
+    store may already be the copy, and the request's export is then the only
+    record of the memories written after it.
+    """
     data_root = Path(data_root)
     intent = read_json(data_root / INTENT_NAME)
     path = data_root / INTENT_NAME
     if not path.exists():
         return False
+    if intent and intent.get("stage") == "writing":
+        raise RestoreRefusedError(_PART_WAY)
     path.unlink()
     if intent:
         _remove_delta_dir(data_root, intent.get("delta_dir"))
-        _remove_delta_dir(data_root, intent.get("final_delta_dir"))
     return True
 
 
