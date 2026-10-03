@@ -14,11 +14,12 @@ import os
 import subprocess
 import sys
 import threading
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from superlocalmemory.core.platform_utils import (
+    cancel_blocking_read,
     get_rss_mb,
     is_pid_alive,
     kill_process,
@@ -124,6 +125,72 @@ class TestKillProcess:
         result = kill_process(pid)
         assert result is True
         proc.wait(timeout=5)
+
+
+class TestCancelBlockingRead:
+    """Unblock a thread wedged in a synchronous pipe read before closing it.
+
+    Windows gotcha this guards: closing a pipe HANDLE while another thread
+    has a synchronous ReadFile in flight on that same handle does not
+    cancel the read — the close() call itself blocks until the read
+    completes, which (no writer, e.g. a dead/silent embedding worker) is
+    forever. CancelSynchronousIo() aborts the specific thread's pending
+    I/O so the blocked read returns immediately and the handle can then be
+    closed safely. POSIX needs none of this: closing the fd already wakes
+    a concurrent blocked read.
+    """
+
+    def test_posix_is_a_noop(self) -> None:
+        with patch("superlocalmemory.core.platform_utils.sys") as mock_sys, \
+             patch("superlocalmemory.core.platform_utils.ctypes") as mock_ctypes:
+            mock_sys.platform = "darwin"
+            thread = threading.Thread(target=lambda: None)
+            cancel_blocking_read(thread)
+            mock_ctypes.windll.kernel32.OpenThread.assert_not_called()
+
+    def test_thread_without_native_id_is_a_noop(self) -> None:
+        with patch("superlocalmemory.core.platform_utils.sys") as mock_sys, \
+             patch("superlocalmemory.core.platform_utils.ctypes") as mock_ctypes:
+            mock_sys.platform = "win32"
+            thread = MagicMock()
+            thread.native_id = None
+            cancel_blocking_read(thread)
+            mock_ctypes.windll.kernel32.OpenThread.assert_not_called()
+
+    def test_windows_cancels_then_closes_the_thread_handle(self) -> None:
+        with patch("superlocalmemory.core.platform_utils.sys") as mock_sys, \
+             patch("superlocalmemory.core.platform_utils.ctypes") as mock_ctypes:
+            mock_sys.platform = "win32"
+            kernel32 = mock_ctypes.windll.kernel32
+            kernel32.OpenThread.return_value = 4242
+            thread = MagicMock()
+            thread.native_id = 9999
+            cancel_blocking_read(thread)
+            kernel32.OpenThread.assert_called_once_with(1, False, 9999)
+            kernel32.CancelSynchronousIo.assert_called_once_with(4242)
+            kernel32.CloseHandle.assert_called_once_with(4242)
+
+    def test_windows_openthread_failure_skips_cancel(self) -> None:
+        with patch("superlocalmemory.core.platform_utils.sys") as mock_sys, \
+             patch("superlocalmemory.core.platform_utils.ctypes") as mock_ctypes:
+            mock_sys.platform = "win32"
+            kernel32 = mock_ctypes.windll.kernel32
+            kernel32.OpenThread.return_value = 0
+            thread = MagicMock()
+            thread.native_id = 9999
+            cancel_blocking_read(thread)
+            kernel32.CancelSynchronousIo.assert_not_called()
+            kernel32.CloseHandle.assert_not_called()
+
+    def test_windows_never_raises_even_if_the_win32_call_fails(self) -> None:
+        with patch("superlocalmemory.core.platform_utils.sys") as mock_sys, \
+             patch("superlocalmemory.core.platform_utils.ctypes") as mock_ctypes:
+            mock_sys.platform = "win32"
+            kernel32 = mock_ctypes.windll.kernel32
+            kernel32.OpenThread.side_effect = OSError("boom")
+            thread = MagicMock()
+            thread.native_id = 9999
+            cancel_blocking_read(thread)  # must not raise
 
 
 class TestStartParentWatchdog:

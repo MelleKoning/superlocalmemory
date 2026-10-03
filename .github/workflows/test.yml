@@ -45,6 +45,7 @@ jobs:
   test:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.focused_windows }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -75,7 +76,7 @@ jobs:
       - name: Run tests
         shell: bash
         run: |
-          python -m pytest tests/ -q --tb=short \
+          python -m pytest tests/ -q --tb=short -o faulthandler_timeout=300 \
             --ignore=tests/test_integration/test_mode_b_ollama.py \
             --ignore=tests/test_integration/test_e2e.py \
             --ignore=tests/test_integration/test_e2e_v32.py \
@@ -113,10 +114,11 @@ jobs:
         run: |
           for attempt in 1 2 3 4 5; do
             echo "Windows proof attempt ${attempt}/5"
-            python -m pytest -q -o "addopts=" \
+            python -m pytest -q -o "addopts=" -o faulthandler_timeout=20 \
               tests/test_adapters/test_antigravity_adapter.py::test_content_hash_skip \
               tests/storage/test_admission_journal_concurrency.py::test_prepare_deadline_bounds_process_lock_wait \
-              tests/stress/test_386_canonical_legacy_multiprocess_contention.py::test_386_canonical_remember_survives_legacy_multiprocess_contention
+              tests/stress/test_386_canonical_legacy_multiprocess_contention.py::test_386_canonical_remember_survives_legacy_multiprocess_contention \
+              "tests/test_core/test_embedding_fallback.py::TestEmbeddingServiceTimeout"
           done
 
   native-lancedb:

@@ -604,6 +604,14 @@ class EmbeddingService:
             logger.warning(
                 "Embedding worker did not respond within %ds", timeout_seconds,
             )
+            # Windows: closing a pipe HANDLE while the reader thread has a
+            # synchronous ReadFile in flight on it does not cancel that read —
+            # close() blocks until the read completes, which (no writer) is
+            # forever. Cancel the reader's pending I/O first so close() below
+            # cannot deadlock against it. No-op on POSIX, where close() alone
+            # already wakes a concurrent blocked read.
+            from superlocalmemory.core.platform_utils import cancel_blocking_read
+            cancel_blocking_read(reader)
             # Close/shutdown the stream so the blocked readline() returns and
             # the reader thread can exit. Raising alone would leak the thread
             # (and its FD) on Windows pipes and fileno-less mocks.
