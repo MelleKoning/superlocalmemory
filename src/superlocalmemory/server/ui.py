@@ -175,6 +175,8 @@ def create_app() -> FastAPI:
     application.include_router(stats_router)
     application.include_router(profiles_router)
     application.include_router(backup_router)
+    from superlocalmemory.server.routes.backup_encryption import router as backup_encryption_router
+    application.include_router(backup_encryption_router)
     application.include_router(data_io_router)
     application.include_router(events_router)
     application.include_router(agents_router)

@@ -4302,6 +4302,8 @@ def _register_dashboard_routes(application: FastAPI) -> None:
     application.include_router(stats_router)
     application.include_router(profiles_router)
     application.include_router(backup_router)
+    from superlocalmemory.server.routes.backup_encryption import router as backup_encryption_router
+    application.include_router(backup_encryption_router)
     application.include_router(data_io_router)
 
     # Optional routers — ImportError-safe so missing modules don't crash startup
