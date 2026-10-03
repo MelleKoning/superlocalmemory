@@ -527,9 +527,9 @@ def run_wizard(auto: bool = False) -> None:
     print("─── Step 1/10: System Check ───")
     print()
     py_ver = platform.python_version()
-    py_ok = sys.version_info >= (3, 11)
+    py_ok = sys.version_info >= (3, 12)
     ram_gb = _get_ram_gb()
-    print(f"  Python:   {py_ver} {'✓' if py_ok else '✗ (3.11+ required)'}")
+    print(f"  Python:   {py_ver} {'✓' if py_ok else '✗ (3.12+ required)'}")
     print(f"  Platform: {platform.system()} {platform.machine()}")
     if ram_gb > 0:
         print(f"  RAM:      {ram_gb:.1f} GB {'✓' if ram_gb >= 4 else '⚠ (4GB+ recommended)'}")
@@ -546,7 +546,7 @@ def run_wizard(auto: bool = False) -> None:
         print(f"    Run: pip install 'sentence-transformers>=4.0.0'")
 
     if not py_ok:
-        print("\n  ✗ Python 3.11+ is required. Please upgrade Python.")
+        print("\n  ✗ Python 3.12+ is required. Please upgrade Python.")
         print("    https://python.org/downloads/")
         return
 

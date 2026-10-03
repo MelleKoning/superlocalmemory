@@ -157,9 +157,10 @@ through the SLM V4 ingestion contract. See [[Framework Adapters]].
 
 **Multi-Agent Memory** — per-agent attribution via `SLM_AGENT_ID`, per-agent pane in the dashboard, and Mesh/lock coordination. See [[Multi-Agent Memory]].
 
-**MCP profile update** — profiles include bounded-loop evidence and reviewed
-correction lifecycle tools. V4.0.5 counts: `core` 16 / `code` 31 / `full` 49 /
-`power` 61 / `mesh` 8 / **`whole` 94** (all registered). See [[MCP Tools]].
+**MCP profile update** — profiles include bounded-loop evidence, reviewed
+correction lifecycle, and memory-kind management tools. Current counts:
+`core` 18 / `code` 38 / `full` 54 / `power` 66 / `mesh` 8 /
+**`whole` 101** (all registered). See [[MCP Tools]].
 
 ## Dashboard workspaces
 

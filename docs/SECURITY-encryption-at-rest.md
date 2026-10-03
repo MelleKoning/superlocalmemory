@@ -53,8 +53,8 @@ memories through the service and change its settings. A web page on another
 site cannot: since 4.1.18 the service refuses requests that are not addressed
 to this computer.
 
-Until a check of which account each request comes from arrives (planned for
-4.1.19):
+A check of which account each request comes from is not in this release. Until
+it exists:
 
 - Prefer a Mac you do not share for SLM.
 - On a shared Mac, turn on company mode (**Team → Access policy**, see

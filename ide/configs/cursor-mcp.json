@@ -6,7 +6,10 @@
         "mcp"
       ],
       "description": "SuperLocalMemory V3 - Local memory system with mathematical foundations and knowledge graphs",
-      "type": "stdio"
+      "type": "stdio",
+      "env": {
+        "SLM_MCP_PROFILE": "code"
+      }
     }
   }
 }

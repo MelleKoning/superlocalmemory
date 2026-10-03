@@ -2988,9 +2988,12 @@ async def get_mcp_profiles(request: Request):
     No engine required — safe to call at any point in the daemon lifecycle.
 
     Note on 'current': when SLM_MCP_PROFILE is unset the MCP server falls
-    back to the legacy _ESSENTIAL_TOOLS set.  The UI reports 'core' for that
-    state because 'core' is the recommended named-profile equivalent for new
-    installs and is the closest documented starting point for users.
+    back to the legacy _ESSENTIAL_TOOLS set, which is asserted equal to the
+    `full` profile — not `core` — by
+    tests/test_mcp/test_mcp_exposure_contract.py
+    (`test_registration_exposure_is_exact_and_duplicate_free`, exposure
+    "essential"). The UI must report 'full' for that state; claiming 'core'
+    understated the real no-profile surface by 36 tools (L3-05).
     """
     try:
         from superlocalmemory.mcp.profiles import (
@@ -3001,9 +3004,14 @@ async def get_mcp_profiles(request: Request):
 
         raw_profile = os.environ.get("SLM_MCP_PROFILE", "").strip().lower()
         canonical = _PROFILE_ALIASES.get(raw_profile, raw_profile)
-        # Blank env var, "whole", or an unknown value all resolve to "core"
-        # for UI display purposes (safe, conservative default).
-        if not canonical or canonical == "whole" or canonical not in _PROFILE_DEFINITIONS:
+        if not raw_profile:
+            # No SLM_MCP_PROFILE set: the real, measured default (see
+            # docstring above).
+            current = "full"
+        elif canonical == "whole" or canonical not in _PROFILE_DEFINITIONS:
+            # "whole" (all 101 tools) and any unrecognized value have no
+            # single named profile that represents them exactly; fall back
+            # to the smallest, safest documented profile for UI display.
             current = "core"
         else:
             current = canonical

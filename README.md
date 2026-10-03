@@ -94,7 +94,7 @@ SuperLocalMemory V4 combines conventional dense and lexical retrieval with graph
 - **Modes A / B / C** — local-only by default (A), on-device LLM enrichment (B), provider-assisted (C). An operating mode records technical locality facts; it does **not** determine EU AI Act legal compliance (that is deployment-context assessment — see [Privacy controls](#privacy-controls-and-operating-modes)).
 - **GDPR posture, retention & audit chain** — export, fail-closed cross-store erasure, retention policies, and a hash-chained audit trail. Engineering controls for compliance programs, not a legal certification.
 - **7-layer retrieval/recall stack & code graph** — multi-channel candidates (semantic, BM25, temporal, Hopfield, spreading activation) plus optional code-graph tools for blast radius and review context.
-- **MCP profiles** — `code` exposes **31** tools for installed coding agents; `full` **49**; `power` **61**; `whole` **94** (all registered). Also `core` (16), `mesh` (8), and the unrestricted default surface (49 with mesh enabled).
+- **MCP profiles** — `code` (38 tools) for installed coding agents; `full` (54 tools); `power` (66 tools); `whole` (101 tools, all registered). Also `core` (18 tools), `mesh` (8 tools), and the unrestricted default surface — the same 54 tools as `full`.
 - **Governed write path & verifiable transactions** — admission + policy control, a per-owner obligation ledger, and a hash-sealed completion manifest with a reconciler that redrives unmet obligations.
 - **Self-healing lifecycle & admin remediation** — stale locks cleared on restart; list/resolve stuck operations from CLI, MCP, or the dashboard.
 
@@ -406,7 +406,7 @@ Full docs: [docs/multi-machine.md](docs/multi-machine.md) · [docs/distributed-d
 | **Python CLI + SDK** (primary) | Activate a Python virtual environment, then `python -m pip install superlocalmemory` | Python 3.12+; the `slm` CLI and importable SDK stay inside that environment |
 | **Repository clone — macOS/Linux** | `./scripts/install.sh install` | Research/contributor path; delegates to an existing uv or pipx installation |
 | **Repository clone — Windows** | `.\scripts\install.ps1 -Action Install` | Research/contributor path; delegates to an existing uv or pipx installation |
-| **Claude Code Plugin** | `/plugin marketplace add qualixar/superlocalmemory` then `/plugin install superlocalmemory@qualixar` | Self-bootstraps venv, isolated SLM_DATA_DIR, additive — 38-tool code profile. Ships the skills/agents/hooks/commands |
+| **Claude Code Plugin** | `/plugin marketplace add qualixar/superlocalmemory` then `/plugin install superlocalmemory@qualixar` | Self-bootstraps venv, additive, no isolated data directory — reads the same store as every other install and sets no `SLM_MCP_PROFILE`, so it defaults to the same 54-tool `full` surface. Ships the skills/agents/hooks/commands |
 | **Portable / IDE connect** | `slm connect <ide> [--here]` | Wire any IDE without reinstalling; `slm connect claude-code` → plugin pointer |
 
 After any install path: `slm setup` → `slm doctor` → `slm warmup` (optional, pre-downloads ~500MB embedding model).
@@ -459,12 +459,12 @@ Control tool surface via `SLM_MCP_PROFILE`:
 
 | Profile | Tools | Use case |
 |:--------|:-----:|:---------|
-| `core` | 16 | Memory, session, optimize, and correction review |
-| `code` | 31 | Core + portable Brain evidence + code-graph tools + profile switching + bounded loops |
+| `core` | 18 | Memory, session, optimize, and correction review |
+| `code` | 38 | Core + portable Brain evidence + code-graph tools + profile switching + bounded loops + memory-kind management |
 | `mesh` | 8 | SLM-Mesh only — multi-session / multi-machine coordination |
-| `full` | 49 | Memory + portable Brain evidence + optimize + evolution + mesh + bounded loops |
-| `power` | 61 | Full + administration, lifecycle, and diagnostics |
-| `whole` | 94 | Every registered MCP tool |
+| `full` | 54 | Memory + portable Brain evidence + optimize + evolution + mesh + bounded loops + memory-kind management (also the no-profile default) |
+| `power` | 66 | Full + administration, lifecycle, and diagnostics |
+| `whole` | 101 | Every registered MCP tool |
 
 **Precedence:** `ALL` > `TOOLS` > `PROFILE` > `default`
 
@@ -515,7 +515,7 @@ Hermes users get the same SLM skills and advisor roles through a native
 `plugin.yaml` package, plus `/slm <command>` and generated `/slm-<command>`
 aliases for the public CLI surface. The plugin is intentionally separate from
 the PyPI/npm runtime: install the owning SLM runtime first, then install the
-reviewed pinned pack from the `v4.1.13` GitHub release. It is additive and does
+reviewed pinned pack from the `v4.1.18` GitHub release. It is additive and does
 not replace Hermes's selected memory provider or existing configuration. See
 [the Hermes integration guide](docs/hermes.md).
 
@@ -549,7 +549,7 @@ slm mode b   # Local Ollama
 slm mode c   # Cloud LLM
 ```
 
-Mode A can run core memory operations without sending memory content to a cloud model provider. This does not disable optional connectors, cloud backup, proxy providers, dependency acquisition, or model downloads; review configuration and network policy for the deployment. The online answer check is the one exception that sends memory content: off unless you turn it on and agree, in any mode, and while it is on each recall sends its question and top memories to the provider you chose — the dashboard and the MCP `get_mode` tool say so.
+Mode A can run core memory operations without sending memory content to a cloud model provider. This does not disable optional connectors, cloud backup, proxy providers, dependency acquisition, or model downloads; review configuration and network policy for the deployment. Memory content leaves the machine in two opt-in cases, not one. The online answer check: off unless you turn it on and agree, in any mode, and while it is on each recall sends its question and top memories to the provider you chose — the dashboard and the MCP `get_mode` tool say so. Jev memory-kind typing: off unless the answer check is already using Jev AND you separately consent to kind typing — both must be the literal boolean `true` — and while it is on, a memory's content (not just the recall question) is sent to Jev to suggest its kind.
 
 SuperLocalMemory provides local storage, export/erasure commands, provenance, policy, and audit features that can support a compliance program. The software is not a legal certification, and compliance depends on the use case, operator, configuration, and surrounding systems.
 

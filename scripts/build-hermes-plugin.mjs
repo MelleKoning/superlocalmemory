@@ -25,6 +25,20 @@ const stamp = (name, text) => {
   return text.replace(rule[0], rule[1]);
 };
 for (const name of ['plugin.yaml', 'README.md', '__init__.py', 'command-inventory.json']) put(name, stamp(name, read(path.join(SRC, name))));
+
+// L3-08: docs/hermes.md and the root README.md's Hermes section quote the
+// pinned GitHub release in prose (install command, release tag, download
+// URL) — not a generated template, so the loop above never touches them.
+// A hand-kept number went stale (4.1.13 pinned for several releases).
+// Stamped here too, from the same pyproject.toml version, so both the
+// package and its install docs move together.
+const stampHermesDocVersion = (text) => text
+  .replace(/superlocalmemory==\d+\.\d+\.\d+/g, `superlocalmemory==${VERSION.join('.')}`)
+  .replace(/`v\d+\.\d+\.\d+`/g, `\`v${VERSION.join('.')}\``)
+  .replace(/download\/v\d+\.\d+\.\d+\//g, `download/v${VERSION.join('.')}/`)
+  .replace(/SuperLocalMemory \d+\.\d+\.\d+ ships/g, `SuperLocalMemory ${VERSION.join('.')} ships`);
+managed.set(path.join(ROOT, 'docs', 'hermes.md'), stampHermesDocVersion(read(path.join(ROOT, 'docs', 'hermes.md'))));
+managed.set(path.join(ROOT, 'README.md'), stampHermesDocVersion(read(path.join(ROOT, 'README.md'))));
 for (const group of ['skills', 'agents']) {
   const source = path.join(ROOT, group === 'skills' ? 'plugin-src/skills' : 'plugin-src/agents');
   for (const entry of fs.readdirSync(source, { withFileTypes: true })) {

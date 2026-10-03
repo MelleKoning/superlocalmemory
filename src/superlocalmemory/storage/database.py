@@ -575,9 +575,11 @@ class DatabaseManager:
         try:
             conn.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, 1)  # type: ignore[attr-defined]
         except (AttributeError, sqlite3.OperationalError):
-            # Silent degradation would hide an inactive deadlock guard on a
-            # supported interpreter (requires-python allows 3.11, which
-            # predates Connection.setconfig).  Warn once, not per connection.
+            # Silent degradation would hide an inactive deadlock guard.
+            # requires-python is >=3.12 (Connection.setconfig support
+            # starts there), so this branch is a defensive fallback for an
+            # interpreter that bypassed that floor, not an expected path.
+            # Warn once, not per connection.
             global _NO_CKPT_WARNED
             if not _NO_CKPT_WARNED:
                 _NO_CKPT_WARNED = True

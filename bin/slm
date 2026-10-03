@@ -40,7 +40,21 @@ for cmd in python3 python; do
 done
 
 if [ -z "$PYTHON" ]; then
-    echo "Error: Python 3 not found. Install Python 3.12+ from python.org"
+    echo "Error: Python 3 not found. Install Python 3.12+ from python.org" >&2
+    exit 1
+fi
+
+# L3-22: this is the repository-clone launcher — the npm-packaged runtime
+# goes through its own .slm-venv, guaranteed 3.12+ by scripts/postinstall.js.
+# Without this check, a `python3` on PATH that is too old (Debian 12's
+# stock 3.11, macOS's stock 3.9) ran anyway and failed later with a cryptic
+# import or syntax error instead of one clear message up front.
+PY_VERSION_OUTPUT="$("$PYTHON" --version 2>&1)"
+PY_MAJOR="$(echo "$PY_VERSION_OUTPUT" | sed -n 's/.*Python \([0-9][0-9]*\)\.[0-9][0-9]*.*/\1/p')"
+PY_MINOR="$(echo "$PY_VERSION_OUTPUT" | sed -n 's/.*Python [0-9][0-9]*\.\([0-9][0-9]*\).*/\1/p')"
+if [ -z "$PY_MAJOR" ] || [ "$PY_MAJOR" -lt 3 ] \
+   || { [ "$PY_MAJOR" -eq 3 ] && [ "${PY_MINOR:-0}" -lt 12 ]; }; then
+    echo "Error: Python 3.12+ required (found: ${PY_VERSION_OUTPUT:-unknown} via $PYTHON). Install from https://python.org/downloads/" >&2
     exit 1
 fi
 

@@ -23,6 +23,21 @@ ROOT = Path(__file__).resolve().parent
 INVENTORY = json.loads((ROOT / "command-inventory.json").read_text(encoding="utf-8"))
 COMMANDS = tuple(INVENTORY["primary_commands"])
 HIGH_IMPACT = frozenset(INVENTORY["high_impact"])
+# L3-16: a command can be routine in general but high-impact with a specific
+# flag — "remember" must stay a single step for ordinary writes, but
+# "--replaces" supersedes an existing memory in place, the same kind of
+# hard-to-undo action "review-correction" (its undo path) and "kinds"
+# already gate behind CONFIRM. Keyed by canonical command name.
+HIGH_IMPACT_FLAGS: dict[str, tuple[str, ...]] = {
+    command: tuple(flags) for command, flags in INVENTORY.get("high_impact_flags", {}).items()
+}
+
+
+def _has_high_impact_flag(command: str, argv: list[str]) -> bool:
+    flags = HIGH_IMPACT_FLAGS.get(command, ())
+    if not flags:
+        return False
+    return any(token == flag or token.startswith(f"{flag}=") for token in argv for flag in flags)
 ROLES = {
     "memory": "slm-memory-advisor.md",
     "governance": "slm-governance-advisor.md",
@@ -275,7 +290,8 @@ class SlmHermesPlugin:
         command = INVENTORY["aliases"].get(argv[0], argv[0])
         if command not in COMMANDS:
             return f"Unsupported SLM command: {argv[0]}"
-        if command in HIGH_IMPACT and "CONFIRM" not in argv:
+        needs_confirm = command in HIGH_IMPACT or _has_high_impact_flag(command, argv)
+        if needs_confirm and "CONFIRM" not in argv:
             return f"Preview required. Re-run /slm {' '.join(argv)} CONFIRM to execute this high-impact command."
         argv = [arg for arg in argv if arg != "CONFIRM"]
         binary = shutil.which("slm")

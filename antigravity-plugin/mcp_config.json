@@ -7,8 +7,7 @@
       ],
       "env": {
         "SLM_AGENT_ID": "antigravity",
-        "SLM_MCP_PROFILE": "power",
-        "SLM_MCP_ALL_TOOLS": "1"
+        "SLM_MCP_PROFILE": "power"
       }
     }
   }

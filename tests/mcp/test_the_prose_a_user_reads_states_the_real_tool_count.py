@@ -32,6 +32,9 @@ PROSE = (
     # Hand-maintained, deliberately not a copy of the Claude one — which is
     # exactly why it drifted two releases further behind than the others.
     REPO_ROOT / "codex-plugin" / "AGENTS.md",
+    REPO_ROOT / "docs" / "mcp-tools.md",
+    REPO_ROOT / "codex-plugin" / "README.md",
+    REPO_ROOT / "plugin-src" / "MCP_JSON_NOTES.md",
 )
 
 # Rules documents that describe the core surface tool by tool.

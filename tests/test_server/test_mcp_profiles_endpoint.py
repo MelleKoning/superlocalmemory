@@ -141,12 +141,17 @@ def test_mcp_profiles_descriptions_present(trusted_client, monkeypatch):
 # Current profile resolution
 # ---------------------------------------------------------------------------
 
-def test_mcp_profiles_current_defaults_to_core(trusted_client, monkeypatch):
-    """When SLM_MCP_PROFILE is unset, current must be 'core'."""
+def test_mcp_profiles_current_defaults_to_full(trusted_client, monkeypatch):
+    """When SLM_MCP_PROFILE is unset, the MCP server falls back to
+    `_ESSENTIAL_TOOLS`, which `tests/test_mcp/test_mcp_exposure_contract.py`
+    asserts is exactly the `full` profile (54 tools) — not `core` (18). The
+    dashboard used to claim 'core' here, understating the real no-profile
+    surface by 36 tools (L3-05).
+    """
     monkeypatch.delenv("SLM_MCP_PROFILE", raising=False)
     data = trusted_client.get(_ENDPOINT).json()
-    assert data["current"] == "core", (
-        f"expected 'core' for unset SLM_MCP_PROFILE, got {data['current']!r}"
+    assert data["current"] == "full", (
+        f"expected 'full' for unset SLM_MCP_PROFILE (the real default), got {data['current']!r}"
     )
 
 

@@ -5,7 +5,7 @@
 
 ## SuperLocalMemory (SLM) — Agent Rules
 
-SLM is local-first memory for agents. All tools run on the user's machine; nothing goes to the cloud unless the user chose Mode C or turned on the online answer check.
+SLM is local-first memory for agents. All tools run on the user's machine; nothing goes to the cloud unless the user chose Mode C, turned on the online answer check, or separately opted into Jev memory-kind typing (its own consent, on top of the answer check already using Jev).
 
 ### Session start
 Call `session_init(project_path, query)` ONCE per fresh session before any recall/remember. Never twice.
