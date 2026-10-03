@@ -1165,12 +1165,12 @@ def _propose_correction_successor(
         emotional_arousal=float(source.get("emotional_arousal") or 0.0),
         signal_type=SignalType(str(source.get("signal_type") or "factual")),
         created_at=now,
-        # A corrected fact keeps its kind: a corrected decision is a decision.
-        memory_kind=source.get("memory_kind"),
-        memory_kind_source=source.get("memory_kind_source"),
-        memory_kind_confidence=source.get("memory_kind_confidence"),
-        memory_kind_recipe=source.get("memory_kind_recipe"),
-        memory_kind_at=source.get("memory_kind_at"),
+        # A corrected fact keeps its kind once the edit is applied - never
+        # before. The five kind columns are left untyped here (LLD I6): a
+        # proposal is a suggestion like any model's, not yet a person's
+        # confirmed say-so, and standing_rules/recall must not see it as one.
+        # ``_transition_correction`` copies the predecessor's *current* kind
+        # onto this successor the moment (and only when) the case is applied.
     )
     persisted_id = db.insert_fact_immutable(successor)
     from superlocalmemory.storage.correction_cases import (
@@ -1255,6 +1255,10 @@ def _transition_correction(
         is_profile_active=lambda candidate: candidate == profile_id,
         is_actor_trusted=lambda candidate: candidate == actor,
     )
+    if kind is CommandKind.APPLY_CORRECTION:
+        _carry_over_confirmed_kind(
+            connection, profile_id, case.predecessor_fact_id, case.successor_fact_id,
+        )
     return {
         "ok": True,
         "operation_id": f"correction:{to_status}:{case.case_id}",
@@ -1264,6 +1268,50 @@ def _transition_correction(
         "status": case.status,
         "version": case.version,
     }
+
+
+_KIND_CARRYOVER_COLUMNS = (
+    "memory_kind", "memory_kind_source", "memory_kind_confidence",
+    "memory_kind_recipe", "memory_kind_at",
+)
+
+
+def _carry_over_confirmed_kind(
+    connection: Any, profile_id: str, predecessor_fact_id: str, successor_fact_id: str,
+) -> None:
+    """On apply, a successor inherits the predecessor's *current* kind - never before.
+
+    Proposing a correction leaves its successor untyped (see
+    ``_propose_correction_successor``): a suggestion no person has reviewed
+    must not drive standing-rule injection or any other kind-gated behaviour
+    (LLD I6). Applying is the one event that makes a successor's kind
+    official, inside the same transaction that supersedes the predecessor, so
+    the two never disagree. Reading the predecessor's columns at apply time
+    (rather than at proposal time) also means a kind confirmed after the
+    proposal was opened is still honoured. Columns the store does not have
+    yet (an older database) are silently skipped - a kind is never the reason
+    a review action fails.
+    """
+    try:
+        columns = {row[1] for row in
+                  connection.execute("PRAGMA table_info(atomic_facts)").fetchall()}
+        present = [c for c in _KIND_CARRYOVER_COLUMNS if c in columns]
+        if not present:
+            return
+        row = connection.execute(
+            f"SELECT {', '.join(present)} FROM atomic_facts "
+            "WHERE fact_id=? AND profile_id=?",
+            (predecessor_fact_id, profile_id),
+        ).fetchone()
+        if row is None:
+            return
+        assignments = ", ".join(f"{c}=?" for c in present)
+        connection.execute(
+            f"UPDATE atomic_facts SET {assignments} WHERE fact_id=? AND profile_id=?",
+            (*(row[c] for c in present), successor_fact_id, profile_id),
+        )
+    except Exception as exc:  # noqa: BLE001 - applying a correction must never fail on this
+        logger.warning("correction apply: kind carry-over skipped (%s)", type(exc).__name__)
 
 
 def _archive_fact(

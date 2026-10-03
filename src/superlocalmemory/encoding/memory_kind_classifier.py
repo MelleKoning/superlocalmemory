@@ -80,11 +80,17 @@ def decide(model: KindAssignment | None, rules: KindAssignment,
     model, and no model confidence is calibrated yet, so a model answer that
     disagrees with a strong cue does not replace it. Where no cue fired, the
     model fills the gap. An agreeing model is kept for its confidence.
-    ``correction`` already went through its own cue-and-verify check, so the
-    model's answer stands there.
+    ``correction`` from Laya or Jev already went through its own cue-and-verify
+    check in ``_merge`` before reaching here, so that answer stands. The Mode
+    B/C extraction call never ran that check (L2-11: no extra model call, no
+    separate yes/no question) - its own say-so is never enough, so its
+    ``correction`` is refused here too and the rules suggestion is kept
+    instead, exactly as if the model had failed outright.
     """
     if model is None:
         return None
+    if model.kind is MemoryKind.CORRECTION and model.source is KindSource.MODEL_LLM:
+        return rules
     if model.source not in MODEL_SOURCES or cue is None:
         return model
     if cue is MemoryKind.CORRECTION or model.kind is cue:
@@ -159,11 +165,20 @@ def resolve_kind_backend(cfg: KindConfigLike, mode: Mode, judge: Any | None,
 
 
 def llm_hint(fact: Any) -> KindAssignment | None:
-    """The kind the Mode B/C extraction call attached to ``fact``, if any."""
+    """The kind the Mode B/C extraction call attached to ``fact``, if any.
+
+    ``correction`` (offered to the model in ``KIND_INSTRUCTION``, encoding/
+    llm_kind_hint.py) is refused here regardless of what the model said: this
+    single extraction call carries no separate yes/no check and no verify
+    score, so it can never clear the cue-and-verify gate every other backend
+    enforces before granting that kind (``decide`` below is a second,
+    defence-in-depth refusal for the same reason). ``None`` here falls
+    through to the rules suggestion (``_suggest``'s ``or r``).
+    """
     if getattr(fact, "memory_kind_source", None) != KindSource.MODEL_LLM.value:
         return None
     kind = parse_kind(getattr(fact, "memory_kind", None))
-    if kind is None:
+    if kind is None or kind is MemoryKind.CORRECTION:
         return None
     return KindAssignment(kind, KindSource.MODEL_LLM, None, LLM_RECIPE)
 

@@ -44,7 +44,18 @@ def _has_table(db: Any, name: str) -> bool:
 
 
 def confirmed_facts(db: Any, profile_id: str, kind: MemoryKind, limit: int) -> list[StandingFact]:
-    """Newest confirmed facts of ``kind`` in ``profile_id`` that are still current."""
+    """Newest confirmed facts of ``kind`` in ``profile_id`` that are still current.
+
+    A predecessor an applied correction replaced is excluded by the
+    ``fact_temporal_validity`` check below. A successor whose correction case
+    is not (or no longer) applied - status ``proposed``, ``rejected`` or
+    ``rolled_back`` - is excluded too, through the identical admission rule
+    recall itself uses (``DatabaseManager.get_nonapplied_correction_successor_ids``):
+    a kind a model or an agent only proposed, and a person has not yet
+    confirmed by applying it, must never be injected as settled truth at
+    session start (LLD I6). An applied successor is admitted normally - it is
+    not the predecessor's case that matters, only its own.
+    """
     try:
         if limit <= 0 or not db.has_memory_kind_columns():
             return []
@@ -62,13 +73,23 @@ def confirmed_facts(db: Any, profile_id: str, kind: MemoryKind, limit: int) -> l
             " ORDER BY f.created_at DESC LIMIT ?",
             (profile_id, kind.value, *sources, int(limit)),
         )
+        rows = list(rows)
+        candidate_ids = [str(dict(row)["fact_id"]) for row in rows]
+        withheld = db.get_nonapplied_correction_successor_ids(candidate_ids, profile_id) \
+            if candidate_ids else set()
+        if not isinstance(withheld, set):
+            logger.debug("Standing %s lookup skipped: malformed admission result", kind.value)
+            return []
     except Exception as exc:  # noqa: BLE001 - session start must never fail on this
         logger.debug("Standing %s lookup skipped: %s", kind.value, type(exc).__name__)
         return []
     out = []
     for row in rows:
         d = dict(row)
-        out.append(StandingFact(str(d["fact_id"]), str(d["content"] or ""), kind.value,
+        fact_id = str(d["fact_id"])
+        if fact_id in withheld:
+            continue
+        out.append(StandingFact(fact_id, str(d["content"] or ""), kind.value,
                                 float(d.get("importance") or 0.0), int(d.get("access_count") or 0)))
     return out
 
