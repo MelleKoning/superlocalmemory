@@ -7,8 +7,12 @@ did after it. Before the live store is replaced, its difference from the copy
 is written out as plain JSON lines (``restore-delta/<ts>/``):
 
   memories.jsonl    memories added since the copy   -> added back after the restore
-  deleted.jsonl     facts / memories deleted since  -> deleted again in the copy
-  kind_edits.jsonl  kinds a person confirmed        -> applied again after the restore
+  deleted.jsonl     facts / memories forgotten or   -> deleted again in the copy
+                    erased since (a recorded intent;
+                    a row merely missing comes back)
+  kind_edits.jsonl  kinds a person confirmed since  -> applied again after the restore
+                    (on new memories: matched by    (the newer confirmation wins)
+                    the fact's words)
   erasures.jsonl    erasure receipts and tombstones -> erased again in the copy
   profiles.jsonl    profiles created since          -> created in the copy
   meta.json         the live profile list and counts
@@ -32,6 +36,9 @@ from typing import Any, Iterable
 
 from superlocalmemory.storage._durable_json import (
     read_json, read_jsonl, write_json_atomic, write_jsonl_atomic,
+)
+from superlocalmemory.storage._restore_intent import (
+    deleted_facts_sql, deleted_memories_sql, returning_facts_sql, returning_memories_sql,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,21 +81,40 @@ def _count(conn: sqlite3.Connection, sql: str) -> int:
 
 _ADDED_MEMORIES = ("FROM main.memories m WHERE NOT EXISTS "
                    "(SELECT 1 FROM snap.memories s WHERE s.memory_id = m.memory_id)")
-_DELETED_FACTS = ("FROM snap.atomic_facts s WHERE NOT EXISTS "
-                  "(SELECT 1 FROM main.atomic_facts f WHERE f.fact_id = s.fact_id)")
-_DELETED_MEMORIES = (
-    "FROM snap.memories s WHERE NOT EXISTS "
-    "(SELECT 1 FROM main.memories m WHERE m.memory_id = s.memory_id) "
-    "AND NOT EXISTS (SELECT 1 FROM snap.atomic_facts sf JOIN main.atomic_facts lf "
-    "ON lf.fact_id = sf.fact_id WHERE sf.memory_id = s.memory_id)")
+#: How a deletion carried in ``deleted.jsonl`` was recorded. Only these are
+#: repeated on the copy; see ``_restore_intent``.
+INTENT_TOMBSTONE = "tombstone"
 
 
 def _kind_edit_sql(conn: sqlite3.Connection) -> str | None:
+    """Confirmed kinds on facts the copy has, where the copy holds something else.
+
+    An unchanged confirmation is not an edit; one the copy lacks the columns for
+    (a copy from before kinds existed) always is.
+    """
+    if "memory_kind_source" not in _cols(conn, "atomic_facts"):
+        return None
+    differs = ""
+    if "memory_kind_source" in _cols(conn, "atomic_facts", "snap"):
+        differs = (" AND (s.memory_kind IS NOT f.memory_kind OR s.memory_kind_source IS NOT "
+                   "f.memory_kind_source OR s.memory_kind_at IS NOT f.memory_kind_at)")
+    return ("FROM main.atomic_facts f WHERE f.memory_kind_source IN ('user','caller') "
+            "AND f.memory_kind IS NOT NULL AND EXISTS "
+            f"(SELECT 1 FROM snap.atomic_facts s WHERE s.fact_id = f.fact_id{differs})")
+
+
+def _added_kind_sql(conn: sqlite3.Connection) -> str | None:
+    """Confirmed kinds on facts of memories added after the copy (L1-09).
+
+    Those memories are re-ingested after the restore and get new fact ids, so
+    each confirmation is carried with its fact's words and matched to the
+    re-ingested fact with the same words (``_restore_reimport``).
+    """
     if "memory_kind_source" not in _cols(conn, "atomic_facts"):
         return None
     return ("FROM main.atomic_facts f WHERE f.memory_kind_source IN ('user','caller') "
-            "AND f.memory_kind IS NOT NULL AND EXISTS "
-            "(SELECT 1 FROM snap.atomic_facts s WHERE s.fact_id = f.fact_id)")
+            "AND f.memory_kind IS NOT NULL AND f.memory_id IN "
+            f"(SELECT m.memory_id {_ADDED_MEMORIES})")
 
 
 def _new_rows_sql(conn: sqlite3.Connection, table: str, keys: Iterable[str]) -> str | None:
@@ -104,6 +130,7 @@ def _new_rows_sql(conn: sqlite3.Connection, table: str, keys: Iterable[str]) -> 
 def delta_counts(conn: sqlite3.Connection) -> dict[str, int]:
     """Counts for the preview. Reads only."""
     kinds = _kind_edit_sql(conn)
+    added_kinds = _added_kind_sql(conn)
     corrections = _new_rows_sql(conn, "correction_cases", ("case_id",))
     receipts = _new_rows_sql(conn, "erasure_receipts", ("erasure_id",))
     tombstones = _new_rows_sql(conn, "projection_tombstones", ("profile_id", "fact_id"))
@@ -113,9 +140,12 @@ def delta_counts(conn: sqlite3.Connection) -> dict[str, int]:
         "memories_now": _count(conn, "SELECT COUNT(*) FROM main.memories"),
         "memories_in_snapshot": _count(conn, "SELECT COUNT(*) FROM snap.memories"),
         "added_memories": _count(conn, f"SELECT COUNT(*) {_ADDED_MEMORIES}"),
-        "deleted_facts": _count(conn, f"SELECT COUNT(*) {_DELETED_FACTS}"),
-        "deleted_memories": _count(conn, f"SELECT COUNT(*) {_DELETED_MEMORIES}"),
-        "kind_edits": _count(conn, f"SELECT COUNT(*) {kinds}") if kinds else 0,
+        "deleted_facts": _count(conn, f"SELECT COUNT(*) {deleted_facts_sql(conn)}"),
+        "deleted_memories": _count(conn, f"SELECT COUNT(*) {deleted_memories_sql(conn)}"),
+        "returning_facts": _count(conn, f"SELECT COUNT(*) {returning_facts_sql(conn)}"),
+        "returning_memories": _count(conn, f"SELECT COUNT(*) {returning_memories_sql(conn)}"),
+        "kind_edits": (_count(conn, f"SELECT COUNT(*) {kinds}") if kinds else 0)
+                      + (_count(conn, f"SELECT COUNT(*) {added_kinds}") if added_kinds else 0),
         "corrections_lost": _count(conn, f"SELECT COUNT(*) {corrections}") if corrections else 0,
         "erasures": max(
             _count(conn, "SELECT COUNT(*) " + _and(receipts, "l.state='COMPLETE'"))
@@ -150,14 +180,21 @@ def export_delta(conn: sqlite3.Connection, delta_dir: Path) -> dict[str, int]:
         item = dict(row)
         item["memory_kind"] = _kind_of_memory(conn, item["memory_id"])
         memories.append(item)
-    deleted = [{"type": "fact", **dict(r)} for r in conn.execute(
-        f"SELECT s.fact_id, s.profile_id, s.memory_id {_DELETED_FACTS}")]
-    deleted += [{"type": "memory", **dict(r)} for r in conn.execute(
-        f"SELECT s.memory_id, s.profile_id {_DELETED_MEMORIES}")]
+    deleted = [{"type": "fact", "intent": INTENT_TOMBSTONE, **dict(r)} for r in conn.execute(
+        f"SELECT s.fact_id, s.profile_id, s.memory_id {deleted_facts_sql(conn)}")]
+    deleted += [{"type": "memory", "intent": INTENT_TOMBSTONE, **dict(r)} for r in conn.execute(
+        f"SELECT s.memory_id, s.profile_id {deleted_memories_sql(conn)}")]
     kinds_sql = _kind_edit_sql(conn)
+    kind_cols = ", ".join("f." + c for c in _KIND_COLS)
     kind_edits = [dict(r) for r in conn.execute(
-        f"SELECT f.fact_id, f.profile_id, f.fact_type, "
-        f"{', '.join('f.' + c for c in _KIND_COLS)} {kinds_sql}")] if kinds_sql else []
+        f"SELECT f.fact_id, f.profile_id, f.fact_type, {kind_cols} {kinds_sql}")
+    ] if kinds_sql else []
+    added_sql = _added_kind_sql(conn)
+    if added_sql:
+        kind_edits += [{**dict(r), "fact_id": None} for r in conn.execute(
+            f"SELECT f.memory_id AS added_memory_id, f.profile_id, f.fact_type, f.content, "
+            f"(SELECT COUNT(*) FROM main.atomic_facts o WHERE o.memory_id = f.memory_id) "
+            f"AS facts_in_memory, {kind_cols} {added_sql}")]
     erasures: list[dict[str, Any]] = []
     receipts = _new_rows_sql(conn, "erasure_receipts", ("erasure_id",))
     if receipts:
@@ -180,6 +217,22 @@ def export_delta(conn: sqlite3.Connection, delta_dir: Path) -> dict[str, int]:
               "profiles": len(profiles)}
     write_json_atomic(delta_dir / "meta.json", {"live_profiles": live_profiles, "counts": counts})
     return counts
+
+
+def export_empty_delta(delta_dir: Path) -> dict[str, int]:
+    """The export when the live store cannot be read: nothing to carry over."""
+    delta_dir = Path(delta_dir)
+    delta_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for name in ("memories", "deleted", "kind_edits", "erasures", "profiles"):
+        write_jsonl_atomic(delta_dir / f"{name}.jsonl", [])
+    counts = dict.fromkeys(("memories", "deleted", "kind_edits", "erasures", "profiles"), 0)
+    write_json_atomic(delta_dir / "meta.json", {"live_profiles": [], "counts": counts,
+                                                "live_unreadable": True})
+    return counts
+
+
+def delta_from_unreadable_store(delta_dir: Path) -> bool:
+    return bool((read_json(Path(delta_dir) / "meta.json") or {}).get("live_unreadable"))
 
 
 # ---------------------------------------------------------------------------
@@ -295,15 +348,30 @@ def _fact_tables(conn: sqlite3.Connection) -> tuple[list[str], set[str]]:
     return out, virtual
 
 
-def _pending_obligation_profiles(conn: sqlite3.Connection, data_root: Path) -> set[str]:
-    """Profiles the GDPR obligation ledger says must not come back."""
+def pending_obligation_profiles(present: set[str], data_root: Path) -> set[str]:
+    """Of ``present``, the profiles the GDPR obligation ledger says must not come back."""
     if not (Path(data_root) / "backup_obligations.db").exists():
         return set()
     from superlocalmemory.infra.backup_obligations import BackupObligationStore
 
     store = BackupObligationStore(Path(data_root))
-    present = {r[0] for r in conn.execute("SELECT DISTINCT profile_id FROM atomic_facts")}
     return {pid for pid in present if pid and store.list_pending_for_profile(pid)}
+
+
+def erased_profile_ids(delta_dir: Path, data_root: Path, present: set[str]) -> set[str]:
+    """Profiles whose data must not come back: completed profile erasures recorded
+    in the export, and any of ``present`` the obligation ledger still holds."""
+    receipts = [e for e in read_jsonl(Path(delta_dir) / "erasures.jsonl")
+                if e.get("type") == "receipt"]
+    erased = {r["profile_id"] for r in receipts
+              if r.get("subject_type") == "profile" and r.get("state") == "COMPLETE"}
+    return erased | pending_obligation_profiles(present, data_root)
+
+
+def _intended(deleted: list[dict[str, Any]], kind: str) -> list[dict[str, Any]]:
+    """Deletions of ``kind`` that carry a recorded intent. An entry without one
+    (an export by an earlier build) is not repeated: a loss is never re-applied."""
+    return [d for d in deleted if d.get("type") == kind and d.get("intent") == INTENT_TOMBSTONE]
 
 
 def apply_delta_to_staging(staging: Path, delta_dir: Path, *, data_root: Path) -> dict[str, int]:
@@ -317,9 +385,8 @@ def apply_delta_to_staging(staging: Path, delta_dir: Path, *, data_root: Path) -
     tombstones = [e for e in erasures if e.get("type") == "tombstone"]
     with closing(sqlite3.connect(str(staging), isolation_level=None)) as conn:
         vec = _load_vec(conn)
-        erased_profiles = {r["profile_id"] for r in receipts
-                           if r.get("subject_type") == "profile" and r.get("state") == "COMPLETE"}
-        erased_profiles |= _pending_obligation_profiles(conn, data_root)
+        present = {r[0] for r in conn.execute("SELECT DISTINCT profile_id FROM atomic_facts")}
+        erased_profiles = erased_profile_ids(delta_dir, data_root, present)
         n_profiles = _erase_profiles(conn, erased_profiles, live, vec)
         conn.execute("PRAGMA foreign_keys=ON")
         fact_tables, virtual = _fact_tables(conn)
@@ -330,7 +397,7 @@ def apply_delta_to_staging(staging: Path, delta_dir: Path, *, data_root: Path) -
             counts["profiles_added"] = _insert_rows(
                 conn, "profiles", [{k: v for k, v in p.items() if k != "type"} for p in profiles])
             plan = [(t["fact_id"], True) for t in tombstones]
-            plan += [(d["fact_id"], False) for d in deleted if d.get("type") == "fact"]
+            plan += [(d["fact_id"], False) for d in _intended(deleted, "fact")]
             for fact_id, erasure in plan:
                 if not conn.execute("SELECT 1 FROM atomic_facts WHERE fact_id=?",
                                     (fact_id,)).fetchone():
@@ -340,7 +407,7 @@ def apply_delta_to_staging(staging: Path, delta_dir: Path, *, data_root: Path) -
                     counts["facts_erased" if erasure else "facts_deleted"] += 1
                 else:
                     counts["kept_protected"] += 1
-            memory_ids = [d["memory_id"] for d in deleted if d.get("type") == "memory"]
+            memory_ids = [d["memory_id"] for d in _intended(deleted, "memory")]
             memory_ids += [t["memory_id"] for t in tombstones if t.get("memory_id")]
             for memory_id in memory_ids:
                 cur = conn.execute(
@@ -378,5 +445,7 @@ def metadata_of(row: dict[str, Any]) -> dict[str, Any]:
     return meta if isinstance(meta, dict) else {}
 
 
-__all__ = ["apply_delta_to_staging", "delta_counts", "export_delta", "load_kind_edits",
-           "load_memories", "metadata_of", "open_compare"]
+__all__ = ["INTENT_TOMBSTONE", "apply_delta_to_staging", "delta_counts",
+           "delta_from_unreadable_store", "erased_profile_ids", "export_delta",
+           "export_empty_delta", "load_kind_edits", "load_memories", "metadata_of",
+           "open_compare", "pending_obligation_profiles"]

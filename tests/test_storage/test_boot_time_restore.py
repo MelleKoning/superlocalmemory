@@ -190,7 +190,9 @@ def test_deleted_facts_are_deleted_again(tmp_path) -> None:
     assert outcome.status == "restored"
     assert "f3" not in fact_ids(memory_db) and "m2" not in memory_ids(memory_db)
     assert {"f1", "f2"} <= fact_ids(memory_db)
-    assert outcome.applied["facts_deleted"] == 1
+    # A forget leaves a tombstone (as the product's delete path does), so the
+    # copy drops f3 through the tombstone: it is counted with the erasures.
+    assert outcome.applied["facts_deleted"] + outcome.applied["facts_erased"] == 1
 
 
 def test_confirmed_kinds_are_reapplied(tmp_path) -> None:
