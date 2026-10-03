@@ -96,6 +96,8 @@ _NO_DAEMON_COMMANDS = {
     # V4.0.7: summaries read memory.db directly and are extractive by default,
     # so they need neither the daemon nor a language model.
     "summary",
+    # 4.1.19: backup encryption reads the credential store and files only.
+    "backup",
 }
 
 
@@ -1071,6 +1073,9 @@ def main() -> None:
     from superlocalmemory.cli.kinds_cmd import register_kinds_parser
 
     register_kinds_parser(sub)
+
+    from superlocalmemory.cli.backup_cmd import add_backup_parser
+    add_backup_parser(sub)
 
     # V4.0.6: GDPR subject-rights CLI (Art.15/17/20)
     gdpr_p = sub.add_parser(

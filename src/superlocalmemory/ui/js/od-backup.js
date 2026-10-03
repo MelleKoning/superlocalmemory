@@ -14,6 +14,7 @@
  *   POST /api/backup/export             → FileResponse (.db.gz download)
  *   GET  /api/backup/oauth/github/start → OAuth redirect or PAT form
  *   GET  /api/backup/oauth/google/start → Google OAuth redirect
+ *   GET/POST /api/backup/encryption, /api/backup/recovery-key (od-backup-encryption.js)
  * No mock / seed data — every render goes to the live daemon.
  * Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar — AGPL-3.0
  */
@@ -688,7 +689,7 @@
             ? new Date(new Date(d.last_backup).getTime() + d.interval_hours * 3600000).toLocaleString()
             : 'Scheduled');
         set(root, 'hero-next',    next);
-        set(root, 'hero-encrypt', 'Plain SQLite');
+        set(root, 'hero-encrypt', 'Plain SQLite here · encrypted in cloud');
 
         // Hero title + badge: reflect configured and witnessed sync state.
         var hasCloud = d.cloud_destinations && d.cloud_destinations.length > 0;
@@ -719,10 +720,10 @@
           if (hasCloud) {
             var dest = d.cloud_destinations[0];
             var destStr = dest.display_name || dest.destination_type || 'cloud';
-            subEl.textContent = 'Plain SQLite copies upload to your private ' + destStr +
-              '. Access protection comes from that provider account.';
+            subEl.textContent = 'Copies are encrypted on this computer before upload to your private ' +
+              destStr + '. The provider stores only ciphertext; keep your recovery key safe.';
           } else {
-            subEl.textContent = 'Local snapshots are plaintext SQLite. Connect a private provider only if you accept its access controls.';
+            subEl.textContent = 'Local snapshots are plaintext SQLite. Cloud copies are encrypted on this computer before upload.';
           }
         }
         var orb = q(root, 'orb');
@@ -793,12 +794,16 @@
     pageHead.appendChild(el('h2', { text:'Backup & cloud sync' }));
     var desc = el('p');
     desc.textContent = 'Your memory lives on this machine as plaintext SQLite snapshots. ' +
-      'You can copy snapshots to a private GitHub repository or your Google Drive. ' +
-      'Those providers control remote access; this release does not encrypt backup files.';
+      'Copies sent to a private GitHub repository or your Google Drive are encrypted on this ' +
+      'computer before upload, so the provider stores only ciphertext. Keep your recovery key: ' +
+      'without it those copies cannot be restored on another computer.';
     pageHead.appendChild(desc);
     hub.appendChild(pageHead);
 
     hub.appendChild(buildHero(hub));
+    if (typeof window.odRenderBackupEncryption === 'function') {
+      hub.appendChild(window.odRenderBackupEncryption(authMutation, toast));
+    }
     hub.appendChild(buildKPIs());
 
     // Two-column area: Connections | Scope

@@ -474,6 +474,12 @@ def _cmd_ops(args: Namespace) -> None:
     cmd_ops(args)
 
 
+def _cmd_backup_dispatch(args: Namespace) -> None:
+    """4.1.19: cloud backup encryption (status, recovery key, decrypt)."""
+    from superlocalmemory.cli.backup_cmd import cmd_backup
+    cmd_backup(args)
+
+
 def _cmd_gdpr_dispatch(args: Namespace) -> None:
     """V4.0.6: GDPR subject-rights CLI (Art.15/17/20)."""
     from superlocalmemory.cli.gdpr_cmd import cmd_gdpr
@@ -624,6 +630,7 @@ def dispatch(args: Namespace) -> None:
         "ops": _cmd_ops,
         # V4.0.6: GDPR subject-rights CLI (Art.15/17/20)
         "gdpr": _cmd_gdpr_dispatch,
+        "backup": _cmd_backup_dispatch,
         "summary": _cmd_summary_dispatch,
         "kinds": _cmd_kinds_dispatch,
     }
@@ -2633,6 +2640,7 @@ _COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         # mention it at all. The drift test caught it; the omission is the thing
         # that test exists to prevent.
         ("gdpr", "Subject rights: status, export, erase, verify"),
+        ("backup", "Cloud backup encryption: recovery key, decrypt a download"),
     ]),
     ("Run SLM (daemon & dashboard)", [
         ("serve", "Start/stop the background daemon"),

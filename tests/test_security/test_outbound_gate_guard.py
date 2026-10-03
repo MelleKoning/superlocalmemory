@@ -39,7 +39,7 @@ _CATEGORIES = (
     "PROXY:",          # forwards the user's own agent traffic; never reads the store
     "MESH:",           # agent-to-agent mesh messages to a configured peer, not memory text
     "RELAY:",          # a byte relay between two loopback sockets
-    "BACKUP-PENDING:",  # L2-17: uploads the store; awaiting Varun's decision
+    "BACKUP:",         # cloud backup: uploads only client-side-encrypted bytes (L2-17)
 )
 
 _S = "src/superlocalmemory/"
@@ -74,22 +74,22 @@ REVIEWED: dict[tuple[str, str, str], tuple[int, str]] = {
         (1, "PROBE: GET /api/tags on 127.0.0.1, no body"),
     (_S + "hooks/portable_kit.py", "_check_daemon_health", "urllib.request.urlopen"):
         (1, "PROBE: GET /api/v3/health on 127.0.0.1, no body"),
-    (_S + "infra/cloud_backup.py", "_cleanup_old_releases", "httpx.delete"):
-        (2, "BACKUP-PENDING: deletes old GitHub backup releases"),
-    (_S + "infra/cloud_backup.py", "_cleanup_old_releases", "httpx.get"):
-        (1, "BACKUP-PENDING: lists GitHub backup releases"),
     (_S + "infra/cloud_backup.py", "_get_drive_service", "googleapiclient.discovery.build"):
-        (1, "BACKUP-PENDING: Google Drive backup client (L2-17)"),
+        (1, "BACKUP: Drive client; uploads only client-side-encrypted bytes"),
     (_S + "infra/cloud_backup.py", "connect_github", "httpx.get"):
-        (3, "BACKUP-PENDING: GitHub backup repo setup"),
+        (3, "BACKUP: GitHub backup repo setup; no memory text"),
     (_S + "infra/cloud_backup.py", "connect_github", "httpx.post"):
-        (1, "BACKUP-PENDING: GitHub backup repo setup"),
+        (1, "BACKUP: GitHub backup repo setup; no memory text"),
     (_S + "infra/cloud_backup.py", "connect_github", "httpx.put"):
-        (1, "BACKUP-PENDING: GitHub backup repo setup"),
+        (1, "BACKUP: GitHub backup repo README; no memory text"),
     (_S + "infra/cloud_backup.py", "connect_google_drive", "googleapiclient.discovery.build"):
-        (1, "BACKUP-PENDING: Google Drive backup setup"),
+        (1, "BACKUP: Google Drive backup setup; no memory text"),
     (_S + "infra/cloud_backup.py", "sync_to_github", "httpx.post"):
-        (2, "BACKUP-PENDING: uploads the store to GitHub (L2-17)"),
+        (2, "BACKUP: uploads only client-side-encrypted bytes (release + assets)"),
+    (_S + "infra/cloud_backup_github.py", "_cleanup_old_releases", "httpx.delete"):
+        (2, "BACKUP: deletes old GitHub backup releases; no memory text"),
+    (_S + "infra/cloud_backup_github.py", "_cleanup_old_releases", "httpx.get"):
+        (1, "BACKUP: lists GitHub backup releases; no memory text"),
     (_S + "ingestion/calendar_adapter.py", "CalendarAdapter._fetch_oauth",
      "googleapiclient.discovery.build"):
         (1, "INBOUND: reads the user's calendar"),

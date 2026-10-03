@@ -1017,6 +1017,7 @@ def check_first_use(command: str) -> None:
     # Commands that work without setup
     _SKIP_COMMANDS = {
         "setup", "init", "hook", "hooks", "reap", "mcp", "diagnostics",
+        "backup",  # restoring on a new computer must not wait for setup
     }
     if command in _SKIP_COMMANDS:
         return
