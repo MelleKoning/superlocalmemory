@@ -129,7 +129,7 @@ def _register_every_tool(target) -> None:
         # clients; prestage_context remains a raw-server-only tool.
         # v4.0.8: +get_memory_summary. The essential/fallback surface must
         # mirror the full profile, so it moves with it.
-        ("essential", "", 50),
+        ("essential", "", 54),
         # v4.0.8: get_memory_summary added to CORE — the summary layer's MCP
         # surface (issue #113). Counts bumped deliberately, which is what
         # this contract exists to force.

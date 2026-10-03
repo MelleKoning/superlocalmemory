@@ -77,13 +77,13 @@ def reset_engine():
 
 # Register tools and resources -------------------------------------------------
 #
-# Essential-only default: 41 base tools + 8 mesh tools = 49 registered.
+# Essential-only default: 46 base tools + 8 mesh tools = 54 registered
 # when mesh is enabled. Set ``SLM_MCP_ALL_TOOLS=1`` to expose the full
 # toolset. Rationale: IDEs cap at 50-100 tools total (Cursor,
 # Antigravity, Windsurf) and a maximal SLM registration crowds out
 # other MCP servers the user may have installed.
 # Admin/diagnostics tools remain available via CLI (`slm <command>`).
-# Set SLM_MCP_ALL_TOOLS=1 to enable all 94 tools (power users).
+# Set SLM_MCP_ALL_TOOLS=1 to enable all 101 tools (power users).
 
 import os as _os_reg
 
@@ -129,6 +129,12 @@ _ESSENTIAL_TOOLS: set[str] = {
     # the default exposure so any MCP client discovers gated loops, not just
     # profile=code/full/power sessions.
     "slm_loop_run", "slm_loop_history", "slm_loop_show",
+    # 4.1.19 WP8: memory-kind management (4). Varun's call (2026-10-03):
+    # default visibility, not power-only — every normal session gets these,
+    # matching mcp/profiles.py's _PROFILE_KINDS in code/full (this set must
+    # mirror full exactly; see test_prestage_registered.py).
+    "set_memory_kind", "memory_kinds_status", "review_memory_kinds",
+    "confirm_memory_kinds",
 }
 
 # v3.4.4: Mesh tools — enabled if mesh_enabled in config or SLM_MCP_MESH_TOOLS=1

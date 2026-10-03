@@ -94,6 +94,10 @@ _CODE_EXTRA = frozenset({
     # 4.1.0: ranking reads whether a memory helped, and only the assistant
     # that used it can say so. The plugin runs this profile.
     "report_outcome", "report_feedback",
+    # 4.1.19 WP8: memory-kind management. Varun's call (2026-10-03): default
+    # visibility, not power-only.
+    "set_memory_kind", "memory_kinds_status", "review_memory_kinds",
+    "confirm_memory_kinds",
 })
 
 
@@ -104,7 +108,7 @@ def test_profile_code_exact():
     assert code == expected, (
         f"code diff — extra: {code - expected}, missing: {expected - code}"
     )
-    assert len(code) == 34, f"code must be 34 names, got {len(code)}"
+    assert len(code) == 38, f"code must be 38 names, got {len(code)}"
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +139,12 @@ _EXPECTED_FULL_BASE = frozenset({
     # prestage_context is registered but intentionally not in named profiles.
 })
 
-_EXPECTED_FULL = _EXPECTED_FULL_BASE | _EXPECTED_FULL_MESH
+_EXPECTED_KINDS = frozenset({
+    "set_memory_kind", "memory_kinds_status", "review_memory_kinds",
+    "confirm_memory_kinds",
+})
+
+_EXPECTED_FULL = _EXPECTED_FULL_BASE | _EXPECTED_FULL_MESH | _EXPECTED_KINDS
 
 
 def test_profile_full_exact():
@@ -144,7 +153,7 @@ def test_profile_full_exact():
     assert full == _EXPECTED_FULL, (
         f"full diff — extra: {full - _EXPECTED_FULL}, missing: {_EXPECTED_FULL - full}"
     )
-    assert len(full) == 50, f"full must be 50 names, got {len(full)}"
+    assert len(full) == 54, f"full must be 54 names, got {len(full)}"
     # Must ⊇ core memory names
     core = mod._PROFILE_DEFINITIONS["core"]
     assert core <= full, f"full must be a superset of core; missing from full: {core - full}"
@@ -158,10 +167,8 @@ _POWER_EXTRA = frozenset({
     "get_version", "get_mode", "health", "consistency_check", "recall_trace",
     "get_lifecycle_status", "set_retention_policy", "compact_memories",
     "get_behavioral_patterns", "audit_trail", "quantize", "get_retention_stats",
-    # 4.1.19 WP8: memory-kind management — governance layer over the `kind`
-    # filter every profile's recall/search/list_recent already carries.
-    "set_memory_kind", "memory_kinds_status", "review_memory_kinds",
-    "confirm_memory_kinds",
+    # memory-kind management arrives here via _EXPECTED_FULL now that it is a
+    # default-visibility surface (code/full/essential), not a power-only one.
 })
 
 _EXPECTED_POWER = _EXPECTED_FULL | _POWER_EXTRA

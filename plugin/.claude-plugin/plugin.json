@@ -3,7 +3,7 @@
     "name": "Qualixar",
     "url": "https://github.com/qualixar/superlocalmemory"
   },
-  "description": "Local-first agent memory + reversible context compression and KV cache, as an MCP server. 34-tool code profile with graph intelligence.",
+  "description": "Local-first agent memory + reversible context compression and KV cache, as an MCP server. 38-tool code profile with graph intelligence.",
   "displayName": "SuperLocalMemory",
   "keywords": [
     "memory",

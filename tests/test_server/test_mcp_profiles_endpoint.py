@@ -20,9 +20,9 @@ _ENDPOINT = "/api/v3/mcp/profiles"
 
 _EXPECTED_COUNTS = {
     "core": 18,   # v4.1.0: + switch_profile (memory is profile-scoped)
-    "code": 34,   # v4.1.0: + the two usefulness reports the ranker reads
-    "full": 50,   # v4.0.5: everyday memory, Brain, optimize, and mesh
-    "power": 66,  # 4.1.19 WP8: + memory-kind management (set/status/review/confirm)
+    "code": 38,   # 4.1.19 WP8: + memory-kind management (default visibility)
+    "full": 54,   # 4.1.19 WP8: + memory-kind management (default visibility)
+    "power": 66,  # unchanged — memory-kind management now arrives via full
     "mesh": 8,
 }
 

@@ -43,8 +43,8 @@ def test_prestage_context_absent_from_counted_profiles():
     assert "prestage_context" not in mod._PROFILE_DEFINITIONS["power"]
     # v4.0.8: +get_memory_summary (#113). The essential set is the fallback
     # surface and must mirror "full" exactly — asserted below.
-    assert len(mod._ESSENTIAL_TOOLS) == 50
-    assert len(mod._PROFILE_DEFINITIONS["full"]) == 50
+    assert len(mod._ESSENTIAL_TOOLS) == 54
+    assert len(mod._PROFILE_DEFINITIONS["full"]) == 54
     assert len(mod._PROFILE_DEFINITIONS["power"]) == 66
     assert set(mod._ESSENTIAL_TOOLS) == set(mod._PROFILE_DEFINITIONS["full"]), (
         "the fallback surface drifted from the full profile; a client on the\n"

@@ -45,7 +45,18 @@ _PROFILE_BRAIN: frozenset[str] = frozenset({
     "observe_bounded_loop_evidence",
 })
 
-_PROFILE_CODE: frozenset[str] = _PROFILE_CORE | _PROFILE_BRAIN | frozenset({  # 32
+#: 4.1.19 WP8: memory-kind management. Base recall/search/list_recent already
+#: carry a `kind` filter in every profile; these four let an agent set,
+#: review and confirm a kind the same way `slm kinds` already does from the
+#: terminal. Varun's call (2026-10-03): default visibility, not power-only —
+#: present in code/full/essential (and therefore power, which is full plus
+#: extras) so every normal session has them, not just governance/admin ones.
+_PROFILE_KINDS: frozenset[str] = frozenset({
+    "set_memory_kind", "memory_kinds_status", "review_memory_kinds",
+    "confirm_memory_kinds",
+})
+
+_PROFILE_CODE: frozenset[str] = _PROFILE_CORE | _PROFILE_BRAIN | _PROFILE_KINDS | frozenset({  # 38
     "build_code_graph", "get_blast_radius", "query_graph",
     "semantic_search_code", "get_review_context", "detect_changes",
     # switch_profile lets a plugin/IDE session change the active workspace over
@@ -67,7 +78,7 @@ _PROFILE_FULL_MESH: frozenset[str] = frozenset({  # 8
     "mesh_state", "mesh_lock", "mesh_events", "mesh_status",
 })
 
-# 41 base — explicit literal, not runtime _ESSENTIAL_TOOLS (OQ-2).
+# 42 base — explicit literal, not runtime _ESSENTIAL_TOOLS (OQ-2).
 _PROFILE_FULL: frozenset[str] = frozenset({
     "remember", "recall", "search", "fetch", "list_recent", "delete_memory", "update_memory",
     "get_status", "session_init", "observe", "close_session", "report_feedback", "forget",
@@ -84,19 +95,14 @@ _PROFILE_FULL: frozenset[str] = frozenset({
     # full is asserted to be a superset of core.
     "get_memory_summary",
     # prestage_context remains registered but deliberately raw-server-only.
-}) | _PROFILE_FULL_MESH  # 50
+}) | _PROFILE_FULL_MESH | _PROFILE_KINDS  # 54
 
 _PROFILE_POWER: frozenset[str] = _PROFILE_FULL | frozenset({  # 66
     "get_version", "get_mode", "health", "consistency_check", "recall_trace",
     "get_lifecycle_status", "set_retention_policy", "compact_memories",
     "get_behavioral_patterns", "audit_trail", "quantize", "get_retention_stats",
-    # 4.1.19 WP8: memory-kind management (set/status/review/confirm). Base
-    # recall/search/list_recent already carry a `kind` filter in every
-    # profile; these four are the governance layer on top (changing or
-    # bulk-confirming a kind), which is why they sit with the other
-    # admin/audit tools rather than in core/full.
-    "set_memory_kind", "memory_kinds_status", "review_memory_kinds",
-    "confirm_memory_kinds",
+    # memory-kind management (_PROFILE_KINDS) arrives here via _PROFILE_FULL
+    # now that it is a default-visibility surface, not a power-only one.
 })
 
 _PROFILE_MESH: frozenset[str] = _PROFILE_FULL_MESH  # 8
@@ -126,12 +132,14 @@ _PROFILE_ALIASES: dict[str, str] = {
     "code28": "code",
     "code29": "code",
     "code31": "code",
+    "code34": "code",
     "full38": "full",
     "full39": "full",
     "full42": "full",
     "full46": "full",
     "full47": "full",
     "full49": "full",
+    "full50": "full",
     "power50": "power",
     "power51": "power",
     "power54": "power",
