@@ -267,3 +267,9 @@ class TestTheGateAsksTheCheckButNeverTheReorder:
         out = _run(_jev(key_store, provider, rerank_k=20), mode_a_config, monkeypatch, n=3)
         assert CHOICE_KEY in provider.bodies[0]["questions"]
         assert out.reranker_status == "jev_listwise"
+
+
+def test_the_recall_ceiling_is_the_owners_three_seconds() -> None:
+    # The owner's rule (2026-10-03): retrieval plus answer check within 3.0 s.
+    # Changing it is the owner's decision, not a tuning knob.
+    assert acs.RECALL_CEILING_S == 3.0

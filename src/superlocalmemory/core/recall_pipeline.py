@@ -1274,7 +1274,8 @@ def run_recall(
                            _label, (_time_t.monotonic() - _t0) * 1000.0)
 
     # The interactive path must retain the complete local retrieval contract.
-    # Only agentic verification can invoke an unbounded model round.
+    # Only agentic verification may call a language model during recall; the
+    # entity channel resolves names read-only (EntityResolver.lookup).
     extra_disabled = None
     response = retrieval_engine.recall(
         query, profile_id, m, limit,

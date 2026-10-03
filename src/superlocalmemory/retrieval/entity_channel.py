@@ -1067,8 +1067,11 @@ class EntityGraphChannel:
         """Resolve local and visible cross-profile canonical entity IDs."""
         ids: list[str] = []
         seen: set[str] = set()
-        if self._resolver is not None:
-            for eid in self._resolver.resolve(raw, profile_id).values():
+        # A question reads the store: lookup() never creates entities, saves
+        # aliases, or asks the language model (resolve() is for saving).
+        lookup = getattr(self._resolver, "lookup", None)
+        if lookup is not None:
+            for eid in lookup(raw, profile_id).values():
                 if eid not in seen:
                     seen.add(eid)
                     ids.append(eid)

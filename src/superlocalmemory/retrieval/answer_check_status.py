@@ -15,8 +15,9 @@ Every rule in this module follows from that:
   recall nobody judged on purpose. Two runs of one question that disagree on
   the verdict can then be told apart from two runs that disagree on results.
 
-The ceiling is the owner's recall budget: 2.0 s. It is a ceiling, not a
-target, and nothing here makes retrieval itself faster or shorter.
+The ceiling is the owner's recall budget: 3.0 s, retrieval and answer check
+together (raised from 2.0 s in 4.1.19 so the check gets room to run). It is a
+ceiling, not a target, and nothing here makes retrieval itself faster or shorter.
 """
 
 from __future__ import annotations
@@ -69,14 +70,14 @@ ANSWER_CHECK_REQUESTS = frozenset({REQUEST_FULL, REQUEST_NO_REORDER})
 
 #: The recall ceiling (the owner's quality rule). Measured from the start of the
 #: recall pipeline.
-RECALL_CEILING_S = 2.0
+RECALL_CEILING_S = 3.0
 #: Kept back for what runs after the check (score contract, markers, working
 #: memory): in-process work of well under a millisecond, with headroom.
 POST_JUDGE_RESERVE_S = 0.05
 #: Below this, the check is not asked. A hosted round trip or a local judgement
 #: of three memories rarely completes in a quarter of a second, so asking would
 #: add that wait to the recall for a verdict that would almost always time out.
-#: COST: a recall whose retrieval already used more than ~1.7 s is reported
+#: COST: a recall whose retrieval already used more than ~2.7 s is reported
 #: unjudged (status "skipped") — its results are unchanged.
 JUDGE_FLOOR_S = 0.25
 

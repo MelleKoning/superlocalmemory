@@ -256,6 +256,24 @@ def _unproject_entity(entity_id: str) -> bool:
         return False
 
 
+def _usable_mention(raw: str) -> str | None:
+    """The mention as a name worth resolving, or None for pronouns, stop
+    words, numbers and fragments too short or long to be a name."""
+    name = raw.strip()
+    if not name or name.lower() in PRONOUNS:
+        return None
+    if len(name) <= 2 or len(name) > 100:
+        return None
+    words = name.lower().split()
+    if len(words) == 1 and name.lower() in _COMMON_WORDS:
+        return None
+    if len(words) > 1 and all(w in _COMMON_WORDS or len(w) <= 2 for w in words):
+        return None
+    if re.match(r"^[\d.v\-/]+$", name):
+        return None
+    return name
+
+
 class EntityResolver:
     """Resolves raw entity mentions to persisted canonical entities.
 
@@ -291,25 +309,8 @@ class EntityResolver:
         candidates_for_llm: list[str] = []
 
         for raw in raw_entities:
-            name = raw.strip()
-            if not name or name.lower() in PRONOUNS:
-                continue
-
-            # Skip very short/long entities
-            if len(name) <= 2 or len(name) > 100:
-                continue
-
-            # Skip single-word stop words
-            words = name.lower().split()
-            if len(words) == 1 and name.lower() in _COMMON_WORDS:
-                continue
-
-            # Skip multi-word entities where ALL words are stop words or <=2 chars
-            if len(words) > 1 and all(w in _COMMON_WORDS or len(w) <= 2 for w in words):
-                continue
-
-            # Skip pure numbers/versions
-            if re.match(r"^[\d.v\-/]+$", name):
+            name = _usable_mention(raw)
+            if name is None:
                 continue
 
             # Tier a: exact match on canonical_name
@@ -363,6 +364,37 @@ class EntityResolver:
                 resolution[raw_name] = new_id
 
         return resolution
+
+    def lookup(
+        self,
+        raw_entities: list[str],
+        profile_id: str,
+    ) -> dict[str, str]:
+        """Known entities named in a question, read-only.
+
+        For recall. Finds a name by exact match, alias, or a spelling close
+        enough to merge automatically. Never creates an entity, saves an alias,
+        updates last-seen, or asks the language model: a question must not
+        change the store, and a model call here would spend the recall budget.
+        A name that is unknown, or only uncertainly close, is left out.
+        """
+        found: dict[str, str] = {}
+        for raw in raw_entities or ():
+            name = _usable_mention(raw)
+            if name is None:
+                continue
+            entity = self._db.get_entity_by_name(name, profile_id)
+            if entity is not None:
+                found[raw] = entity.entity_id
+                continue
+            entity_id = self._alias_lookup(name, profile_id)
+            if entity_id is not None:
+                found[raw] = entity_id
+                continue
+            match_id, score = self._fuzzy_match(name, profile_id)
+            if match_id is not None and score >= JARO_WINKLER_AUTO_MERGE:
+                found[raw] = match_id
+        return found
 
     def create_speaker_entities(
         self,

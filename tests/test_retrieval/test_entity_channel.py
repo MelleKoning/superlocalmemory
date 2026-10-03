@@ -239,14 +239,16 @@ class TestEntityGraphChannelSearch:
         db = MagicMock()
         _authorize_all_mock_candidates(db)
         resolver = MagicMock()
-        resolver.resolve.return_value = {"Alice": "e_alice"}
+        resolver.lookup.return_value = {"Alice": "e_alice"}
         db.get_facts_by_entity.return_value = [_mock_fact("f1")]
         db.get_edges_for_node.return_value = []
         db.execute.return_value = []
 
         ch = EntityGraphChannel(db, entity_resolver=resolver, max_hops=1)
         results = ch.search("What did Alice do?", "default")
-        resolver.resolve.assert_called_once()
+        resolver.lookup.assert_called_once()
+        # A search must never use the resolver's writing path.
+        resolver.resolve.assert_not_called()
         assert len(results) > 0
 
     def test_discover_entities_from_facts(self) -> None:
