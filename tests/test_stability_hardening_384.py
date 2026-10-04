@@ -83,6 +83,18 @@ class TestFix1HealthNameError:
 # FIX-2: Warm-embed pool TOCTOU — exactly ONE pool under concurrent init
 # ===========================================================================
 
+# Every engine built here is closed after its test (audit C-3): an engine left
+# open keeps its pool threads alive into later, unrelated tests.
+_OPEN_ENGINES: list = []
+
+
+@pytest.fixture(autouse=True)
+def _close_engines_made_by_this_test():
+    yield
+    while _OPEN_ENGINES:
+        _OPEN_ENGINES.pop().close()
+
+
 class TestFix2EmbedPoolRace:
     """Concurrent first-calls to the warm-guard pool init must produce exactly
     one ThreadPoolExecutor (no orphaned second pool)."""
@@ -96,6 +108,7 @@ class TestFix2EmbedPoolRace:
         engine = MemoryEngine(cfg)
         engine._require_full = lambda _: None
         engine._ensure_init()
+        _OPEN_ENGINES.append(engine)
         return engine
 
     def test_concurrent_pool_init_creates_one_executor(
@@ -309,6 +322,7 @@ class TestFix4EnvVarGuard:
         engine = MemoryEngine(cfg)
         engine._require_full = lambda _: None
         engine._ensure_init()
+        _OPEN_ENGINES.append(engine)
         return engine
 
     @pytest.mark.parametrize("bad_value", [

@@ -28,6 +28,7 @@ The rules that follow from that, and each one here is a defect that shipped:
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -39,7 +40,7 @@ from superlocalmemory.storage.models import Mode
 
 
 @pytest.fixture
-def engine(tmp_path: Path) -> MemoryEngine:
+def engine(tmp_path: Path) -> Iterator[MemoryEngine]:
     eng = MemoryEngine(
         SLMConfig(
             mode=Mode.A,
@@ -50,7 +51,8 @@ def engine(tmp_path: Path) -> MemoryEngine:
         )
     )
     eng._ensure_init()
-    return eng
+    yield eng
+    eng.close()
 
 
 def _local_embedder(vector: list[float] | None = None) -> MagicMock:

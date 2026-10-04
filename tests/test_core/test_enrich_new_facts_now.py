@@ -23,6 +23,7 @@ background queue.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -38,7 +39,7 @@ from tests.helpers.env_capabilities import (
 
 
 @pytest.fixture
-def engine(tmp_path: Path) -> MemoryEngine:
+def engine(tmp_path: Path) -> Iterator[MemoryEngine]:
     eng = MemoryEngine(
         SLMConfig(
             mode=Mode.A,
@@ -49,7 +50,8 @@ def engine(tmp_path: Path) -> MemoryEngine:
         )
     )
     eng._ensure_init()
-    return eng
+    yield eng
+    eng.close()
 
 
 def _local_embedder_mock() -> MagicMock:

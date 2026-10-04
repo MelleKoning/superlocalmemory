@@ -69,6 +69,18 @@ def _make_mock_embedder(
     return embedder
 
 
+# Every engine built here is closed after its test (audit C-3): an engine left
+# open keeps its pool threads alive into later, unrelated tests.
+_OPEN_ENGINES: list = []
+
+
+@pytest.fixture(autouse=True)
+def _close_engines_made_by_this_test():
+    yield
+    while _OPEN_ENGINES:
+        _OPEN_ENGINES.pop().close()
+
+
 def _make_engine(tmp_path: Path) -> "MemoryEngine":  # noqa: F821
     """Create a lightweight MemoryEngine with a real SQLite DB but no ML."""
     from superlocalmemory.core.config import SLMConfig
@@ -79,6 +91,7 @@ def _make_engine(tmp_path: Path) -> "MemoryEngine":  # noqa: F821
     engine = MemoryEngine(cfg)
     engine._require_full = lambda _: None  # bypass FULL capability gate
     engine._ensure_init()
+    _OPEN_ENGINES.append(engine)
     return engine
 
 

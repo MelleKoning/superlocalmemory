@@ -736,7 +736,10 @@ class TestFullPipelineSmoke:
             embedder=embedder,
         )
 
-        response = engine.recall("Tell me about Python", "default")
+        try:
+            response = engine.recall("Tell me about Python", "default")
+        finally:
+            engine.close()  # its channel pool must not outlive the test
         assert response.query is not None
         assert len(response.results) >= 1
         # All 5 channels + hopfield were called

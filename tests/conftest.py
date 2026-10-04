@@ -310,6 +310,29 @@ def cleanup_slm_workers_between_tests():
         pass
 
 
+@pytest.fixture(autouse=True)
+def _reset_daemon_enrichment_pool():
+    """Give back the daemon's enrichment pool a test created (audit C-5).
+
+    The pool is module-global in ``unified_daemon`` and created on the first
+    inline enrichment. Only the app lifespan shuts it down, so a ``TestClient``
+    used without its context manager left ``slm-enrich`` threads running for
+    the rest of the session. After each test: shut it down, join its threads
+    (bounded), and reopen it for the next test -- exactly what a daemon
+    restart in one process does.
+    """
+    yield
+    daemon = sys.modules.get("superlocalmemory.server.unified_daemon")
+    if daemon is None or getattr(daemon, "_enrichment_pool", None) is None:
+        return
+    from superlocalmemory.core.thread_join import executor_threads, join_threads
+
+    threads = executor_threads(daemon._enrichment_pool)
+    daemon._shutdown_enrichment_pool_if_created()
+    daemon._open_enrichment_pool()
+    join_threads(threads, owner="test enrichment pool")
+
+
 @pytest.fixture
 def in_memory_db():
     """Create an in-memory SQLite database with full SLM schema.
