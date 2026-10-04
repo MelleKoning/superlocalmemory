@@ -142,6 +142,52 @@ describe('Answer Check tab — sections and data', function () {
     assert.ok(!html.includes('SECRET-Q') && !html.includes('SECRET-M') && !html.includes('FACT-9'));
   });
 
+  it('Recent checks says where a check\'s time went, in words', async function () {
+    const p = await render({ '/api/v3/answer-check/history': { status: 200, body: { enabled: true,
+      items: [item('s1', { embed_ms: 412.4, rerank_ms: 95 }), item('s2', { embed_ms: null, rerank_ms: null })],
+      next_cursor: null } } });
+    const cells = [...p.d.querySelectorAll('#ac-feed tbody tr td:last-child')];
+    assert.equal(cells[0].querySelector('.ac-split').textContent,
+      'Finding memories 812 ms (waiting for the embedding model 412 ms, ranking 95 ms); answer check 201 ms');
+    assert.equal(cells[0].getAttribute('title'), cells[0].querySelector('.ac-split').textContent);
+    assert.match(cells[0].textContent, /^1,013 ms/);
+    assert.equal(cells[1].querySelector('.ac-split').textContent,
+      'Finding memories 812 ms; answer check 201 ms', 'an unmeasured stage is left out, not shown as 0');
+  });
+
+  it('a stage value that is not a number is never shown', async function () {
+    const p = await render({ '/api/v3/answer-check/history': { status: 200, body: { enabled: true,
+      items: [item('s3', { embed_ms: 'SECRET-Q', rerank_ms: '<b>x</b>' })], next_cursor: null } } });
+    const html = p.pane.innerHTML;
+    assert.ok(!html.includes('SECRET-Q') && !html.includes('<b>x'));
+    assert.equal(p.d.querySelector('#ac-feed .ac-split').textContent,
+      'Finding memories 812 ms; answer check 201 ms', 'a stage that is not a number is left out');
+  });
+
+  it('the latency chart tooltip splits typical and slow recalls by stage', async function () {
+    const s = summary();
+    s.latency.stages = { retrieval: { n: 40, p50: 650, p95: 2100 }, embed: { n: 40, p50: 30, p95: 1400 },
+      rerank: { n: 38, p50: 60, p95: 300 } };
+    const p = page(defaults({ '/api/v3/answer-check/history/summary': { status: 200, body: s } }));
+    p.w.slmSpark = function () { return '<svg></svg>'; };
+    p.w.odRenderAnswerCheck(p.pane);
+    await flushPromises(); await flushPromises();
+    const rows = [...p.d.querySelectorAll('#ac-latency .ac-bar-row')];
+    assert.equal(rows[0].getAttribute('title'),
+      'Typical: Finding memories 650 ms (waiting for the embedding model 30 ms, ranking 60 ms); answer check 200 ms');
+    assert.equal(rows[1].getAttribute('title'),
+      'Slow: Finding memories 2,100 ms (waiting for the embedding model 1,400 ms, ranking 300 ms); answer check 450 ms');
+    assert.match(rows[1].querySelector('[role="img"]').getAttribute('aria-label'), /waiting for the embedding model 1,400 ms/);
+    assert.match(p.d.querySelector('#ac-latency .ac-spark').getAttribute('title'), /^Typical recall: Finding memories 650 ms/);
+  });
+
+  it('a summary without stage timings names only what was measured', async function () {
+    const p = await render();
+    const rows = [...p.d.querySelectorAll('#ac-latency .ac-bar-row')];
+    assert.equal(rows[0].getAttribute('title'), 'Typical: answer check 200 ms');
+    assert.equal(rows[2].getAttribute('title'), null, 'the check bars carry no split');
+  });
+
   it('every outcome has words, not only a colour', async function () {
     const items = OUTCOMES.map((o, i) => item('o' + i, { outcome: o }));
     const p = await render({ '/api/v3/answer-check/history': { status: 200,

@@ -248,6 +248,11 @@ _KNOWN_EQUIVALENT_DDL_HASHES: dict[str, frozenset[str]] = {
         # M032.repair() into the profile-scoped receipt contract.
         "e45df41becba3d0c3342eca5ec3bd83aa899eef76943c819d2da73b4ca1625a7",
     }),
+    _M053.NAME: frozenset({
+        # Unreleased 4.1.20 development table without the embed_ms / rerank_ms
+        # stage columns. M053.repair() adds them; no released build ran M053.
+        "3ff0b2d15dd73eb00ffae2347386234f015032e6889391924aa34ed9b8bb89e9",
+    }),
 }
 
 

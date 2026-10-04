@@ -117,7 +117,21 @@ def _latency(rows: list[Mapping], ceiling_ms: float, recent_n: int) -> dict[str,
         "judge": {"n": len(judge_sorted), "p50": nearest_rank(judge_sorted, 0.50),
                   "p95": nearest_rank(judge_sorted, 0.95)},
         "recent_total_ms": recent,
+        "stages": {name: _spread(rows, column) for name, column in _STAGES},
     }
+
+
+#: Where a recall's time goes before the check. ``embed`` and ``rerank`` are
+#: parts of ``retrieval``; the check itself is ``judge`` above (judged rows).
+_STAGES = (("retrieval", "retrieval_ms"), ("embed", "embed_ms"),
+           ("rerank", "rerank_ms"))
+
+
+def _spread(rows: list[Mapping], column: str) -> dict[str, Any]:
+    """Typical (p50) and slow (p95) milliseconds of one stage, where measured."""
+    values = sorted(v for v in (_finite(r.get(column)) for r in rows) if v is not None)
+    return {"n": len(values), "p50": nearest_rank(values, 0.50),
+            "p95": nearest_rank(values, 0.95)}
 
 
 def summarize(rows: Iterable[Mapping], *, ceiling_ms: float,

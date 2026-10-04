@@ -29,7 +29,8 @@
   // The only item fields this pane ever reads. A server change that adds a
   // field (or, by mistake, text) to an item renders nothing extra.
   var ITEM_KEYS = ['id', 'at', 'outcome', 'judge', 'origin', 'answer_confidence',
-                   'result_count', 'total_ms', 'over_ceiling'];
+                   'result_count', 'total_ms', 'over_ceiling',
+                   'retrieval_ms', 'embed_ms', 'rerank_ms', 'judge_ms'];
 
   var ctl = null; // the one live controller; replaced on every render
 
@@ -79,6 +80,19 @@
   }
   function fmtMs(v) {
     return (typeof v === 'number' && isFinite(v)) ? Math.round(v).toLocaleString('en-US') + ' ms' : '—';
+  }
+  function isMs(v) { return typeof v === 'number' && isFinite(v); }
+  // Where one recall's time went, in words. Numbers only come from the server.
+  function stageText(retrieval, embed, rerank, judge) {
+    var parts = [];
+    if (isMs(retrieval)) {
+      var inner = [];
+      if (isMs(embed)) inner.push('waiting for the embedding model ' + fmtMs(embed));
+      if (isMs(rerank)) inner.push('ranking ' + fmtMs(rerank));
+      parts.push('Finding memories ' + fmtMs(retrieval) + (inner.length ? ' (' + inner.join(', ') + ')' : ''));
+    }
+    if (isMs(judge)) parts.push('answer check ' + fmtMs(judge));
+    return parts.join('; ');
   }
   function pct(v) { return (v * 100).toFixed(v < 0.1 ? 1 : 0) + '%'; }
 
@@ -225,11 +239,12 @@
     ]);
   }
 
-  function bar(label, value) {
+  function bar(label, value, tip) {
     var v = typeof value === 'number' ? value : null;
     var width = v === null ? 0 : Math.min(100, 100 * v / CEILING_MS);
-    var aria = label + ': ' + (v === null ? 'no data' : fmtMs(v)) + ' of the 3,000 ms limit';
-    return el('div', { class: 'ac-bar-row', style: 'display:grid;grid-template-columns:120px 1fr 80px;gap:10px;align-items:center;margin:6px 0' }, [
+    var aria = label + ': ' + (v === null ? 'no data' : fmtMs(v)) + ' of the 3,000 ms limit' +
+      (tip ? '. ' + tip : '');
+    return el('div', { class: 'ac-bar-row', title: tip || null, style: 'display:grid;grid-template-columns:120px 1fr 80px;gap:10px;align-items:center;margin:6px 0' }, [
       el('span', { style: 'font-size:12.5px', text: label }),
       el('div', { role: 'img', 'aria-label': aria, class: 'ac-bar',
         style: 'position:relative;height:10px;border-radius:5px;background:var(--card-2);border:1px solid var(--border)' }, [
@@ -246,16 +261,21 @@
     var lat = s.latency || {};
     var total = lat.total || {};
     var judge = lat.judge || {};
+    var st = lat.stages || {};
+    function at(name, q) { return (st[name] || {})[q]; }
+    var tipP50 = stageText(at('retrieval', 'p50'), at('embed', 'p50'), at('rerank', 'p50'), judge.p50);
+    var tipP95 = stageText(at('retrieval', 'p95'), at('embed', 'p95'), at('rerank', 'p95'), judge.p95);
     var spark = null;
     var recent = lat.recent_total_ms || [];
     if (recent.length >= 2 && typeof window.slmSpark === 'function') {
-      spark = el('div', { class: 'ac-spark', 'aria-hidden': 'true', style: 'margin-top:8px' });
+      spark = el('div', { class: 'ac-spark', 'aria-hidden': 'true', style: 'margin-top:8px',
+        title: tipP50 ? 'Typical recall: ' + tipP50 : null });
       spark.innerHTML = window.slmSpark(recent.map(Number), { w: 320, h: 48 }); // numbers only
     }
     fill(b, [
       note('Time inside the recall pipeline — what the 3-second limit measures.', ';margin-bottom:8px'),
-      bar('Total, typical (p50)', total.p50),
-      bar('Total, slow (p95)', total.p95),
+      bar('Total, typical (p50)', total.p50, tipP50 ? 'Typical: ' + tipP50 : ''),
+      bar('Total, slow (p95)', total.p95, tipP95 ? 'Slow: ' + tipP95 : ''),
       bar('Check, typical (p50)', judge.p50),
       bar('Check, slow (p95)', judge.p95),
       el('p', { class: 'ac-over', style: 'font-size:12.5px;margin:8px 0 0', text: 'Over the limit: ' + (lat.over_ceiling || 0) }),
@@ -268,6 +288,14 @@
     var out = {};
     ITEM_KEYS.forEach(function (k) { out[k] = item[k]; });
     return out;
+  }
+
+  function timeCell(it) {
+    var split = stageText(it.retrieval_ms, it.embed_ms, it.rerank_ms, it.judge_ms);
+    return el('td', { title: split || null }, [
+      el('span', { text: fmtMs(it.total_ms) + (it.over_ceiling ? ' (over the limit)' : '') }),
+      split ? el('span', { class: 'ac-split', style: 'display:block;font-size:11.5px;color:var(--fg-2)', text: split }) : null,
+    ]);
   }
 
   function row(item) {
@@ -283,7 +311,7 @@
       el('td', { text: it.judge === 'laya' ? 'Laya' : it.judge === 'jev' ? 'Jev' : '—' }),
       el('td', { text: typeof it.answer_confidence === 'number' ? it.answer_confidence.toFixed(2) : '—' }),
       el('td', { text: String(it.result_count || 0) }),
-      el('td', { text: fmtMs(it.total_ms) + (it.over_ceiling ? ' (over the limit)' : '') }),
+      timeCell(it),
     ]);
   }
 
