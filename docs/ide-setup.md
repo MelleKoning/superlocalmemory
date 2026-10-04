@@ -57,20 +57,26 @@ This scans your system for installed IDEs, configures each one, and verifies the
 To connect a specific IDE:
 
 ```bash
-slm connect claude
+slm connect claude-code
 slm connect cursor
-slm connect vscode
+slm connect vscode-copilot --here   # run from your project root
 ```
 
 ---
 
 ## Claude Code
 
-**Auto:**
+**Plugin (recommended):**
 
 ```bash
-slm connect claude
+claude plugin marketplace add qualixar/superlocalmemory
+claude plugin install superlocalmemory@qualixar
 ```
+
+The plugin brings the MCP server, skills, sub-agents and hooks. `slm connect
+claude-code` prints these two commands and writes no MCP config; `slm setup`
+can run them for you. Use the manual config below only if you don't want the
+plugin.
 
 **Manual — HTTP (recommended, v3.6.7+):**
 

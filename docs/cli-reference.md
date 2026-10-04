@@ -46,7 +46,7 @@ Configure IDE integrations.
 ```bash
 slm connect           # Auto-detect and configure all IDEs
 slm connect cursor    # Configure Cursor specifically
-slm connect claude    # Configure Claude Code specifically
+slm connect claude-code  # Prints the Claude Code plugin install commands
 ```
 
 Run `slm connect --list` for the client names supported by the installed
