@@ -37,8 +37,8 @@ def app():
 @pytest.fixture()
 def keys():
     store = RemoteKeyStore()
-    _, write_secret = store.add("hermes-laptop", "write")
-    _, read_secret = store.add("viewer", "read")
+    _, write_secret = store.add("hermes-laptop", "write", profile="default")
+    _, read_secret = store.add("viewer", "read", profile="default")
     return SimpleNamespace(store=store, write=write_secret, read=read_secret)
 
 

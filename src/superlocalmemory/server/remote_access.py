@@ -14,7 +14,11 @@ Every request to ``/mcp`` that is not from this computer passes, in order:
 3. **A key.** ``Authorization: Bearer slmr_...`` (a named remote key), or the
    older ``X-SLM-API-Key`` (treated as a write key). The install token, the hook
    token and the daemon capability are never remote credentials and are ignored.
-4. The tool policy (:mod:`server.remote_tool_policy`) then decides per tool.
+   A named key made before 4.1.20 that is not yet bound to a profile is refused
+   (``remote_key_unbound``).
+4. The tool policy (:mod:`server.remote_tool_policy`) then decides per tool,
+   and :mod:`server.remote_profile_binding` keeps the call inside the key's
+   profile.
 
 "This computer" means :func:`server.access_gate.is_local_peer` and the request
 did not arrive on the remote listener: the remote listener treats every caller
@@ -48,6 +52,10 @@ class RemotePrincipal:
     key_id: str
     name: str
     scope: Literal["read", "write"]
+    #: The one profile this caller may reach. Always set for a named key. The
+    #: older SLM API key has no stored binding, so it reaches only the profile
+    #: active on this computer at the time of each call (``None``).
+    profile: str | None = None
 
     @property
     def actor_id(self) -> str:
@@ -100,7 +108,8 @@ def authenticate_remote(headers: Mapping[str, str],
             key = (store or default_store()).verify(presented)
             if key is None:
                 return None
-            return RemotePrincipal("remote-key", key.key_id, key.name, key.scope)
+            return RemotePrincipal("remote-key", key.key_id, key.name, key.scope,
+                                   key.profile)
         # The SLM API key may travel as a Bearer token too: clients strip
         # Authorization on a redirect to another site, unlike X-SLM-API-Key.
         if verify_api_key(presented):
@@ -140,6 +149,13 @@ COMPANY_MODE = {
     "error": "remote_mcp_company_mode",
     "message": ("Company mode does not accept remote MCP keys in this release; remote "
                 "keys are not bound to a user role."),
+}
+KEY_UNBOUND = {
+    "error": "remote_key_unbound",
+    "message": ("This remote key was made before keys were tied to one profile and is "
+                "not bound yet. On the SLM computer run 'slm remote keys list' (it binds "
+                "the key to the active profile), or make a new key with "
+                "'slm remote keys add <name> --profile <profile>'."),
 }
 AUTH_REQUIRED = {
     "error": "remote_auth_required",
@@ -188,6 +204,9 @@ def gate_remote_mcp(scope: Mapping[str, Any], headers: Mapping[str, str], app_st
     if principal is None:
         _log_refusal(peer, AUTH_REQUIRED["error"])
         return GateDecision(401, AUTH_REQUIRED)
+    if principal.kind == "remote-key" and principal.profile is None:
+        _log_refusal(peer, KEY_UNBOUND["error"])
+        return GateDecision(403, KEY_UNBOUND)
     return GateDecision(200, None, principal)
 
 
@@ -195,6 +214,7 @@ __all__ = [
     "AUTH_REQUIRED",
     "COMPANY_MODE",
     "GateDecision",
+    "KEY_UNBOUND",
     "PLAINTEXT_ENV",
     "PRINCIPAL_SCOPE_KEY",
     "REMOTE_LISTENER_SCOPE_KEY",

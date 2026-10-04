@@ -7,7 +7,7 @@
     slm remote tls init --name <dns>... --ip <addr>... [--days 397] [--force]
     slm remote enable --listen HOST:PORT
     slm remote disable
-    slm remote keys add <name> [--read-only]
+    slm remote keys add <name> [--read-only] [--profile <profile>]
     slm remote keys list [--json]
     slm remote keys revoke <name|key_id>
     slm remote check [--json]
@@ -279,6 +279,11 @@ def run_checks(probe: bool = True) -> list[dict]:
         add("PASS" if active else "WARN", "keys",
             f"{len(active)} active key(s)" if active
             else "no active keys (slm remote keys add <name>)")
+        unbound = [k.name for k in active if k.profile is None]
+        if unbound:
+            add("WARN", "key profiles",
+                f"{len(unbound)} key(s) not bound to a profile yet and refused: "
+                f"{', '.join(unbound)} (run: slm remote keys list)")
     try:
         from superlocalmemory.server.remote_access import company_mode_active
 
@@ -302,12 +307,67 @@ def run_checks(probe: bool = True) -> list[dict]:
     return results
 
 
+# -- profiles ------------------------------------------------------------------------
+
+
+def active_profile() -> str:
+    """The profile this computer is using, read without side effects."""
+    from superlocalmemory.infra.data_root import state_path
+
+    for name, field in (("config.json", "active_profile"), ("profiles.json", "active_profile")):
+        try:
+            value = json.loads(Path(state_path(name)).read_text(encoding="utf-8")).get(field)
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return "default"
+
+
+def profile_exists(profile: str) -> bool:
+    """Whether ``profile`` exists in the memory store (read-only check)."""
+    import sqlite3
+
+    from superlocalmemory.infra.data_root import state_path
+
+    if profile == "default":
+        return True
+    db = Path(state_path("memory.db"))
+    if not db.exists():
+        return False
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)
+        try:
+            row = conn.execute("SELECT 1 FROM profiles WHERE profile_id = ?",
+                               (profile,)).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        raise ValueError(f"Cannot read the profile list ({exc}).") from exc
+    return row is not None
+
+
+def _bind_unbound_keys(store) -> None:
+    """Bind keys made before 4.1.20 to the active profile, and say so."""
+    bound = store.bind_unbound(active_profile())
+    for key in bound:
+        print(f"Note: remote key '{key.name}' was made before keys were tied to one profile. "
+              f"It is now bound to profile '{key.profile}' (the active profile) and can "
+              "reach only that profile. To use another profile, revoke it and run "
+              f"'slm remote keys add {key.name} --profile <profile>'.", file=sys.stderr)
+
+
 # -- CLI glue ------------------------------------------------------------------------
 
 
-def _print_key_snippet(name: str, secret: str) -> None:
+def _print_key_snippet(name: str, secret: str, profile: str, scope: str) -> None:
     print(f"Remote key '{name}' created. This is the only time it is shown:\n")
     print(f"  {secret}\n")
+    reach = "read" if scope == "read" else "read and save to"
+    print(f"It can {reach} profile '{profile}' only. Whoever holds it can read the full "
+          "text of every memory in that profile, including any paths, names or other "
+          "details written into those memories. Give it only to tools you trust with "
+          "that profile.\n")
     print("Hermes (~/.hermes/config.yaml), with the key in your Hermes secrets as SLM_REMOTE_KEY:")
     print("  mcp_servers:\n    superlocalmemory:\n      url: \"https://<slm-host>:<port>/mcp/hermes\"")
     print("      headers:\n        Authorization: \"Bearer ${SLM_REMOTE_KEY}\"")
@@ -362,9 +422,18 @@ def _cmd_keys(args: Namespace) -> None:
 
     store = default_store()
     sub = getattr(args, "keys_command", None)
+    if sub in ("add", "list", "revoke"):
+        _bind_unbound_keys(store)
     if sub == "add":
-        record, secret = store.add(args.key_name, "read" if args.read_only else "write")
-        _print_key_snippet(record.name, secret)
+        chosen = getattr(args, "profile", None)
+        profile = chosen.strip() if isinstance(chosen, str) and chosen.strip() else active_profile()
+        if not profile_exists(profile):
+            raise ValueError(f"Profile '{profile}' does not exist. Create it first: "
+                             f"slm profile create {profile}")
+        scope = "read" if args.read_only else "write"
+        record, secret = store.add(args.key_name, scope, profile=profile,
+                                   profile_source="chosen" if chosen else "active-at-creation")
+        _print_key_snippet(record.name, secret, profile, scope)
         return
     if sub == "list":
         rows = [k.public() for k in store.list()]
@@ -375,8 +444,11 @@ def _cmd_keys(args: Namespace) -> None:
             print("No remote keys. Create one: slm remote keys add <name>")
         for row in rows:
             state = f"revoked {row['revoked_at']}" if row["revoked_at"] else "active"
+            profile = row["profile"] or "(unbound - refused)"
+            if row["profile_source"] == "bound-on-upgrade":
+                profile += " (bound on upgrade)"
             print(f"{row['name']:<24} {row['key_id']:<12} {row['scope']:<5} "
-                  f"created {row['created_at']}  {state}")
+                  f"profile {profile:<28} created {row['created_at']}  {state}")
         return
     if sub == "revoke":
         record = store.revoke(args.key_ref)
@@ -405,9 +477,15 @@ def add_parser(sub) -> None:
     rsub.add_parser("disable", help="Turn remote access off (applies on restart)")
     keys = rsub.add_parser("keys", help="Create, list and revoke remote keys")
     ksub = keys.add_subparsers(dest="keys_command")
-    add = ksub.add_parser("add", help="Create a key (shown once)")
+    add = ksub.add_parser(
+        "add", help="Create a key (shown once), bound to one profile",
+        description="Create a remote key. The key reaches exactly one profile: --profile, "
+                    "or the profile active now. Its holder can read the full text of every "
+                    "memory in that profile.")
     add.add_argument("key_name", help="A name for the tool or computer, e.g. hermes-laptop")
     add.add_argument("--read-only", action="store_true", help="Recall only, no saves")
+    add.add_argument("--profile", default=None,
+                     help="The one profile this key may reach (default: the active profile)")
     lst = ksub.add_parser("list", help="List keys (never shows secrets)")
     lst.add_argument("--json", action="store_true")
     rev = ksub.add_parser("revoke", help="Revoke a key; effective on its next request")
@@ -416,5 +494,5 @@ def add_parser(sub) -> None:
     chk.add_argument("--json", action="store_true")
 
 
-__all__ = ["add_parser", "cmd_remote", "enable", "disable", "make_ca", "make_leaf",
-           "run_checks", "tls_init"]
+__all__ = ["active_profile", "add_parser", "cmd_remote", "enable", "disable", "make_ca",
+           "make_leaf", "profile_exists", "run_checks", "tls_init"]

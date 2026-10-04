@@ -27,6 +27,7 @@ from mcp.types import ToolAnnotations
 from superlocalmemory.core.admission import admits
 from superlocalmemory.core.operation_request import OperationKind
 from superlocalmemory.mcp.agent_context import get_current_agent_id
+from superlocalmemory.mcp.remote_caller import current_remote_key_id
 from superlocalmemory.optimize.compress.ccr import CCRStore, _UUID4_RE
 from superlocalmemory.optimize.compress.router import CompressRouter
 from superlocalmemory.optimize.storage.db import CacheDB, _normalize_tenant_id
@@ -57,8 +58,34 @@ _kv_misses: int = 0
 
 
 def _tenant() -> str:
+    """Whose cache and reversible-compression store this request uses.
+
+    On this computer that is the agent (``/mcp/<agent>``, else ``SLM_AGENT_ID``).
+    A caller on another computer chooses its ``/mcp/<agent>`` segment freely, so
+    its tenant is also keyed by the remote key that authenticated it: a remote
+    key can never read or overwrite a local agent's entries, nor another key's.
+    ``:`` never occurs in a URL-derived agent id, so no local agent can name
+    this tenant from a URL either.
+    """
     # get_current_agent_id() never returns ""; "mcp_client" is its stdio sentinel.
-    return get_current_agent_id()
+    agent = get_current_agent_id()
+    key_id = current_remote_key_id()
+    if key_id is None:
+        return agent
+    return f"remote:{key_id}:{agent}"
+
+
+def _kv_location(key: str) -> tuple[str, str]:
+    """``(cache_key, normalized tenant)`` for a ``slm_cache_*`` entry.
+
+    Local entries keep their pre-4.1.20 address, so existing caches still hit.
+    Remote entries use their own prefix, so the hashed key cannot collide with
+    a local agent's entry whatever the agent or key text.
+    """
+    tenant = _tenant()
+    prefix = "mcpkv-remote" if current_remote_key_id() is not None else "mcpkv"
+    cache_key = hashlib.sha256(f"{prefix}:{tenant}:{key}".encode()).hexdigest()
+    return cache_key, _normalize_tenant_id(tenant)
 
 
 # ─── Tool registration ────────────────────────────────────────────────────────
@@ -218,9 +245,7 @@ def register_optimize_tools(server) -> None:
             if len(value_bytes) > _MAX_KV_VALUE_BYTES:
                 return {"ok": False, "stored": False, "note": "value exceeds 1MB limit"}
 
-            tenant = _tenant()
-            cache_key = hashlib.sha256(f"mcpkv:{tenant}:{key}".encode()).hexdigest()
-            norm_tid = _normalize_tenant_id(tenant)
+            cache_key, norm_tid = _kv_location(key)
             ttl_exp = time.time() + ttl_seconds
 
             db = CacheDB.get_default()
@@ -257,9 +282,7 @@ def register_optimize_tools(server) -> None:
                     "ok": False, "hit": False, "value": None,
                     "note": f"key must be 1–{_MAX_KV_KEY_CHARS} chars",
                 }
-            tenant = _tenant()
-            cache_key = hashlib.sha256(f"mcpkv:{tenant}:{key}".encode()).hexdigest()
-            norm_tid = _normalize_tenant_id(tenant)
+            cache_key, norm_tid = _kv_location(key)
 
             db = CacheDB.get_default()
             blob = db.get_value(cache_key, norm_tid)

@@ -163,12 +163,23 @@ def denial_message(tool: str, key_name: str, scope: str) -> str:
 
 
 async def _send_json(send: Callable[..., Awaitable[None]], status: int,
-                     payload: dict[str, Any]) -> None:
+                     payload: dict[str, Any],
+                     extra_headers: tuple[tuple[bytes, bytes], ...] = ()) -> None:
     body = json.dumps(payload).encode("utf-8")
     await send({"type": "http.response.start", "status": status,
                 "headers": [(b"content-type", b"application/json"),
-                            (b"content-length", str(len(body)).encode())]})
+                            (b"content-length", str(len(body)).encode()),
+                            *extra_headers]})
     await send({"type": "http.response.body", "body": body})
+
+
+#: Answer to any non-POST request from another computer. The MCP transport is
+#: stateless here, so a GET event stream could never carry a message; it would
+#: only hold a connection (and a worker) open for as long as the caller liked.
+METHOD_NOT_ALLOWED = {
+    "error": "remote_method_not_allowed",
+    "message": "Remote MCP accepts POST only.",
+}
 
 
 async def _read_body(receive: Callable[[], Awaitable[dict[str, Any]]]) -> bytes | None:
@@ -216,15 +227,22 @@ def _filter_tools_list(body: bytes, scope: str) -> bytes:
 
 
 def _redact_call_answer(body: bytes) -> bytes:
-    from superlocalmemory.server.remote_redaction import redact_tool_result
+    """The tool answer with host details removed. Fails closed: an answer that
+    cannot be read as a JSON-RPC response is not forwarded as it is."""
+    from superlocalmemory.server.remote_redaction import redact_rpc_error, redact_tool_result
 
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
-        return body
-    if not isinstance(payload, dict) or not isinstance(payload.get("result"), dict):
-        return body
-    return json.dumps(dict(payload, result=redact_tool_result(payload["result"]))).encode()
+        payload = None
+    if not isinstance(payload, dict):
+        return json.dumps({"jsonrpc": "2.0", "id": None, "error": {
+            "code": -32603, "message": "The tool answer could not be checked."}}).encode()
+    if "error" in payload:
+        payload = dict(payload, error=redact_rpc_error(payload["error"]))
+    if isinstance(payload.get("result"), dict):
+        payload = dict(payload, result=redact_tool_result(payload["result"]))
+    return json.dumps(payload).encode()
 
 
 class _JsonAnswerFilter:
@@ -268,16 +286,25 @@ def _audit(principal: Any, scope: dict[str, Any], tool: str, decision: str) -> N
     path = scope.get("path", "") or ""
     agent = path[len(root):].lstrip("/").split("/")[0] if path.startswith(root) else ""
     audit_logger.info(
-        "remote tools/call key_id=%s key_name=%s scope=%s agent=%s tool=%s decision=%s",
-        principal.key_id, principal.name, principal.scope,
+        "remote tools/call key_id=%s key_name=%s scope=%s profile=%s agent=%s tool=%s "
+        "decision=%s",
+        principal.key_id, principal.name, principal.scope, principal.profile or "(active)",
         sanitize_agent_id(agent) or "-", sanitize_agent_id(tool), decision,
     )
 
 
-def _tool_error(message: dict[str, Any], text: str) -> dict[str, Any]:
+def _tool_error(message: dict[str, Any], text: str,
+                code: str = DENIAL_CODE) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": message.get("id"),
             "result": {"content": [{"type": "text", "text": text}], "isError": True,
-                       "structuredContent": {"error": DENIAL_CODE, "message": text}}}
+                       "structuredContent": {"error": code, "message": text}}}
+
+
+def _with_body(scope: dict[str, Any], body: bytes) -> dict[str, Any]:
+    """``scope`` with its Content-Length matching a rewritten ``body``."""
+    headers = [(k, v) for k, v in scope.get("headers", []) if k.lower() != b"content-length"]
+    headers.append((b"content-length", str(len(body)).encode()))
+    return dict(scope, headers=headers)
 
 
 def _method_error(message: dict[str, Any], method: str) -> dict[str, Any]:
@@ -287,10 +314,21 @@ def _method_error(message: dict[str, Any], method: str) -> dict[str, Any]:
 
 
 class RemoteToolScopeASGI:
-    """Wraps the MCP app. Local callers pass straight through."""
+    """Wraps the MCP app. Local callers pass straight through.
 
-    def __init__(self, app: Any) -> None:
+    ``runtime_for`` finds the daemon's profile runtime for a request (default:
+    the one on ``scope["app"].state``). Without one a remote tool call is
+    refused - there would be no way to hold it to its key's profile.
+    """
+
+    def __init__(self, app: Any, runtime_for: Callable[[dict[str, Any]], Any] | None = None
+                 ) -> None:
         self.app = app
+        if runtime_for is None:
+            from superlocalmemory.server.remote_profile_binding import runtime_from_scope
+
+            runtime_for = runtime_from_scope
+        self._runtime_for = runtime_for
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if scope.get("type") != "http":
@@ -311,7 +349,7 @@ class RemoteToolScopeASGI:
             await _send_json(send, 401, {"error": "remote_auth_required"})
             return
         if scope.get("method") != "POST":
-            await self.app(scope, receive, send)
+            await _send_json(send, 405, METHOD_NOT_ALLOWED, ((b"allow", b"POST"),))
             return
         body = await _read_body(receive)
         if body is None:
@@ -345,14 +383,74 @@ class RemoteToolScopeASGI:
             downstream_send = _JsonAnswerFilter(send, _redact_call_answer)
         else:
             downstream_send = send
-        await self.app(scope, _replay(body, receive), downstream_send)
+        from superlocalmemory.mcp.remote_caller import remote_caller
 
+        # Per-agent stores (cache, reversible compression) are keyed by this
+        # key as well as by the caller-chosen /mcp/<agent> segment.
+        with remote_caller(principal.key_id):
+            if tool is None:
+                await self.app(scope, _replay(body, receive), downstream_send)
+            else:
+                await self._call_in_bound_profile(principal, scope, receive, send,
+                                                  downstream_send, message, tool)
+
+    async def _call_in_bound_profile(self, principal: Any, scope: dict[str, Any],
+                                     receive: Any, send: Any, downstream_send: Any,
+                                     message: dict[str, Any], tool: str) -> None:
+        """Run one tool call for the key's profile (server/remote_profile_binding)."""
+        from superlocalmemory.server.remote_profile_binding import (
+            PROFILE_FREE_TOOLS,
+            ROUTED_TOOLS,
+            inactive_refusal,
+            profile_lease,
+        )
+
+        runtime = self._runtime_for(scope)
+        if runtime is None:
+            await _send_json(send, 503, {"error": "remote_profile_unavailable",
+                                         "message": "The SLM profile state is not ready."})
+            return
+        if tool in ROUTED_TOOLS or tool in PROFILE_FREE_TOOLS:
+            # Routed per request (or touches no profile): the host's active
+            # profile is not involved, so no lease and no active check.
+            bound = principal.profile or runtime.snapshot.profile_id
+            await self._run_bound(principal, scope, receive, send, downstream_send,
+                                  message, tool, bound)
+            return
+        async with profile_lease(runtime) as active_profile:
+            if principal.profile is not None and active_profile != principal.profile:
+                refusal = inactive_refusal(tool, principal.name, principal.profile)
+                _audit(principal, scope, tool, f"deny:{refusal.code}")
+                await _send_json(send, 200, _tool_error(message, str(refusal), refusal.code))
+                return
+            await self._run_bound(principal, scope, receive, send, downstream_send,
+                                  message, tool, principal.profile or active_profile)
+
+    async def _run_bound(self, principal: Any, scope: dict[str, Any], receive: Any,
+                         send: Any, downstream_send: Any, message: dict[str, Any],
+                         tool: str, bound: str) -> None:
+        from superlocalmemory.server.remote_profile_binding import (
+            BindingRefusal,
+            bind_arguments,
+        )
+
+        params = message.get("params") or {}
+        try:
+            arguments = bind_arguments(tool, params.get("arguments"),
+                                       key_name=principal.name, bound=bound)
+        except BindingRefusal as refusal:
+            _audit(principal, scope, tool, f"deny:{refusal.code}")
+            await _send_json(send, 200, _tool_error(message, str(refusal), refusal.code))
+            return
+        body = json.dumps(dict(message, params=dict(params, arguments=arguments))).encode()
+        await self.app(_with_body(scope, body), _replay(body, receive), downstream_send)
 
 __all__ = [
     "ALLOWED_METHODS",
     "DENIAL_CODE",
     "HOST_ONLY_TOOLS",
     "MAX_BODY_BYTES",
+    "METHOD_NOT_ALLOWED",
     "PolicyViolation",
     "READ_ONLY_TAG",
     "READ_TOOLS",

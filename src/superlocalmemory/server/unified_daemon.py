@@ -851,6 +851,22 @@ class EngineRecallAdapter:
         }
 
 
+def _bind_unbound_remote_keys(active_profile: str) -> None:
+    """Bind remote keys made before 4.1.20 to the profile active at this start.
+
+    Those keys have been reaching whatever profile was active; binding them to
+    it keeps them working there and nowhere else. A key that cannot be bound
+    (an untrusted or unwritable key store) stays refused - never unbounded.
+    """
+    try:
+        from superlocalmemory.server.remote_keys import default_store
+
+        default_store().bind_unbound(active_profile)
+    except Exception as exc:  # noqa: BLE001 — remote keys stay refused, daemon starts
+        logger.warning("Could not bind older remote keys to a profile (%s); they are "
+                       "refused until 'slm remote keys list' binds them.", exc)
+
+
 def _configure_scale_backends(engine, config) -> None:
     """Attach optional graph/vector backends to one initialized engine."""
     try:
@@ -2326,6 +2342,7 @@ async def lifespan(application: FastAPI):
         from superlocalmemory.server.profile_runtime import bind_profile_runtime
 
         profile_runtime = bind_profile_runtime(application.state, engine, config)
+        _bind_unbound_remote_keys(profile_runtime.snapshot.profile_id)
         application.state.reconfigure_engine = (
             lambda new_config, mode_change=False: _hot_reconfigure_engine(
                 application, new_config, mode_change=mode_change,
