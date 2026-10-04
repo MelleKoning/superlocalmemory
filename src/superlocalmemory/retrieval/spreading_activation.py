@@ -35,17 +35,21 @@ from superlocalmemory.storage.models import _new_id
 logger = logging.getLogger(__name__)
 
 
-def _seed_score(cosine: float, vector_path: bool) -> float:
+def _seed_score(cosine: float, vector_path: bool = True) -> float:
     """A seed's initial activation from its cosine to the query.
 
     The ONE place the seed scale is defined, so local and cross-scope seeds
-    can never drift apart again (#146).  The vec0 path scores
-    ``max(0, 1 - distance)`` = ``max(0, cos)`` (``VectorStore.search``); the
-    SQL fallback in ``_seed_search`` has always used ``(cos + 1) / 2``.
+    can never drift apart again (#146), and neither can the two seed paths.
+    The vec0 path scores ``max(0, 1 - distance)`` = ``max(0, cos)``
+    (``VectorStore.search``), and every path now uses that scale.
+
+    Before 4.1.20 the SQL fallback used ``(cos + 1) / 2``: cos 0.45 started the
+    walk at 0.725 instead of 0.45, an unrelated memory (cos 0) at 0.5, so the
+    answer depended on whether the vector index happened to be available.
+    ``vector_path`` is accepted for callers and no longer changes the scale.
     """
-    if vector_path:
-        return max(0.0, cosine)
-    return (cosine + 1.0) / 2.0
+    del vector_path
+    return max(0.0, cosine)
 
 
 # ---------------------------------------------------------------------------
@@ -598,6 +602,12 @@ class SpreadingActivation:
             scope_bytes += _CROSS_SCOPE_SEEDING.encode()
         if seeds is not None:
             scope_bytes += _seed_fingerprint(seeds).encode()
+            # Which search produced the seeds. One scale on both paths makes
+            # their walks agree, but the two indexes can still disagree (a
+            # vector index lagging the store), so one never answers for the other.
+            scope_bytes += (
+                b"|path=vec" if self._uses_vector_seeds() else b"|path=sql"
+            )
         if isinstance(query, np.ndarray):
             data = query.tobytes() + profile_id.encode() + scope_bytes
         elif isinstance(query, list):
