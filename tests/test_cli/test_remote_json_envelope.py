@@ -42,7 +42,8 @@ def test_check_json_still_exits_1_on_a_failure(capsys) -> None:
 def test_keys_list_json_is_the_standard_envelope(capsys) -> None:
     row = {"name": "hermes", "key_id": "k1", "scope": "read",
            "created_at": "2026-10-04", "revoked_at": None}
-    store = SimpleNamespace(list=lambda: [SimpleNamespace(public=lambda: row)])
+    store = SimpleNamespace(list=lambda: [SimpleNamespace(public=lambda: row)],
+                            bind_unbound=lambda _profile: ())
     with patch("superlocalmemory.server.remote_keys.default_store", return_value=store):
         remote_commands.cmd_remote(
             Namespace(remote_command="keys", keys_command="list", json=True))

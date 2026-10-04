@@ -38,7 +38,7 @@ def _record_calls(monkeypatch):
 def test_key_store_is_restricted_before_the_secret_is_written(tmp_path, monkeypatch) -> None:
     calls = _record_calls(monkeypatch)
     store_path = tmp_path / "remote_keys.json"
-    RemoteKeyStore(store_path).add("hermes-laptop", "read")
+    RemoteKeyStore(store_path).add("hermes-laptop", "read", profile="default")
     assert calls, "the key store writer never restricted its file"
     assert all(size == 0 for _p, size in calls), "restricted only after data was written"
     assert all(p.parent == tmp_path and p != store_path for p, _s in calls), \
@@ -68,7 +68,7 @@ def test_a_failed_restriction_leaves_nothing_behind(tmp_path, monkeypatch) -> No
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
 def test_posix_files_are_0600(tmp_path) -> None:
     store_path = tmp_path / "remote_keys.json"
-    RemoteKeyStore(store_path).add("hermes-laptop", "read")
+    RemoteKeyStore(store_path).add("hermes-laptop", "read", profile="default")
     key = tmp_path / "server.key"
     remote_commands._write_private(key, b"k")
     for path in (store_path, key):
@@ -87,7 +87,7 @@ def test_windows_files_have_an_owner_only_protected_dacl(tmp_path) -> None:
     )
 
     store_path = tmp_path / "remote_keys.json"
-    RemoteKeyStore(store_path).add("hermes-laptop", "read")
+    RemoteKeyStore(store_path).add("hermes-laptop", "read", profile="default")
     key = tmp_path / "tls" / "server.key"
     remote_commands._write_private(key, b"k")
     owner_sid, _dacl = _windows_owner_dacl(win32api, win32con, win32security)
