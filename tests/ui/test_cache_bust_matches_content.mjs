@@ -50,7 +50,10 @@ const HASHED = ['od-brain.js', 'od-graph.js', 'fact-detail.js', 'od-memories.js'
                 'od-optimize.js', 'od-mesh.js', 'od-boundedloops.js',
                 // 4.1.20: the nav and Settings change with the Answer Check tab;
                 // a hand-numbered ?v= would keep serving the old nav after upgrade.
-                'od-shell.js', 'od-settings.js', 'od-answercheck.js', 'od-answercheck-tryit.js'];
+                'od-shell.js', 'od-settings.js', 'od-answercheck.js', 'od-answercheck-tryit.js',
+                // 4.1.20 audit: the Memory activity fix and the Automatic answer-check
+                // state lived in files a browser could keep serving from cache.
+                'dashboard.js', 'answer-check.js'];
 
 describe('cache-bust params match file content', function () {
   const html = readFileSync(join(UI, 'index.html'), 'utf8');
