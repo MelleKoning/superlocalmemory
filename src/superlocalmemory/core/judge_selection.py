@@ -337,6 +337,8 @@ def jev_rerank_k(retrieval_config: Any) -> int:
 # -- the one live judge ------------------------------------------------------
 
 def _stop(judge: Any) -> None:
+    """Stop ``judge`` and forget every verdict it gave (one judge, one memo):
+    a switch of provider, a setting or Off never lets an old verdict answer."""
     try:
         shutdown = getattr(judge, "shutdown", None)
         if callable(shutdown):
@@ -344,6 +346,10 @@ def _stop(judge: Any) -> None:
     except Exception as exc:  # noqa: BLE001 — a stuck judge must not block a switch
         logger.warning("Answer check (%s) did not stop cleanly: %s",
                        backend_of(judge), type(exc).__name__)
+    finally:
+        from superlocalmemory.core import answer_check_memo
+
+        answer_check_memo.clear(judge)
 
 
 def _ref(engine: Any) -> Callable[[], Any]:

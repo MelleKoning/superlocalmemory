@@ -359,6 +359,45 @@ class TestOnlyTheSelectedProviderIsEverTouched:
         assert memo.finish_later(hosted, "q", ["doc"]) is None
 
 
+# -- a switch of provider forgets every remembered verdict ----------------------------
+
+class _Switchable:
+    top_k, threshold, calibration_id = 3, 0.5, "laya:test"
+
+    def __init__(self, backend: str) -> None:
+        self.backend = backend
+        self.ready, self.closed = True, False
+
+    def shutdown(self) -> None:
+        self.closed = True
+
+
+class TestASwitchForgetsTheMemo:
+    def test_switching_provider_and_back_starts_empty(self) -> None:
+        first, online, second = _Switchable("laya"), _Switchable("jev"), _Switchable("laya")
+        engine = SimpleNamespace(_sufficiency_judge=None)
+        verdict = SufficiencyVerdict((0.9,), 0.5, "laya:test")
+        judge_selection.swap_sufficiency_judge(engine, lambda: first)
+        memo.store(first, "q", ["doc"], verdict)
+        assert memo.lookup(engine._sufficiency_judge, "q", ["doc"]) is verdict
+
+        judge_selection.swap_sufficiency_judge(engine, lambda: online)   # Settings: Jev
+        assert first.closed
+        assert first not in memo._memos, "the stopped judge's verdicts were kept"
+        assert memo.lookup(first, "q", ["doc"]) is None
+
+        judge_selection.swap_sufficiency_judge(engine, lambda: second)  # and back
+        assert memo.lookup(engine._sufficiency_judge, "q", ["doc"]) is None
+
+    def test_turning_the_check_off_forgets_it_too(self) -> None:
+        judge = _Switchable("laya")
+        engine = SimpleNamespace(_sufficiency_judge=None)
+        judge_selection.swap_sufficiency_judge(engine, lambda: judge)
+        memo.store(judge, "q", ["doc"], SufficiencyVerdict((0.9,), 0.5, "laya:test"))
+        judge_selection.swap_sufficiency_judge(engine, lambda: None)     # Settings: Off
+        assert judge.closed and judge not in memo._memos
+
+
 # -- the real on-device judge, against a fake worker ---------------------------------
 
 _FAKE_WORKER = r'''
