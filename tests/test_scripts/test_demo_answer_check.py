@@ -55,12 +55,39 @@ def test_accepts_new_or_empty_folder_and_marks_ownership(tmp_path) -> None:
     made.rmdir()
 
 
-def test_owner_roots_include_the_real_home() -> None:
-    import os
-    import pwd
+def _account_home(tmp_path, monkeypatch) -> Path:
+    """A stand-in account home served by the passwd lookup, never the real one."""
+    home = tmp_path / "account"
+    (home / ".superlocalmemory").mkdir(parents=True)
+    monkeypatch.setattr(
+        demo.pwd, "getpwuid", lambda _uid: SimpleNamespace(pw_dir=str(home)),
+    )
+    return home
 
-    real = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve() / ".superlocalmemory"
-    assert real in demo.owner_roots()
+
+def test_owner_roots_include_the_account_home_not_just_home_env(
+    tmp_path, monkeypatch,
+) -> None:
+    home = _account_home(tmp_path, monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path / "override"))
+    roots = demo.owner_roots()
+    assert (home / ".superlocalmemory").resolve() in roots
+    assert (tmp_path / "elsewhere" / ".superlocalmemory").resolve() in roots
+    assert (tmp_path / "override").resolve() not in roots
+
+
+def test_owner_roots_follow_the_account_config_redirect(tmp_path, monkeypatch) -> None:
+    home = _account_home(tmp_path, monkeypatch)
+    moved = tmp_path / "moved-store"
+    (home / ".superlocalmemory" / "config.json").write_text(
+        json.dumps({"base_dir": str(moved)}), encoding="utf-8",
+    )
+    roots = demo.owner_roots()
+    assert moved.resolve() in roots
+    assert (home / ".superlocalmemory").resolve() in roots
+    with pytest.raises(demo.DemoError):
+        demo.check_data_dir(str(moved / "demo"), roots)
 
 
 def test_exits_3_without_a_ready_laya(tmp_path, monkeypatch, capsys) -> None:

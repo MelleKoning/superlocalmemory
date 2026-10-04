@@ -69,9 +69,13 @@ def owner_roots() -> list[Path]:
     """Every place the owner's real store could be: never a demo folder."""
     from superlocalmemory.infra.data_root import canonical_data_root
 
+    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
     with data_root(None):
         roots = {canonical_data_root().resolve(),
-                 canonical_data_root(home=pwd.getpwuid(os.getuid()).pw_dir).resolve()}
+                 canonical_data_root(home=account_home).resolve(),
+                 # The account's default root even when its config.json moves
+                 # the store elsewhere: it still holds that locator.
+                 (account_home / ".superlocalmemory").resolve()}
     return sorted(roots)
 
 

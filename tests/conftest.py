@@ -225,6 +225,33 @@ def cleanup_slm_workers_between_tests():
 
 
 @pytest.fixture(autouse=True)
+def closes_admission_journals(monkeypatch):
+    """Close every ``AdmissionJournal`` a test builds, the way shutdown does.
+
+    A journal owns a group-commit writer thread (``slm-journal-writer``) and a
+    pool of reader connections. The runtime closes its journal in ``stop()``;
+    tests build journals inline in many folders and rarely close them, so the
+    writer stayed parked until its idle exit and was reported against the
+    test. Every journal built during any test is closed when the test ends,
+    so a new test cannot leak one by forgetting to. ``close()`` is not final:
+    a journal held by a wider-scoped fixture reopens on its next operation.
+    """
+    from superlocalmemory.storage.admission_journal import AdmissionJournal
+
+    built: list[AdmissionJournal] = []
+    original_init = AdmissionJournal.__init__
+
+    def _tracking_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        built.append(self)
+
+    monkeypatch.setattr(AdmissionJournal, "__init__", _tracking_init)
+    yield built
+    for journal in built:
+        journal.close()
+
+
+@pytest.fixture(autouse=True)
 def _reset_daemon_enrichment_pool():
     """Give back the daemon's enrichment pool a test created (audit C-5).
 
