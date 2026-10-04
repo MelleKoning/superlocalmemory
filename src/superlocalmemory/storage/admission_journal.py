@@ -142,6 +142,9 @@ class RememberRequest:
     session_date: str = ""
     speaker: str = ""
     role: str = "user"
+    #: What this save retires once committed (``remember(..., replaces=)``).
+    #: Journaled with the save so a deferred or replayed commit applies it.
+    replaces: str = ""
 
     def __post_init__(self) -> None:
         if not isinstance(self.content, str) or not self.content.strip():
@@ -155,6 +158,8 @@ class RememberRequest:
             raise AdmissionPayloadError("idempotency_key must be 1-256 safe characters")
         if self.scope not in {"personal", "project", "shared", "global"}:
             raise AdmissionPayloadError(f"unsupported scope: {self.scope}")
+        if not isinstance(self.replaces, str):
+            raise AdmissionPayloadError("replaces must be a string id")
         if not isinstance(self.metadata, Mapping):
             raise AdmissionPayloadError("metadata must be an object")
         metadata = dict(self.metadata)
@@ -163,7 +168,7 @@ class RememberRequest:
         object.__setattr__(self, "shared_with", tuple(self.shared_with))
 
     def canonical_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "content": self.content,
             "idempotency_key": self.idempotency_key,
             "metadata": dict(self.metadata),
@@ -177,6 +182,11 @@ class RememberRequest:
             "speaker": self.speaker,
             "trusted_actor_id": self.trusted_actor_id,
         }
+        if self.replaces:
+            # Only when set: every request hash journaled before this field
+            # existed is unchanged, so retries across an upgrade still match.
+            payload["replaces"] = self.replaces
+        return payload
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> RememberRequest:
@@ -193,6 +203,7 @@ class RememberRequest:
             session_date=str(payload.get("session_date") or ""),
             speaker=str(payload.get("speaker") or ""),
             role=str(payload.get("role") or "user"),
+            replaces=str(payload.get("replaces") or ""),
         )
 
 

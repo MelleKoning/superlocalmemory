@@ -225,3 +225,84 @@ def test_recall_answers_with_the_new_memory(engine_with_mock_deps) -> None:
 # A per-request ``profile_id`` with ``replaces`` -- saved, retired and undone in
 # the routed profile, refused across profiles -- is covered end to end in
 # tests/test_server/test_routed_mutations.py.
+
+
+def test_a_replacement_accepted_while_the_writer_is_busy_is_applied(
+    engine_with_mock_deps,
+) -> None:
+    """A save with ``replaces`` answered 202 still retires the old memory.
+
+    The replacement is journaled with the save and applied the moment the
+    background commit lands; resending the same key reports it as done.
+    """
+    import sqlite3
+
+    engine = engine_with_mock_deps
+    with _client(engine) as client:
+        runtime = client.app.state.canonical_remember_runtime
+        old = _save(client, OLD, "replaces-busy-old")
+        [old_id] = old["fact_ids"]
+        holder = sqlite3.connect(str(engine._db.db_path), timeout=5, isolation_level=None)
+        holder.execute("BEGIN IMMEDIATE")
+        try:
+            accepted = client.post("/remember", json={
+                "content": NEW, "idempotency_key": "replaces-busy-new", "replaces": old_id,
+            })
+        finally:
+            holder.execute("ROLLBACK")
+            holder.close()
+        assert accepted.status_code == 202, accepted.text
+        assert accepted.json()["replaced"]["pending"] is True
+        assert runtime.wait_for_deferred(timeout=15.0)
+        # Retired by the background commit itself - before anyone resends.
+        assert _expired(engine, old_id)["system_expired_at"], "replacement was dropped"
+        final = _save(client, NEW, "replaces-busy-new", replaces=old_id)
+
+    [new_id] = final["fact_ids"]
+    assert _expired(engine, old_id)["invalidated_by"] == new_id
+    assert final["replaced"]["ok"] is True, final["replaced"]
+    assert final["replaced"]["fact_ids"] == [old_id]
+    assert _count(engine, "correction_cases") == 1
+
+
+def test_a_replacement_survives_a_restart_before_its_save_committed(
+    engine_with_mock_deps,
+) -> None:
+    """Journaled but not committed when the daemon stopped: recovery applies both."""
+    from superlocalmemory.storage.admission_journal import Actor, RememberRequest
+
+    engine = engine_with_mock_deps
+    with _client(engine) as client:
+        runtime = client.app.state.canonical_remember_runtime
+        old = _save(client, OLD, "replaces-restart-old")
+        [old_id] = old["fact_ids"]
+        actor_id = dict(engine._db.execute(
+            "SELECT trusted_actor_id FROM ingestion_operations")[0])["trusted_actor_id"]
+        profile = engine._profile_id
+        runtime.journal.prepare(
+            RememberRequest(
+                content=NEW, profile_id=profile, source_type="http",
+                idempotency_key="replaces-restart-new", trusted_actor_id=actor_id,
+                replaces=old_id,
+            ),
+            Actor(actor_id, frozenset({profile}), frozenset({"personal"})),
+        )
+        runtime.stop()
+        # A daemon restart: a new runtime whose recovery commits the save,
+        # then its replacement.
+        from superlocalmemory.core.remember_runtime import CanonicalRememberRuntime
+
+        restarted = CanonicalRememberRuntime.for_engine(engine)
+        restarted.start()
+        client.app.state.canonical_remember_runtime = restarted
+        try:
+            assert restarted.wait_for_deferred(timeout=15.0)
+            assert _expired(engine, old_id)["system_expired_at"], "replacement was dropped"
+            final = _save(client, NEW, "replaces-restart-new", replaces=old_id)
+        finally:
+            restarted.stop()
+
+    [new_id] = final["fact_ids"]
+    assert _expired(engine, old_id)["invalidated_by"] == new_id
+    assert final["replaced"]["ok"] is True, final["replaced"]
+    assert _count(engine, "correction_cases") == 1

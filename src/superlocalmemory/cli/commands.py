@@ -1792,6 +1792,9 @@ def cmd_remember(args: Namespace) -> None:
                 if isinstance(replaced, dict) and replaced.get("ok"):
                     print(f"Replaced \u2713 {len(replaced.get('fact_ids') or [])} fact(s) "
                           f"of {replaced.get('replaces')}. {replaced.get('undo', '')}".rstrip())
+                elif isinstance(replaced, dict) and replaced.get("pending"):
+                    print(f"{replaced.get('replaces')} will be replaced as soon as the "
+                          "new memory is indexed (within seconds).")
                 elif isinstance(replaced, dict):
                     print(f"Saved, but {replaced.get('replaces')} was NOT replaced: "
                           f"{replaced.get('reason')}", file=sys.stderr)

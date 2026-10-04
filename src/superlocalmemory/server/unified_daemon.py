@@ -312,10 +312,12 @@ def _accepted_remember_response(payload: dict, profile: str, *, replaces=None):
     if replaces is not None:
         body["replaced"] = {
             "ok": False,
+            "pending": True,
             "replaces": replaces,
             "reason": (
-                "the new memory is saved but not yet indexed, so the old one "
-                "was not retired; resend with the same idempotency_key"
+                "the new memory is saved durably and what it replaces will be "
+                "retired as soon as it is indexed (within seconds); resend "
+                "with the same idempotency_key to see the result"
             ),
         }
     return JSONResponse(body, status_code=202)
@@ -5204,6 +5206,10 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 trusted_actor_id=trusted_actor_id,
                 session_id=req.session_id,
                 session_date=req.session_date,
+                # Journaled with the save: if the writer is busy and the save
+                # is accepted (202), the replacement is applied when the
+                # background commit lands rather than silently dropped.
+                replaces=replaces_id or "",
             )
             actor = Actor(
                 principal_id=trusted_actor_id,

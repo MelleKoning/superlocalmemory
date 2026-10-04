@@ -330,6 +330,9 @@ class CanonicalRememberRuntime:
         # Commits remembers that were accepted while the writer was busy.
         self._deferred = DeferredCommitter(self.journal, self._commit_deferred)
         self._started = False
+        # Mutations may run as soon as the writer does - during start()'s own
+        # recovery too, which applies replacements of replayed saves.
+        self._writer_open = False
         self._obligation_schema_ok: bool | None = None
 
     @classmethod
@@ -445,8 +448,10 @@ class CanonicalRememberRuntime:
                 CommandKind.REPLACE_BY_CALLER, self._handle_mutation,
             )
             self.coordinator.start()
+            self._writer_open = True
             self.replay_pending()
         except BaseException:
+            self._writer_open = False
             self.coordinator.release_ownership()
             raise
         if self._deferred.stopped:  # a restart of this same runtime
@@ -492,6 +497,7 @@ class CanonicalRememberRuntime:
         # fails cleanly, and anything still queued stays in the journal for
         # replay_pending at the next start.
         self._deferred.stop()
+        self._writer_open = False
         self.coordinator.release_ownership()
         # Drains queued journal marks, then frees the writer thread and the
         # pooled connections; a later start reopens them.
@@ -525,9 +531,47 @@ class CanonicalRememberRuntime:
             profile_id=entry.profile_id,
             idempotency_key=entry.idempotency_key,
         )
-        return _CoordinatorAdapter(self.coordinator).submit(
+        receipt = _CoordinatorAdapter(self.coordinator).submit(
             command, wait_ms=_DEFERRED_COMMIT_WAIT_MS,
         )["receipt"]
+        # Before the journal marks it committed, so a crash in between replays
+        # the replacement too (it is idempotent, keyed on the operation id).
+        self._apply_replacement(request, receipt)
+        return receipt
+
+    def _apply_replacement(
+        self, request: RememberRequest, receipt: Mapping[str, Any],
+    ) -> None:
+        """Retire what a save named in ``replaces``, after a background commit.
+
+        A foreground save is answered by the daemon, which applies (and
+        reports) its own replacement; a save accepted under contention or
+        recovered after a restart has no caller waiting, so it is applied
+        here. Never raises: the save stands either way, and the outcome is
+        logged and returned to whoever resends the same idempotency key.
+        """
+        if not request.replaces:
+            return
+        from types import SimpleNamespace
+
+        from superlocalmemory.core.remember_replaces import replace_after_save
+
+        with self._binding_lock:
+            db, active = self._db, self._profile_id
+        result = replace_after_save(
+            self, SimpleNamespace(_db=db), replaces=request.replaces,
+            profile_id=request.profile_id,
+            successor_fact_ids=list(receipt.get("fact_ids") or ()),
+            operation_id=str(receipt.get("operation_id") or ""),
+            trusted_actor_id=request.trusted_actor_id,
+            routed=request.profile_id != active,
+        )
+        if result.get("ok"):
+            logger.info("a deferred save retired %d fact(s) it replaces",
+                        len(result.get("fact_ids") or ()))
+        else:
+            logger.warning("a deferred save did not replace what it named: %s",
+                           result.get("reason"))
 
     def rebind_engine(self, engine: Any) -> None:
         """Atomically follow a drained daemon mode/profile transition."""
@@ -656,9 +700,30 @@ class CanonicalRememberRuntime:
                 find,
                 dispatch,
                 profile_id=self._profile_id,
+                after_commit=self._after_replayed_commit,
             )
         except (WriteCoordinatorError, ValueError, json.JSONDecodeError) as exc:
             raise CanonicalRememberUnavailable("pending remember recovery failed") from exc
+
+    def _after_replayed_commit(
+        self,
+        entry: AdmissionEntry,
+        request: RememberRequest | None,
+        receipt: Mapping[str, Any],
+    ) -> None:
+        if request is None:
+            # Found already committed: read the command back only to learn
+            # whether it carried a replacement still to apply. The save
+            # itself stands even if the command can no longer be read.
+            try:
+                request = self.journal.request_for(entry)
+            except AdmissionPayloadError:
+                logger.error(
+                    "a recovered save's command cannot be read back, so any "
+                    "replacement it asked for was not applied (%s)", entry.journal_id,
+                )
+                return
+        self._apply_replacement(request, receipt)
 
     def delete_fact(
         self, profile_id: str, fact_id: str, *, idempotency_key: str | None = None,
@@ -857,7 +922,7 @@ class CanonicalRememberRuntime:
         *,
         idempotency_key: str | None,
     ) -> Mapping[str, Any]:
-        if not self._started:
+        if not self._writer_open:
             raise CanonicalRememberUnavailable("canonical mutation writer is not ready")
         if not profile_id:
             raise ValueError("profile_id is required")
