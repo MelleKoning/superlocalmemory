@@ -59,6 +59,8 @@ def describe_not_ready(health: dict | None) -> str:
     if words is None:
         engine = health.get("engine", "unknown")
         words = f"engine state '{engine}'"
+    if state == "warming":
+        return words                      # already says the model is loading
     model = "warm" if health.get("embedding_warm") is True else "not loaded yet"
     return f"{words} (embedding model: {model})"
 
