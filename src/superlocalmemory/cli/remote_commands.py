@@ -343,7 +343,13 @@ def cmd_remote(args: Namespace) -> None:
         if action == "check":
             results = run_checks()
             if getattr(args, "json", False):
-                print(json.dumps({"results": results}, indent=2))
+                # The standard CLI envelope (success/command/version/data),
+                # like `slm doctor --json`; exit status still says pass/fail.
+                from superlocalmemory.cli.json_output import json_print
+
+                summary = {status.lower(): sum(r["status"] == status for r in results)
+                           for status in ("PASS", "WARN", "FAIL", "INFO")}
+                json_print("remote check", data={"results": results, "summary": summary})
             else:
                 for r in results:
                     print(f"[{r['status']:<4}] {r['check']}: {r['detail']}")
@@ -369,7 +375,9 @@ def _cmd_keys(args: Namespace) -> None:
     if sub == "list":
         rows = [k.public() for k in store.list()]
         if getattr(args, "json", False):
-            print(json.dumps({"keys": rows}, indent=2))
+            from superlocalmemory.cli.json_output import json_print
+
+            json_print("remote keys list", data={"keys": rows})
             return
         if not rows:
             print("No remote keys. Create one: slm remote keys add <name>")
