@@ -657,8 +657,18 @@ def _rank_key(result) -> tuple[float, str]:
     return (-float(utility), result.fact.fact_id)
 
 
+def _question_key(query: str | None) -> str | None:
+    """A stable, text-free key for a question; None when there is no question."""
+    if query is None:
+        return None
+    from superlocalmemory.learning.bandit_draw import normalize_question
+
+    return hashlib.sha256(normalize_question(query).encode("utf-8")).hexdigest()[:16]
+
+
 def _apply_outcome_bonus(
     results: list, profile_id: str, memory_db_path: Any = None,
+    *, query: str | None = None,
 ) -> list:
     """Nudge ranking by whether each memory has demonstrably helped before.
 
@@ -728,7 +738,9 @@ def _apply_outcome_bonus(
             ))
         adjusted.sort(key=_rank_key)
         if adjusted:
-            RECENT_TOPS.record_top(profile_id, adjusted[0].fact.fact_id)
+            # Against the question, so asking it again is not another win.
+            RECENT_TOPS.record_top(profile_id, adjusted[0].fact.fact_id,
+                                   query_key=_question_key(query))
         return adjusted
     except Exception as exc:  # pragma: no cover — advisory, never fatal
         logger.debug("outcome bonus skipped: %s", exc)
@@ -1056,7 +1068,7 @@ def apply_v2_bandit_ensemble(
         # true by construction: the model cannot learn from a signal it
         # never sees, so there is no self-reinforcing loop to exclude.
         final_results = _apply_outcome_bonus(
-            final_results, profile_id, memory_db_path,
+            final_results, profile_id, memory_db_path, query=query,
         )
 
         # Give the play its evidence: which memories this query actually
