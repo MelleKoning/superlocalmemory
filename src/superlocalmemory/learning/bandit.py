@@ -9,7 +9,9 @@ Schema: ``bandit_arms`` + ``bandit_plays`` live in ``learning.db``, created by
 LLD-07 M005. This module NEVER defines DDL — it only READs / WRITEs.
 
 Hard rules:
-  - B1: ``secrets.SystemRandom`` used for Beta sampling (NOT ``random``).
+  - B1: the Beta draw is keyed by an install secret (``bandit_draw``):
+    unpredictable without it, and one question over one posterior is one arm
+    (4.1.20 — a fresh system-random draw reordered identical recalls).
   - B2: α, β clamped at ``SLM_BANDIT_ALPHA_CAP`` (default 1000).
   - B4: stratum cardinality == 48 (4 query_types × 3 entity bins × 4 buckets).
   - B5: cache invalidated on every successful ``update``.
@@ -25,7 +27,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import secrets
 import sqlite3
 import threading
 from dataclasses import dataclass, field
@@ -35,6 +36,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from superlocalmemory.learning.arm_catalog import ARM_CATALOG
+from superlocalmemory.learning.bandit_draw import draw_rng
 from superlocalmemory.learning.bandit_cache import (
     _BanditCache,
     get_shared_cache,
@@ -234,8 +236,6 @@ class ContextualBandit:
         self._catalog = catalog or ARM_CATALOG
         self._cache = cache or get_shared_cache()
         self._alpha_cap = float(alpha_cap)
-        # Fresh SystemRandom per instance; cheap, seeded from os.urandom.
-        self._rng = secrets.SystemRandom()
 
     # ------------------------------------------------------------------
     # choose
@@ -245,8 +245,15 @@ class ContextualBandit:
         self,
         context: dict[str, Any],
         query_id: str,
+        *,
+        draw_key: str | None = None,
     ) -> BanditChoice:
         """Sample one arm under the context stratum; record play row.
+
+        ``draw_key`` is the question. The draw is keyed by it and the stratum's
+        posterior, so asking the same thing twice picks the same arm until a
+        settled reward changes what the bandit knows. Without one, the opaque
+        ``query_id`` keys the draw. The question is never stored (B6).
 
         Never raises. On DB error, returns a fallback_default choice with
         ``play_id=None`` and logs at WARN level (no PII).
@@ -263,7 +270,8 @@ class ContextualBandit:
             )
             posteriors = {}
 
-        arm_id = self._sample_best(posteriors)
+        key = draw_key if draw_key is not None else query_id
+        arm_id = self._sample_best(posteriors, stratum, key)
         play_id = self._insert_play(query_id, stratum, arm_id)
         return BanditChoice(
             stratum=stratum,
@@ -272,8 +280,15 @@ class ContextualBandit:
             play_id=play_id,
         )
 
-    def choose_readonly(self, context: dict[str, Any]) -> BanditChoice:
+    def choose_readonly(
+        self,
+        context: dict[str, Any],
+        *,
+        draw_key: str | None = None,
+    ) -> BanditChoice:
         """Sample an arm from a read-only snapshot without recording a play.
+
+        ``draw_key`` keys the draw exactly as in :meth:`choose`.
 
         Recall uses this method so the established bandit weighting and
         ensemble quality path remain available without turning a query into a
@@ -291,7 +306,7 @@ class ContextualBandit:
                 exc,
             )
             posteriors = {}
-        arm_id = self._sample_best(posteriors)
+        arm_id = self._sample_best(posteriors, stratum, draw_key or "")
         return BanditChoice(
             stratum=stratum,
             arm_id=arm_id,
@@ -302,9 +317,15 @@ class ContextualBandit:
     def _sample_best(
         self,
         posteriors: dict[str, tuple[float, float]],
+        stratum: str,
+        draw_key: str,
     ) -> str:
-        """Draw one Beta sample per arm, return argmax."""
-        rng = self._rng  # B1: secrets.SystemRandom
+        """Draw one Beta sample per arm, return argmax.
+
+        B1: the generator is keyed (``bandit_draw.draw_rng``), so the same
+        question over the same posterior always yields the same arm.
+        """
+        rng = draw_rng(self._profile, stratum, draw_key, posteriors)
         best_arm = _FALLBACK_ARM_ID
         best_sample = float("-inf")
         for arm_id in self._catalog:

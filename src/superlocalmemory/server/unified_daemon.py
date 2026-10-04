@@ -4689,6 +4689,11 @@ def _register_daemon_routes(application: FastAPI) -> None:
         except InvalidKind as exc:
             from superlocalmemory.server.kind_error import invalid_kind_http
             raise invalid_kind_http(exc)
+        # 4.1.20 (R5): refused before any retrieval, never run unfiltered.
+        from superlocalmemory.server.time_filter_error import checked_window_or_400
+        window = checked_window_or_400(window)
+        if not isinstance(window, str):
+            return window
         engine = _get_engine_or_503()
         req_profile = (profile_id or "").strip()
         # 4.1.14 audit: permission before existence on the read path, the

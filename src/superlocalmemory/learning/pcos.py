@@ -144,21 +144,32 @@ class RecentTopCounter:
     compounds — without new plumbing. In-process and ephemeral on purpose: a DB
     write per displayed fact per query is exactly the contention the exposure
     enqueue was switched off to avoid.
+
+    COUNTS DIFFERENT QUESTIONS, NOT ASKS (4.1.20). The risk is one memory
+    winning MANY questions. Counting every ask meant one question asked a
+    fourth time capped its own top answer and flipped it — the answer changed
+    because the person asked again. A win is now recorded against the question
+    (``query_key``, a hash — never the text); asking it again refreshes that
+    win instead of adding one.
     """
 
-    __slots__ = ("_counts", "_seen")
+    __slots__ = ("_counts", "_seen", "_anonymous")
 
     #: Queries per profile before the window resets.
     _WINDOW = 200
 
     def __init__(self) -> None:
-        self._counts: dict[str, dict[str, int]] = defaultdict(
-            lambda: defaultdict(int)
-        )
+        # profile -> fact -> ordered set of the questions it won (oldest first)
+        self._counts: dict[str, dict[str, dict[str, None]]] = defaultdict(dict)
         self._seen: dict[str, int] = defaultdict(int)
+        self._anonymous = 0
 
-    def record_top(self, profile_id: str, fact_id: str) -> None:
+    def record_top(self, profile_id: str, fact_id: str,
+                   query_key: str | None = None) -> None:
         """Note that ``fact_id`` took first place for ``profile_id``.
+
+        ``query_key`` identifies the question; without one, every call counts
+        as a different question (the behaviour before 4.1.20).
 
         The window DECAYS rather than being dropped. Emptying it wholesale every
         ``_WINDOW`` queries handed every previously-capped memory its bonus back
@@ -172,13 +183,22 @@ class RecentTopCounter:
         if self._seen[key] > self._WINDOW:
             bucket = self._counts.get(key)
             if bucket:
-                halved = {f: c // 2 for f, c in bucket.items() if c > 1}
-                self._counts[key] = defaultdict(int, halved)
+                # Keep the most recent half of each fact's won questions.
+                self._counts[key] = {
+                    f: dict.fromkeys(list(won)[len(won) - len(won) // 2:])
+                    for f, won in bucket.items() if len(won) > 1
+                }
             self._seen[key] = 0
-        self._counts[key][fact_id] += 1
+        if query_key is None:
+            self._anonymous += 1
+            query_key = f"#anon{self._anonymous}"
+        won = self._counts[key].setdefault(fact_id, {})
+        won.pop(query_key, None)
+        won[query_key] = None
 
     def tops(self, profile_id: str, fact_id: str) -> int:
-        return self._counts.get(profile_id or "", {}).get(fact_id, 0)
+        """How many different questions this fact has recently won."""
+        return len(self._counts.get(profile_id or "", {}).get(fact_id, ()))
 
     def capped(self, profile_id: str, fact_id: str) -> bool:
         """Whether this fact has won often enough to stop earning a bonus."""

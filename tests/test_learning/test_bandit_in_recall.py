@@ -178,7 +178,7 @@ def test_readonly_bandit_preserves_ensemble_reranking_without_play(
     monkeypatch.setattr(
         ContextualBandit,
         "choose_readonly",
-        lambda self, context: readonly_choice,
+        lambda self, context, draw_key=None: readonly_choice,
     )
     monkeypatch.setattr(
         ContextualBandit,

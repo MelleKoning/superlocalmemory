@@ -47,12 +47,12 @@ def _visible(store, include_global: bool, include_shared: bool) -> list[str]:
     return store.ids("L" + ("G" if include_global else "") + ("S" if include_shared else ""))
 
 
-def _oracle(store, q, cfg, include_global, include_shared, *, vector_path=True):
-    """SYNAPSE seeded by one KNN over every visible fact, on the seed path's scale."""
+def _oracle(store, q, cfg, include_global, include_shared):
+    """SYNAPSE seeded by one KNN over every visible fact, on the one seed scale."""
     scored = []
     for fid in _visible(store, include_global, include_shared):
         c = cosine(q, store.embs[fid])
-        scored.append((fid, max(0.0, c) if vector_path else (c + 1.0) / 2.0))
+        scored.append((fid, max(0.0, c)))
     scored.sort(key=lambda x: (-x[1], x[0]))
     seeds = scored[: cfg.top_m]
     ch = SpreadingActivation(store.db, None, cfg)
@@ -114,12 +114,12 @@ def test_cross_scope_answer_equals_the_unified_index_oracle(
 
 
 def test_sql_fallback_path_equals_its_oracle(store, monkeypatch) -> None:
-    """Without vec0 the seed scale is (cos+1)/2 for everything, as it always was."""
+    """Without vec0 the seeds are scored on the same max(0, cos) scale (MUSE-4)."""
     cfg = SpreadingActivationConfig()
     spy = _SeedSpy(monkeypatch)
     ch = SpreadingActivation(store.db, None, cfg)
     for q in store.queries[:4]:
-        want_seeds, want = _oracle(store, q, cfg, True, True, vector_path=False)
+        want_seeds, want = _oracle(store, q, cfg, True, True)
         got = ch.search(q.tolist(), REQ, top_k=TOP_K, include_global=True,
                         include_shared=True)
         assert spy.seeds[-1] == want_seeds

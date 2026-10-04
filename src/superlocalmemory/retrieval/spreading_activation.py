@@ -35,17 +35,21 @@ from superlocalmemory.storage.models import _new_id
 logger = logging.getLogger(__name__)
 
 
-def _seed_score(cosine: float, vector_path: bool) -> float:
+def _seed_score(cosine: float, vector_path: bool = True) -> float:
     """A seed's initial activation from its cosine to the query.
 
     The ONE place the seed scale is defined, so local and cross-scope seeds
-    can never drift apart again (#146).  The vec0 path scores
-    ``max(0, 1 - distance)`` = ``max(0, cos)`` (``VectorStore.search``); the
-    SQL fallback in ``_seed_search`` has always used ``(cos + 1) / 2``.
+    can never drift apart again (#146), and neither can the two seed paths.
+    The vec0 path scores ``max(0, 1 - distance)`` = ``max(0, cos)``
+    (``VectorStore.search``), and every path now uses that scale.
+
+    Before 4.1.20 the SQL fallback used ``(cos + 1) / 2``: cos 0.45 started the
+    walk at 0.725 instead of 0.45, an unrelated memory (cos 0) at 0.5, so the
+    answer depended on whether the vector index happened to be available.
+    ``vector_path`` is accepted for callers and no longer changes the scale.
     """
-    if vector_path:
-        return max(0.0, cosine)
-    return (cosine + 1.0) / 2.0
+    del vector_path
+    return max(0.0, cosine)
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +96,19 @@ class SpreadingActivationConfig:
 #: Bumped when cross-scope seed selection changes, so activations cached by the
 #: old selection are not served after an upgrade.
 _CROSS_SCOPE_SEEDING = "|seeds=2"
+
+#: Seed scores are compared to this many decimals in the cache key.
+_SEED_SCORE_DECIMALS = 6
+
+
+def _seed_fingerprint(seeds: list[tuple[str, float]]) -> str:
+    """Order-free digest of a seed set: ids and rounded scores."""
+    material = "\n".join(
+        f"{fact_id}={round(float(score), _SEED_SCORE_DECIMALS)!r}"
+        for fact_id, score in sorted(
+            seeds, key=lambda item: (str(item[0]), float(item[1])))
+    )
+    return "|seedset=" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
 
 
 class SpreadingActivation:
@@ -175,11 +192,15 @@ class SpreadingActivation:
                 return []
 
             # Check cache first
+            # Keyed by the seeds too: a memory saved since the entry was
+            # written that now seeds this question must be walked, not hidden
+            # behind an hour-old answer.
             query_hash = self._compute_query_hash(
                 query,
                 profile_id,
                 include_global=include_global,
                 include_shared=include_shared,
+                seeds=seed_results,
             )
             cached = self._get_cached_results(query_hash, profile_id)
             if cached:
@@ -566,12 +587,27 @@ class SpreadingActivation:
         *,
         include_global: bool = False,
         include_shared: bool = False,
+        seeds: list[tuple[str, float]] | None = None,
     ) -> str:
-        """Deterministic hash for cache key."""
+        """Deterministic hash for cache key.
+
+        ``seeds`` is the seed set this search starts from. It is part of the
+        key because the activations are a function of it: before 4.1.20 a
+        memory saved after a question was asked — even the best match, seeding
+        first — stayed invisible to that question for the cache's full hour.
+        Scores are rounded so float noise cannot defeat the cache.
+        """
         scope_bytes = f"|g={int(include_global)}|s={int(include_shared)}".encode()
         if include_global or include_shared:
-            # Personal keys are unchanged: personal seeding did not change.
             scope_bytes += _CROSS_SCOPE_SEEDING.encode()
+        if seeds is not None:
+            scope_bytes += _seed_fingerprint(seeds).encode()
+            # Which search produced the seeds. One scale on both paths makes
+            # their walks agree, but the two indexes can still disagree (a
+            # vector index lagging the store), so one never answers for the other.
+            scope_bytes += (
+                b"|path=vec" if self._uses_vector_seeds() else b"|path=sql"
+            )
         if isinstance(query, np.ndarray):
             data = query.tobytes() + profile_id.encode() + scope_bytes
         elif isinstance(query, list):
@@ -587,13 +623,19 @@ class SpreadingActivation:
     def _get_cached_results(
         self, query_hash: str, profile_id: str,
     ) -> list[tuple[str, float]] | None:
-        """Check activation_cache for recent results."""
+        """Check activation_cache for recent results.
+
+        One row per node, whatever the table holds: two identical recalls in
+        flight at once used to store the entry twice, and a hit then returned
+        every node twice.
+        """
         try:
             rows = self._db.execute(
-                "SELECT node_id, activation_value FROM activation_cache "
+                "SELECT node_id, MAX(activation_value) AS activation_value "
+                "FROM activation_cache "
                 "WHERE profile_id = ? AND query_hash = ? "
                 "AND expires_at > datetime('now') "
-                "ORDER BY activation_value DESC",
+                "GROUP BY node_id",
                 (profile_id, query_hash),
             )
             if not rows:
@@ -613,11 +655,21 @@ class SpreadingActivation:
         profile_id: str,
         activations: dict[str, float],
     ) -> None:
-        """Store results in activation_cache with 1-hour TTL."""
+        """Store results in activation_cache with 1-hour TTL.
+
+        Replaces the entry rather than adding to it: the old rows for this key
+        are deleted in the same transaction, so two concurrent writers of one
+        entry leave exactly one copy (SQLite serialises the two transactions).
+        """
         try:
             # One transaction => ONE write-lock acquisition for the whole
             # activation cache, instead of N separately-locked writes.
             with self._db.transaction():
+                self._db.execute(
+                    "DELETE FROM activation_cache "
+                    "WHERE profile_id = ? AND query_hash = ?",
+                    (profile_id, query_hash),
+                )
                 for node_id, value in activations.items():
                     self._db.execute(
                         "INSERT OR REPLACE INTO activation_cache "

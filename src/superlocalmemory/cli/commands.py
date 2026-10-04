@@ -1854,18 +1854,17 @@ _RECALL_TIME_FLAGS = (
 
 
 def _invalid_recall_time_filter(args: Namespace) -> tuple[str, str] | None:
-    """Return ``(flag, value)`` for the first time filter that cannot be read."""
-    from superlocalmemory.retrieval.temporal_utils import normalize_as_of
-    from superlocalmemory.retrieval.time_window import parse_window
+    """Return ``(flag, value)`` for the first time filter that cannot be read.
 
-    for attr, flag in _RECALL_TIME_FLAGS:
-        raw = getattr(args, attr, "") or ""
-        if not raw:
-            continue
-        readable = parse_window(raw) if attr == "window" else normalize_as_of(raw)
-        if readable is None:
-            return flag, raw
-    return None
+    The same check MCP, HTTP and the engine use (``retrieval.time_filter``).
+    """
+    from superlocalmemory.retrieval.time_filter import first_invalid
+
+    bad = first_invalid({attr: getattr(args, attr, "") or ""
+                         for attr, _flag in _RECALL_TIME_FLAGS})
+    if bad is None:
+        return None
+    return dict(_RECALL_TIME_FLAGS)[bad.field], bad.raw
 
 
 def _refuse_bad_recall_time_filter(args: Namespace, use_json: bool) -> None:
