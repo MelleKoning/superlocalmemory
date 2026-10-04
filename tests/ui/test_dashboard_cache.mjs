@@ -17,6 +17,11 @@ const coreSource = readFileSync(
   'utf8',
 );
 
+// One dashboard refresh reads: /api/stats, /api/timeline, /api/memories,
+// /api/v3/dashboard and, since 4.1.18 (8f9e953e), the /api/v3/answer-check
+// summary. Each is fetched once per refresh and served from the cache after.
+const READS_PER_REFRESH = 5;
+
 function responseFor(path) {
   if (path === '/api/stats') {
     return { overview: {}, ingestion_sources: [] };
@@ -64,7 +69,7 @@ describe('dashboard read cache', function () {
     const initialCalls = calls.length;
     await window.refreshDashboard();
 
-    assert.equal(initialCalls, 4);
+    assert.equal(initialCalls, READS_PER_REFRESH);
     assert.equal(calls.length, initialCalls);
 
     await window.refreshDashboard({ force: true });
@@ -127,7 +132,7 @@ describe('dashboard read cache', function () {
       (path) => path !== '/internal/token' && path !== '/api/behavioral/report-outcome',
     ).length;
     assert.equal(paneInvalidations, 1);
-    assert.equal(readsAfterMutation, readsBeforeMutation + 4);
+    assert.equal(readsAfterMutation, readsBeforeMutation + READS_PER_REFRESH);
     dom.window.close();
   });
 
@@ -150,7 +155,7 @@ describe('dashboard read cache', function () {
     window.paneErrorMessage = function () { return 'unavailable'; };
     window.fetch = function (path) {
       calls.push(path);
-      if (calls.length <= 4) {
+      if (calls.length <= READS_PER_REFRESH) {
         return new Promise(function (resolve) {
           firstWave.push(function () {
             resolve({
@@ -174,7 +179,7 @@ describe('dashboard read cache', function () {
     firstWave.forEach(function (release) { release(); });
     await refresh;
 
-    assert.equal(calls.length, 8);
+    assert.equal(calls.length, READS_PER_REFRESH * 2);
     dom.window.close();
   });
 
@@ -211,7 +216,7 @@ describe('dashboard read cache', function () {
     unavailable = false;
     await window.refreshDashboard();
 
-    assert.equal(calls.length, 8);
+    assert.equal(calls.length, READS_PER_REFRESH * 2);
     dom.window.close();
   });
 });
