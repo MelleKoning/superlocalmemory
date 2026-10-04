@@ -19,10 +19,18 @@ current name -- so it was kept forever and a newer generation pruned instead.
 
 A generation is the set of copies taken together (``memory`` and ``learning``
 share a timestamp) and is only useful whole. Retention keeps the ``keep``
-newest generations. A legacy time could be anywhere from fourteen hours before
-to twelve hours after the same digits read as UTC, so a generation is pruned
-only when at least ``keep`` others are newer than it under EVERY reading. Where
-the order is genuinely uncertain, one more copy is kept rather than one lost.
+newest generations. Since 4.1.20 an update that changes only learning.db
+copies only learning.db, and such a copy must never push the last copies of
+memory.db -- the restore points a person can go back to -- out of the folder.
+So a generation is counted by the copy that makes it worth keeping: one that
+holds a memory copy goes when ``keep`` newer generations hold a memory copy
+too (its learning copy goes with it, as before); one that holds only a
+learning copy goes when ``keep`` newer generations hold a learning copy.
+
+A legacy time could be anywhere from fourteen hours before to twelve hours
+after the same digits read as UTC, so a generation is pruned only when at least
+``keep`` others are newer than it under EVERY reading. Where the order is
+genuinely uncertain, one more copy is kept rather than one lost.
 
 Deletion is only ever by explicit full path, of a regular file directly inside
 the folder; a symlink is neither followed, counted nor removed, and a folder
@@ -49,6 +57,8 @@ _LEGACY = re.compile(
     r"-pre-(?P<version>\d[0-9A-Za-z.+_-]*)\.db$"
 )
 _SIDE_SUFFIXES = ("-wal", "-shm", "-journal")
+#: The database whose copy makes a generation a restore point.
+_RESTORE_POINT_STEM = "memory"
 _STAGING_SUFFIX = ".partial"
 
 #: A copy is written under ``<name>.partial`` and renamed when verified. One
@@ -67,10 +77,18 @@ class _Generation:
     earliest: float
     latest: float
     files: list[Path] = field(default_factory=list)
+    #: The databases it holds copies of ("memory", "learning", ...).
+    stems: set[str] = field(default_factory=set)
 
 
 def _parse(name: str) -> tuple[tuple, float, float] | None:
     """(generation key, earliest, latest) in UTC seconds, or None if not a copy."""
+    parsed = _parse_with_stem(name)
+    return None if parsed is None else parsed[:3]
+
+
+def _parse_with_stem(name: str) -> tuple[tuple, float, float, str] | None:
+    """``_parse`` plus the database the copy is of (its name's stem)."""
     for pattern, legacy in ((_CURRENT, False), (_LEGACY, True)):
         match = pattern.match(name)
         if match is None:
@@ -88,9 +106,9 @@ def _parse(name: str) -> tuple[tuple, float, float] | None:
             return None
         if legacy:
             key = ("legacy", match["date"], match["time"], match["version"])
-            return key, moment - _LOCAL_EARLIEST, moment + _LOCAL_LATEST
+            return key, moment - _LOCAL_EARLIEST, moment + _LOCAL_LATEST, match["stem"]
         key = ("current", match["date"], match["time"], match["us"])
-        return key, moment, moment
+        return key, moment, moment, match["stem"]
     return None
 
 
@@ -157,11 +175,13 @@ def plan(root: Path, keep: int, protect: frozenset[str] = frozenset()) -> list[P
     children, everything = _list(root)
     generations: dict[tuple, _Generation] = {}
     for name, path in children.items():
-        parsed = _parse(name)
+        parsed = _parse_with_stem(name)
         if parsed is None:
             continue
-        key, earliest, latest = parsed
-        generations.setdefault(key, _Generation(earliest, latest)).files.append(path)
+        key, earliest, latest, stem = parsed
+        generation = generations.setdefault(key, _Generation(earliest, latest))
+        generation.files.append(path)
+        generation.stems.add(stem)
 
     protected = {
         key for key, gen in generations.items()
@@ -171,12 +191,14 @@ def plan(root: Path, keep: int, protect: frozenset[str] = frozenset()) -> list[P
     for key, gen in sorted(generations.items(), key=lambda kv: kv[1].latest):
         if key in protected:
             continue
-        certainly_newer = sum(
-            1 for other_key, other in generations.items()
-            if other_key != key
-            and (other_key in protected or other.earliest > gen.latest)
-        )
-        if certainly_newer < keep:
+        newer = [other for other_key, other in generations.items()
+                 if other_key != key
+                 and (other_key in protected or other.earliest > gen.latest)]
+        # A generation is the copy of what makes it worth keeping: memory.db
+        # when it holds one (a restore point), otherwise whatever it holds.
+        counted = {_RESTORE_POINT_STEM} if _RESTORE_POINT_STEM in gen.stems else gen.stems
+        if any(sum(1 for other in newer if stem in other.stems) < keep
+               for stem in counted):
             continue
         mains = sorted(gen.files)
         doomed.extend(mains)
