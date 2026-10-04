@@ -34,6 +34,7 @@ __all__ = [
 ]
 
 _REL = re.compile(r"^\s*(\d+)\s*([hdwmy])\s*$", re.IGNORECASE)
+_DATE_ONLY = re.compile(r"^\s*\d{4}-\d{2}-\d{2}\s*$")
 
 # Hours per unit. Month and year are documented approximations.
 _UNIT_HOURS: dict[str, int] = {
@@ -91,11 +92,7 @@ def parse_window(
     if isinstance(window, (tuple, list)):
         if len(window) != 2:
             return None
-        start = parse_timestamp(window[0])
-        end = parse_timestamp(window[1])
-        if start is None or end is None:
-            return None
-        return (start, end) if start <= end else (end, start)
+        return _explicit_range(window[0], window[1])
 
     # String forms: relative "<int><unit>" or an explicit range written as
     # "start..end" / "start,end" (so it survives URL params, JSON, and CLI args
@@ -110,13 +107,30 @@ def parse_window(
         for sep in ("..", ","):
             if sep in window:
                 left, _, right = window.partition(sep)
-                start = parse_timestamp(left)
-                end = parse_timestamp(right)
-                if start is None or end is None:
-                    return None
-                return (start, end) if start <= end else (end, start)
+                return _explicit_range(left, right)
 
     return None
+
+
+def _explicit_range(left: object, right: object) -> tuple[datetime, datetime] | None:
+    """Order the two ends; a date-only END covers that whole day.
+
+    "2026-07-01..2026-07-31" means all of July. Read as instants, its end was
+    31 July 00:00 and the last day fell outside its own range. The end of a
+    date-only bound is the last microsecond of that day — the same set as an
+    exclusive end at the next midnight, at datetime's full resolution. An end
+    written with a time is taken exactly as written.
+    """
+    ends = []
+    for raw in (left, right):
+        parsed = parse_timestamp(raw) if isinstance(raw, str) else None
+        if parsed is None:
+            return None
+        ends.append((parsed, bool(_DATE_ONLY.match(raw))))
+    (start, _), (end, end_is_date) = sorted(ends, key=lambda item: (item[0], item[1]))
+    if end_is_date:
+        end = end + timedelta(days=1) - timedelta(microseconds=1)
+    return (start, end)
 
 
 # Natural-language temporal-scope patterns → relative window spec. Ordered:
