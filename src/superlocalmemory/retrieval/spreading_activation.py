@@ -183,18 +183,20 @@ class SpreadingActivation:
             )
             cached = self._get_cached_results(query_hash, profile_id)
             if cached:
-                # v3.8.2 perf: cached activations were produced from this profile's
-                # own propagation; personal-scope hits need no re-authorization.
-                # Cross-scope hits still pass the fail-closed filter.
-                if include_global or include_shared:
-                    return filter_authorized_results(
-                        self._db,
-                        cached,
-                        profile_id,
-                        include_global=include_global,
-                        include_shared=include_shared,
-                    )[:top_k]
-                return cached[:top_k]
+                # A hit is answered exactly as the propagation that stored it
+                # was: same order, same fail-closed filter, for EVERY scope.
+                # The cache holds raw activations, and a personal propagation
+                # can reach facts outside this profile through an edge; 4.1.19
+                # returned personal hits unfiltered, so a repeated question
+                # could surface another profile's fact the first answer had
+                # removed (and the two answers differed).
+                return filter_authorized_results(
+                    self._db,
+                    cached,
+                    profile_id,
+                    include_global=include_global,
+                    include_shared=include_shared,
+                )[:top_k]
 
             # Run 5-step spreading activation
             activations = self._propagate(
@@ -596,10 +598,12 @@ class SpreadingActivation:
             )
             if not rows:
                 return None
-            return [
-                (dict(r)["node_id"], dict(r)["activation_value"])
-                for r in rows
-            ]
+            # The same total order as a fresh propagation (value desc, then
+            # id), so a tie cannot reorder the answer on a hit.
+            return sorted(
+                ((dict(r)["node_id"], dict(r)["activation_value"]) for r in rows),
+                key=lambda item: (-item[1], item[0]),
+            )
         except Exception:
             return None
 
@@ -625,7 +629,9 @@ class SpreadingActivation:
                          self._config.max_iterations),
                     )
         except Exception as exc:
-            logger.debug("Cache write failed: %s", exc)
+            # Not debug: a cache that is never written is invisible otherwise,
+            # and every identical recall then pays the full propagation.
+            logger.warning("Spreading-activation cache write failed: %s", exc)
 
     def cleanup_expired_cache(self) -> int:
         """Delete expired cache entries. Called by maintenance."""

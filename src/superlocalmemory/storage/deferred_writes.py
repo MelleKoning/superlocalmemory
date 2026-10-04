@@ -46,10 +46,19 @@ _bg_thread: threading.Thread | None = None
 
 
 def _bg_run(work_queue: "queue.Queue", stop: threading.Event) -> None:
-    while not stop.is_set():
+    """Run queued jobs; on stop, finish what is already queued, then exit.
+
+    Stopping used to exit at the next loop turn and drop every job still in
+    the queue, so a write submitted just before shutdown (an activation-cache
+    write after the last recall of a short-lived process) never happened.
+    The drain is bounded by the caller's join timeout; the thread is a daemon.
+    """
+    while True:
         try:
             fn = work_queue.get(timeout=0.1)
         except queue.Empty:
+            if stop.is_set():
+                return
             continue
         try:
             fn()
@@ -57,7 +66,9 @@ def _bg_run(work_queue: "queue.Queue", stop: threading.Event) -> None:
             # Best-effort: bookkeeping must never crash the writer thread.
             pass
         finally:
-            _bg_queue.task_done()
+            # This thread's own queue: the module global is replaced when a
+            # stopped writer is restarted.
+            work_queue.task_done()
 
 
 def _ensure_bg_thread() -> None:
