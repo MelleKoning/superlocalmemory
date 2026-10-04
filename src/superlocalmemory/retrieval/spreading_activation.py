@@ -89,6 +89,11 @@ class SpreadingActivationConfig:
 # SpreadingActivation Channel
 # ---------------------------------------------------------------------------
 
+#: Bumped when cross-scope seed selection changes, so activations cached by the
+#: old selection are not served after an upgrade.
+_CROSS_SCOPE_SEEDING = "|seeds=2"
+
+
 class SpreadingActivation:
     """SYNAPSE 5-step spreading activation as 5th retrieval channel.
 
@@ -562,6 +567,9 @@ class SpreadingActivation:
     ) -> str:
         """Deterministic hash for cache key."""
         scope_bytes = f"|g={int(include_global)}|s={int(include_shared)}".encode()
+        if include_global or include_shared:
+            # Personal keys are unchanged: personal seeding did not change.
+            scope_bytes += _CROSS_SCOPE_SEEDING.encode()
         if isinstance(query, np.ndarray):
             data = query.tobytes() + profile_id.encode() + scope_bytes
         elif isinstance(query, list):

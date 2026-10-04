@@ -250,3 +250,21 @@ PERSONAL_GOLDEN: list[tuple[list[str], list[float]]] = [(['L00023', 'L00035', 'L
    0.5144647081339602]),
  (['L00041', 'L00007', 'L00012', 'L00079'],
   [0.7211928220184252, 0.6540041551666688, 0.5296917662751737, 0.5277701882654858])]
+
+
+def test_cross_scope_cache_key_changes_with_the_seed_fix_and_personal_does_not() -> None:
+    """Activations cached by 4.1.19's cross-scope seeding must not be served
+    after the upgrade; personal results were unchanged, so their cache stays."""
+    import hashlib
+
+    def old_key(query, profile_id, g, s):  # 4.1.19's formula, verbatim
+        scope = f"|g={int(g)}|s={int(s)}".encode()
+        return hashlib.sha256(str(query).encode() + profile_id.encode() + scope).hexdigest()[:16]
+
+    ch = SpreadingActivation.__new__(SpreadingActivation)
+    q = "what did we decide"
+    assert ch._compute_query_hash(q, "p1") == old_key(q, "p1", False, False)
+    for g, s in ((True, False), (False, True), (True, True)):
+        assert ch._compute_query_hash(
+            q, "p1", include_global=g, include_shared=s,
+        ) != old_key(q, "p1", g, s)
