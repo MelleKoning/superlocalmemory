@@ -24,6 +24,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from superlocalmemory.core.config import PolarQuantConfig
+from superlocalmemory.math.orthogonal import haar_orthogonal
 from superlocalmemory.infra.data_root import canonical_data_root
 
 logger = logging.getLogger(__name__)
@@ -203,11 +204,8 @@ class TurboQuantEncoder:
             except Exception as exc:
                 logger.warning("Could not copy polar rotation: %s", exc)
 
-        # Generate new via Mezzadri-corrected QR
-        rng = np.random.default_rng(self._config.seed)
-        H = rng.standard_normal((d, d))
-        Q, R = np.linalg.qr(H)
-        S = Q @ np.diag(np.sign(np.diag(R)))
+        # Generate new via Mezzadri-corrected QR (no LAPACK; see math.orthogonal)
+        S = haar_orthogonal(d, self._config.seed)
 
         turbo_path.parent.mkdir(parents=True, exist_ok=True)
         np.save(str(turbo_path), S)

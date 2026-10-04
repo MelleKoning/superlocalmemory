@@ -41,6 +41,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from superlocalmemory.core.config import PolarQuantConfig
+from superlocalmemory.math.orthogonal import haar_orthogonal
 from superlocalmemory.infra.data_root import state_path
 
 logger = logging.getLogger(__name__)
@@ -130,12 +131,9 @@ class PolarQuantEncoder:
             except Exception as exc:
                 logger.warning("Corrupt rotation matrix, regenerating: %s", exc)
 
-        # Generate new rotation matrix with Mezzadri correction
-        rng = np.random.default_rng(self._config.seed)
-        H = rng.standard_normal((self._d, self._d))
-        Q, R = np.linalg.qr(H)
-        # Mezzadri correction: ensures uniform sampling from O(d)
-        S = Q @ np.diag(np.sign(np.diag(R)))
+        # Mezzadri-corrected QR: uniform sampling from O(d). Built without
+        # LAPACK, whose macOS QR corrupts memory at this size (math.orthogonal).
+        S = haar_orthogonal(self._d, self._config.seed)
 
         path.parent.mkdir(parents=True, exist_ok=True)
         np.save(str(path), S)
