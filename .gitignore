@@ -95,6 +95,9 @@ add_attribution.py
 # ==== BUILD ARTIFACTS ====
 build/
 dist/
+# Release builds kept by hand at the top level (dist_407/, dist_4115/ ...).
+# Anchored to the root so a source folder named dist* is never ignored.
+/dist*/
 *.dmg
 *.exe
 *.tgz
