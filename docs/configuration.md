@@ -270,6 +270,16 @@ dashboard's install token, the daemon capability, or an API key):
 | `sufficiency_jev_rerank`, `sufficiency_jev_rerank_consent` | `false` | Reordering with Jev and its own consent; both must be `true`; set only by the dashboard switch |
 | `sufficiency_jev_rerank_k` | `20` | How many top results reordering sends (clamped to 5–30) |
 
+The Answer Check tab's history (4.1.20) lives in `config.json` under
+`retrieval`, with the other recall settings. A change applies at the next
+daemon start:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `answer_check_history` | `true` | Keep outcomes and timings of recent checks (never questions or memories) for the dashboard's Answer Check tab |
+| `answer_check_history_days` | `30` | Days kept (clamped to 1–365) |
+| `answer_check_history_max_rows` | `10000` | Most checks kept per profile (clamped to 1,000–10,000; a data export reads at most 10,000 rows per table) |
+
 The provider key is never stored in any of these files; it lives in its own
 owner-only key store. Hand-editing `answer_check.json` works but is
 unsupported — use the dashboard. A damaged file is read as "no consent".
