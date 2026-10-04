@@ -118,8 +118,28 @@ def _child_env(data_root: Path, port: int, home: Path, cache_root: Path) -> dict
     return env
 
 
+_DEFAULT_DAEMON_PORT = 8765  # unified_daemon --start with no --port
+
+
+def _daemon_port(cmdline: list[str]) -> int | None:
+    """The port a ``unified_daemon --start`` command line serves on."""
+    for arg in cmdline:
+        if arg.startswith("--port="):
+            try:
+                return int(arg.split("=", 1)[1])
+            except ValueError:
+                return None
+    return _DEFAULT_DAEMON_PORT
+
+
 def _foreign_daemon_pids() -> set[int]:
-    """PIDs of unified daemons that do not belong to this test (production)."""
+    """PIDs of production unified daemons (on a production port) not ours.
+
+    Only production daemons are counted. Other test runs on the same machine
+    start their own daemons on private ports and stop them whenever they
+    finish; counting those made this guard fail whenever a parallel suite
+    ended (4.1.20 full-suite run: two such daemons exited mid-module).
+    """
     try:
         import psutil
     except Exception:  # pragma: no cover — psutil is a test dependency
@@ -128,15 +148,23 @@ def _foreign_daemon_pids() -> set[int]:
     pids: set[int] = set()
     for proc in psutil.process_iter(["pid", "cmdline"]):
         try:
-            cmdline = " ".join(proc.info["cmdline"] or [])
+            cmdline = list(proc.info["cmdline"] or [])
         except Exception:
             continue
         if (
             proc.info["pid"] != mine
-            and "superlocalmemory.server.unified_daemon" in cmdline
+            and "superlocalmemory.server.unified_daemon" in " ".join(cmdline)
+            and _daemon_port(cmdline) in PRODUCTION_PORTS
         ):
             pids.add(proc.info["pid"])
     return pids
+
+
+def test_only_production_port_daemons_count_as_foreign() -> None:
+    mod = "superlocalmemory.server.unified_daemon"
+    assert _daemon_port(["python", "-m", mod, "--start"]) == 8765
+    assert _daemon_port(["python", "-m", mod, "--start", "--port=8767"]) in PRODUCTION_PORTS
+    assert _daemon_port(["python", "-m", mod, "--start", "--port=18921"]) not in PRODUCTION_PORTS
 
 
 def _alive(pid: int) -> bool:
@@ -284,11 +312,25 @@ class RealDaemon:
         assert code == 200, payload
         return payload
 
+    #: 503 is remember's documented "retry shortly" answer when its 2 s
+    #: admission deadline passes (a loaded machine: 4.1.19 and 4.1.20 both
+    #: returned it here at load average 25). A client honouring the contract
+    #: resends the SAME idempotency key; the exact-count assertions then also
+    #: prove such a retry never stores a memory twice. Any other status fails
+    #: at once, and the retry budget is small and counted.
+    RETRYABLE_ATTEMPTS = 5
+    retries = 0
+
     def remember(self, content: str, profile_id: str, idempotency_key: str) -> dict:
         body = {"content": content, "idempotency_key": idempotency_key}
         if profile_id:
             body["profile_id"] = profile_id
-        code, payload = self.request("POST", "/remember", body)
+        for attempt in range(self.RETRYABLE_ATTEMPTS):
+            code, payload = self.request("POST", "/remember", body)
+            if code != 503:
+                break
+            self.retries += 1
+            time.sleep(0.2 * (attempt + 1))
         assert code == 200, payload
         assert payload.get("ok") is True, payload
         return payload
