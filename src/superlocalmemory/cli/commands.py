@@ -1823,6 +1823,54 @@ def _answer_check_line(result: dict) -> str:
     return ""
 
 
+#: Recall's time filters: (Namespace attribute, flag as typed).
+_RECALL_TIME_FLAGS = (
+    ("window", "--window"),
+    ("as_of", "--as-of"),
+    ("known_as_of", "--known-as-of"),
+    ("valid_at", "--valid-at"),
+)
+
+
+def _invalid_recall_time_filter(args: Namespace) -> tuple[str, str] | None:
+    """Return ``(flag, value)`` for the first time filter that cannot be read."""
+    from superlocalmemory.retrieval.temporal_utils import normalize_as_of
+    from superlocalmemory.retrieval.time_window import parse_window
+
+    for attr, flag in _RECALL_TIME_FLAGS:
+        raw = getattr(args, attr, "") or ""
+        if not raw:
+            continue
+        readable = parse_window(raw) if attr == "window" else normalize_as_of(raw)
+        if readable is None:
+            return flag, raw
+    return None
+
+
+def _refuse_bad_recall_time_filter(args: Namespace, use_json: bool) -> None:
+    """Exit 1 on an unreadable time filter, in the output format asked for."""
+    bad = _invalid_recall_time_filter(args)
+    if bad is None:
+        return
+    flag, raw = bad
+    expected = (
+        "Expected a relative span (24h, 7d, 30d, 1y) or a range "
+        "(2026-07-01..2026-07-31)."
+        if flag == "--window"
+        else "Expected ISO 8601 UTC datetime, e.g. '2024-01-01T00:00:00Z'."
+    )
+    if use_json:
+        from superlocalmemory.cli.json_output import json_print
+        json_print("recall", error={
+            "code": "INVALID_TIME_FILTER",
+            "flag": flag,
+            "message": f"invalid {flag} value: {raw!r}. {expected}",
+        })
+    else:
+        sys.stderr.write(f"Error: invalid {flag} value: {raw!r}\n{expected}\n")
+    sys.exit(1)
+
+
 def cmd_recall(args: Namespace) -> None:
     """Search memories through the owned daemon without a local engine."""
     use_json = getattr(args, 'json', False)
@@ -1840,6 +1888,10 @@ def cmd_recall(args: Namespace) -> None:
         else:
             print(str(exc), file=sys.stderr)
         sys.exit(2)
+    # 4.1.20: every time filter is checked here, before the daemon is probed,
+    # so a bad value is answered in the format asked for (JSON under --json)
+    # and a bad --window is refused instead of silently running unfiltered.
+    _refuse_bad_recall_time_filter(args, use_json)
     # v3.6.15: None = "not specified" → daemon/engine resolves the configured
     # default (shared-off). Only an explicit --include-global / --no-global
     # produces True/False here.
