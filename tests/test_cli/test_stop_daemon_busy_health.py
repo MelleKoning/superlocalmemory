@@ -65,6 +65,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from superlocalmemory.infra.daemon_identity import build_descriptor, write_descriptor
+from tests._urlopen_fake import patch_urlopen
 
 
 def _owned_descriptor(port: int = 43923):
@@ -107,7 +108,7 @@ class TestBusyHealthIsNotDeath:
         from superlocalmemory.cli import daemon
 
         _owned_descriptor()
-        with patch("urllib.request.urlopen", side_effect=_AlwaysTimesOut()):
+        with patch_urlopen(side_effect=_AlwaysTimesOut()):
             assert daemon.is_daemon_running() is False
 
     def test_owned_daemon_process_alive_survives_busy_health(self) -> None:
@@ -115,7 +116,7 @@ class TestBusyHealthIsNotDeath:
         from superlocalmemory.cli import daemon
 
         _owned_descriptor()
-        with patch("urllib.request.urlopen", side_effect=_AlwaysTimesOut()) as request:
+        with patch_urlopen(side_effect=_AlwaysTimesOut()) as request:
             assert daemon.owned_daemon_process_alive() is True
         # Never even tried HTTP -- liveness came from the PID/start-token
         # check alone, so it cannot be starved by a busy event loop.
@@ -136,7 +137,7 @@ class TestDaemonRequestVerifyHealthFlag:
         from superlocalmemory.cli import daemon
 
         _owned_descriptor()
-        with patch("urllib.request.urlopen", side_effect=_AlwaysTimesOut()) as request:
+        with patch_urlopen(side_effect=_AlwaysTimesOut()) as request:
             assert daemon.daemon_request("POST", "/stop") is None
         assert request.call_count == 1  # the (failed) health preflight only
 
@@ -169,7 +170,7 @@ class TestDaemonRequestVerifyHealthFlag:
             seen_capability.append(req.get_header("X-slm-daemon-capability"))
             return _StopResponse()
 
-        with patch("urllib.request.urlopen", side_effect=_urlopen):
+        with patch_urlopen(side_effect=_urlopen):
             result = daemon.daemon_request(
                 "POST", "/stop",
                 expected_descriptor=descriptor,
@@ -215,7 +216,7 @@ class TestStopDaemonSurvivesBusyHealth:
             assert url.endswith("/stop")
             return _StopResponse()
 
-        with patch("urllib.request.urlopen", side_effect=_urlopen) as request, \
+        with patch_urlopen(side_effect=_urlopen) as request, \
              patch.object(daemon, "wait_for_owned_daemon_shutdown", return_value=True) as wait:
             assert daemon.stop_daemon() is True
 
@@ -232,7 +233,7 @@ class TestStopDaemonSurvivesBusyHealth:
 
         _owned_descriptor()
         with patch.object(daemon, "_descriptor_process_is_alive", return_value=False), \
-             patch("urllib.request.urlopen") as request:
+             patch_urlopen() as request:
             assert daemon.stop_daemon() is False
         request.assert_not_called()
 

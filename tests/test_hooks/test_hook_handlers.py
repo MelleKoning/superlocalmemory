@@ -28,6 +28,7 @@ import pytest
 from superlocalmemory.core import context_cache as cc
 from superlocalmemory.core import security_primitives as sp
 from superlocalmemory.hooks import user_prompt_hook, post_tool_async_hook
+from tests._urlopen_fake import setattr_urlopen
 
 
 # ---------------------------------------------------------------------------
@@ -293,8 +294,7 @@ def test_post_tool_async_sends_install_token(
         return _R()
 
     # Patch urllib inside the module.
-    import urllib.request as _ur
-    monkeypatch.setattr(_ur, "urlopen", fake_urlopen)
+    setattr_urlopen(monkeypatch, fake_urlopen)
     rc, out = _run_hook(
         post_tool_async_hook.main,
         json.dumps({"session_id": "s", "tool_name": "Read",
@@ -443,8 +443,7 @@ def test_post_tool_async_without_token(
         called["count"] += 1
         raise AssertionError("urlopen should not be called without token")
 
-    import urllib.request as _ur
-    monkeypatch.setattr(_ur, "urlopen", fake_urlopen)
+    setattr_urlopen(monkeypatch, fake_urlopen)
     rc, out = _run_hook(
         post_tool_async_hook.main,
         json.dumps({"session_id": "s", "tool_name": "Read"}),
@@ -471,8 +470,7 @@ def test_post_tool_async_summarize_string_input(
                 return None
         return _R()
 
-    import urllib.request as _ur
-    monkeypatch.setattr(_ur, "urlopen", fake_urlopen)
+    setattr_urlopen(monkeypatch, fake_urlopen)
     rc, out = _run_hook(
         post_tool_async_hook.main,
         json.dumps({"session_id": "s", "tool_name": "Bash",
@@ -501,8 +499,7 @@ def test_post_tool_async_truncates_large_output(
                 return None
         return _R()
 
-    import urllib.request as _ur
-    monkeypatch.setattr(_ur, "urlopen", fake_urlopen)
+    setattr_urlopen(monkeypatch, fake_urlopen)
     big = "y" * 20000
     rc, out = _run_hook(
         post_tool_async_hook.main,

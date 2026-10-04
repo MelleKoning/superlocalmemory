@@ -175,6 +175,8 @@ def test_urlopen_screens_a_json_body_for_another_machine(monkeypatch) -> None:
         raise OSError("stop")
 
     monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open",
+                        lambda self, req, *a, **kw: _fake_urlopen(req))
     req = urllib.request.Request(_LAN, data=json.dumps(_payload()).encode(),
                                  headers={"Content-Type": "application/json"})
     with pytest.raises(OSError):
