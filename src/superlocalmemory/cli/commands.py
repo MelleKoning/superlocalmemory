@@ -73,6 +73,28 @@ def _daemon_unavailable(command: str, use_json: bool) -> None:
     raise SystemExit(1)
 
 
+def _memory_not_found(command: str, fact_id: str, use_json: bool) -> None:
+    """Exit for an id the running daemon does not know.
+
+    A live daemon answering 404 is an answer, not an outage. Reporting it as
+    DAEMON_UNAVAILABLE sent people to restart a daemon that was working.
+    """
+    message = f"No memory with id {fact_id}"
+    hint = "Run `slm list` to see memory ids."
+    if use_json:
+        from superlocalmemory.cli.json_output import json_print
+
+        json_print(command, error={
+            "code": "NOT_FOUND",
+            "message": message,
+            "hint": hint,
+            "retryable": False,
+        })
+    else:
+        print(f"{message}. {hint}", file=sys.stderr)
+    raise SystemExit(1)
+
+
 def _cmd_db_dispatch(args: Namespace) -> None:
     """Route ``slm db ...`` subcommands. LLD-06 §7.2."""
     sub = getattr(args, "db_command", None)
@@ -2182,6 +2204,7 @@ def cmd_delete(args: Namespace) -> None:
     import urllib.parse
 
     from superlocalmemory.cli.daemon import (
+        DaemonNotFound,
         daemon_request,
         ensure_daemon,
         is_daemon_running,
@@ -2194,10 +2217,14 @@ def cmd_delete(args: Namespace) -> None:
         confirmed = getattr(args, "yes", False)
         content = ""
         if not confirmed:
-            detail = daemon_request(
-                "GET",
-                "/api/facts/" + urllib.parse.quote(fact_id, safe=""),
-            )
+            try:
+                detail = daemon_request(
+                    "GET",
+                    "/api/facts/" + urllib.parse.quote(fact_id, safe=""),
+                    preserve_not_found=True,
+                )
+            except DaemonNotFound:
+                _memory_not_found("delete", fact_id, use_json)
             if not isinstance(detail, dict):
                 _daemon_unavailable("delete", use_json)
             content = str(detail.get("content") or "")
@@ -2223,7 +2250,10 @@ def cmd_delete(args: Namespace) -> None:
                 print("Cancelled.")
                 return
 
-        result = daemon_request("DELETE", path)
+        try:
+            result = daemon_request("DELETE", path, preserve_not_found=True)
+        except DaemonNotFound:
+            _memory_not_found("delete", fact_id, use_json)
         if not isinstance(result, dict) or not result.get("success"):
             _daemon_unavailable("delete", use_json)
         if use_json:
@@ -2253,6 +2283,7 @@ def cmd_update(args: Namespace) -> None:
     import urllib.parse
 
     from superlocalmemory.cli.daemon import (
+        DaemonNotFound,
         daemon_request,
         ensure_daemon,
         is_daemon_running,
@@ -2272,7 +2303,11 @@ def cmd_update(args: Namespace) -> None:
 
     if is_daemon_running() or ensure_daemon():
         path = "/api/memories/" + urllib.parse.quote(fact_id, safe="")
-        result = daemon_request("PATCH", path, {"content": new_content})
+        try:
+            body = {"content": new_content}
+            result = daemon_request("PATCH", path, body, preserve_not_found=True)
+        except DaemonNotFound:
+            _memory_not_found("update", fact_id, use_json)
         if not isinstance(result, dict) or not result.get("success"):
             _daemon_unavailable("update", use_json)
         if use_json:
