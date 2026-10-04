@@ -285,11 +285,12 @@ def test_concurrent_receipt_writes_complete_without_deadlock(store: AgentExperie
         payload["experience_id"] = f"experience-{number}"
         return store.record_experience(payload)
 
-    started = time.monotonic()
+    # A deadlock shows as a missed deadline on a future, not as a slow
+    # stopwatch: the old "< 2 s" total failed in a loaded run with no deadlock.
     with ThreadPoolExecutor(max_workers=8) as executor:
-        outcomes = list(executor.map(write, range(32)))
+        futures = [executor.submit(write, number) for number in range(32)]
+        outcomes = [future.result(timeout=30) for future in futures]
     assert outcomes == [True] * 32
-    assert time.monotonic() - started < 2.0
 
 
 def _receipt_and_memory_stores(tmp_path: Path):
