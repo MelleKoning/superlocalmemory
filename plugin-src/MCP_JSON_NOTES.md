@@ -29,3 +29,25 @@ memories written from Claude Code be told apart from every other agent.
 
 A plugin should add capability. It should not quietly re-point the data it reads
 or take tools away.
+
+# Why the Windows launcher is not what Claude Code runs
+
+`.mcp.json` names `${CLAUDE_PLUGIN_ROOT}/scripts/slm-launch`, with no extension.
+On macOS and Linux that is the bash launcher. On Windows it is not resolved to
+`slm-launch.bat`: a host that starts an MCP server without a shell goes through
+`CreateProcess`, which cannot start a batch file and appends only `.exe` to a
+name that has no extension. Node's `child_process.spawn` without `shell` and
+libuv behave the same way (libuv tries the literal name, then `.com`, then
+`.exe`). The Windows CI runner checks this directly:
+`tests/test_plugin/test_windows_mcp_spawn_premise.py`.
+
+So editing `slm-launch.bat` changes nothing for a plugin install on Windows,
+and `SLM_LAUNCHER` was deliberately not ported into it (#139). A single
+`.mcp.json` has no per-platform command, so making the plugin's server start on
+native Windows means changing what the command names — for example an `.exe`,
+or `cmd` with `/c` — and that choice affects every platform. It is an open
+decision, not something this file settles.
+
+Hooks are different: Claude Code runs command hooks with bash (Git Bash on
+Windows) or, without Git Bash, PowerShell. Under Git Bash the POSIX scripts —
+`slm-run`, `ensure-venv.sh`, and the shared `slm-resolve.sh` — are what run.

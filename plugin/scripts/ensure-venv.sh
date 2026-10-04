@@ -8,7 +8,7 @@
 #   CLAUDE_PLUGIN_ROOT  — plugin installation dir (ephemeral, contains scripts/ + requirements.txt)
 #   CLAUDE_PLUGIN_DATA  — persistent data dir (venv lives here, survives plugin updates)
 #
-# Exit codes: 0 = venv ready   non-0 = failure (logged to stderr)
+# Exit codes: 0 = venv ready, or not needed   non-0 = failure (logged to stderr)
 # All output goes to stderr only (stdout reserved for MCP stdio protocol).
 
 set -euo pipefail
@@ -23,6 +23,28 @@ set -euo pipefail
 # Redirect all output to stderr (MCP uses stdout for protocol messages)
 # ---------------------------------------------------------------------------
 exec 1>&2
+
+# ---------------------------------------------------------------------------
+# Only build a venv that will be used.
+#
+# slm-launch prefers an slm that is already installed, and SLM_LAUNCHER can name
+# one outright. In those cases the plugin venv is never run, so neither its
+# Python requirement nor its install cost should land on this session. The
+# question is answered by slm-resolve.sh, the same code the launcher and the
+# hooks use, so the three can never disagree about which slm is in play.
+# ---------------------------------------------------------------------------
+# shellcheck source=slm-resolve.sh
+. "$(dirname "${BASH_SOURCE[0]}")/slm-resolve.sh"
+if ! slm_choose; then
+    # A venv cannot fix a launcher that is configured to use something else.
+    # Report it, and leave the session alone: the MCP server reports it again.
+    echo "SLM plugin: venv not needed — ${SLM_RESOLVE_ERROR}" >&2
+    exit 0
+fi
+if [ "${SLM_CHOICE}" != "plugin" ]; then
+    echo "SLM plugin: venv not needed — using ${SLM_CHOICE_BIN} (${SLM_CHOICE})." >&2
+    exit 0
+fi
 
 # ---------------------------------------------------------------------------
 # Python >= 3.12 guard

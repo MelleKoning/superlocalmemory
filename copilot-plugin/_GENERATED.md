@@ -41,3 +41,5 @@ Regenerate: `npm run build:copilot-plugin` (or `node scripts/build-copilot-plugi
 - `scripts/ensure-venv.sh`
 - `scripts/slm-launch`
 - `scripts/slm-launch.bat`
+- `scripts/slm-resolve.sh`
+- `scripts/slm-run`

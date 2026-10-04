@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "slm hook mandate 2>/dev/null || true",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/slm-run\" hook mandate || true",
             "timeout": 5000
           }
         ]
@@ -22,7 +22,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "slm hook start 2>/dev/null || true",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/slm-run\" hook start || true",
             "timeout": 15000
           }
         ]
@@ -34,7 +34,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "slm hook checkpoint 2>/dev/null || true",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/slm-run\" hook checkpoint || true",
             "timeout": 5000
           }
         ]
@@ -44,7 +44,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "slm hook post_tool_outcome 2>/dev/null || true",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/slm-run\" hook post_tool_outcome || true",
             "timeout": 5000
           }
         ]
@@ -55,7 +55,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "slm hook user_prompt_rehash 2>/dev/null || true",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/slm-run\" hook user_prompt_rehash || true",
             "timeout": 5000
           }
         ]
@@ -64,7 +64,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "slm hook topic_shift 2>/dev/null || true",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/slm-run\" hook topic_shift || true",
             "timeout": 3000
           }
         ]
@@ -75,12 +75,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "slm hook stop 2>/dev/null || true",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/slm-run\" hook stop || true",
             "timeout": 10000
           },
           {
             "type": "command",
-            "command": "slm hook stop_outcome 2>/dev/null || true",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/slm-run\" hook stop_outcome || true",
             "timeout": 10000
           }
         ]
@@ -92,7 +92,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "slm hook before_web 2>/dev/null || true",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/slm-run\" hook before_web || true",
             "timeout": 5000
           }
         ]

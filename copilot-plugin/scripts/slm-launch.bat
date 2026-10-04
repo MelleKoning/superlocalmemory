@@ -2,7 +2,15 @@
 :: slm-launch.bat — WP-F SuperLocalMemory MCP launcher (Windows)
 ::
 :: Cross-platform counterpart: slm-launch (POSIX bash)
-:: Referenced by plugin/.mcp.json as the MCP server command (Windows picks .bat automatically).
+::
+:: NOT reached through plugin/.mcp.json. That file names the extensionless
+:: "${CLAUDE_PLUGIN_ROOT}/scripts/slm-launch", and a host that spawns it without
+:: a shell (CreateProcess, Node spawn without shell) never resolves it to this
+:: .bat: CreateProcess cannot start a batch file and only appends .exe to a
+:: name without an extension. This file runs only when started through cmd.exe
+:: (for example a hand-written MCP entry using "cmd /c"). It does not read
+:: SLM_LAUNCHER; see MCP_JSON_NOTES.md and issue #139.
+:: Proven on the Windows CI runner: tests/test_plugin/test_windows_mcp_spawn_premise.py
 ::
 :: Resolves the correct venv binary for Windows and joins the namespace daemon
 :: before opening MCP, preserving one writer for parallel Claude sessions.

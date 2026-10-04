@@ -251,14 +251,24 @@ class TestLaunchersPreferWhatIsAlreadyInstalled:
 
     @pytest.mark.parametrize("name, rel", LAUNCHERS, ids=[l[0] for l in LAUNCHERS])
     def test_it_says_something_useful_when_nothing_is_installed(
-        self, name, rel,
+        self, name, rel, tmp_path,
     ) -> None:
         """A path that silently does not exist is the worst outcome — that is how
-        the Codex server failed to start with no explanation at all."""
-        text = (REPO / rel).read_text(encoding="utf-8")
+        the Codex server failed to start with no explanation at all.
 
-        assert "pipx install superlocalmemory" in text, (
-            f"{name}: no install advice for a machine that has no SLM"
+        Run, not grepped: the Claude launcher's wording lives in the shared
+        resolver it sources, so only executing it shows what a user sees."""
+        empty = tmp_path / "bin"
+        empty.mkdir(parents=True, exist_ok=True)
+
+        result = self._run(
+            rel, path_dir=empty, plugin_data=tmp_path / "plugin-data", tmp_path=tmp_path,
+        )
+
+        assert result.returncode != 0, f"{name}: started with nothing installed"
+        assert "pipx install superlocalmemory" in result.stderr, (
+            f"{name}: no install advice for a machine that has no SLM.\n"
+            f"stderr={result.stderr[:300]!r}"
         )
 
     @pytest.mark.parametrize("name, rel", LAUNCHERS, ids=[l[0] for l in LAUNCHERS])

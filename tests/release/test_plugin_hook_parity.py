@@ -16,13 +16,25 @@ REQUIRED_CMDS = {
 }
 
 
+# 4.1.20 (#141): plugin hooks run slm through scripts/slm-run, which finds the
+# same slm the MCP launcher uses. Normalise that back to the slm command it runs.
+_SLM_RUN = '"${CLAUDE_PLUGIN_ROOT}/scripts/slm-run" '
+
+
+def _slm_command(command):
+    command = command.split("2>")[0].split("||")[0].strip()
+    if command.startswith(_SLM_RUN):
+        command = "slm " + command[len(_SLM_RUN):]
+    return command
+
+
 def _events_and_cmds(path):
     d = json.loads(Path(path).read_text(encoding="utf-8"))
     cmds = set()
     for arr in d["hooks"].values():
         for grp in arr:
             for hk in grp.get("hooks", []):
-                cmds.add(hk["command"].split("2>")[0].strip())
+                cmds.add(_slm_command(hk["command"]))
     return set(d["hooks"].keys()), cmds
 
 
