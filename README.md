@@ -23,6 +23,8 @@ slm connect cursor                # or claude-code, codex, windsurf, zed ... 12 
 
 Runs on Apple Silicon macOS, 64-bit Linux and 64-bit Windows. No Docker, no required graph database, no API key.
 
+pipx installs SLM into its own Python virtual environment. npm also needs Node 18+ and installs into a package-owned virtual environment. Repository clone: `./scripts/install.sh install` (macOS, Linux) or `.\scripts\install.ps1 -Action Install` (Windows); see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## 30-second example
 
 ```console
