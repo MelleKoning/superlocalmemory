@@ -93,6 +93,19 @@ class SpreadingActivationConfig:
 #: old selection are not served after an upgrade.
 _CROSS_SCOPE_SEEDING = "|seeds=2"
 
+#: Seed scores are compared to this many decimals in the cache key.
+_SEED_SCORE_DECIMALS = 6
+
+
+def _seed_fingerprint(seeds: list[tuple[str, float]]) -> str:
+    """Order-free digest of a seed set: ids and rounded scores."""
+    material = "\n".join(
+        f"{fact_id}={round(float(score), _SEED_SCORE_DECIMALS)!r}"
+        for fact_id, score in sorted(
+            seeds, key=lambda item: (str(item[0]), float(item[1])))
+    )
+    return "|seedset=" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+
 
 class SpreadingActivation:
     """SYNAPSE 5-step spreading activation as 5th retrieval channel.
@@ -175,11 +188,15 @@ class SpreadingActivation:
                 return []
 
             # Check cache first
+            # Keyed by the seeds too: a memory saved since the entry was
+            # written that now seeds this question must be walked, not hidden
+            # behind an hour-old answer.
             query_hash = self._compute_query_hash(
                 query,
                 profile_id,
                 include_global=include_global,
                 include_shared=include_shared,
+                seeds=seed_results,
             )
             cached = self._get_cached_results(query_hash, profile_id)
             if cached:
@@ -566,12 +583,21 @@ class SpreadingActivation:
         *,
         include_global: bool = False,
         include_shared: bool = False,
+        seeds: list[tuple[str, float]] | None = None,
     ) -> str:
-        """Deterministic hash for cache key."""
+        """Deterministic hash for cache key.
+
+        ``seeds`` is the seed set this search starts from. It is part of the
+        key because the activations are a function of it: before 4.1.20 a
+        memory saved after a question was asked — even the best match, seeding
+        first — stayed invisible to that question for the cache's full hour.
+        Scores are rounded so float noise cannot defeat the cache.
+        """
         scope_bytes = f"|g={int(include_global)}|s={int(include_shared)}".encode()
         if include_global or include_shared:
-            # Personal keys are unchanged: personal seeding did not change.
             scope_bytes += _CROSS_SCOPE_SEEDING.encode()
+        if seeds is not None:
+            scope_bytes += _seed_fingerprint(seeds).encode()
         if isinstance(query, np.ndarray):
             data = query.tobytes() + profile_id.encode() + scope_bytes
         elif isinstance(query, list):
