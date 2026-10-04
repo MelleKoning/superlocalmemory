@@ -3899,6 +3899,9 @@ def _register_dashboard_routes(application: FastAPI) -> None:
         @application.middleware("http")
         async def rate_limit_middleware(request, call_next):
             client_ip = request.client.host if request.client else "unknown"
+            # Remote-listener callers all carry the same placeholder peer;
+            # count each real peer address separately.
+            client_ip = str(request.scope.get("slm_remote_peer") or client_ip)
             is_write = request.method in ("POST", "PUT", "DELETE", "PATCH")
             from superlocalmemory.server.loopback import is_loopback as _is_lb_rl
             loopback = _is_lb_rl(client_ip)

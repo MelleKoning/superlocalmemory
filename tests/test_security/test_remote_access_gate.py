@@ -243,3 +243,17 @@ def test_local_mcp_is_unchanged(app) -> None:
         assert "remote" not in json.dumps(resp.json())
     except ValueError:
         pass
+
+
+def test_remote_listener_rate_limits_each_real_peer_separately(keys, monkeypatch) -> None:
+    """Every remote-listener request carries the same placeholder peer; the limiter
+    must still count real addresses, or one noisy computer locks out the rest."""
+    monkeypatch.setenv("SLM_RATE_LIMIT_WRITE", "2")
+    fresh = create_app()
+    first = _remote(fresh, client=("192.168.50.21", 1))
+    codes = [first.post("/mcp/hermes", json=_call("recall"),
+                        headers=_bearer(keys.write)).status_code for _ in range(3)]
+    assert codes[-1] == 429, codes
+    other = _remote(fresh, client=("192.168.50.22", 1))
+    assert other.post("/mcp/hermes", json=_call("recall"),
+                      headers=_bearer(keys.write)).status_code != 429
