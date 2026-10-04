@@ -154,6 +154,22 @@ class InsufficientDiskSpaceError(Exception):
         )
 
 
+def _create_private_file(path: Path) -> None:
+    """Create (or truncate) ``path`` readable and writable by its owner only."""
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+                 | getattr(os, "O_BINARY", 0), 0o600)
+    os.close(fd)
+    if os.name != "nt":
+        os.chmod(path, 0o600)        # an existing file keeps its old mode otherwise
+
+
+def _make_private_dir(path: Path) -> None:
+    """Create ``path`` (and parents) and keep it owner-only on POSIX."""
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.name != "nt":
+        os.chmod(path, 0o700)
+
+
 def _backup_via_sqlite_api(src: Path, dest: Path) -> None:
     """Copy a live SQLite database to dest using the SQLite backup API.
 
@@ -172,6 +188,11 @@ def _backup_via_sqlite_api(src: Path, dest: Path) -> None:
     # name — a snapshot that looks present and restores nothing. rename() within
     # one directory is atomic, so the final name only ever appears complete.
     staging = dest.with_name(dest.name + ".partial")
+    # A snapshot holds every memory, so it is created owner-only (0600) before
+    # a single byte is copied -- the live store is 0600 and a copy beside it
+    # must not be readable by other accounts on the machine. SQLite opens an
+    # existing file as-is and gives its journal the same mode.
+    _create_private_file(staging)
     src_conn = sqlite3.connect(str(src), check_same_thread=False)
     dst_conn = sqlite3.connect(str(staging))
     try:
@@ -553,7 +574,7 @@ def _pre_migration_backup(
     if free_bytes < needed_bytes:
         raise InsufficientDiskSpaceError(needed_bytes, free_bytes)
 
-    backups_root.mkdir(parents=True, exist_ok=True)
+    _make_private_dir(backups_root)
     # A copy a crash interrupted keeps its staging name, the size of the store.
     _cleanup_stale_partials(backups_root)
     facts_before = _live_fact_count(memory_db)
