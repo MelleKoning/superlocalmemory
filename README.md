@@ -21,7 +21,7 @@ slm setup                         # pick Mode A to keep everything on this machi
 slm connect cursor                # or claude-code, codex, windsurf, zed ... 12 IDEs
 ```
 
-The other primary route is pip in a virtual environment you activate: `python3 -m venv .venv`, activate it, then `python -m pip install superlocalmemory`. From a clone: `./scripts/install.sh install` (macOS, Linux) or `.\scripts\install.ps1 -Action Install` (Windows); see [CONTRIBUTING.md](CONTRIBUTING.md).
+npm installs SLM into a package-owned virtual environment. The other primary route is pip in a Python virtual environment you activate: `python3 -m venv .venv`, activate it, then `python -m pip install superlocalmemory`. Repository clone: `./scripts/install.sh install` (macOS, Linux) or `.\scripts\install.ps1 -Action Install` (Windows); see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Runs on Apple Silicon macOS, 64-bit Windows and 64-bit Linux; Intel Mac and 32-bit Windows are not supported (the pinned `cryptography` has no build for them). No Docker, no required graph database, no API key.
 

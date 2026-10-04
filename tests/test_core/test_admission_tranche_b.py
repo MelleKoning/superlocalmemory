@@ -287,9 +287,13 @@ class TestTrancheBCliGates:
         from superlocalmemory.cli import commands as cmd_mod
         gate_called = {"called": False, "kind": None}
 
+        class _GateReached(Exception):
+            """Stop the command at its gate: nothing after it is under test."""
+
         def mock_gate(kind):
             gate_called["called"] = True
             gate_called["kind"] = kind
+            raise _GateReached  # never start a daemon or engine from this test
 
         with patch("superlocalmemory.core.admission.gate_cli_mutation", mock_gate):
             fn = getattr(cmd_mod, cmd_fn_name)
