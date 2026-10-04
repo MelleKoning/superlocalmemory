@@ -3687,6 +3687,9 @@ def create_app() -> FastAPI:
             application, new_config, mode_change=mode_change,
         )
     )
+    # A refused body (422) is described, never quoted: it may be a key.
+    from superlocalmemory.server import validation_errors
+    validation_errors.install(application)
 
     # -- Middleware --
     from superlocalmemory.server.profile_runtime import ProfileRuntimeMiddleware
