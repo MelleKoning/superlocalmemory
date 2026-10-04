@@ -55,6 +55,29 @@ SLM_ALLOWED_HOSTS=slm.lan,*.office.lan slm serve start
 Names you already list in `SLM_MCP_ALLOWED_HOSTS` (for example `slm.lan:*`)
 are accepted too, so existing LAN setups keep working unchanged.
 
+## Behind a reverse proxy (4.1.20+)
+
+SLM decides whether a caller is on this computer from the TCP connection
+alone. It ignores `X-Forwarded-For`, `Forwarded`, `X-Real-IP` and similar
+headers, and a request that arrives from `127.0.0.1` carrying any of them is
+treated as coming from another computer: it gets no local trust and must
+present credentials like any network caller.
+
+If you run a TLS proxy on another host and want SLM to see each client's real
+address (for `SLM_MCP_ALLOWED_HOSTS` or rate limiting), name the proxy:
+
+```bash
+SLM_TRUSTED_PROXIES=10.0.0.5 slm serve start      # addresses or networks, comma-separated
+```
+
+SLM then reads `X-Forwarded-For` / `X-Forwarded-Proto` from those addresses
+only. Naming a proxy never makes its callers local.
+
+> **Warning:** a proxy on the same computer that strips every forwarding
+> header makes all of its callers look like `127.0.0.1`, and SLM cannot tell
+> them from a local program. Do not run such a proxy in front of SLM: configure
+> it to send `X-Forwarded-For` (most proxies do by default).
+
 ## Opening the HTTP MCP transport to LAN clients (v3.6.9+)
 
 The `/mcp` endpoint uses MCP's DNS-rebinding protection, which defaults to localhost-only even when the daemon is bound on `0.0.0.0`. Set `SLM_MCP_ALLOWED_HOSTS` to open it:
@@ -251,6 +274,7 @@ agent id; pick a stable, lowercase name per tool.
 |----------|---------|---------|
 | `SLM_MCP_EMBEDDED` | Set `1` when running MCP inside the daemon (suppresses warmup threads) | — |
 | `SLM_MCP_ALLOWED_HOSTS` | **NEW** Comma-separated allowlist (`host:port*`, exact IP, CIDR, prefix`*`, or `*`) for HTTP MCP + LAN token/origin/rate-limit (see above) | localhost-only |
+| `SLM_TRUSTED_PROXIES` | **NEW (4.1.20)** Proxies whose `X-Forwarded-For` / `X-Forwarded-Proto` SLM reads (addresses or networks). Unset: forwarding headers are ignored. Never grants local trust | — |
 | `SLM_REMOTE` | One-switch LAN mode: serves token to allowlisted LAN clients, relaxes origin guard, and exempts LAN from rate limit. It does not change the default stateless MCP transport. Default OFF | — |
 | `SLM_MCP_STATELESS` | Explicitly select stateless MCP transport; stateless is already the V4 default | — |
 | `SLM_MCP_STATEFUL` | Set `1` only for a compatibility integration that requires stateful Streamable HTTP | — |

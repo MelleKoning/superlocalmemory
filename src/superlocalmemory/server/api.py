@@ -287,6 +287,9 @@ def create_app() -> FastAPI:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
+    # Outermost: a proxied request never counts as local (forwarded_guard).
+    from superlocalmemory.server.forwarded_guard import ForwardedLoopbackDemotion
+    application.add_middleware(ForwardedLoopbackDemotion)
     return application
 
 
@@ -307,6 +310,8 @@ if __name__ == "__main__":
     print("API Documentation: http://localhost:8000/docs")
     print("\nPress Ctrl+C to stop\n")
 
+    from superlocalmemory.server.forwarded_guard import uvicorn_proxy_options
     uvicorn.run(
         app, host="127.0.0.1", port=8000, log_level="info",
+        **uvicorn_proxy_options(),
     )

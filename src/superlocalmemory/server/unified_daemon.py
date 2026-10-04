@@ -3923,9 +3923,12 @@ def create_app() -> FastAPI:
     except Exception as _mcp_exc:  # pragma: no cover — defensive
         logger.warning("MCP HTTP mount failed (non-fatal, stdio still works): %s", _mcp_exc)
 
-    # Added last, so it is the outermost layer: a request not addressed to this
-    # machine (DNS rebinding from a web page) is refused before anything runs.
+    # Outermost three, innermost first: a proxied request loses loopback trust
+    # (forwarded_guard), then a request not addressed to this machine (DNS
+    # rebinding from a web page) is refused before anything runs.
+    from superlocalmemory.server.forwarded_guard import ForwardedLoopbackDemotion
     from superlocalmemory.server.host_guard import HostGuardMiddleware
+    application.add_middleware(ForwardedLoopbackDemotion)
     application.add_middleware(HostGuardMiddleware)
 
     return application
@@ -6824,6 +6827,7 @@ def start_server(port: int = _DEFAULT_PORT) -> None:
     log_dir = state_path("logs")
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    from superlocalmemory.server.forwarded_guard import uvicorn_proxy_options
     config = uvicorn.Config(
         app="superlocalmemory.server.unified_daemon:create_app",
         factory=True,
@@ -6831,6 +6835,7 @@ def start_server(port: int = _DEFAULT_PORT) -> None:
         port=port,
         log_level="warning",
         timeout_graceful_shutdown=10,
+        **uvicorn_proxy_options(),
     )
     server = uvicorn.Server(config)
 

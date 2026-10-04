@@ -52,6 +52,19 @@ controls in addition to the session: `Origin` must match the daemon,
 (`src/superlocalmemory/server/routes/backup.py`, `server/origin.py`,
 `server/rbac_enforce.py`). See `docs/rbac-teams.md`.
 
+#### Network access (4.1.20+)
+
+**A proxied request is never local.** SuperLocalMemory trusts a caller on
+`127.0.0.1` as the local user. It decides that from the socket peer only:
+forwarding headers (`X-Forwarded-For`, `Forwarded`, `X-Real-IP` and the like)
+are ignored unless you name your proxy in `SLM_TRUSTED_PROXIES`
+(comma-separated addresses or networks), and a request that reaches the daemon
+from loopback carrying any forwarding header is treated as coming from another
+computer. A reverse proxy on the same machine therefore cannot hand its
+callers local trust. A same-machine proxy that strips every forwarding header
+still looks local; configure the proxy to send `X-Forwarded-For`. See
+`docs/distributed-deployment.md`.
+
 #### Data Protection
 - Parameterized SQL queries throughout (no SQL injection)
 - XSS protection via `escapeHtml()` in all UI rendering

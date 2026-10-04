@@ -307,8 +307,11 @@ def create_app() -> FastAPI:
         except Exception:
             pass
 
-    # Outermost: refuse a request not addressed to this machine (DNS rebinding).
+    # A proxied request never counts as local (forwarded_guard); outermost,
+    # refuse a request not addressed to this machine (DNS rebinding).
+    from superlocalmemory.server.forwarded_guard import ForwardedLoopbackDemotion
     from superlocalmemory.server.host_guard import HostGuardMiddleware
+    application.add_middleware(ForwardedLoopbackDemotion)
     application.add_middleware(HostGuardMiddleware)
 
     return application
@@ -357,4 +360,6 @@ if __name__ == "__main__":
     print(f"  WebSocket:   ws://localhost:{ui_port}/ws/updates")
     print("\n  Press Ctrl+C to stop\n")
 
-    uvicorn.run(app, host="127.0.0.1", port=ui_port, log_level="info", access_log=True)
+    from superlocalmemory.server.forwarded_guard import uvicorn_proxy_options
+    uvicorn.run(app, host="127.0.0.1", port=ui_port, log_level="info", access_log=True,
+                **uvicorn_proxy_options())
