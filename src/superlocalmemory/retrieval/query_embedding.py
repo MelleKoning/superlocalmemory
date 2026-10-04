@@ -13,23 +13,25 @@ embedding at all. The daemon's last-resort budget then fired and answered with
 a degraded fallback, and a memory saved seconds earlier with a "queryable"
 receipt came back as "No confident match".
 
-The embedding now runs on its own worker and the recall waits for it no longer
-than the per-channel hang guard (``CHANNEL_HANG_GUARD_SECONDS``) — the limit
-every channel is already held to, so this adds no new cutoff to the embedding
-channels' work, it only moves the clock to include the step that feeds them. If
-the vector is not back by then, the channels that need it are reported as
-``warming`` (model still loading) or ``timeout`` (model loaded but slow) and the
-recall is marked incomplete, while the channels that need no vector run and can
-find the memory.
+ONLY while the embedder is not ready yet (its ``is_warm`` is ``False``: model
+not loaded, or the worker has not answered once), the embedding runs on its own
+worker and the recall waits for it no longer than the per-channel hang guard
+(``CHANNEL_HANG_GUARD_SECONDS``). If the vector is not back by then, the
+channels that need it are reported as ``warming`` and the recall is marked
+incomplete, while the channels that need no vector run and can find the memory.
+
+ONCE THE EMBEDDER IS READY — or when it does not say (no ``is_warm``) — the
+recall embeds inline and waits exactly as 4.1.19 did, with no bound. A slow
+embed on a warm model is waited for; this is not a speed cap.
 
 WHAT IT COSTS IN QUALITY
 ------------------------
-Nothing on a warm daemon: an embed there takes well under a second, far inside
-the guard. In the cold window the alternative was not "a recall with semantic
-search", it was a recall with NO channels at all (the daemon budget fallback),
-so this strictly adds results. The abandoned embed is not cancelled: it finishes
-on its worker and lands in the query cache, so the same question asked again
-gets the full set of channels as soon as the model is up.
+Nothing on a warm daemon: that path is unchanged. In the cold window the
+alternative was not "a recall with semantic search", it was a recall with NO
+channels at all (the daemon budget fallback), so this strictly adds results.
+The abandoned embed is not cancelled: it finishes on its worker and lands in
+the query cache, so the same question asked again gets every channel as soon
+as the model is up.
 """
 
 from __future__ import annotations
@@ -50,9 +52,9 @@ class QueryEmbedder:
     """Bounded, single-flight, cached query embedding for one retrieval engine.
 
     ``embed`` returns ``(vector, status)``. ``status`` is ``None`` when the
-    embedder answered in time (the vector may still be ``None`` if the embedder
-    itself returned nothing — that stays the caller's ``no_embedding`` case),
-    and ``WARMING`` / ``TIMEOUT`` when the recall stopped waiting.
+    embedder answered (the vector may still be ``None`` if the embedder itself
+    returned nothing — that stays the caller's ``no_embedding`` case), and
+    ``WARMING`` when a not-yet-ready model made the recall stop waiting.
     """
 
     def __init__(
@@ -113,16 +115,15 @@ class QueryEmbedder:
         fut.add_done_callback(_done)
         return fut
 
-    def _abandoned_status(self) -> str:
-        """``warming`` when the embedder says its model is not loaded yet."""
-        warm = getattr(self._provider(), "is_warm", None)
-        return chstat.WARMING if warm is False else chstat.TIMEOUT
+    def _not_ready(self) -> bool:
+        """True only when the embedder SAYS it is not ready. Unknown is ready."""
+        return getattr(self._provider(), "is_warm", None) is False
 
     def embed(self, query: str, wait_seconds: float) -> tuple[list[float] | None, str | None]:
-        """Embed ``query``, waiting at most ``wait_seconds`` for the vector.
+        """Embed ``query``; ``wait_seconds`` bounds the wait only while the
+        embedder is not ready yet. A ready embedder is waited for unbounded.
 
-        Raises whatever the embedder raised when it answered in time with an
-        error, exactly as the direct call did.
+        Raises whatever the embedder raised, exactly as the direct call did.
         """
         if self._provider() is None:
             return None, None
@@ -131,22 +132,26 @@ class QueryEmbedder:
             return cached, None
         from superlocalmemory.core.recall_gate import is_background_work
 
-        if is_background_work():
-            # Background callers (materializer, warm-up) keep the exact old
-            # behaviour: their thread-local priority marker does not cross to
-            # a worker thread, and nobody is waiting on them interactively.
+        if is_background_work() or not self._not_ready():
+            # 4.1.19 behaviour, inline on the caller's thread (background
+            # callers keep their thread-local priority marker). An embed for
+            # this question started while the model was loading is joined,
+            # not repeated.
+            with self._lock:
+                pending = self._inflight.get(query)
+            if pending is not None:
+                return pending.result(), None
             return self._compute(query), None
         fut = self._future_for(query)
         try:
             return fut.result(timeout=max(0.0, wait_seconds)), None
         except concurrent.futures.TimeoutError:
-            status = self._abandoned_status()
             logger.warning(
-                "Query embedding not ready within %.1fs (%s); this recall runs "
+                "Embedding model not ready within %.1fs; this recall runs "
                 "without the channels that need it and is marked incomplete",
-                wait_seconds, status,
+                wait_seconds,
             )
-            return None, status
+            return None, chstat.WARMING
 
     def close(self) -> None:
         with self._lock:

@@ -65,12 +65,21 @@ def test_a_cold_model_is_reported_as_warming_not_waited_for() -> None:
     qe.close()
 
 
-def test_a_slow_but_loaded_model_is_reported_as_timeout() -> None:
-    slow = _ColdEmbedder(report_warm=True)
+def test_a_ready_but_slow_model_is_waited_for_unbounded() -> None:
+    """Warm path = 4.1.19: no bound, inline on the caller's thread."""
+    slow = _ColdEmbedder(report_warm=True, hold=0.6)
     qe = QueryEmbedder(lambda: slow)
-    _, status = qe.embed("q", 0.2)
-    assert status == chstat.TIMEOUT
-    slow.release.set()
+    t0 = time.monotonic()
+    assert qe.embed("q", 0.05) == ([0.1] * 8, None)
+    assert time.monotonic() - t0 >= 0.5
+    assert qe._executor is None  # never left the caller's thread
+    qe.close()
+
+
+def test_an_embedder_that_does_not_say_is_treated_as_ready() -> None:
+    unknown = _ColdEmbedder(report_warm=None, hold=0.4)
+    qe = QueryEmbedder(lambda: unknown)
+    assert qe.embed("q", 0.05) == ([0.1] * 8, None)
     qe.close()
 
 
@@ -228,3 +237,20 @@ def test_a_model_that_answers_inside_the_guard_is_waited_for(monkeypatch) -> Non
     assert dropped == set()
     assert status["semantic"] == chstat.OK
     assert "semantic" in out
+
+
+def test_a_warm_model_slower_than_the_guard_is_still_waited_for() -> None:
+    """The coordinator's case: a 9 s embed on a WARM model, real 8 s guard.
+    Recall waits, runs every channel, flags nothing incomplete (as 4.1.19)."""
+    assert engine_mod.CHANNEL_HANG_GUARD_SECONDS == 8.0
+    slow = _ColdEmbedder(report_warm=True, hold=9.0)
+    eng = _engine(slow)
+    t0 = time.monotonic()
+    out, status, dropped = _run(eng)
+    elapsed = time.monotonic() - t0
+    eng.close()
+    assert elapsed >= 8.9
+    assert dropped == set()
+    assert all(status[n] == chstat.OK for n in
+               ("semantic", "hopfield", "spreading_activation", "bm25"))
+    assert {"semantic", "hopfield", "spreading_activation", "bm25"} <= set(out)

@@ -948,10 +948,9 @@ class RetrievalEngine:
     # -- Channel execution --------------------------------------------------
 
     def _embed_query(self, query: str) -> tuple[list[float] | None, str | None]:
-        """(vector, status): cached, waits at most the channel hang guard.
-
-        status is None when the embedder answered in time, else WARMING /
-        TIMEOUT — the channels that need the vector were not run.
+        """(vector, status). Bounded by the hang guard ONLY while the embedder
+        is not ready (status WARMING: vector channels not run); a ready one is
+        waited for exactly as in 4.1.19. See retrieval/query_embedding.py.
         """
         return self._query_embedder.embed(query, CHANNEL_HANG_GUARD_SECONDS)
 
@@ -1094,7 +1093,7 @@ class RetrievalEngine:
 
         # V3.3.4: Embed query ONCE, reuse for semantic + hopfield channels
         q_emb: list[float] | None = None
-        emb_wait: str | None = None  # WARMING/TIMEOUT: recall stopped waiting
+        emb_wait: str | None = None  # WARMING: model not ready, recall stopped waiting
         needs_embedding = (
             (self._semantic is not None and "semantic" not in disabled)
             or (self._hopfield is not None and "hopfield" not in disabled)
