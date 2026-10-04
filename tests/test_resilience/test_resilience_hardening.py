@@ -64,13 +64,15 @@ def _dead_pid() -> int:
 class TestBoundedRetryLoop:
     """G-01+G-05: bounded 5-attempt retry loop replaces single self-heal+retry."""
 
+    @pytest.fixture(autouse=True)
+    def _runtime_dir(self, tmp_path):
+        self._tmp_path = tmp_path
+
     def _make_runtime(self, mock_coordinator):
-        """Build a minimal CanonicalRememberRuntime shell for unit testing."""
-        from superlocalmemory.core.remember_runtime import CanonicalRememberRuntime
-        rt = CanonicalRememberRuntime.__new__(CanonicalRememberRuntime)
-        rt._started = False
-        rt.coordinator = mock_coordinator
-        return rt
+        """A real runtime whose writer coordinator is the given test double."""
+        from tests.test_resilience.runtime_factory import runtime_with_coordinator
+
+        return runtime_with_coordinator(self._tmp_path, mock_coordinator)
 
     def test_alive_but_not_healthy_then_becomes_healthy_raises_daemon_already_serving(self):
         """Holder alive but health-check not yet responsive → eventually responds → DaemonAlreadyServing.
