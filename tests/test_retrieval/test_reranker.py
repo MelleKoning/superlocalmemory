@@ -88,24 +88,22 @@ class TestInitialization:
 # Worker lifecycle
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(autouse=False)
-def _clean_reranker_module_state():
-    """Isolate reranker module-level state from suite-order pollution.
+@pytest.fixture
+def isolated_spawn(tmp_path, monkeypatch):
+    """Spawn bookkeeping kept off the machine: no singleton PID check and a
+    tmp PID file. (``_ensure_worker`` still makes its 1 s crash check.)
 
-    ``test_ensure_worker_spawns_subprocess`` and ``test_ensure_worker_respawns_if_dead``
-    pass in isolation but fail when run as part of the full suite. Some
-    earlier test mutates ``subprocess.Popen`` or the PID-file path on the
-    canonical module, and the leak survives across test boundaries
-    because the reranker module binds ``subprocess`` at import time.
-    This fixture re-imports the reranker module under test and yields a
-    fresh reference — expensive enough we only attach it to the two
-    affected tests.
+    Replaces an ``importlib.reload`` of the reranker module that these two
+    tests used (and were skipped over since v3.4.22): reloading rebinds the
+    module's globals under every other test holding the old class, which is
+    itself suite-order pollution. Patching the instance's ``_spawn_process``
+    needs no reload.
     """
-    import importlib
+    from superlocalmemory.retrieval import reranker as mod
 
-    from superlocalmemory.retrieval import reranker as _r
-    importlib.reload(_r)
-    yield _r
+    monkeypatch.setattr(mod, "_is_reranker_worker_alive", lambda: False)
+    monkeypatch.setattr(mod, "_RERANKER_PID_FILE", tmp_path / ".reranker.pid")
+    return tmp_path / ".reranker.pid"
 
 
 class TestWorkerManagement:
@@ -142,37 +140,15 @@ class TestWorkerManagement:
 
         warmup.assert_not_called()
 
-    @pytest.mark.skip(
-        reason=(
-            "Pre-existing suite-order pollution: passes in isolation, "
-            "fails in full suite. Some earlier test leaves state on the "
-            "reranker module's subprocess binding that module-reload and "
-            "targeted patches don't recover from. Logic itself is "
-            "verified by the sibling tests ``test_ensure_worker_noop_if_alive`` "
-            "and ``test_ensure_worker_handles_spawn_failure`` (both pass). "
-            "Tracked for cleanup in v3.4.22 test-suite hardening."
-        ),
-    )
-    def test_ensure_worker_spawns_subprocess(self, tmp_path,
-                                             _clean_reranker_module_state) -> None:
+    def test_ensure_worker_spawns_subprocess(self, isolated_spawn) -> None:
         reranker = _make_reranker(model_name="fake-model")
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
         mock_proc.pid = 99999
-        # Patch the module attribute directly — `subprocess.Popen` (plain
-        # target) is brittle under suite-order state pollution because the
-        # reranker module binds `subprocess` at import time and another
-        # test may have left state on the canonical module. Routing via
-        # the module attribute is the robust path. Also patch the PID
-        # file location so we don't touch ``~/.superlocalmemory``.
-        with patch("superlocalmemory.retrieval.reranker._is_reranker_worker_alive",
-                   return_value=False), \
-             patch("superlocalmemory.retrieval.reranker.subprocess.Popen",
-                   return_value=mock_proc), \
-             patch("superlocalmemory.retrieval.reranker._RERANKER_PID_FILE",
-                   tmp_path / ".reranker.pid"):
+        with patch.object(reranker, "_spawn_process", return_value=mock_proc):
             reranker._ensure_worker()
         assert reranker._worker_proc is mock_proc
+        assert isolated_spawn.read_text() == "99999"
 
     def test_ensure_worker_noop_if_alive(self) -> None:
         reranker = _make_reranker(model_name="fake-model")
@@ -183,15 +159,7 @@ class TestWorkerManagement:
             reranker._ensure_worker()
             mock_popen.assert_not_called()
 
-    @pytest.mark.skip(
-        reason=(
-            "Pre-existing suite-order pollution — same root cause as "
-            "``test_ensure_worker_spawns_subprocess`` above. "
-            "Tracked for v3.4.22 test-suite hardening."
-        ),
-    )
-    def test_ensure_worker_respawns_if_dead(self, tmp_path,
-                                              _clean_reranker_module_state) -> None:
+    def test_ensure_worker_respawns_if_dead(self, isolated_spawn) -> None:
         reranker = _make_reranker(model_name="fake-model")
         dead_proc = MagicMock()
         dead_proc.poll.return_value = 1  # Exited
@@ -199,14 +167,11 @@ class TestWorkerManagement:
         new_proc = MagicMock()
         new_proc.poll.return_value = None
         new_proc.pid = 99998
-        with patch("superlocalmemory.retrieval.reranker._is_reranker_worker_alive",
-                   return_value=False), \
-             patch("superlocalmemory.retrieval.reranker.subprocess.Popen",
-                   return_value=new_proc), \
-             patch("superlocalmemory.retrieval.reranker._RERANKER_PID_FILE",
-                   tmp_path / ".reranker.pid"):
+        with patch.object(reranker, "_spawn_process", return_value=new_proc) as spawn:
             reranker._ensure_worker()
+        spawn.assert_called_once()
         assert reranker._worker_proc is new_proc
+        assert isolated_spawn.read_text() == "99998"
 
     def test_ensure_worker_handles_spawn_failure(self) -> None:
         reranker = _make_reranker(model_name="fake-model")
