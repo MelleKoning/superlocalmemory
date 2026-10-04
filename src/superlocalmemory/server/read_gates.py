@@ -38,6 +38,8 @@ _SENSITIVE_READ_PREFIXES = (
     "/events", "/api/events", "/api/agents", "/api/trust/",
     "/api/v3/abstraction", "/api/v3/insights",
     "/api/v3/answer-check/history",
+    # The timeline lists memory text by date.
+    "/api/v3/timeline",
 )
 _SENSITIVE_READ_EXACT_PATHS = (
     "/api/search", "/api/v3/recall/trace", "/api/patterns",
@@ -45,6 +47,8 @@ _SENSITIVE_READ_EXACT_PATHS = (
     # L3-01: project/agent names and per-bucket memory counts — the same
     # cross-tenant metadata the prefixes above already gate.
     "/api/v3/facets",
+    # The dashboard summary quotes recent memories.
+    "/api/summary",
 )
 #: POST routes that only read and return memory content (4.1.20).
 READ_ONLY_POST_PATHS = frozenset({"/api/search", "/api/v3/chat/stream"})
