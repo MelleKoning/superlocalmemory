@@ -303,23 +303,11 @@ register_kind_tools(_target, get_engine)  # 4.1.19 WP8: memory-kind management (
 from superlocalmemory.mcp.tools_context import register_prestage_tool
 
 
-def _prestage_recall(query: str, limit: int, profile_id: str, as_of: str | None = None):
-    """Bridge engine.recall → prestage_context recall_fn shape."""
-    engine = get_engine()
-    if hasattr(engine, "profile_id") and profile_id:
-        try:
-            engine.profile_id = profile_id
-        except Exception:
-            pass
-    try:
-        if as_of is not None:
-            results = engine.recall(query, limit=limit, as_of=as_of)
-        else:
-            results = engine.recall(query, limit=limit)
-    except TypeError:
-        results = engine.recall(query, limit=limit)
+def _memories_from(results) -> list[dict]:
+    """``engine.recall`` output (a RecallResponse, or a plain list) as prestage rows."""
+    items = getattr(results, "results", results) or []
     out: list[dict] = []
-    for r in results or []:
+    for r in items:
         if isinstance(r, dict):
             out.append({
                 "id": str(r.get("fact_id") or r.get("id") or ""),
@@ -327,14 +315,30 @@ def _prestage_recall(query: str, limit: int, profile_id: str, as_of: str | None 
                 "score": float(r.get("score") or r.get("relevance_score") or 0.0),
                 "source": str(r.get("source") or "recall"),
             })
-        else:
-            out.append({
-                "id": str(getattr(r, "fact_id", "") or ""),
-                "text": str(getattr(r, "content", "") or ""),
-                "score": float(getattr(r, "score", 0.0) or 0.0),
-                "source": "recall",
-            })
+            continue
+        fact = getattr(r, "fact", r)
+        out.append({
+            "id": str(getattr(fact, "fact_id", "") or ""),
+            "text": str(getattr(fact, "content", "") or ""),
+            "score": float(getattr(r, "score", 0.0) or 0.0),
+            "source": "recall",
+        })
     return out
+
+
+def _prestage_recall(query: str, limit: int, profile_id: str, as_of: str | None = None):
+    """Bridge engine.recall -> prestage_context recall_fn shape.
+
+    Serves ``profile_id`` when one is named, else the engine's (active)
+    profile. The profile travels as an argument of this one recall: the shared
+    engine's profile is never assigned, so no other caller is moved.
+    """
+    engine = get_engine()
+    target = (profile_id or "").strip() or None
+    kwargs = {"profile_id": target, "limit": limit}
+    if as_of is not None:
+        kwargs["as_of"] = as_of
+    return _memories_from(engine.recall(query, **kwargs))
 
 
 register_prestage_tool(_target, _prestage_recall)

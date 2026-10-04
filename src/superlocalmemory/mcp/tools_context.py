@@ -101,7 +101,7 @@ def prestage_context(
     query: str,
     *,
     limit: int = 5,
-    profile_id: str = "default",
+    profile_id: str = "",
     session_id: str = "default",
     recall_fn: PrestageRecallFn,
     limiter: _RateLimiter | None = None,
@@ -216,11 +216,12 @@ def register_prestage_tool(server, recall_fn: PrestageRecallFn,
     async def prestage_context(  # noqa: F811 — MCP tool surface name
         query: str,
         limit: int = 5,
-        profile_id: str = "default",
+        profile_id: str = "",
         as_of: str | None = None,
     ) -> dict:
         """Proactively return top-K memories for a query.
 
+        ``profile_id`` names the profile to read; empty = the active profile.
         Optional ``as_of`` (ISO 8601 UTC) for point-in-time context retrieval.
         """
         session_id = session_id_fn() if session_id_fn else "default"
