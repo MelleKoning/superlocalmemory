@@ -118,12 +118,12 @@ required sign-in) refuses remote keys in this release. Remote calls share the
 rate limiter with other network callers (`SLM_RATE_LIMIT_WRITE`, default 30
 per minute per computer); raise it for a busy agent.
 
-**Client recipes.** Hermes: see [Hermes: remote](hermes.md#remote). SLM has
-no `SLM_DAEMON_URL` setting; the address lives in each client's own MCP
-configuration: `https://<slm-host>:8443/mcp/<agent>` with `Authorization:
+**Client recipes.** Hermes: see [Hermes: remote](hermes.md#remote). No SLM
+environment variable points a client at a server; the address lives in each
+client's own MCP configuration: `https://<slm-host>:8443/mcp/<agent>` with `Authorization:
 Bearer <remote key>`. Stdio-only clients can use the `mcp-remote` bridge:
 `npx -y mcp-remote https://<slm-host>:8443/mcp/<agent> --header
-"Authorization:${SLM_REMOTE_AUTH}"` with `SLM_REMOTE_AUTH="Bearer <key>"` and
+"Authorization:${AUTH_HEADER}"` with `AUTH_HEADER="Bearer <key>"` and
 `NODE_EXTRA_CA_CERTS=/path/to/slm-ca.pem` in its `env`. Never use
 `--allow-http` against another computer.
 
