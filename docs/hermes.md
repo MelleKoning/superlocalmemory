@@ -40,7 +40,7 @@ grants are approved.
 only validated execution-reliability signals from eligible terminal receipts;
 it never turns a passing gate into a semantic memory or a user preference.
 
-## Use an SLM that runs on another computer {#remote}
+## Use an SLM that runs on another computer
 
 If your memory lives on a dedicated SLM server, the Hermes plugin can use it
 directly. You do not need SuperLocalMemory installed on the Hermes computer.
