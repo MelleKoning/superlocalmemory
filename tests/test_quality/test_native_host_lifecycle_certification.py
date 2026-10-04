@@ -227,6 +227,9 @@ def test_shipped_codex_and_claude_assets_declare_the_same_native_lifecycle() -> 
     for hooks in (CODEX_HOOKS, CLAUDE_HOOKS):
         starts = _hook_commands(hooks, "SessionStart")
         stops = _hook_commands(hooks, "Stop")
+        # Claude plugin hooks run slm through scripts/slm-run (4.1.20, #141).
+        starts = [c.replace('/scripts/slm-run" hook', ' slm hook') for c in starts]
+        stops = [c.replace('/scripts/slm-run" hook', ' slm hook') for c in stops]
         assert any("slm hook start" in command for command in starts), hooks
         assert any("slm hook stop" in command for command in stops), hooks
 

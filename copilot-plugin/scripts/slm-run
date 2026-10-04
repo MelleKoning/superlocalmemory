@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# slm-run — run slm for a plugin hook, using the slm the MCP server uses.
+#
+#   "${CLAUDE_PLUGIN_ROOT}/scripts/slm-run" hook <name>
+#
+# Hooks used to call a bare `slm`, so on a machine where SuperLocalMemory lives
+# only in the plugin venv every hook was "command not found" — and the error was
+# thrown away, so memory capture stopped with nothing to say why. This wrapper
+# resolves slm with the launcher's own code (slm-resolve.sh), honours the same
+# SLM_LAUNCHER, and passes stdin, stdout and the arguments straight through.
+#
+# A hook must never break the session that runs it, so this ALWAYS exits 0
+# (Claude Code reads exit 2 as "block"). When slm cannot be found, or fails, the
+# reason goes to
+#     ${SLM_DATA_DIR:-~/.superlocalmemory}/logs/plugin-hooks.log
+# and one line naming that file goes to stderr. A hook that succeeds is silent:
+# whatever slm wrote to stderr is discarded, exactly as before.
+
+_slm_args="$*"
+_log_dir="${SLM_DATA_DIR:-${HOME}/.superlocalmemory}/logs"
+_log="${_log_dir}/plugin-hooks.log"
+_LOG_MAX_BYTES=1048576
+
+# Append one entry. Best effort: an unwritable log must not fail the hook.
+_log_entry() {
+    {
+        mkdir -p "${_log_dir}" || return 1
+        if [ -f "${_log}" ] && [ "$(wc -c < "${_log}")" -gt "${_LOG_MAX_BYTES}" ]; then
+            mv -f "${_log}" "${_log}.1"
+        fi
+        printf '%s slm %s: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "${_slm_args}" "$1" >> "${_log}"
+    } 2>/dev/null
+}
+
+# Record a failure, tell stderr where to look, and leave the session alone.
+_give_up() {
+    if _log_entry "$1"; then
+        echo "SLM plugin: hook 'slm ${_slm_args}' did not run cleanly; see ${_log}" >&2
+    else
+        echo "SLM plugin: hook 'slm ${_slm_args}' did not run cleanly: $1" >&2
+    fi
+    exit 0
+}
+
+_here="${BASH_SOURCE[0]%/*}"
+[ "${_here}" = "${BASH_SOURCE[0]}" ] && _here=.
+# shellcheck source=slm-resolve.sh
+if ! . "${_here}/slm-resolve.sh" 2>/dev/null; then
+    _give_up "the plugin is incomplete: ${_here}/slm-resolve.sh is missing"
+fi
+
+if ! slm_choose; then
+    _give_up "$(printf '%s' "${SLM_RESOLVE_ERROR}" | tr '\n' ' ')"
+fi
+
+if [ "${SLM_CHOICE_READY}" -ne 1 ]; then
+    if [ "${SLM_LAUNCHER:-auto}" = "auto" ]; then
+        _give_up "$(slm_not_found_message | tr '\n' ' ') (A plugin venv is built by SessionStart; the first session can run its hooks before it exists.)"
+    fi
+    _give_up "${SLM_CHOICE} slm is not executable: ${SLM_CHOICE_BIN}"
+fi
+
+# slm's stderr is kept only long enough to report a failure. The trap removes
+# it however this script ends, including a host timeout killing the hook.
+_err="$(mktemp "${TMPDIR:-/tmp}/slm-hook.XXXXXX" 2>/dev/null)" || _err=/dev/null
+trap '[ "${_err}" = /dev/null ] || rm -f "${_err}"' EXIT
+trap 'exit 0' HUP INT TERM
+
+"${SLM_CHOICE_BIN}" "$@" 2>"${_err}"
+_rc=$?
+if [ "${_rc}" -ne 0 ]; then
+    _detail=""
+    [ "${_err}" = /dev/null ] || _detail="$(tail -n 5 "${_err}" 2>/dev/null | tr '\n' ' ')"
+    _give_up "exit ${_rc} from ${SLM_CHOICE_BIN} (${SLM_CHOICE})${_detail:+: ${_detail}}"
+fi
+exit 0

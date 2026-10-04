@@ -40,12 +40,21 @@ _slm_expand_tilde() {
 # directory (only Claude Code sets CLAUDE_PLUGIN_DATA). A venv built on Windows
 # keeps entry points in Scripts\ with an .exe suffix, and Git Bash is where these
 # scripts run there.
-slm_plugin_bin() {
+#
+# _slm_plugin_bin_var sets SLM_PLUGIN_BIN without a subshell (hooks run this on
+# every tool call); slm_plugin_bin prints it, for callers that want a value.
+_slm_plugin_bin_var() {
+    SLM_PLUGIN_BIN=""
     [ -n "${CLAUDE_PLUGIN_DATA:-}" ] || return 0
     case "${OSTYPE:-}" in
-        msys*|cygwin*|win32*) printf '%s' "${CLAUDE_PLUGIN_DATA}/venv/Scripts/slm.exe" ;;
-        *)                    printf '%s' "${CLAUDE_PLUGIN_DATA}/venv/bin/slm" ;;
+        msys*|cygwin*|win32*) SLM_PLUGIN_BIN="${CLAUDE_PLUGIN_DATA}/venv/Scripts/slm.exe" ;;
+        *)                    SLM_PLUGIN_BIN="${CLAUDE_PLUGIN_DATA}/venv/bin/slm" ;;
     esac
+}
+
+slm_plugin_bin() {
+    _slm_plugin_bin_var
+    printf '%s' "${SLM_PLUGIN_BIN}"
 }
 
 # The message for "nothing to run", naming both places that were looked in.
@@ -69,7 +78,8 @@ slm_choose() {
     SLM_CHOICE_READY=0
     SLM_RESOLVE_ERROR=""
     local _pbin _sys
-    _pbin="$(slm_plugin_bin)"
+    _slm_plugin_bin_var
+    _pbin="${SLM_PLUGIN_BIN}"
 
     case "${SLM_LAUNCHER:-auto}" in
         auto)
