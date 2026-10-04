@@ -35,6 +35,19 @@ from superlocalmemory.storage.models import _new_id
 logger = logging.getLogger(__name__)
 
 
+def _seed_score(cosine: float, vector_path: bool) -> float:
+    """A seed's initial activation from its cosine to the query.
+
+    The ONE place the seed scale is defined, so local and cross-scope seeds
+    can never drift apart again (#146).  The vec0 path scores
+    ``max(0, 1 - distance)`` = ``max(0, cos)`` (``VectorStore.search``); the
+    SQL fallback in ``_seed_search`` has always used ``(cos + 1) / 2``.
+    """
+    if vector_path:
+        return max(0.0, cosine)
+    return (cosine + 1.0) / 2.0
+
+
 # ---------------------------------------------------------------------------
 # Configuration (frozen dataclass, Rule 10)
 # ---------------------------------------------------------------------------
@@ -137,58 +150,22 @@ class SpreadingActivation:
                 include_global=include_global,
                 include_shared=include_shared,
             )
-            # Owner-partitioned vector indexes cannot discover opted-in peers.
-            # Add visible external embeddings with the same cosine seed signal.
-            # v3.8.2 perf: external (global/shared) facts only matter for a
-            # cross-scope read. For the default personal scope this query always
-            # returns [] — skip it to remove a per-recall DB round-trip.
-            # #147: id + embedding only; full hydration was most of the cost.
-            external_embeddings: list = []
             if include_global or include_shared:
-                try:
-                    external_embeddings = self._db.get_external_visible_embeddings(
-                        profile_id,
-                        include_global=include_global,
-                        include_shared=include_shared,
-                    )
-                except Exception as exc:
-                    # Not silent: losing this drops every cross-scope seed.
-                    logger.warning(
-                        "SpreadingActivation: cross-scope seeds unavailable "
-                        "for profile %s: %s", profile_id, exc,
-                    )
-                    external_embeddings = []
-            q_vec = np.array(query, dtype=np.float32)
-            q_norm = float(np.linalg.norm(q_vec))
-            combined = {fact_id: score for fact_id, score in seed_results}
-            for ext_id, fact_vec in external_embeddings:
-                if fact_vec.shape != q_vec.shape:
-                    continue
-                denominator = q_norm * float(np.linalg.norm(fact_vec))
-                if denominator <= 1e-8:
-                    continue
-                score = (float(np.dot(q_vec, fact_vec) / denominator) + 1.0) / 2.0
-                combined[ext_id] = max(combined.get(ext_id, 0.0), score)
-            # v3.8.2 perf: seeds come from this profile's own vector index /
-            # get_all_facts(profile_id), so for personal scope they are already
-            # authorized. Only re-authorize when a cross-scope read merged in
-            # global/shared candidates. filter_authorized_results below remains the
-            # security net on the returned set.
-            if include_global or include_shared:
-                allowed_seeds = authorized_fact_ids(
-                    self._db,
-                    combined,
+                seed_results = self._merge_cross_scope_seeds(
+                    query,
+                    seed_results,
                     profile_id,
                     include_global=include_global,
                     include_shared=include_shared,
                 )
-                seed_results = [
-                    (fact_id, score)
-                    for fact_id, score in combined.items()
-                    if fact_id in allowed_seeds
-                ]
             else:
-                seed_results = list(combined.items())
+                # v3.8.2 perf: seeds come from this profile's own vector index /
+                # get_all_facts(profile_id), so for personal scope they are
+                # already authorized, and there are top_m of them at most.
+                # filter_authorized_results below remains the security net.
+                seed_results = list(
+                    {fact_id: score for fact_id, score in seed_results}.items()
+                )
             if not seed_results:
                 return []
 
@@ -253,6 +230,80 @@ class SpreadingActivation:
             )
             return []
 
+    def _uses_vector_seeds(self) -> bool:
+        """Whether ``_seed_search`` takes the vec0 path (else the SQL scan)."""
+        return self._vector_store is not None and bool(
+            getattr(self._vector_store, "available", False)
+        )
+
+    def _merge_cross_scope_seeds(
+        self,
+        query: Any,
+        seed_results: list[tuple[str, float]],
+        profile_id: str,
+        *,
+        include_global: bool,
+        include_shared: bool,
+    ) -> list[tuple[str, float]]:
+        """Seeds for a cross-scope read: the top_m of local + visible external.
+
+        The vector index is partitioned by owner, so it cannot find an opted-in
+        global or shared fact; those are scored here and merged in.  #146:
+
+        * Externals are scored on the SAME scale as the seed path.  vec0 seeds
+          are ``max(0, cos)``; externals used ``(cos + 1) / 2``, so an unrelated
+          external (cos 0 -> 0.5) outranked a relevant local fact (cos 0.45).
+        * Authorization runs on the whole merged set FIRST, so a fact the
+          caller may not see can never take a seed slot from one it may.
+        * Then the set is cut to ``top_m`` by ``(-score, fact_id)``.  That is
+          the algorithm's own seed width -- the set a single KNN over every
+          visible fact would return -- not a new cap.  Without it all visible
+          externals became seeds, one neighbour lookup each, and the channel
+          ran past its 8 s guard and answered nothing.
+        """
+        external_embeddings: list = []
+        try:
+            # #147: id + embedding only; full hydration was most of the cost.
+            external_embeddings = self._db.get_external_visible_embeddings(
+                profile_id,
+                include_global=include_global,
+                include_shared=include_shared,
+            )
+        except Exception as exc:
+            # Not silent: losing this drops every cross-scope seed.
+            logger.warning(
+                "SpreadingActivation: cross-scope seeds unavailable "
+                "for profile %s: %s", profile_id, exc,
+            )
+        vector_path = self._uses_vector_seeds()
+        q_vec = np.array(query, dtype=np.float32)
+        q_norm = float(np.linalg.norm(q_vec))
+        combined = {fact_id: score for fact_id, score in seed_results}
+        for ext_id, fact_vec in external_embeddings:
+            if fact_vec.shape != q_vec.shape:
+                continue
+            denominator = q_norm * float(np.linalg.norm(fact_vec))
+            if denominator <= 1e-8:
+                continue
+            score = _seed_score(
+                float(np.dot(q_vec, fact_vec) / denominator), vector_path,
+            )
+            combined[ext_id] = max(combined.get(ext_id, 0.0), score)
+        allowed_seeds = authorized_fact_ids(
+            self._db,
+            combined,
+            profile_id,
+            include_global=include_global,
+            include_shared=include_shared,
+        )
+        authorized = [
+            (fact_id, score)
+            for fact_id, score in combined.items()
+            if fact_id in allowed_seeds
+        ]
+        authorized.sort(key=lambda item: (-item[1], item[0]))
+        return authorized[: self._config.top_m]
+
     def _seed_search(
         self,
         query: Any,
@@ -269,9 +320,7 @@ class SpreadingActivation:
         cross-profile supplement below.  This keeps spreading activation
         present and truthful rather than silently removing a retrieval layer.
         """
-        if self._vector_store is not None and getattr(
-            self._vector_store, "available", False,
-        ):
+        if self._uses_vector_seeds():
             return self._vector_store.search(
                 query, top_k=self._config.top_m, profile_id=profile_id,
             )
@@ -296,7 +345,9 @@ class SpreadingActivation:
             denominator = q_norm * float(np.linalg.norm(fact_vec))
             if denominator <= 1e-8:
                 continue
-            score = (float(np.dot(q_vec, fact_vec) / denominator) + 1.0) / 2.0
+            score = _seed_score(
+                float(np.dot(q_vec, fact_vec) / denominator), vector_path=False,
+            )
             scored.append((fact.fact_id, score))
         return sorted(scored, key=lambda item: (-item[1], item[0]))[:self._config.top_m]
 
