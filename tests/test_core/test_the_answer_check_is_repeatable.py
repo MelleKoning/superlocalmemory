@@ -323,7 +323,13 @@ class TestOnlyTheSelectedProviderIsEverTouched:
         assert touched == []
 
     def test_the_memo_never_serves_a_hosted_check(self) -> None:
-        hosted = SimpleNamespace(backend="jev", top_k=3)
+        class _Hosted:  # weak-referenceable, unlike SimpleNamespace
+            backend, top_k, ready, closed = "jev", 3, True, False
+
+            def assess_if_idle(self, *a):
+                raise AssertionError("a hosted check is never finished later")
+
+        hosted = _Hosted()
         memo.store(hosted, "q", ["doc"], SufficiencyVerdict((0.9,), 0.5, "x"))
         assert memo.lookup(hosted, "q", ["doc"]) is None
         assert memo.finish_later(hosted, "q", ["doc"]) is None
