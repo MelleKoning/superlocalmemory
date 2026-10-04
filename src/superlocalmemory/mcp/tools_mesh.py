@@ -369,6 +369,13 @@ def register_mesh_tools(server, get_engine: Callable) -> None:
             )
             return result or {"ok": False, "error": "Failed to set state"}
 
+        if key == "delta":
+            # GET /mesh/state/delta is the fleet state-sync endpoint, so the
+            # single-key route cannot serve a key with this name.
+            result = await asyncio.to_thread(_mesh_request, "GET", "/state")
+            entry = ((result or {}).get("state") or {}).get(key)
+            return {"key": key, **entry} if entry else {"key": key, "value": None}
+
         if key:
             result = await asyncio.to_thread(_mesh_request, "GET", f"/state/{key}")
             return result or {"key": key, "value": None}
