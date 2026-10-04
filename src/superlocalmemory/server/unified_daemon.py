@@ -1057,6 +1057,20 @@ from superlocalmemory.server.recall_fallback import (  # noqa: E402
 _embedding_warm: bool = False
 
 
+def upgrade_banner(previous: str, current: str) -> str:
+    """The log line for the first start after an upgrade.
+
+    It used to promise every user a fixed fact count ("18 thousand plus") --
+    a number from one developer's store, printed to a user with twelve. It now
+    states only what is true for every store: memories are kept, and a store
+    change is preceded by a restore point.
+    """
+    return (f"[slm] upgraded {previous} → {current}. Data migrations run in a moment; "
+            "your memories are kept, and a restore point is taken before any change "
+            "to the store. Changelog: "
+            "https://github.com/qualixar/superlocalmemory/blob/main/CHANGELOG.md")
+
+
 def _sanitize_json_text(text: str) -> str:
     """Strip control characters that break JSON serialization.
 
@@ -1990,12 +2004,7 @@ async def lifespan(application: FastAPI):
                     _slm_version,
                 )
             else:
-                logger.info(
-                    "[slm] upgraded %s → %s. Data migrations run in a moment; "
-                    "your 18k+ atomic facts are preserved. Changelog: "
-                    "https://github.com/qualixar/superlocalmemory/blob/main/CHANGELOG.md",
-                    _prev, _slm_version,
-                )
+                logger.info("%s", upgrade_banner(_prev, _slm_version))
     except Exception as _exc:  # pragma: no cover — never block startup
         logger.debug("version-banner skipped: %s", _exc)
         _want_write_marker = False
