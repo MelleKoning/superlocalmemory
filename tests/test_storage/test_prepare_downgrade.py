@@ -19,6 +19,9 @@ from superlocalmemory.storage.migrations import M052_memory_kinds as M052
 
 from ._upgrade_store import current_store
 
+#: The schema this build stamps (53 since M053, the Answer Check history).
+_CURRENT = sv.SUPPORTED_SCHEMA_VERSION
+
 
 @pytest.fixture()
 def store(tmp_path, monkeypatch):
@@ -26,7 +29,7 @@ def store(tmp_path, monkeypatch):
     (tmp_path / ".last_version").write_text("4.1.19")
     monkeypatch.setattr(sm, "package_version", lambda: "4.1.19")
     monkeypatch.setattr(sv, "_detect_all_installs", lambda: [])
-    assert sv.read_schema_version(memory_db) == 52
+    assert sv.read_schema_version(memory_db) == _CURRENT
     return tmp_path, learning_db, memory_db
 
 
@@ -49,7 +52,7 @@ def test_refuses_after_a_breaking_migration(store, monkeypatch) -> None:
     monkeypatch.delattr(M052, "DOWNGRADE_FLOOR")        # a change that cannot be undone
     with pytest.raises(DowngradeRefusedError, match="cannot be undone"):
         _prepare(root, learning_db, memory_db)
-    assert sv.read_schema_version(memory_db) == 52
+    assert sv.read_schema_version(memory_db) == _CURRENT
     assert not (root / ".downgrade-prepared").exists()
     assert ur.list_restore_points(root) == [], "refused before copying anything"
 
@@ -88,7 +91,7 @@ def test_marker_dropped_after_another_build_ran(store) -> None:
 
     _next_start(learning_db, memory_db)
 
-    assert sv.read_schema_version(memory_db) == 52
+    assert sv.read_schema_version(memory_db) == _CURRENT
     assert not (root / ".downgrade-prepared").exists()
 
 
@@ -97,7 +100,7 @@ def test_51_ceiling_guard_accepts_prepared_store(store, monkeypatch) -> None:
     monkeypatch.setattr(sv, "SUPPORTED_SCHEMA_VERSION", 51)
     with pytest.raises(sv.SchemaVersionError):           # unprepared: an old build refuses
         sv.check_version_or_raise(memory_db)
-    monkeypatch.setattr(sv, "SUPPORTED_SCHEMA_VERSION", 52)
+    monkeypatch.setattr(sv, "SUPPORTED_SCHEMA_VERSION", _CURRENT)
     _prepare(root, learning_db, memory_db)
     monkeypatch.setattr(sv, "SUPPORTED_SCHEMA_VERSION", 51)
     sv.check_version_or_raise(memory_db)
@@ -110,5 +113,5 @@ def test_cancel_restamps_on_next_start(store) -> None:
     assert ur.cancel_downgrade(root) is True
     result = _next_start(learning_db, memory_db)
     assert result["failed"] == []
-    assert sv.read_schema_version(memory_db) == 52 == sv.read_schema_version(learning_db)
+    assert sv.read_schema_version(memory_db) == _CURRENT == sv.read_schema_version(learning_db)
     assert ur.cancel_downgrade(root) is False

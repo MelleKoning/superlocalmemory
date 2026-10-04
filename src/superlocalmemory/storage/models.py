@@ -501,6 +501,11 @@ class RecallResponse:
     # caller comparing two runs tell "not judged this time" from "nothing
     # answers". Additive — backward compatible.
     answer_check_status: str = "skipped"
+    # 4.1.20: timing and provenance of the answer check (an AnswerCheckTrace).
+    # In-process only — deliberately absent from recall_response_metadata, so
+    # MCP and HTTP recall envelopes are unchanged. Typed Any to keep the
+    # storage -> retrieval import direction.
+    answer_check_trace: Any = None
     # Wave Q2b: precomputed community summary for the cluster the top results
     # fall into (thematic context). None unless results cluster into one
     # community above threshold. Additive — backward compatible.

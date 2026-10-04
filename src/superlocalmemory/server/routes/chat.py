@@ -362,7 +362,8 @@ def _recall_via_resident_engine(app_state, query: str, limit: int) -> list:
         engine = get_engine_lazy(app_state)
         if engine is None:
             return []
-        response = engine.recall(query, limit=limit)
+        from superlocalmemory.core.answer_check_history import call_as_dashboard
+        response = call_as_dashboard(engine.recall, query, limit=limit)  # not agent traffic
         memory_ids = list({
             r.fact.memory_id for r in response.results[:limit]
             if r.fact.memory_id

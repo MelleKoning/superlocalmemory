@@ -1,0 +1,264 @@
+# Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar
+# Licensed under AGPL-3.0-or-later - see LICENSE file
+"""The saved side of the Answer Check history: one writer, safe erasure, retention."""
+
+from __future__ import annotations
+
+import sqlite3
+import threading
+import time
+from pathlib import Path
+
+import pytest
+
+from superlocalmemory.core import answer_check_history as h
+from superlocalmemory.core import answer_check_history_store as store
+from superlocalmemory.storage import migration_runner as mr
+
+from .test_answer_check_history import make_response
+
+
+@pytest.fixture()
+def learning_db(tmp_path: Path) -> Path:
+    from superlocalmemory.storage import schema
+
+    learning, memory = tmp_path / "learning.db", tmp_path / "memory.db"
+    with sqlite3.connect(memory) as conn:
+        schema.create_all_tables(conn)
+    result = mr.apply_all(learning, memory)
+    assert "M053_answer_check_history" in result["applied"], result
+    return learning
+
+
+@pytest.fixture(autouse=True)
+def fresh():
+    store._reset_for_testing()
+    h._reset_for_testing()
+    yield
+    store._reset_for_testing()
+    h._reset_for_testing()
+
+
+def _events(n: int, profile: str = "default", start_ms: int | None = None):
+    base = int(time.time() * 1000) if start_ms is None else start_ms
+    return [h.event_from_response(make_response(), profile, now_ms=base + i, origin_name="")
+            for i in range(n)]
+
+
+def _count(db: Path, profile: str | None = None) -> int:
+    with sqlite3.connect(db) as conn:
+        if profile is None:
+            return conn.execute("SELECT COUNT(*) FROM answer_check_events").fetchone()[0]
+        return conn.execute("SELECT COUNT(*) FROM answer_check_events WHERE profile_id=?",
+                            (profile,)).fetchone()[0]
+
+
+def test_insert_batch_roundtrip(learning_db) -> None:
+    events = _events(128)
+    conn = store.connect(learning_db, readonly=False)
+    assert store.insert_batch(conn, events) == 128
+    conn.close()
+    rows = store.read_window(learning_db, "default", since_ms=0, include_dashboard=True)
+    by_id = {r["event_id"]: r for r in rows}
+    for ev in events:
+        row = by_id[ev.event_id]
+        for name in store.COLUMNS:
+            value = getattr(ev, name)
+            assert row[name] == (int(value) if isinstance(value, bool) else value), name
+
+
+def test_insert_is_idempotent(learning_db) -> None:
+    events = _events(128)
+    conn = store.connect(learning_db, readonly=False)
+    store.insert_batch(conn, events)
+    assert store.insert_batch(conn, events) == 0
+    conn.close()
+    assert _count(learning_db) == 128
+
+
+def test_tombstone_blocks_older_events(learning_db) -> None:
+    t = int(time.time() * 1000)
+    conn = store.connect(learning_db, readonly=False)
+    store.erase_profile_rows(conn, "default", now_ms=t)
+    older = _events(1, start_ms=t - 1)
+    newer = _events(1, start_ms=t + 1)
+    assert store.insert_batch(conn, older + newer) == 1
+    conn.close()
+    rows = store.read_window(learning_db, "default", since_ms=0, include_dashboard=True)
+    assert [r["event_id"] for r in rows] == [newer[0].event_id]
+
+
+def test_cli_erase_beats_inflight_daemon_batch(learning_db) -> None:
+    """The daemon has a batch in flight; `slm gdpr` erases from another process."""
+    h.enable(True)
+    for _ in range(10):
+        h.record_recall_verdict(make_response(), profile_id="victim")
+    batch = h.snapshot_unsaved(store.BATCH_MAX)          # daemon thread A, mid-flush
+    other = sqlite3.connect(learning_db, isolation_level=None)  # the CLI process
+    time.sleep(0.002)
+    store.erase_profile_rows(other, "victim", now_ms=int(time.time() * 1000))
+    other.close()
+    conn = store.connect(learning_db, readonly=False)
+    assert store.insert_batch(conn, [ev for _, ev in batch]) == 0
+    store._state["tombstones_seen_ms"] = 0
+    assert store.apply_remote_tombstones(conn) == 10   # and the ring is purged too
+    conn.close()
+    assert _count(learning_db, "victim") == 0
+    assert h.recent("victim", after_seq=0, limit=50)[0] == []
+
+
+def test_in_process_erase_waits_for_flush(learning_db) -> None:
+    h.enable(True)
+    store._state["learning_db"] = learning_db
+    for _ in range(5):
+        h.record_recall_verdict(make_response(), profile_id="victim")
+    assert store.erase_profile_everywhere(learning_db, "victim") == 0
+    assert store.flush_once() == 0             # nothing of the erased profile left to save
+    assert _count(learning_db, "victim") == 0
+
+
+def test_prune_by_age(learning_db) -> None:
+    now = int(time.time() * 1000)
+    old = _events(5, start_ms=now - 31 * 86_400_000)
+    fresh_ = _events(5, start_ms=now - 1000)
+    conn = store.connect(learning_db, readonly=False)
+    store.insert_batch(conn, old + fresh_)
+    assert store.prune(conn, now_ms=now, retention_days=30, max_rows=10_000) == 5
+    conn.close()
+    assert _count(learning_db) == 5
+
+
+def test_prune_by_count_per_profile(learning_db) -> None:
+    now = int(time.time() * 1000)
+    conn = store.connect(learning_db, readonly=False)
+    many = _events(10_500, "busy", start_ms=now - 20_000)
+    for i in range(0, len(many), 128):
+        store.insert_batch(conn, many[i:i + 128])
+    store.insert_batch(conn, _events(10, "quiet", start_ms=now - 20_000))
+    assert store.prune(conn, now_ms=now, retention_days=30, max_rows=10_000) == 500
+    oldest = conn.execute("SELECT MIN(occurred_ms) FROM answer_check_events "
+                          "WHERE profile_id='busy'").fetchone()[0]
+    conn.close()
+    assert _count(learning_db, "busy") == 10_000 and _count(learning_db, "quiet") == 10
+    assert oldest == many[500].occurred_ms
+
+
+def test_prune_chunks_hold_lock_briefly(learning_db, monkeypatch) -> None:
+    now = int(time.time() * 1000)
+    conn = store.connect(learning_db, readonly=False)
+    old = _events(1_200, start_ms=now - 40 * 86_400_000)
+    for i in range(0, len(old), 128):
+        store.insert_batch(conn, old[i:i + 128])
+    sizes: list[int] = []
+    real = store._in_txn
+
+    def spy(c, fn):
+        before = c.total_changes
+        out = real(c, fn)
+        sizes.append(c.total_changes - before)
+        return out
+    monkeypatch.setattr(store, "_in_txn", spy)
+    assert store.prune(conn, now_ms=now, retention_days=30, max_rows=10_000) == 1_200
+    conn.close()
+    assert max(sizes) <= store.PRUNE_CHUNK and len(sizes) >= 3
+
+
+def test_writer_flushes_on_interval_and_on_wake(learning_db) -> None:
+    store.start_writer(learning_db)
+    h.record_recall_verdict(make_response(), profile_id="default")
+    deadline = time.monotonic() + 2.5
+    while _count(learning_db) < 1 and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert _count(learning_db) == 1, "idle flush within the 2 s interval"
+    started = time.monotonic()
+    for _ in range(h.WAKE_AT_UNSAVED):
+        h.record_recall_verdict(make_response(), profile_id="default")
+    while _count(learning_db) < 129 and time.monotonic() - started < 1.5:
+        time.sleep(0.01)
+    assert _count(learning_db) == 129
+    assert time.monotonic() - started < 1.5, "woken early, not on the 2 s timer"
+
+
+def test_writer_survives_locked_db(learning_db) -> None:
+    store.start_writer(learning_db)
+    h.record_recall_verdict(make_response(), profile_id="default")
+    blocker = sqlite3.connect(learning_db, isolation_level=None)
+    blocker.execute("BEGIN IMMEDIATE")
+    deadline = time.monotonic() + 10   # first try at <= 2 s, gives up after the 5 s busy wait
+    while h.counters()["save_failures"] < 1 and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert h.counters()["save_failures"] >= 1
+    blocker.execute("ROLLBACK")
+    blocker.close()
+    deadline = time.monotonic() + 6
+    while _count(learning_db) < 1 and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert _count(learning_db) == 1 and h.counters()["dropped_before_save"] == 0
+
+
+def test_stop_writer_final_flush(learning_db) -> None:
+    store.start_writer(learning_db)
+    for _ in range(50):
+        h.record_recall_verdict(make_response(), profile_id="default")
+    assert store.stop_writer() == 0
+    assert _count(learning_db) == 50
+    h.record_recall_verdict(make_response(), profile_id="default")
+    assert h.counters()["recorded"] == 50, "stopped writer means recording is off"
+
+
+def test_history_survives_restart(learning_db) -> None:
+    store.start_writer(learning_db)
+    for _ in range(3):
+        h.record_recall_verdict(make_response(), profile_id="default")
+    store.stop_writer()
+    h._reset_for_testing()
+    store.start_writer(learning_db)
+    assert h.recent("default", after_seq=0, limit=50)[0] == []
+    rows, cursor = store.read_page(learning_db, "default", cursor=None, limit=50,
+                                   status=None, since_ms=0)
+    assert len(rows) == 3 and cursor is None
+
+
+def test_read_page_keyset(learning_db) -> None:
+    conn = store.connect(learning_db, readonly=False)
+    store.insert_batch(conn, _events(7, start_ms=1_000))
+    conn.close()
+    seen, cursor = [], None
+    while True:
+        rows, cursor_next = store.read_page(learning_db, "default", cursor=cursor, limit=3,
+                                            status=None, since_ms=0)
+        seen += rows
+        if cursor_next is None:
+            break
+        ms, eid = cursor_next.split(":")
+        cursor = (int(ms), eid)
+    assert [r["occurred_ms"] for r in seen] == list(range(1_006, 999, -1))
+
+
+def test_retention_clamps() -> None:
+    assert store.clamp_settings(0, 5) == (1, 1_000)
+    assert store.clamp_settings(9999, 50_000) == (365, 10_000)
+    assert store.clamp_settings("x", None) == (30, 10_000)
+    assert store.clamp_settings(30, 10_000) == (30, 10_000)
+
+
+def test_readers_tolerate_missing_tables(tmp_path) -> None:
+    db = tmp_path / "learning.db"
+    sqlite3.connect(db).close()
+    assert store.read_window(db, "p", since_ms=0, include_dashboard=True) == []
+    assert store.erase_profile_everywhere(db, "p") == 0
+    assert store.erase_profile_everywhere(tmp_path / "absent.db", "p") == 0
+
+
+def test_concurrent_record_and_flush_lose_nothing(learning_db) -> None:
+    store.start_writer(learning_db)
+    def burst():
+        for _ in range(400):
+            h.record_recall_verdict(make_response(), profile_id="default")
+    threads = [threading.Thread(target=burst) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    store.stop_writer()
+    assert _count(learning_db) == 1600 and h.counters()["dropped_before_save"] == 0

@@ -37,6 +37,7 @@ _SENSITIVE_READ_PREFIXES = (
     # expose cross-agent coordination signals and behavioral profiles.
     "/events", "/api/events", "/api/agents", "/api/trust/",
     "/api/v3/abstraction", "/api/v3/insights",
+    "/api/v3/answer-check/history",
 )
 _SENSITIVE_READ_EXACT_PATHS = (
     "/api/search", "/api/v3/recall/trace", "/api/patterns",

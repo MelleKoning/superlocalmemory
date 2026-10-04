@@ -403,6 +403,9 @@ def delete_profile_from_db(name: str) -> None:
     from superlocalmemory.storage.agent_experience import purge_profile_receipts
 
     purge_profile_receipts(Path(DB_PATH).parent / "learning.db", name)
+    from superlocalmemory.core.answer_check_history_store import erase_profile_everywhere
+
+    erase_profile_everywhere(Path(DB_PATH).parent / "learning.db", name)
     with memory_write(DB_PATH) as conn:
         conn.execute("PRAGMA foreign_keys=ON")
         # Purge role grants for this workspace (no FK CASCADE covers these).

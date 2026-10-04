@@ -767,10 +767,12 @@ async def search_memories(request: Request, body: SearchRequest):
             # than ``limit`` results even when enough actually exist.
             from superlocalmemory.retrieval.kind_filter import overfetch_limit
             _search_limit = overfetch_limit(body.limit) if parsed_kind else body.limit
+            # Tagged as a dashboard test, so it never counts as agent traffic.
+            from superlocalmemory.core.answer_check_history import call_as_dashboard
             _recall_future = loop.run_in_executor(
                 None,
-                lambda: engine.recall(
-                    body.query, limit=_search_limit, fast=True,
+                lambda: call_as_dashboard(
+                    engine.recall, body.query, limit=_search_limit, fast=True,
                     window=_window or None,
                     # Name the surface. A recall with no name leaves no record
                     # an outcome can be matched to, and a search typed into the

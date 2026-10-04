@@ -1259,6 +1259,14 @@ class MemoryEngine:
         except Exception as exc:  # noqa: BLE001 -- a read must not fail on this
             logger.debug("recall outcome ticket skipped: %s", exc)
 
+        # 4.1.20: the Answer Check history. One append to an in-memory ring --
+        # no I/O; the daemon's writer thread saves it. Outcomes and timings only.
+        try:
+            from superlocalmemory.core.answer_check_history import record_recall_verdict
+            record_recall_verdict(response, profile_id=str(pid))
+        except Exception as exc:  # noqa: BLE001 -- a read must not fail on this
+            logger.debug("answer-check history skipped: %s", type(exc).__name__)
+
         return response
 
     def _session_for_signals(self, session_id: str | None) -> str:

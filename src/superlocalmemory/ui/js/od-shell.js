@@ -61,6 +61,8 @@
   ================================================================ */
   var NAV = [
     { g: 'Overview', items: [
+      // 4.1.20: Jev and Laya, dedicated and first in the group (owner's call).
+      { k: 'answercheck-pane', t: 'Answer Check', i: 'shield', crumb: 'Overview', tag: 'new', hero: true },
       { k: 'dashboard-pane', t: 'Dashboard',   i: 'dashboard', crumb: 'Overview' },
       { k: 'brain-pane',     t: 'Brain',        i: 'brain',     crumb: 'Overview', tag: 'live', hero: true },
     ]},
@@ -526,6 +528,9 @@
         return true;
       case 'loops-pane':
         od('odRenderLoops');
+        return true;
+      case 'answercheck-pane':
+        od('odRenderAnswerCheck');
         return true;
       case 'settings-pane':
         if (od('odRenderSettings')) return true;

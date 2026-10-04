@@ -1188,6 +1188,9 @@ async def recall_trace(request: Request):
     """
     import asyncio
     import time as _time
+    # 4.1.20: it returns memory content, so it needs READ on the workspace when
+    # team accounts are on. The RBAC middleware gates GET only; this is a POST.
+    _resolve_profile(request)
     try:
         body = await request.json()
         query = body.get("query", "")
@@ -1239,10 +1242,11 @@ async def recall_trace(request: Request):
 
         loop = asyncio.get_event_loop()
         t0 = _time.monotonic()
+        from superlocalmemory.core.answer_check_history import call_as_dashboard
         response = await loop.run_in_executor(
             None,
-            lambda: engine.recall(
-                query, limit=limit, fast=False,
+            lambda: call_as_dashboard(  # a dashboard test, never agent traffic
+                engine.recall, query, limit=limit, fast=False,
                 window=window or None, as_of=_as_of,
                 known_as_of=_known_as_of, valid_at=_valid_at,
                 include_unknown=include_unknown,
@@ -1258,6 +1262,7 @@ async def recall_trace(request: Request):
             recall_response_metadata,
             serialize_recall_response,
         )
+        from superlocalmemory.server.routes.answer_check_history import answer_check_block
         results, no_confident_match = serialize_recall_response(
             response,
             limit=limit,
@@ -1281,6 +1286,7 @@ async def recall_trace(request: Request):
             "synthesis": "",
             "no_confident_match": no_confident_match,
             **recall_response_metadata(response),
+            "answer_check": answer_check_block(response),
         }
     except Exception as e:
         return _internal_error()

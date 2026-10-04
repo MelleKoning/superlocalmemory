@@ -194,6 +194,52 @@ loop's gate, even if it would otherwise look like a match. Each lap asks the
 check once, for the verdict only — never for the optional reorder, even
 when reordering is turned on.
 
+## The Answer Check tab
+
+The dashboard's first tab, **Answer Check**, shows the check at work:
+
+- **Which check runs** — on this Mac with Laya, online with Jev, or off, and
+  why when something was chosen but cannot run. **Change in Settings** takes
+  you to the settings; the tab itself changes nothing.
+- **Try it** — ask a question and see what retrieval found next to what the
+  check said: the verdict, its confidence and the confidence it needed, and
+  how long retrieval and the check took against the 3-second limit. These
+  questions are marked as dashboard tests and never counted in the numbers
+  below. With Jev, the tab reminds you each time that asking sends the
+  question and the top memories to your provider.
+- **How often it said "I don't have that"** — over the last 24 hours, 7 days
+  or 30 days. The rate counts only recalls the check actually judged; "nothing
+  found" and "not checked" are shown separately. It is not shown until at least
+  20 recalls were judged, and then with its 95% range.
+- **Time against the 3-second limit** — typical and slow (p50, p95) times
+  inside the recall pipeline, for the whole recall and for the check alone.
+- **Recent checks** — a live list, newest first.
+
+### What is kept, and for how long
+
+The history keeps **outcomes and timings only**: the verdict, its confidence
+and threshold, which judge ran, how many results there were, the question
+type, and the times. It never keeps your question, any memory's text, memory
+ids, session ids or agent names.
+
+It stays on this machine (in `learning.db`), separately for each profile, for
+30 days and at most 10,000 checks per profile, whichever comes first. Recent
+checks are also held in memory so the live list costs no disk read; they are
+saved every two seconds by one background writer in the daemon, never on the
+recall itself. If that writer ever falls behind, the oldest unsaved checks are
+dropped rather than slowing a recall down, and the tab says how many.
+
+Recalls served while the daemon is not running (the CLI's offline fallback)
+are not recorded.
+
+**Clear history** on the tab removes this profile's history (it needs delete
+permission when team accounts are on). A data export includes it; erasing a
+profile, or deleting it, erases it too, including from a running daemon.
+"Reset learning data" does not touch it.
+
+To turn the history off, or keep it shorter, set the keys below and restart
+the daemon.
+
 ## Technical reference
 
 ### Response fields
@@ -272,12 +318,41 @@ settings decide where memory text is sent and what is billed.
 | `sufficiency_jev_rerank_consent` | `true` \| `false` (default) | Must be explicitly `true`, set only by ticking the switch next to its notice. Cleared whenever reordering is turned off |
 | `sufficiency_jev_rerank_k` | `5`–`30`, default `20` | How many top results reordering sends and may reorder. A value that isn't a whole number of at least 1 means reordering is off. Not on the dashboard |
 
+The Answer Check tab's history has its own keys, in `config.json` under
+`retrieval` (they apply at the next daemon start):
+
+| Key | Values | Meaning |
+|---|---|---|
+| `answer_check_history` | `true` (default) \| `false` | Keep the Answer Check tab's history (outcomes and timings only) |
+| `answer_check_history_days` | `1`–`365`, default `30` | Days the history is kept |
+| `answer_check_history_max_rows` | `1,000`–`10,000`, default `10,000` | Most checks kept per profile. Capped at 10,000 so a data export always carries all of them |
+
 The provider key itself is never written to any of these files; it lives in
 its own owner-only store, separate from the rest of your configuration.
 
 The on-device model loads when the daemon starts, or the moment you switch
 the check on from the dashboard — never inside a one-shot CLI command, so
 running `slm recall` on its own never pays for loading it.
+
+### Answer Check history over HTTP
+
+All four routes act on the active profile. Reads need read access to the
+workspace when team accounts are on; clearing needs SLM's own credential and
+delete access. Items carry outcomes and timings only.
+
+| Route | What it returns |
+|---|---|
+| `GET /api/v3/answer-check/history/live?after_seq=&limit=` | Newest checks held in memory (no disk read), with `boot_id` and `last_seq` for polling |
+| `GET /api/v3/answer-check/history/summary?window=24h\|7d\|30d&include_dashboard=` | Counts, the abstention rate (`null` below 20 judged checks, with its 95% range), latency against the 3,000 ms limit, and recording health |
+| `GET /api/v3/answer-check/history?limit=&cursor=&status=&window=` | Saved checks, newest first; pass `next_cursor` back as `cursor` |
+| `DELETE /api/v3/answer-check/history` | Clears this profile's history; returns `{"cleared": n}` |
+
+`POST /api/v3/recall/trace` (Recall Lab and the tab's Try it panel) also
+returns an `answer_check` block: `status`, `detail`, `judge`, `abstained`,
+`abstention_reason`, `answer_confidence`, `threshold`, `reordered`,
+`retrieval_ms`, `judge_ms`, `total_ms` and `ceiling_ms`. Since 4.1.20 it
+requires read access to the workspace when team accounts are on. MCP and
+`/recall` responses are unchanged.
 
 ### CLI and MCP output
 

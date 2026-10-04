@@ -1189,6 +1189,7 @@
     var mount = el('div', { 'data-set':'', 'data-txt':'answer check laya jev sufficiency' },
       { padding:'16px 20px' });
     var g = makeGrp('Answer check', 'shield', [mount]);
+    g.id = 'settings-answer-check';  // deep-link target of the Answer Check tab
     if (window.SLMAnswerCheck && typeof window.SLMAnswerCheck.renderInto === 'function') {
       window.SLMAnswerCheck.renderInto(mount);
     }
