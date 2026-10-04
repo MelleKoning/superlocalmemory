@@ -1937,10 +1937,8 @@ def cmd_recall(args: Namespace) -> None:
                 # NoneType.__format__". ``or 0`` covers both. Same for score,
                 # which the keyword-fallback path returns as None.
                 elapsed_ms = result.get('retrieval_time_ms') or 0
-                print(
-                    "SpreadingActivation.search completed via daemon "
-                    f"({elapsed_ms:.0f}ms)"
-                )
+                # Timing is diagnostics; stdout carries only the results.
+                logger.debug("recall completed via daemon (%.0fms)", elapsed_ms)
                 for i, r in enumerate(result["results"], 1):
                     score = r.get('score') or 0
                     print(f"  {i}. [{score:.2f}] {r['content']}")
