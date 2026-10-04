@@ -58,6 +58,50 @@ def _update_applied(memory_db: Path) -> bool:
     return bool(row) and row[0] == "complete"
 
 
+#: (table, timestamp column) for every row kind the repair can change. A row
+#: in any of them that is older than the update could carry old-build damage.
+_DATED_ROWS = (
+    ("memories", "created_at"),
+    ("atomic_facts", "created_at"),
+    ("canonical_entities", "first_seen"),
+    ("ingestion_operations", "created_at"),
+)
+
+
+def _store_was_empty_before_update(memory_db: Path) -> bool:
+    """True when every row the repair could touch was written after the update.
+
+    The repair undoes damage that builds before 4.1.19 wrote. A store that held
+    nothing when the update ran (a fresh install) has no such rows, so there is
+    nothing to repair and no copy to wait for. Without this, a fresh install
+    waited forever on its install-time copy -- a copy of a store with no tables
+    to restore -- and logged "does not verify" on every start.
+
+    Conservative by construction: a row with a missing or unreadable timestamp
+    counts as older than the update.
+    """
+    try:
+        with closing(sqlite3.connect(f"{memory_db.absolute().as_uri()}?mode=ro", uri=True)) as conn:
+            row = conn.execute("SELECT applied_at FROM migration_log WHERE name=? "
+                               "AND status='complete'", (_UPGRADE_MIGRATION,)).fetchone()
+            if not row or conn.execute("SELECT julianday(?)", (row[0],)).fetchone()[0] is None:
+                return False
+            tables = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            for table, column in _DATED_ROWS:
+                if table not in tables:
+                    continue
+                older = conn.execute(
+                    f"SELECT 1 FROM {table} WHERE {column} IS NULL "  # noqa: S608 - fixed names
+                    f"OR julianday({column}) IS NULL "
+                    f"OR julianday({column}) < julianday(?) LIMIT 1", (row[0],)).fetchone()
+                if older:
+                    return False
+    except sqlite3.Error:
+        return False
+    return True
+
+
 def _verified_pre_upgrade_point(data_root: Path) -> Any | None:
     """Newest copy with a manifest, taken before the update, that verifies now."""
     from superlocalmemory.storage import _snapshot_manifest as sm
@@ -95,6 +139,15 @@ def run_store_repair_once(data_root: Path, memory_db: Path) -> dict[str, Any]:
         return {**record, "status": "already_done"}
     if not memory_db.exists() or not _update_applied(memory_db):
         return {"status": "waiting_for_update"}
+    if _store_was_empty_before_update(memory_db):
+        done = {"repair_id": REPAIR_ID, "status": "complete", "point_id": None,
+                "planned": {}, "result": {},
+                "reason": "the store held nothing before the update",
+                "completed_at": _now()}
+        write_json_atomic(record_path, done)
+        logger.info("[SLM] One-time repair not needed: the store held nothing "
+                    "before the update")
+        return {**done, "status": "nothing_to_repair"}
     point = _verified_pre_upgrade_point(data_root)
     if point is None:
         logger.info("[SLM] One-time repair waits: no verified copy from before the update")
