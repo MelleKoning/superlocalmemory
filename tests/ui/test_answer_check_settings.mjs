@@ -215,6 +215,44 @@ describe('Answer check settings', function () {
     const d = p.root.querySelector('.ac-details');
     d.querySelector('summary').click();
     assert.equal(d.open, true);
-    assert.match(d.textContent, /Python program: \/Users\/v\/\.local/);
+    assert.match(d.textContent, /Python program: ~\/\.local\/share\/laya-venv\/bin\/python/);
+    assert.doesNotMatch(d.textContent, /\/Users\/v\//);
+  });
+
+  describe('each choice says what state it is in', function () {
+    const label = (p, m) => p.ac('mode-' + m).parentElement.textContent.replace(/\s+/g, ' ').trim();
+    const cases = [
+      ['laya ready', status({ laya: { state: 'ready', action: '', error: '' } }), 'laya',
+       'On this Mac — private (recommended) ✓ Ready'],
+      ['laya not set up', status({ laya: { state: 'not_installed', action: '', error: '' } }), 'laya',
+       'On this Mac — private (recommended) — set it up below'],
+      ['laya found, unchecked', status(), 'laya', 'On this Mac — private (recommended) — check it below'],
+      ['laya half-made', status({ laya: { state: 'failed', managed: true, action: 'setup' } }), 'laya',
+       'On this Mac — private (recommended) — repair it below'],
+      ['laya installing', status({ setup_running: true, laya: { state: 'installing', action: '', error: '' } }), 'laya',
+       'On this Mac — private (recommended) — being set up below'],
+      ['laya no Apple Silicon', status({ apple_silicon: false, laya: { state: 'unsupported', action: '' } }), 'laya',
+       'On this Mac — private (recommended) — needs a Mac with Apple Silicon'],
+      ['jev no key', status(), 'jev', 'Online with Jev — add your key to use it'],
+      ['jev key, no notice', status({ jev: { has_key: true, key_hint: '****abcd' } }), 'jev',
+       'Online with Jev — tick the notice below to use it'],
+      ['jev ready', status({ jev: { has_key: true, key_hint: '****abcd', consent: true } }), 'jev',
+       'Online with Jev ✓ Ready'],
+      ['off', status(), 'off', 'Off'],
+    ];
+    for (const [name, s, mode, expected] of cases) {
+      it(name, async function () {
+        const p = await mount(s);
+        assert.equal(label(p, mode), expected);
+      });
+    }
+    it('jev with a pasted, unsaved key and the notice ticked says to Save', async function () {
+      const p = await mount(status());
+      p.ac('jev-key').value = 'sk-test-fake';
+      p.ac('jev-key').dispatchEvent(new p.w.Event('input'));
+      p.ac('jev-consent').click();
+      await flushPromises();
+      assert.equal(label(p, 'jev'), 'Online with Jev — Save to use it');
+    });
   });
 });

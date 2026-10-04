@@ -189,7 +189,7 @@
     var wrap = el('fieldset', { class: 'ac-choices' },
       { border: '0', padding: '0', margin: '0 0 10px' });
     wrap.appendChild(el('legend', { text: 'Check answers' }, { fontSize: '12px', color: 'var(--fg-2)', marginBottom: '6px' }));
-    [['laya', 'On this Mac — private (recommended)'], ['jev', 'Online with Jev — needs a key'], ['off', 'Off']]
+    [['laya', 'On this Mac — private (recommended)'], ['jev', 'Online with Jev'], ['off', 'Off']]
       .forEach(function (opt) {
         var label = el('label', null, { display: 'flex', alignItems: 'baseline', gap: '8px',
           marginBottom: '6px', fontSize: '13.5px', cursor: canManage ? 'pointer' : 'not-allowed' });
@@ -200,10 +200,10 @@
         label.appendChild(radio);
         var words = el('span');
         words.appendChild(document.createTextNode(opt[1]));
-        var ready = opt[0] === 'laya' ? layaReadiness() : opt[0] === 'jev' ? jevReadiness() : null;
-        if (ready) {
-          words.appendChild(el('span', { text: ready.ready ? '  ✓ ' + ready.text : '  — not ready yet' },
-            { fontSize: '11.5px', color: ready.ready ? 'var(--success, #1a7f37)' : 'var(--fg-3)' }));
+        var state = choiceState(opt[0]);
+        if (state) {
+          words.appendChild(el('span', { text: ' ' + state.text, class: 'ac-choice-state' },
+            { fontSize: '12px', color: state.ready ? 'var(--success, #1a7f37)' : 'var(--fg-3)' }));
         }
         label.appendChild(words);
         wrap.appendChild(label);
@@ -216,6 +216,30 @@
         : 'Not chosen yet. On this Mac turns on by itself once it is set up and checked.', 'dim'));
     }
     return wrap;
+  }
+
+  /* The short state shown beside each choice: always what it is now. */
+  function choiceState(mode) {
+    if (mode === 'laya') {
+      var laya = status.laya;
+      if (!status.apple_silicon) return { text: '— needs a Mac with Apple Silicon' };
+      if (laya.state === 'ready') return { ready: true, text: '✓ Ready' };
+      if (laya.state === 'installing') return { text: '— being set up below' };
+      if (laya.action === 'check') return { text: '— check it below' };
+      if (laya.action === 'setup') return { text: '— repair it below' };
+      return { text: '— set it up below' };
+    }
+    if (mode === 'jev') {
+      if (!jevKeySaved() && !draft.key.trim()) return { text: '— add your key to use it' };
+      if (!draft.consent) return { text: '— tick the notice below to use it' };
+      if (!jevKeySaved()) return { text: '— Save to use it' };
+      return { ready: true, text: '✓ Ready' };
+    }
+    return null;
+  }
+  /* Paths with the home folder shown as "~". */
+  function homeShort(path) {
+    return String(path || '').replace(/^\/(Users|home)\/[^/]+(?=\/|$)/, '~');
   }
 
   function buildGuidance(ready) {
@@ -358,9 +382,9 @@
     var lines = [
       'Status: ' + laya.state + (laya.step ? ' — ' + laya.step : ''),
       'Installed by SLM: ' + (laya.managed ? 'yes' : 'no'),
-      'Python program: ' + (laya.python || '—'),
-      'Model folder: ' + (laya.model_path || '—'),
-      'Model cache folder: ' + (laya.hf_home || '—'),
+      'Python program: ' + (homeShort(laya.python) || '—'),
+      'Model folder: ' + (homeShort(laya.model_path) || '—'),
+      'Model cache folder: ' + (homeShort(laya.hf_home) || '—'),
     ];
     lines.forEach(function (t) {
       d.appendChild(el('div', { text: t, class: 'mono' }, { fontSize: '11.5px', color: 'var(--fg-2)', wordBreak: 'break-all' }));
