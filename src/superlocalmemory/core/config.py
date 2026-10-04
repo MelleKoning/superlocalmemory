@@ -1513,7 +1513,7 @@ class SLMConfig:
                 rng = fields.get("langevin_weight_range")
                 if isinstance(rng, list):
                     fields["langevin_weight_range"] = tuple(rng)
-                fields = _config_upgrades.sheaf_reviewed(mth, fields)
+                fields = _config_upgrades.sheaf_reviewed(mth, fields, path.parent)
                 config.math = MathConfig(**fields)
             except (TypeError, ValueError) as exc:
                 logger.warning(
