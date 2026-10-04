@@ -96,25 +96,30 @@ class TestRememberTool:
         assert result["count"] >= 1
         assert len(result["fact_ids"]) >= 1
 
-    @pytest.mark.slow
     @patch("superlocalmemory.mcp.tools_core._emit_event")
-    def test_remember_returns_pending_id(self, mock_emit):
-        """Offline canonical ingestion returns a truthful durable receipt.
+    def test_remember_without_a_daemon_is_a_truthful_retryable_refusal(
+        self, mock_emit, tmp_path, monkeypatch,
+    ):
+        """No daemon, none startable: say so, claim nothing, write nothing.
 
-        The historical regression lived in the real worker slow lane. The
-        suite-level heavy-worker guard now supplies the same public receipt
-        contract without loading models, while the worker receipt itself is
-        covered in ``test_recall_worker_write_identity``.
+        The daemon is the only writer (3.8.6): an MCP process never builds a
+        local worker pool to store a memory itself, so the honest answer is a
+        retryable DAEMON_UNAVAILABLE - no fact ids, no operation id, and no
+        store created behind the caller's back. (This replaces a test of the
+        pre-3.8.6 in-process fallback that sat unrun in the slow lane.)
         """
+        import superlocalmemory.cli.daemon as _d
+
+        monkeypatch.setattr(_d, "ensure_daemon", lambda *a, **k: False)
         remember = _get_remember_tool()
-        result = asyncio.run(remember("Test content for pending store"))
-        assert result["success"] is True
-        assert result["materialization_state"] == "complete"
-        assert result["pending"] is False
-        assert result["pending_id"] is None
-        assert result["operation_id"]
-        assert result["fact_ids"]
-        assert all(not fact_id.startswith("pending:") for fact_id in result["fact_ids"])
+        result = asyncio.run(remember("Test content for an absent daemon"))
+
+        assert result["success"] is False
+        assert result["code"] == "DAEMON_UNAVAILABLE"
+        assert result["retryable"] is True
+        assert "fact_ids" not in result and "operation_id" not in result
+        assert not (tmp_path / "memory.db").exists()
+        mock_emit.assert_not_called()
 
     def test_remember_preserves_worker_materialization_receipt(self):
         """The MCP surface must not relabel a queryable operation complete."""
