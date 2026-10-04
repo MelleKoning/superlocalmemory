@@ -5,6 +5,89 @@ All notable changes to SuperLocalMemory will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.20] — Answers you can check, from any computer
+
+### Added
+
+- **Answer Check tab** in the dashboard: which check is running, a "Try it" box
+  that shows raw results next to the verdict, how often SLM said "I don't have
+  that", time against the 3-second limit, and the recent checks with where each
+  recall's time went. History is kept 30 days on this machine; questions and
+  memories are never stored in it.
+- **Answer-check settings anyone can use.** Each option says whether it is
+  ready and what to do next, has its own Test button with a visible result, and
+  one Save applies everything without a restart. Only the option you choose
+  runs: Laya on this Mac, or Jev online, never both. A setup that stalls stops
+  by itself and offers to use an install you already have.
+- **Use SuperLocalMemory from another computer** (`slm remote`): an encrypted
+  listener that is off by default, a certificate helper, and named keys you can
+  revoke. Each key is read-only or read-write and is bound to one profile.
+  Remote callers never see this computer's paths, account or environment.
+- **Hermes can use an SLM on another computer** (#138). A save that did not land
+  says NOT SAVED.
+
+### Changed
+
+- **The same question gets the same answer.** Learned ranking no longer
+  reshuffles results between runs, a repeat question keeps its top answer, and
+  the answer check gives the same verdict on a repeat. A check that did not run
+  says why.
+- **Recall right after a save finds it.** On a fresh install, recall answers
+  while the embedding model is still loading, within 3 seconds, and says which
+  parts of the search were still warming instead of "No confident match".
+- **Saves under heavy load are accepted and saved**, never refused. A save the
+  disk refuses says so.
+- **Upgrades are faster.** An update copies only the databases it changes and
+  says how long that will take.
+- Cross-scope recall reads only what it scores and seeds the graph from the
+  best matches (#146, #147).
+- The README is rewritten for developers, with new guides for memory kinds,
+  recall and restore points.
+
+### Fixed
+
+- **macOS:** building the memory compression rotation no longer corrupts
+  process memory, which could crash SuperLocalMemory later at random.
+- On Windows the plugin starts the SuperLocalMemory you installed (#139). The
+  plugin no longer requires Python 3.12 when it uses your installed `slm`
+  (#140), and its hooks find SuperLocalMemory wherever the plugin's server does
+  (#141).
+- Saves accepted for another profile, or with `--replaces` while busy, are
+  completed after a restart. One unreadable saved memory no longer blocks
+  start-up. Re-running `slm remember` never stores the same memory twice.
+- A data export includes everything: the whole code graph and every learning
+  record, from the CLI and the dashboard.
+- A date range includes its last day; an unreadable time filter is refused
+  instead of ignored, on every surface.
+- `slm warmup` reports PASS only when recall is ready. `slm list` shows each
+  memory's ID and kind. `slm delete` and `slm update` report an unknown ID as
+  not found. `slm remember --replaces` prints the exact undo command.
+- The dashboard's Memory activity uses your local time zone; on a phone the
+  menu closes after you choose a page.
+- Mesh peers can sync shared state again. Dashboard search finds the same
+  memories as recall. A shut-down embedding service stays shut.
+- `slm recall` prints only results; error hints name commands that exist; an
+  unknown MCP tool profile is refused with the valid names; the
+  consistency-check notice is shown once.
+
+### Security
+
+- Other computers must sign in to read memory, not only to write it.
+- On team workspaces, search, memory chat, recall trace, summary, timeline,
+  `slm list` and mesh reads all require read permission.
+- Requests carried by a proxy are never treated as local unless you name a
+  trusted proxy.
+- SuperLocalMemory's own requests never follow redirects, so a key is never
+  sent through one. A refused request never repeats the value it was sent.
+- Restore points and remote keys are readable only by you, on macOS, Linux and
+  Windows.
+
+### Upgrade notes
+
+- The first start after upgrading writes a restore point and adds the Answer
+  Check history. `slm db prepare-downgrade` returns your data to 4.1.19 if
+  needed, and prints the exact install command.
+
 ## [4.1.19] — Memories know what kind they are
 
 ### Added
