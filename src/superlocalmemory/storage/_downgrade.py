@@ -51,6 +51,53 @@ logger = logging.getLogger(__name__)
 
 _SERIAL = re.compile(r"^M(\d{3})_")
 
+#: The first release that opens a store stamped at each schema version. A
+#: store prepared for schema N opens in that release and every later one.
+OLDEST_RELEASE_FOR_SCHEMA = {51: "4.1.18"}
+
+
+def _parse(version: str) -> tuple[int, ...] | None:
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", str(version or "").strip())
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def downgrade_target_release(target_schema: int, current: str) -> str | None:
+    """The release to go back to: the one just before ``current``.
+
+    Never older than the first release that opens the prepared store; ``None``
+    when either version is unknown, so the message never names a wrong one.
+    """
+    oldest = OLDEST_RELEASE_FOR_SCHEMA.get(int(target_schema))
+    now, floor = _parse(current), _parse(oldest or "")
+    if now is None or floor is None:
+        return oldest
+    major, minor, patch = now
+    previous = (major, minor, patch - 1) if patch > 0 else None
+    if previous is None or previous < floor or previous >= now:
+        return oldest
+    return ".".join(str(part) for part in previous)
+
+
+def downgrade_install_commands(version: str) -> list[str]:
+    """The exact commands that install ``version`` over a newer one."""
+    return [f'pipx install --force "superlocalmemory=={version}"',
+            f"npm install -g superlocalmemory@{version}",
+            f'pip install "superlocalmemory=={version}"']
+
+
+def _ready_message(target_schema: int, version: str | None) -> str:
+    keeps = ("Your memories were copied first. Restarting this version keeps the "
+             "preparation; to undo it, choose Cancel (slm db prepare-downgrade --cancel) "
+             "and it is undone at the next start.")
+    if not version:
+        return "Ready to go back. Install the older version now. " + keeps
+    oldest = OLDEST_RELEASE_FOR_SCHEMA.get(int(target_schema))
+    also = (f" (any version from {oldest} on can open the store now)"
+            if oldest and oldest != version else "")
+    pipx, npm, pip = downgrade_install_commands(version)
+    return (f"Ready to go back to {version}{also}. Install it now with the tool you "
+            f"installed SuperLocalMemory with: {pipx}  |  {npm}  |  {pip}. " + keeps)
+
 
 def _last_version_fingerprint(data_root: Path) -> dict[str, Any]:
     path = Path(data_root) / ".last_version"
@@ -140,13 +187,12 @@ def prepare_downgrade(*, target_schema: int = 51, requested_by: str, data_root: 
     })
     logger.info("[SLM] Store prepared for schema %s by %s (copy %s)",
                 target_schema, requested_by, point_id)
+    version = downgrade_target_release(int(target_schema), sm.package_version())
     return DowngradeReport(
         prepared=True, target_schema=int(target_schema), point_id=point_id,
-        marker=str(marker),
-        message="Ready to go back. Install the older version now; your memories were "
-                "copied first. Restarting this version keeps the preparation; to undo it, "
-                "choose Cancel (slm db prepare-downgrade --cancel) and it is undone at the "
-                "next start.")
+        marker=str(marker), message=_ready_message(int(target_schema), version),
+        target_version=version,
+        install_commands=downgrade_install_commands(version) if version else [])
 
 
 def cancel_downgrade(data_root: Path) -> bool:

@@ -40,18 +40,44 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
 
+#: Pending rewrites, keyed by absolute path. Every writer stages its result
+#: here instead of touching the disk, and readers see staged text first, so two
+#: entries that edit the same file (package-lock.json, CITATION.cff) compose.
+#: Nothing reaches the disk until every entry has validated -- a release bump
+#: that fails half way once left sixteen files at the new version and three at
+#: the old one.
+_STAGED: dict[Path, str] = {}
+
+
+def _load(path: Path) -> str:
+    """Current text of ``path``: the staged rewrite if any, else the disk."""
+    staged = _STAGED.get(path)
+    return staged if staged is not None else path.read_text(encoding="utf-8")
+
+
+def _store(path: Path, text: str) -> None:
+    """Stage a rewrite. :func:`_commit` writes it; nothing else does."""
+    _STAGED[path] = text
+
+
+def _commit() -> None:
+    """Write every staged rewrite to disk, then clear the stage."""
+    for path, text in _STAGED.items():
+        path.write_text(text, encoding="utf-8")
+    _STAGED.clear()
+
 
 def _sub_json(rel: str, version: str, *, package_root: bool = False) -> tuple[str, str]:
     """Rewrite a JSON ``version`` field, preserving formatting where possible."""
     path = _ROOT / rel
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(_load(path))
     if package_root:
         old = data["packages"][""]["version"]
         data["packages"][""]["version"] = version
     else:
         old = data["version"]
         data["version"] = version
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    _store(path, json.dumps(data, indent=2) + "\n")
     return old, version
 
 
@@ -65,15 +91,13 @@ def _sub_regex(rel: str, pattern: str, replacement: str, version: str,
     by a version string.
     """
     path = _ROOT / rel
-    text = path.read_text(encoding="utf-8")
+    text = _load(path)
     m = re.search(pattern, text, re.MULTILINE)
     if not m:
         raise SystemExit(f"{rel}: pattern not found: {pattern}")
     old = m.group(1)
-    path.write_text(
-        re.sub(pattern, replacement.format(v=version), text, count=1, flags=re.MULTILINE),
-        encoding="utf-8",
-    )
+    _store(path, re.sub(pattern, replacement.format(v=version), text,
+                        count=1, flags=re.MULTILINE))
     return old, (reported if reported is not None else version)
 
 
@@ -85,15 +109,13 @@ def _today() -> str:
 def _sub_all(rel: str, pattern: str, replacement: str, version: str) -> tuple[str, str]:
     """Rewrite EVERY match. For files that stamp the version more than once."""
     path = _ROOT / rel
-    text = path.read_text(encoding="utf-8")
+    text = _load(path)
     m = re.search(pattern, text, re.MULTILINE)
     if not m:
         raise SystemExit(f"{rel}: pattern not found: {pattern}")
     old = m.group(1)
-    path.write_text(
-        re.sub(pattern, replacement.format(v=version), text, flags=re.MULTILINE),
-        encoding="utf-8",
-    )
+    _store(path, re.sub(pattern, replacement.format(v=version), text,
+                        flags=re.MULTILINE))
     return old, version
 
 
@@ -108,21 +130,21 @@ def _sub_glob(pattern_glob: str, pattern: str, replacement: str,
     """
     old = "<none found>"
     for path in sorted(_ROOT.glob(pattern_glob)):
-        text = path.read_text(encoding="utf-8")
+        text = _load(path)
         m = re.search(pattern, text, re.MULTILINE)
         if not m:
             continue
         old = m.group(1)
-        path.write_text(
-            re.sub(pattern, replacement.format(v=version), text, flags=re.MULTILINE),
-            encoding="utf-8",
-        )
+        _store(path, re.sub(pattern, replacement.format(v=version), text,
+                            flags=re.MULTILINE))
+    if old == "<none found>":
+        raise SystemExit(f"{pattern_glob}: pattern not found in any file: {pattern}")
     return old, version
 
 
 def _read_json_at(rel: str, path: tuple):
     """Read a nested JSON value by a path of keys and indexes."""
-    data = json.loads((_ROOT / rel).read_text(encoding="utf-8"))
+    data = json.loads(_load(_ROOT / rel))
     for step in path:
         data = data[step]
     return str(data)
@@ -131,13 +153,13 @@ def _read_json_at(rel: str, path: tuple):
 def _sub_json_at(rel: str, path: tuple, version: str) -> tuple[str, str]:
     """Set a nested JSON value, preserving the rest of the document."""
     p = _ROOT / rel
-    data = json.loads(p.read_text(encoding="utf-8"))
+    data = json.loads(_load(p))
     node = data
     for step in path[:-1]:
         node = node[step]
     old = str(node.get(path[-1]) if isinstance(node, dict) else node[path[-1]])
     node[path[-1]] = version
-    p.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _store(p, json.dumps(data, indent=2, sort_keys=True) + "\n")
     return old, version
 
 
@@ -150,7 +172,7 @@ def _read_glob(pattern_glob: str, pattern: str) -> str:
     """
     found = set()
     for path in sorted(_ROOT.glob(pattern_glob)):
-        m = re.search(pattern, path.read_text(encoding="utf-8"), re.MULTILINE)
+        m = re.search(pattern, _load(path), re.MULTILINE)
         if m:
             found.add(m.group(1))
     if not found:
@@ -161,12 +183,12 @@ def _read_glob(pattern_glob: str, pattern: str) -> str:
 
 
 def _read(rel: str, pattern: str) -> str:
-    m = re.search(pattern, (_ROOT / rel).read_text(encoding="utf-8"), re.MULTILINE)
+    m = re.search(pattern, _load(_ROOT / rel), re.MULTILINE)
     return m.group(1) if m else "<not found>"
 
 
 def _read_json(rel: str, *, package_root: bool = False) -> str:
-    data = json.loads((_ROOT / rel).read_text(encoding="utf-8"))
+    data = json.loads(_load(_ROOT / rel))
     return data["packages"][""]["version"] if package_root else data["version"]
 
 
@@ -249,11 +271,6 @@ def _plan(version: str):
          lambda: _read("plugin-src/rules/AGENTS.md", r"SuperLocalMemory v([0-9.]+)"),
          lambda: _sub_regex("plugin-src/rules/AGENTS.md", r"SuperLocalMemory v([0-9.]+)",
                             "SuperLocalMemory v{v}", version)),
-        # The first thing anyone sees. It states the version three times — the
-        # title, the summary line, and the release badge — and this script did
-        # not know about any of them, so 4.1.0 was bumped everywhere the
-        # consistency test looks and the front page still advertised 4.0.10.
-        # The test does not read README, which is exactly why the script must.
         # The version the marketplace advertises. Without it there is nothing
         # for a client to compare, so an installed plugin never looks out of
         # date -- which is exactly what "no upgrade in the plugins" meant. It is
@@ -272,50 +289,38 @@ def _plan(version: str):
          lambda: _sub_glob("plugin-src/**/*.md",
                            r"SuperLocalMemory v([0-9]+\.[0-9]+\.[0-9]+)",
                            "SuperLocalMemory v{v}", version)),
-        # Three parts required. ``V([0-9.]+)`` also matches "SuperLocalMemory V4"
-        # in the prose and the diagram alt text, where V4 is the product line and
-        # not a stamp -- a sweep on that pattern rewrote both.
-        ("README.md title",
-         lambda: _read("README.md", r"SuperLocalMemory V([0-9]+\.[0-9]+\.[0-9]+)"),
-         lambda: _sub_all("README.md",
-                          r"SuperLocalMemory V([0-9]+\.[0-9]+\.[0-9]+)",
-                          "SuperLocalMemory V{v}", version)),
-        # Each construct is matched exactly. A sweep of every ``vX.Y.Z`` in this
-        # file would also rewrite its references to v3.8.1, v3.6.7 and v3.6.15,
-        # which are history and not this release.
-        ("README.md summary",
-         lambda: _read("README.md", r"<code>v([0-9.]+)</code>"),
-         lambda: _sub_regex("README.md", r"<code>v([0-9.]+)</code>",
-                            "<code>v{v}</code>", version)),
-        ("README.md release badge",
-         lambda: _read("README.md", r"badge/v([0-9.]+)-Current_Release"),
-         lambda: _sub_all("README.md",
-                          r"v([0-9.]+)(-Current_Release| — Current Release)",
-                          "v{v}\\2", version)),
+        # README.md no longer carries a release stamp (no title version, no
+        # summary version, no badge), so it is not a source. Listing a source
+        # that does not exist made --check red on every tree and made a real
+        # bump fail after the other sources were already written.
     ]
 
 
-def main() -> int:
+def _date_ok(value: str) -> bool:
+    """date-released is acceptable when it parses and is not in the future."""
+    from datetime import date
+    try:
+        return date.fromisoformat(value) <= date.today()
+    except ValueError:
+        return False
+
+
+_PREDICATES = {"CITATION.cff date-released": _date_ok}
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("version", help="target version, e.g. 4.0.7")
     ap.add_argument("--check", action="store_true",
                     help="report drift and exit non-zero; change nothing")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     if not re.fullmatch(r"\d+\.\d+\.\d+", args.version):
         raise SystemExit(f"not a release version: {args.version!r}")
 
-    def _date_ok(value: str) -> bool:
-        """date-released is acceptable when it parses and is not in the future."""
-        from datetime import date
-        try:
-            return date.fromisoformat(value) <= date.today()
-        except ValueError:
-            return False
-
-    _PREDICATES = {"CITATION.cff date-released": _date_ok}
-
-    drift = []
+    _STAGED.clear()
+    drift: list[str] = []
+    failed: list[str] = []
     for entry in _plan(args.version):
         label, read, write = entry[0], entry[1], entry[2]
         accepts = _PREDICATES.get(label, lambda v: v == args.version)
@@ -323,7 +328,7 @@ def main() -> int:
             current = read()
         except Exception as exc:
             print(f"  !! {label}: unreadable ({exc})")
-            drift.append(label)
+            failed.append(label)
             continue
 
         if accepts(current):
@@ -333,14 +338,27 @@ def main() -> int:
         drift.append(label)
         if args.check:
             print(f"  ✗  {label:36s} {current}  (want {args.version})")
-        else:
+            continue
+        try:
             old, new = write()
-            print(f"  ->  {label:36s} {old} -> {new}")
+        except (Exception, SystemExit) as exc:
+            print(f"  !! {label}: cannot update ({exc})")
+            failed.append(label)
+            continue
+        print(f"  ->  {label:36s} {old} -> {new}")
 
+    if failed:
+        _STAGED.clear()
+        print(f"\n{len(failed)} source(s) could not be read or updated: "
+              f"{', '.join(failed)}")
+        if not args.check:
+            print("nothing was written; fix the source list and run again")
+        return 1
     if args.check and drift:
         print(f"\n{len(drift)} source(s) disagree with {args.version}")
         return 1
-    if drift and not args.check:
+    if drift:
+        _commit()
         print(f"\nupdated {len(drift)} source(s) to {args.version}")
     else:
         print(f"\nall sources already at {args.version}")

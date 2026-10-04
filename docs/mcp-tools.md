@@ -14,7 +14,7 @@ for names and counts; a client still decides when to call a tool.
 > **Profile exposure:** The active `SLM_MCP_PROFILE` determines which tools are
 > visible to the connected client. Core tools are in every profile. Code-graph
 > tools require `code`, `full`, or `power`. Mesh tools require `full`, `power`, or
-> `mesh`. See [MCP Profiles →](../README.md#mcp--profiles) and
+> `mesh`. See [MCP Profiles →](../README.md#mcp-memory-server-tool-profiles) and
 > [docs/profiles.md](profiles.md).
 
 ## Connecting

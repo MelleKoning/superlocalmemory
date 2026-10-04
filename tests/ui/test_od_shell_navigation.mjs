@@ -17,6 +17,8 @@ const shellSource = readFileSync(
 
 function harness(options = {}) {
   const dom = new JSDOM(`<!doctype html><html><body>
+    <div class="scrim" id="scrim"></div>
+    <button id="menuBtn" aria-label="Open menu"></button>
     <aside id="sidebar"></aside>
     <main id="main-content">
       <div id="dashboard-pane" class="tab-pane active"></div>
@@ -48,6 +50,29 @@ function harness(options = {}) {
 }
 
 describe('OD shell navigation lifecycle', function () {
+  it('closes the phone menu once a page is chosen (audit 4.1.20 L7)', function () {
+    const window = harness();
+    window.slmShell({ active: 'dashboard-pane' });
+    const doc = window.document;
+    const sidebar = doc.getElementById('sidebar');
+    const scrim = doc.getElementById('scrim');
+    const menuBtn = doc.getElementById('menuBtn');
+
+    menuBtn.click();
+    assert.ok(sidebar.classList.contains('open'), 'the menu opens');
+    assert.ok(scrim.classList.contains('on'));
+    assert.equal(menuBtn.getAttribute('aria-expanded'), 'true');
+
+    doc.querySelector('[data-tab="memories-pane"]').click();
+    assert.ok(!sidebar.classList.contains('open'), 'choosing a page closes the menu');
+    assert.ok(!scrim.classList.contains('on'), 'and removes the scrim');
+    assert.equal(menuBtn.getAttribute('aria-expanded'), 'false');
+
+    menuBtn.click();
+    doc.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+    assert.ok(!sidebar.classList.contains('open'), 'Escape closes it too');
+  });
+
   it('mounts an OD pane once and never invokes its legacy tab loader', function () {
     const window = harness();
     let odRenders = 0;

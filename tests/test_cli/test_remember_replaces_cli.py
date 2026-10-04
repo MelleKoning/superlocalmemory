@@ -148,3 +148,18 @@ def test_a_422_is_raised_with_its_code_when_asked() -> None:
 
 def test_a_422_keeps_its_old_meaning_when_not_asked() -> None:
     assert _post(_http_422({"detail": "x"})) is None
+
+
+def test_the_undo_hint_prints_each_exact_rollback_command(capsys) -> None:
+    """Audit 4.1.20 L2: the hint named no case_id or version, so there was
+    nothing a person could type. Each case now gets its literal command."""
+    _run(_args(OLD_ID), _reply({
+        "ok": True, "replaces": OLD_ID, "fact_ids": [OLD_ID, "f-2"],
+        "cases": [{"case_id": "case-aaa", "version": 1},
+                  {"case_id": "case-bbb", "version": 3}],
+        "undo": "To undo, call review_correction with each case_id ...",
+    }))
+    out = capsys.readouterr().out
+    assert "slm review-correction case-aaa rollback 1" in out
+    assert "slm review-correction case-bbb rollback 3" in out
+    assert "call review_correction with each case_id" not in out

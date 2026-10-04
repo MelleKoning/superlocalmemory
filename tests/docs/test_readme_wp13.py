@@ -100,55 +100,51 @@ def test_line_count_le_720():
 
 
 # ---------------------------------------------------------------------------
-# AC2: exactly one ## Quick Start, zero ### Quick Start
+# AC2: one install block, at the top. The 4.1.20 README rewrite (e48b83b2)
+# replaced "## Quick Start" with a three-line install block under the hero and
+# a "## 30-second example"; the intent -- one place to start, no duplicate
+# accordion copy -- is unchanged.
 # ---------------------------------------------------------------------------
 
 
 def test_single_quick_start():
-    """AC2: Exactly one '## Quick Start', zero '### Quick Start'."""
+    """AC2: exactly one install block, near the top; no duplicate Quick Start."""
     text = _readme_text()
-    h2_matches = re.findall(r"^## Quick Start", text, re.MULTILINE)
-    h3_matches = re.findall(r"^### Quick Start", text, re.MULTILINE)
-    assert len(h2_matches) == 1, (
-        f"Expected exactly 1 '## Quick Start', found {len(h2_matches)}."
+    blocks = re.findall(r"```(?:bash|console|sh)?\n(.*?)```", text, re.DOTALL)
+    install_blocks = [b for b in blocks if "pipx install superlocalmemory" in b]
+    assert len(install_blocks) == 1, (
+        f"Expected exactly 1 install block, found {len(install_blocks)} (LLD AC2)."
     )
-    assert len(h3_matches) == 0, (
-        f"Expected zero '### Quick Start', found {len(h3_matches)} "
-        "(duplicate accordion Quick Start must be deleted — LLD AC2)."
+    assert "slm setup" in install_blocks[0]
+    assert text.index("pipx install superlocalmemory") < text.index("\n## "), (
+        "The install block must come before the first section (LLD AC2)."
     )
+    assert len(re.findall(r"^#{2,3} Quick Start", text, re.MULTILINE)) <= 1
 
 
 # ---------------------------------------------------------------------------
-# AC3: current hero version matches pyproject.toml
+# AC3: the README states no release number that can go stale.
+# Since 4.1.20 the version comes only from the live PyPI and npm badges, and
+# scripts/bump_version.py no longer rewrites README (a stamp it could not find
+# made every bump fail half way). A hard-coded number here is now drift.
 # ---------------------------------------------------------------------------
 
 
 def test_current_version_in_hero():
-    """AC3: no stale 3.6.10-13 stragglers; h1/hero tracks project version.
-
-    The release-history table may still list older versions as legitimate
-    history, but the current hero must follow pyproject.toml instead of a
-    hard-coded past release.
-    """
+    """AC3: no stale or hard-coded release in the hero; live version badges."""
     text = _readme_text()
-    current_version = _project_version()
     stale = re.findall(r"3\.6\.1[0-3]", text)
     assert not stale, (
         f"Found stale version strings: {stale}. Hero version refs must not "
         "point at pre-3.6.14 releases (LLD AC3)."
     )
-    assert current_version in text, (
-        f"README must contain current project version {current_version!r} (LLD AC3)."
+    hero = text[: text.index("\n## ")]
+    assert "img.shields.io/pypi/v/superlocalmemory" in hero
+    assert "img.shields.io/npm/v/superlocalmemory" in hero
+    assert _project_version() not in hero, (
+        "The hero must not hard-code the release; the live badges show it (LLD AC3)."
     )
-    # h1 check — first heading
-    lines = _readme_lines()
-    h1_lines = [l for l in lines if l.startswith("# ") or l.startswith("<h1")]
-    assert any(
-        current_version in l or f"V{current_version}" in l
-        for l in h1_lines[:5]
-    ), (
-        f"h1 / hero must reference V{current_version} (LLD AC3)."
-    )
+    assert "Current_Release" not in text
 
 
 # ---------------------------------------------------------------------------
@@ -225,10 +221,10 @@ def test_no_90pct_overclaim():
 
 
 def test_without_a_proxy_present():
-    """AC6b: 'without a proxy' hard constraint must appear once."""
-    text = _readme_text()
-    assert "without a proxy" in text.lower(), (
-        "The 'without a proxy' hard-constraint sentence must be present (LLD AC6)."
+    """AC6b: the proxy is one way to optimize, never the only one."""
+    text = _readme_text().lower()
+    assert "through a proxy (`slm wrap claude`), mcp tools or a skill" in text, (
+        "The README must say optimize works without a proxy too (LLD AC6)."
     )
 
 
@@ -238,27 +234,26 @@ def test_without_a_proxy_present():
 
 
 def test_evidence_safe_positioning_near_hero():
-    """AC7: Opening copy must state the local contract without a competitor scoreboard."""
-    lines = _readme_lines()
-    opening = "\n".join(lines[:50]).lower()
-    assert "local runtime" in opening, (
+    """AC7: the opening states the local contract; benchmarks state their source."""
+    text = _readme_text()
+    opening = "\n".join(_readme_lines()[:60]).lower()
+    assert "lives on your machine" in opening, (
         "Opening copy must describe the local runtime contract (LLD AC7)."
     )
-    assert "explicit choices" in opening, (
+    assert "in mode a, core remember and recall make no model-provider call" in opening
+    assert "anything that sends data out is a choice you make" in opening, (
         "Opening copy must disclose optional provider/network choices (LLD AC7)."
     )
-    assert "published benchmark evidence carried into v4" in opening, (
-        "Opening copy must identify the evidence as the published V3 research "
-        "carried into the release (LLD AC7)."
+    bench = text.split("## Benchmarks", 1)
+    assert len(bench) == 2, "README must keep its Benchmarks section"
+    bench_text = bench[1].split("\n## ", 1)[0]
+    assert "published **V3** architecture paper" in bench_text, (
+        "Benchmarks must be identified as the published V3 evidence (LLD AC7)."
     )
-    assert "not a claim of a newly rerun v4 package benchmark" in opening, (
-        "Opening copy must preserve the protocol boundary of the published evidence "
-        "(LLD AC7)."
+    assert "They are not a fresh V4 package run." in bench_text, (
+        "Benchmarks must keep the protocol boundary of the evidence (LLD AC7)."
     )
-    assert "different products solve different boundaries" in opening, (
-        "Opening copy must frame the comparison by product boundary, not an "
-        "unsupported performance scoreboard."
-    )
+    assert "comparable only when the subset, answer model and judge match" in bench_text
 
 
 # ---------------------------------------------------------------------------
@@ -267,14 +262,16 @@ def test_evidence_safe_positioning_near_hero():
 
 
 def test_four_install_paths():
-    """AC8: npm / pip / /plugin install / slm connect all present + slm wrap claude."""
+    """AC8: pipx / npm / Claude Code plugin / slm connect, plus slm wrap claude."""
     text = _readme_text()
     checks = {
-        "npm i -g superlocalmemory or npm install -g": (
+        "pipx install superlocalmemory": "pipx install superlocalmemory" in text,
+        "npm install -g superlocalmemory": (
             "npm i -g superlocalmemory" in text or "npm install -g superlocalmemory" in text
         ),
-        "pip install superlocalmemory": "pip install superlocalmemory" in text,
-        "/plugin install superlocalmemory@qualixar": "/plugin install superlocalmemory@qualixar" in text,
+        "claude plugin install superlocalmemory@qualixar": (
+            "claude plugin install superlocalmemory@qualixar" in text
+        ),
         "slm connect": "slm connect" in text,
         "slm wrap claude": "slm wrap claude" in text,
     }
@@ -301,37 +298,35 @@ def test_claim_audit_dropped_absent():
 
 
 # ---------------------------------------------------------------------------
-# Section order: Why < Quick Start < Three Pillars < Papers
+# Section order (4.1.20 README): example, why, integrations, features, then
+# evidence and research, then upgrade. Selling before showing, or evidence
+# before the reader knows what the product is, is the regression guarded.
 # ---------------------------------------------------------------------------
 
 
 def test_section_order():
-    """LLD §6: Why SLM < Quick Start < Three Pillars < Papers (no Support-before-Why regressions)."""
+    """Example < Why < Works with < Everything < Benchmarks < Research < Upgrade."""
     text = _readme_text()
+    order = [
+        ("Example", r"^## 30-second example"),
+        ("Why", r"^## Why"),
+        ("Works with", r"^## Works with your agents"),
+        ("Everything", r"^## Everything SLM does"),
+        ("Benchmarks", r"^## Benchmarks"),
+        ("Research", r"^## Research"),
+        ("Upgrade", r"^## Upgrade"),
+    ]
     positions: dict[str, int] = {}
-    # Use first match position for each section
-    patterns = {
-        "Why": r"^## Why",
-        "Quick Start": r"^## Quick Start",
-        "Three Pillars": r"^## Three Pillars",
-        "Papers": r"^## Research Papers|^## Papers",
-    }
-    for name, pat in patterns.items():
+    for name, pat in order:
         m = re.search(pat, text, re.MULTILINE)
         if m:
             positions[name] = m.start()
 
-    missing = [k for k in patterns if k not in positions]
+    missing = [name for name, _ in order if name not in positions]
     assert not missing, f"Section(s) not found in README: {missing}"
-
-    assert positions["Why"] < positions["Quick Start"], (
-        "'## Why' must come before '## Quick Start'."
-    )
-    assert positions["Quick Start"] < positions["Three Pillars"], (
-        "'## Quick Start' must come before '## Three Pillars'."
-    )
-    assert positions["Three Pillars"] < positions["Papers"], (
-        "'## Three Pillars' must come before '## Research Papers'."
+    found = [positions[name] for name, _ in order]
+    assert found == sorted(found), (
+        f"README sections out of order: {sorted(positions, key=positions.get)}"
     )
 
 

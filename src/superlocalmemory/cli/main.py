@@ -575,7 +575,9 @@ def main() -> None:
     )
     correction_p.add_argument("--json", action="store_true", help="Output structured JSON (agent-native)")
 
-    list_p = sub.add_parser("list", help="List recent memories chronologically (shows IDs for delete/update)")
+    _list_help = ("List recent memories, newest first, with each one's kind and the "
+                  "ID that slm update and slm delete take")
+    list_p = sub.add_parser("list", help=_list_help, description=_list_help)
     list_p.add_argument(
         "--limit", "-n", type=int, default=CANONICAL_LIST_LIMIT,
         help=f"Number of entries (default {CANONICAL_LIST_LIMIT})",
@@ -652,7 +654,14 @@ def main() -> None:
 
     # -- Services ------------------------------------------------------
     sub.add_parser("mcp", help="Start MCP server (stdio transport for IDE integration)")
-    sub.add_parser("warmup", help="Pre-download embedding model (~500MB, one-time)")
+    warmup_p = sub.add_parser(
+        "warmup",
+        help="Load the embedding model (~500MB download the first time) and "
+             "confirm recall is ready; exits non-zero if it is not")
+    warmup_p.add_argument(
+        "--timeout", type=float, default=None, metavar="SECONDS",
+        help="How long to wait for a starting daemon to become ready "
+             "(default 120; 0 checks once without waiting)")
 
     dashboard_p = sub.add_parser("dashboard", help="Open web dashboard")
     dashboard_p.add_argument(

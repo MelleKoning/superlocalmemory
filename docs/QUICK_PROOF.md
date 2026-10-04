@@ -1,6 +1,6 @@
 # Store and recall one synthetic fact
 
-Install using the [Quick Start](../README.md#quick-start), choose operating mode
+Install using the [Getting Started guide](getting-started.md#install), choose operating mode
 A in `slm setup`, and run `slm doctor` before using the CLI.
 
 ```bash

@@ -105,11 +105,23 @@ async function loadDashboardStats() {
 // ----------------------------------------------------------------
 // loadDashboardTimeline — renders real daily fact counts from /api/timeline
 // ----------------------------------------------------------------
+function localDateKey(date) {
+    var month = String(date.getMonth() + 1).padStart(2, '0');
+    var day = String(date.getDate()).padStart(2, '0');
+    return date.getFullYear() + '-' + month + '-' + day;
+}
+
 async function loadDashboardTimeline() {
     var spBig = document.getElementById('sp-big');
     if (!spBig) return true;
     try {
-        var response = await fetch('/api/timeline?days=365&group_by=day&include_categories=false', {
+        // Both sides key by the browser's LOCAL calendar day: the server buckets
+        // with this offset, and the loop below builds local YYYY-MM-DD keys.
+        // toISOString() keyed local midnights by their UTC date, which is the
+        // previous day east of UTC -- today's activity never matched.
+        var tzOffsetMinutes = -new Date().getTimezoneOffset();
+        var response = await fetch('/api/timeline?days=365&group_by=day&include_categories=false'
+            + '&tz_offset_minutes=' + encodeURIComponent(String(tzOffsetMinutes)), {
             credentials: 'same-origin'
         });
         if (!response.ok) throw new Error('timeline unavailable');
@@ -125,7 +137,7 @@ async function loadDashboardTimeline() {
         for (var dayOffset = 364; dayOffset >= 0; dayOffset--) {
             var day = new Date(today);
             day.setDate(today.getDate() - dayOffset);
-            counts.push(byDate[day.toISOString().slice(0, 10)] || 0);
+            counts.push(byDate[localDateKey(day)] || 0);
         }
         var total = counts.reduce(function(sum, value) { return sum + value; }, 0);
         var avgEl = document.getElementById('k-avg-day');

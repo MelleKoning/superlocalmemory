@@ -130,7 +130,7 @@ def test_keys_add_prints_the_secret_once_and_list_never_shows_it(tmp_path) -> No
     assert "Bearer ${SLM_REMOTE_KEY}" in added.stdout
     listed = _slm(tmp_path, "remote", "keys", "list", "--json")
     assert listed.returncode == 0, listed.stderr[-2000:]
-    rows = json.loads(listed.stdout)["keys"]
+    rows = json.loads(listed.stdout)["data"]["keys"]
     assert rows[0]["name"] == "hermes-laptop" and rows[0]["scope"] == "write"
     assert secret not in listed.stdout and "digest" not in listed.stdout
     stored = (tmp_path / "remote_keys.json").read_text()
@@ -150,7 +150,7 @@ def test_check_exit_code_is_nonzero_on_a_failure(tmp_path) -> None:
     assert enabled.returncode == 0 and "slm restart" in enabled.stdout
     broken = _slm(tmp_path, "remote", "check", "--json")
     assert broken.returncode == 1
-    failures = [r for r in json.loads(broken.stdout)["results"] if r["status"] == "FAIL"]
+    failures = [r for r in json.loads(broken.stdout)["data"]["results"] if r["status"] == "FAIL"]
     assert any("tls_missing" in r["detail"] for r in failures)
     disabled = _slm(tmp_path, "remote", "disable")
     assert disabled.returncode == 0
@@ -164,7 +164,7 @@ def test_check_flags_a_world_readable_key_store(tmp_path) -> None:
     result = _slm(tmp_path, "remote", "check", "--json")
     assert result.returncode == 1
     assert any(r["check"] == "key store" and r["status"] == "FAIL"
-               for r in json.loads(result.stdout)["results"])
+               for r in json.loads(result.stdout)["data"]["results"])
 
 
 # -- keys are bound to one profile (audit 4.1.20 L2 F2) ----------------------------------
@@ -175,7 +175,7 @@ def test_keys_add_binds_the_active_profile_and_warns_about_memory_text(tmp_path)
     assert added.returncode == 0, added.stderr[-2000:]
     assert "profile 'default' only" in added.stdout
     assert "full text of every memory" in added.stdout
-    row = json.loads(_slm(tmp_path, "remote", "keys", "list", "--json").stdout)["keys"][0]
+    row = json.loads(_slm(tmp_path, "remote", "keys", "list", "--json").stdout)["data"]["keys"][0]
     assert row["profile"] == "default" and row["profile_source"] == "active-at-creation"
     listed = _slm(tmp_path, "remote", "keys", "list")
     assert "profile default" in listed.stdout

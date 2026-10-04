@@ -102,3 +102,54 @@ def test_dashboard_timeline_skips_unneeded_category_scans(
         "total_memories": 2,
         "categories_used": None,
     }
+
+
+def test_timeline_buckets_by_the_callers_local_day(monkeypatch, tmp_path: Path) -> None:
+    """Audit 4.1.20 M5: a fact saved at 20:00 UTC is the NEXT day in India.
+
+    The dashboard keys its chart by local day and sends its offset; the server
+    must bucket by that same local day or the two never agree east of UTC.
+    """
+    db_path = tmp_path / "memory.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE atomic_facts (profile_id TEXT, created_at TEXT, fact_type TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO atomic_facts VALUES (?, ?, ?)",
+        [
+            ("default", "2026-07-22T20:00:00.123456+00:00", "semantic"),
+            ("default", "2026-07-22T10:00:00+00:00", "semantic"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(stats, "get_db_connection", lambda: sqlite3.connect(db_path))
+    monkeypatch.setattr(stats, "get_active_profile", lambda: "default")
+
+    utc = stats.get_timeline(days=365, group_by="day", include_categories=False)
+    india = stats.get_timeline(
+        days=365, group_by="day", include_categories=False, tz_offset_minutes=330,
+    )
+    west = stats.get_timeline(
+        days=365, group_by="day", include_categories=False, tz_offset_minutes=-660,
+    )
+
+    assert {r["period"]: r["count"] for r in utc["timeline"]} == {"2026-07-22": 2}
+    assert {r["period"]: r["count"] for r in india["timeline"]} == {
+        "2026-07-23": 1, "2026-07-22": 1,
+    }
+    assert {r["period"]: r["count"] for r in west["timeline"]} == {
+        "2026-07-22": 1, "2026-07-21": 1,
+    }
+
+
+def test_timeline_offset_is_bounded() -> None:
+    from fastapi.testclient import TestClient
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    app.include_router(stats.router)
+    client = TestClient(app)
+    assert client.get("/api/timeline?tz_offset_minutes=99999").status_code == 422
+    assert client.get("/api/timeline?tz_offset_minutes=1;DROP").status_code == 422

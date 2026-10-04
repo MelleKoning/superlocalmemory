@@ -124,7 +124,10 @@
   }
   function savedForm(s) {
     var jev = s.jev || {};
-    return { mode: effectiveMode(s), provider: jev.provider || 'typesafe', key: '',
+    // "auto" (never chosen) is its own state in the form, not "Off": showing
+    // it as Off next to "Not chosen yet" contradicted itself.
+    return { mode: s.mode === 'auto' ? 'auto' : effectiveMode(s),
+             provider: jev.provider || 'typesafe', key: '',
              consent: !!jev.consent, rerank: !!(jev.rerank && jev.rerank.enabled) };
   }
   function isDirty() {
@@ -137,7 +140,7 @@
   function jevKeySaved() {
     return !!status.jev.has_key && status.jev.provider === draft.provider;
   }
-  var NAMES = { laya: 'On this Mac', jev: 'Online with Jev', off: 'Off' };
+  var NAMES = { laya: 'On this Mac', jev: 'Online with Jev', off: 'Off', auto: 'Automatic' };
   function runningText(s) {
     if (s.active === 'laya') return 'On this Mac — your memories never leave it.';
     if (s.active === 'jev') return 'Online with Jev (' + providerLabel(s.jev.provider) + ').';
@@ -189,6 +192,7 @@
     var wrap = el('fieldset', { class: 'ac-choices' },
       { border: '0', padding: '0', margin: '0 0 10px' });
     wrap.appendChild(el('legend', { text: 'Check answers' }, { fontSize: '12px', color: 'var(--fg-2)', marginBottom: '6px' }));
+    if (draft.mode === 'auto') wrap.appendChild(buildAutomaticState());
     [['laya', 'On this Mac — private (recommended)'], ['jev', 'Online with Jev'], ['off', 'Off']]
       .forEach(function (opt) {
         var label = el('label', null, { display: 'flex', alignItems: 'baseline', gap: '8px',
@@ -210,12 +214,21 @@
       });
     var chosen = draft.mode === 'laya' ? layaReadiness() : draft.mode === 'jev' ? jevReadiness() : null;
     if (chosen && !chosen.ready) wrap.appendChild(buildGuidance(chosen));
-    if (status.mode === 'auto' && draft.mode === effectiveMode(status)) {
-      wrap.appendChild(note(status.active === 'laya'
-        ? 'Turned on by itself: the on-device check is set up and checked.'
-        : 'Not chosen yet. On this Mac turns on by itself once it is set up and checked.', 'dim'));
-    }
     return wrap;
+  }
+
+  /* Nothing chosen yet: say what Automatic is doing now, with no radio
+     claiming a choice the person never made. */
+  function buildAutomaticState() {
+    var box = el('div', { class: 'ac-auto-state', role: 'status' },
+      { fontSize: '13.5px', marginBottom: '8px' });
+    box.appendChild(el('strong', { text: 'Automatic' }));
+    box.appendChild(document.createTextNode(status.active === 'laya'
+      ? ' — checking on this Mac. It turned on by itself once it was set up and checked.'
+      : ' — not checking yet. On this Mac turns on by itself once it is set up and checked.'));
+    box.appendChild(el('div', { text: 'Choose an option below to decide yourself.' },
+      { fontSize: '12px', color: 'var(--fg-3)' }));
+    return box;
   }
 
   /* The short state shown beside each choice: always what it is now. */
@@ -552,11 +565,12 @@
     var leavingJev = saved.mode === 'jev' && draft.mode !== 'jev';
     if (leavingJev && saved.rerank && !window.confirm('Reordering with Jev turns off while ' +
         NAMES[draft.mode] + ' is selected. It comes back when you choose Jev again. Save?')) return;
-    if (saved.mode !== draft.mode && saved.mode !== 'off' && draft.mode !== 'off' &&
-        !leavingJev && !window.confirm('Only one option runs at a time: this turns ' + NAMES[saved.mode] + ' off. Save?')) return;
+    var running = effectiveMode(status);
+    if (running !== draft.mode && running !== 'off' && draft.mode !== 'off' && draft.mode !== 'auto' &&
+        !leavingJev && !window.confirm('Only one option runs at a time: this turns ' + NAMES[running] + ' off. Save?')) return;
     var body = { provider: draft.provider, key: draft.key.trim(), consent: draft.consent, rerank: draft.rerank };
     // The never-chosen start state stays as it is unless the person picked something.
-    if (!(status.mode === 'auto' && draft.mode === effectiveMode(status))) body.mode = draft.mode;
+    if (draft.mode !== 'auto') body.mode = draft.mode;
     var b = mountEl.querySelector('[data-ac="ac-save"]');
     if (b) { b.disabled = true; b.textContent = 'Saving…'; }
     send('/save', 'POST', body).then(function (r) {

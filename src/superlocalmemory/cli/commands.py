@@ -73,6 +73,28 @@ def _daemon_unavailable(command: str, use_json: bool) -> None:
     raise SystemExit(1)
 
 
+def _memory_not_found(command: str, fact_id: str, use_json: bool) -> None:
+    """Exit for an id the running daemon does not know.
+
+    A live daemon answering 404 is an answer, not an outage. Reporting it as
+    DAEMON_UNAVAILABLE sent people to restart a daemon that was working.
+    """
+    message = f"No memory with id {fact_id}"
+    hint = "Run `slm list` to see memory ids."
+    if use_json:
+        from superlocalmemory.cli.json_output import json_print
+
+        json_print(command, error={
+            "code": "NOT_FOUND",
+            "message": message,
+            "hint": hint,
+            "retryable": False,
+        })
+    else:
+        print(f"{message}. {hint}", file=sys.stderr)
+    raise SystemExit(1)
+
+
 def _cmd_db_dispatch(args: Namespace) -> None:
     """Route ``slm db ...`` subcommands. LLD-06 §7.2."""
     sub = getattr(args, "db_command", None)
@@ -1608,6 +1630,18 @@ def cmd_migrate(args: Namespace) -> None:
 # -- Memory Operations (all support --json) --------------------------------
 
 
+def _kind_display(fields: dict) -> str:
+    """The memory kind as a person reads it: "Decision", "Rule (suggested)".
+
+    The same label the dashboard and ``--json`` report; the old text view
+    printed the internal fact type ("semantic") instead.
+    """
+    label = fields.get("memory_kind_label") or "Untyped"
+    if fields.get("memory_kind_state") == "suggested":
+        return f"{label} (suggested)"
+    return str(label)
+
+
 def cmd_list(args: Namespace) -> None:
     """List recent memories chronologically."""
     from superlocalmemory.core.config import CANONICAL_LIST_LIMIT, SLMConfig
@@ -1679,13 +1713,16 @@ def cmd_list(args: Namespace) -> None:
     if not facts:
         print("No memories stored yet.")
     else:
+        from superlocalmemory.storage.memory_kinds import kind_fields
+
         print(f"Recent memories ({len(facts)}):\n")
         for i, f in enumerate(facts, 1):
             date = (f.created_at or "")[:19]
-            ftype_raw = getattr(f, "fact_type", "")
-            ftype = ftype_raw.value if hasattr(ftype_raw, "value") else str(ftype_raw)
             content = f.content[:100] + ("..." if len(f.content) > 100 else "")
-            print(f"  {i:3d}. [{date}] ({ftype}) {content}")
+            print(f"  {i:3d}. [{date}] {_kind_display(kind_fields(f))}: {content}")
+            print(f"       id: {f.fact_id}")
+        print("\nChange one with: slm update <id> \"new text\"   "
+              "Remove one with: slm delete <id>")
     if kind_filter_truncated:
         print(
             "\nNote: the kind filter stopped at its search cap before "
@@ -1790,8 +1827,8 @@ def cmd_remember(args: Namespace) -> None:
                 print(remember_receipt_text(result))
                 replaced = result.get("replaced")
                 if isinstance(replaced, dict) and replaced.get("ok"):
-                    print(f"Replaced \u2713 {len(replaced.get('fact_ids') or [])} fact(s) "
-                          f"of {replaced.get('replaces')}. {replaced.get('undo', '')}".rstrip())
+                    from superlocalmemory.cli.recall_text import replaced_text
+                    print(replaced_text(replaced))
                 elif isinstance(replaced, dict):
                     print(f"Saved, but {replaced.get('replaces')} was NOT replaced: "
                           f"{replaced.get('reason')}", file=sys.stderr)
@@ -2181,6 +2218,7 @@ def cmd_delete(args: Namespace) -> None:
     import urllib.parse
 
     from superlocalmemory.cli.daemon import (
+        DaemonNotFound,
         daemon_request,
         ensure_daemon,
         is_daemon_running,
@@ -2193,10 +2231,14 @@ def cmd_delete(args: Namespace) -> None:
         confirmed = getattr(args, "yes", False)
         content = ""
         if not confirmed:
-            detail = daemon_request(
-                "GET",
-                "/api/facts/" + urllib.parse.quote(fact_id, safe=""),
-            )
+            try:
+                detail = daemon_request(
+                    "GET",
+                    "/api/facts/" + urllib.parse.quote(fact_id, safe=""),
+                    preserve_not_found=True,
+                )
+            except DaemonNotFound:
+                _memory_not_found("delete", fact_id, use_json)
             if not isinstance(detail, dict):
                 _daemon_unavailable("delete", use_json)
             content = str(detail.get("content") or "")
@@ -2222,7 +2264,10 @@ def cmd_delete(args: Namespace) -> None:
                 print("Cancelled.")
                 return
 
-        result = daemon_request("DELETE", path)
+        try:
+            result = daemon_request("DELETE", path, preserve_not_found=True)
+        except DaemonNotFound:
+            _memory_not_found("delete", fact_id, use_json)
         if not isinstance(result, dict) or not result.get("success"):
             _daemon_unavailable("delete", use_json)
         if use_json:
@@ -2252,6 +2297,7 @@ def cmd_update(args: Namespace) -> None:
     import urllib.parse
 
     from superlocalmemory.cli.daemon import (
+        DaemonNotFound,
         daemon_request,
         ensure_daemon,
         is_daemon_running,
@@ -2271,7 +2317,11 @@ def cmd_update(args: Namespace) -> None:
 
     if is_daemon_running() or ensure_daemon():
         path = "/api/memories/" + urllib.parse.quote(fact_id, safe="")
-        result = daemon_request("PATCH", path, {"content": new_content})
+        try:
+            body = {"content": new_content}
+            result = daemon_request("PATCH", path, body, preserve_not_found=True)
+        except DaemonNotFound:
+            _memory_not_found("update", fact_id, use_json)
         if not isinstance(result, dict) or not result.get("success"):
             _daemon_unavailable("update", use_json)
         if use_json:
@@ -3897,40 +3947,27 @@ def cmd_warmup(_args: Namespace) -> None:
     print(f"  Model:  nomic-ai/nomic-embed-text-v1.5 (~500MB)")
     print()
 
-    # v3.4.42 — daemon-aware fast path. If the daemon is up and reports
-    # engine=initialized, the embedding model is already loaded inside
-    # the daemon's worker subprocess. No need to spawn a redundant one;
-    # in fact, the machine-wide singleton would refuse to do so anyway.
+    # v3.4.42 — daemon-aware path. When the daemon is up it owns the
+    # machine-wide embedding worker; a local one would be refused anyway.
     try:
         from superlocalmemory.cli.daemon import (
             is_daemon_running, daemon_request,
         )
-        if is_daemon_running():
-            health = daemon_request("GET", "/health")
-            if health and health.get("engine") == "initialized":
-                from superlocalmemory.core.config import EmbeddingConfig
-                cfg = EmbeddingConfig()
-                print("[PASS] Daemon is running with embedding model loaded.")
-                print(f"       Model: {cfg.model_name} ({cfg.dimension}-dim)")
-                print("Semantic search is fully operational.")
-                return
-            # Daemon up but engine not yet initialized — warn and return
-            # rather than racing the daemon for the singleton lock.
-            engine_state = (health or {}).get("engine", "unknown")
-            print(f"[INFO] Daemon is up but engine state is '{engine_state}'.")
-            print("       Wait ~30s and retry, or run: slm doctor")
-            return
+        daemon_up = is_daemon_running()
     except Exception:
-        # Any failure in the daemon path falls through to local warmup —
+        # Any failure in the daemon probe falls through to local warmup --
         # better to spawn a local worker than block warmup entirely.
-        pass
+        daemon_up = False
+    if daemon_up:
+        _warmup_via_daemon(daemon_request, _args)
+        return
 
     # Local-warmup fallback path: daemon is unreachable, so it's safe
     # to spawn our own embedding worker (no singleton conflict).
     # Increase timeout for first-time download.
     original_timeout = _emb_mod._SUBPROCESS_RESPONSE_TIMEOUT
     _emb_mod._SUBPROCESS_RESPONSE_TIMEOUT = 180  # 3 min for cold start
-
+    failed = False
     try:
         from superlocalmemory.core.config import EmbeddingConfig
         from superlocalmemory.core.embeddings import EmbeddingService
@@ -3943,27 +3980,76 @@ def cmd_warmup(_args: Namespace) -> None:
         if not svc.is_available:
             print("\n[FAIL] Embedding service not available.")
             _warmup_diagnose()
-            return
-
-        print("Step 2/3: Loading model (may download ~500MB on first run)...")
-        emb = svc.embed("warmup test")
-
-        if emb and len(emb) == config.dimension:
-            print("Step 3/3: Verifying embedding output...")
-            print(f"\n[PASS] Model ready: {config.model_name} ({config.dimension}-dim)")
-            print("Semantic search is fully operational.")
+            failed = True
         else:
-            print("\n[FAIL] Model loaded but embedding verification failed.")
-            _warmup_diagnose()
+            print("Step 2/3: Loading model (may download ~500MB on first run)...")
+            emb = svc.embed("warmup test")
+            if emb and len(emb) == config.dimension:
+                print("Step 3/3: Verifying embedding output...")
+                print(f"\n[PASS] Model ready: {config.model_name} ({config.dimension}-dim)")
+                print("Semantic search is fully operational.")
+            else:
+                print("\n[FAIL] Model loaded but embedding verification failed.")
+                _warmup_diagnose()
+                failed = True
 
     except ImportError as exc:
         print(f"\n[FAIL] Missing dependency: {exc}")
         print("Fix: pip install sentence-transformers einops torch")
+        failed = True
     except Exception as exc:
         print(f"\n[FAIL] Warmup failed: {exc}")
         _warmup_diagnose()
+        failed = True
     finally:
         _emb_mod._SUBPROCESS_RESPONSE_TIMEOUT = original_timeout
+    if failed:
+        sys.exit(1)
+
+
+def _warmup_via_daemon(daemon_request, args: Namespace) -> None:
+    """Report warmup against a running daemon; exit non-zero unless ready.
+
+    PASS requires the daemon to report ``ready`` AND ``embedding_warm``. An
+    engine object alone is not enough -- the first recall after such a PASS
+    still paid the whole model load. A starting daemon is waited on up to
+    ``--timeout`` seconds; if it is still not ready, that is said plainly and
+    the command exits 1 so a script does not mistake it for success.
+    """
+    from superlocalmemory.cli.warmup_readiness import (
+        DEFAULT_WAIT_SECONDS, wait_until_warm,
+    )
+
+    timeout = getattr(args, "timeout", None)
+    timeout = DEFAULT_WAIT_SECONDS if timeout is None else max(0.0, float(timeout))
+
+    def _fetch():
+        try:
+            return daemon_request("GET", "/health")
+        except Exception:
+            return None
+
+    def _announce_wait() -> None:
+        print(f"Daemon is running; waiting up to {int(timeout)} s for it to be ready...")
+
+    verdict = wait_until_warm(_fetch, timeout, on_first_wait=_announce_wait)
+
+    if verdict.ready:
+        from superlocalmemory.core.config import EmbeddingConfig
+        cfg = EmbeddingConfig()
+        print("[PASS] Daemon is ready and the embedding model is loaded.")
+        print(f"       Model: {cfg.model_name} ({cfg.dimension}-dim)")
+        print("Semantic search is fully operational.")
+        return
+    if not verdict.reachable:
+        print("[FAIL] The daemon stopped answering while warmup waited.")
+        print("       Run: slm status   (or: slm doctor)")
+        sys.exit(1)
+    print(f"[INFO] The daemon is running but not ready yet: {verdict.detail}.")
+    print(f"       Waited {int(round(verdict.waited_seconds))} s. "
+          "Run `slm warmup` again in a minute, or `slm warmup --timeout 300` "
+          "to wait longer. If it stays like this, run: slm doctor")
+    sys.exit(1)
 
 
 def _warmup_diagnose() -> None:

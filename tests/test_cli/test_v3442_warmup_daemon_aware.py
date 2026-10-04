@@ -37,14 +37,15 @@ class TestWarmupDaemonUpFastPath:
         with patch("superlocalmemory.cli.daemon.is_daemon_running", return_value=True), \
              patch(
                  "superlocalmemory.cli.daemon.daemon_request",
-                 return_value={"status": "ok", "engine": "initialized"},
+                 return_value={"status": "ok", "engine": "initialized",
+                               "ready": True, "embedding_warm": True},
              ), \
              patch("superlocalmemory.core.embeddings.EmbeddingService") as svc_cls:
             commands.cmd_warmup(Namespace())
 
         out = capsys.readouterr().out
         assert "[PASS]" in out
-        assert "Daemon is running" in out
+        assert "Daemon is ready" in out
         assert "Semantic search is fully operational" in out
         # Critical: never tried to spawn a local EmbeddingService
         svc_cls.assert_not_called()
@@ -58,8 +59,10 @@ class TestWarmupDaemonUpFastPath:
                  "superlocalmemory.cli.daemon.daemon_request",
                  return_value={"status": "ok", "engine": "warming_up"},
              ), \
-             patch("superlocalmemory.core.embeddings.EmbeddingService") as svc_cls:
-            commands.cmd_warmup(Namespace())
+             patch("superlocalmemory.core.embeddings.EmbeddingService") as svc_cls, \
+             pytest.raises(SystemExit) as exc:
+            commands.cmd_warmup(Namespace(timeout=0))
+        assert exc.value.code == 1
 
         out = capsys.readouterr().out
         assert "[INFO]" in out
@@ -76,8 +79,10 @@ class TestWarmupDaemonUpFastPath:
                  "superlocalmemory.cli.daemon.daemon_request",
                  return_value={"status": "ok"},  # no engine key
              ), \
-             patch("superlocalmemory.core.embeddings.EmbeddingService") as svc_cls:
-            commands.cmd_warmup(Namespace())
+             patch("superlocalmemory.core.embeddings.EmbeddingService") as svc_cls, \
+             pytest.raises(SystemExit) as exc:
+            commands.cmd_warmup(Namespace(timeout=0))
+        assert exc.value.code == 1
 
         out = capsys.readouterr().out
         assert "[INFO]" in out
@@ -140,8 +145,10 @@ class TestWarmupDaemonDownFallback:
                  "superlocalmemory.core.embeddings.EmbeddingService",
                  return_value=fake_svc,
              ), \
-             patch.object(commands, "_warmup_diagnose") as diag:
+             patch.object(commands, "_warmup_diagnose") as diag, \
+             pytest.raises(SystemExit) as exc:
             commands.cmd_warmup(Namespace())
+        assert exc.value.code == 1
 
         out = capsys.readouterr().out
         assert "[FAIL]" in out

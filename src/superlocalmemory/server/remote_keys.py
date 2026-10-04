@@ -262,6 +262,15 @@ class RemoteKeyStore:
         tmp = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
+            # 0600 means nothing on Windows; owner-only there too, before any byte.
+            from superlocalmemory.infra.owner_only_acl import restrict_to_owner
+
+            restrict_to_owner(tmp)
+        except BaseException:
+            os.close(fd)
+            tmp.unlink(missing_ok=True)
+            raise
+        try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(payload)
                 handle.flush()

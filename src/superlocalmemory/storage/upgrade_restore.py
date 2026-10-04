@@ -96,8 +96,29 @@ def _point_from(root: Path, point_id: str, memory: Path, learning: Path | None,
     )
 
 
+def _copy_of_an_empty_store(memory_snapshot: Path) -> bool:
+    """True for a readable copy of a store that had no memory table yet.
+
+    A fresh install takes a copy before its first migration, of a database
+    with no tables to restore. It can never be restored (it does not verify),
+    so listing it offered a restore point that only ever said "unusable".
+    A copy that cannot be read is NOT hidden: damage is something to show.
+    """
+    try:
+        with closing(sm._open_immutable(memory_snapshot)) as conn:
+            tables = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+    except Exception:  # noqa: BLE001 - unreadable is reported by verify, not hidden
+        return False
+    return "atomic_facts" not in tables and "memories" not in tables
+
+
 def list_restore_points(data_root: Path) -> list[RestorePoint]:
-    """Every restorable generation, newest first. Reads only."""
+    """Every restorable generation, newest first. Reads only.
+
+    Copies of a store that held no memories (taken by a fresh install before
+    its first migration) are left out: there is nothing in them to restore.
+    """
     root = Path(data_root) / SNAPSHOTS_DIR
     if not root.is_dir() or root.is_symlink():
         return []
@@ -106,6 +127,8 @@ def list_restore_points(data_root: Path) -> list[RestorePoint]:
     for name in sorted(names):
         stamp = sm.stamp_of(Path(name))
         if stamp and name.startswith("memory-"):
+            if _copy_of_an_empty_store(root / name):
+                continue
             learning = root / f"learning-{stamp}{sm.SNAPSHOT_SUFFIX}"
             points.append(_point_from(root, stamp, root / name,
                                       learning if learning.name in names else None,

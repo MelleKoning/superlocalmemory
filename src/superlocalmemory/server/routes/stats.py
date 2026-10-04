@@ -8,7 +8,7 @@ Routes: /api/stats, /api/timeline
 """
 import logging
 import sqlite3
-from typing import Optional
+from typing import Annotated, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -314,20 +314,30 @@ def get_timeline(
     days: int = Query(30, ge=1, le=365),
     group_by: str = Query("day", pattern="^(day|week|month)$"),
     include_categories: bool = Query(True),
+    tz_offset_minutes: Annotated[int, Query(ge=-840, le=840)] = 0,
 ):
-    """Get temporal memory creation; dashboard callers may skip category scans."""
+    """Get temporal memory creation; dashboard callers may skip category scans.
+
+    ``created_at`` is stored in UTC. ``tz_offset_minutes`` (the caller's
+    offset east of UTC, e.g. 330 for India) buckets each fact by the caller's
+    local calendar day. Without it a browser east of UTC keyed its local days
+    against UTC days and the dashboard showed no activity for today.
+    """
     try:
         conn = get_db_connection()
         conn.row_factory = dict_factory
         cursor = conn.cursor()
         active_profile = get_active_profile()
 
+        # Formatted from an int bounded to +/-14 h by the Query validator and
+        # coerced again here, so no caller text can reach the SQL.
+        local = f"'{int(tz_offset_minutes):+d} minutes'"
         if group_by == "day":
-            date_group = "DATE(created_at)"
+            date_group = f"DATE(created_at, {local})"
         elif group_by == "week":
-            date_group = "strftime('%Y-W%W', created_at)"
+            date_group = f"strftime('%Y-W%W', created_at, {local})"
         else:
-            date_group = "strftime('%Y-%m', created_at)"
+            date_group = f"strftime('%Y-%m', created_at, {local})"
 
         # Try V3 first
         try:

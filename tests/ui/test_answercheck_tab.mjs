@@ -103,6 +103,15 @@ describe('Answer Check tab — sections and data', function () {
     assert.ok(!/not saved/.test(text(p, '#ac-feed')), 'no warning when nothing was lost');
   });
 
+  it('the Recent checks table scrolls inside its own box on a phone (audit 4.1.20 L7)', async function () {
+    const p = await render();
+    const table = p.d.querySelector('#ac-feed table.ac-feed');
+    const box = table && table.parentElement;
+    assert.ok(box && box.classList.contains('ac-feed-scroll'), 'the table has its own scroll box');
+    assert.match(box.getAttribute('style') || '', /overflow-x:\s*auto/);
+    assert.match(box.getAttribute('style') || '', /max-width:\s*100%/);
+  });
+
   it('withholds the rate below the minimum sample', async function () {
     const p = await render({ '/api/v3/answer-check/history/summary': { status: 200, body: summary({
       abstention: { k: 3, n: 12, rate: null, ci95: null, min_sample: 20, enough: false } }) } });

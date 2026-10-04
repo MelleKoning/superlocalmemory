@@ -23,8 +23,10 @@ def test_cli_mutations_never_construct_a_local_memory_writer() -> None:
 
     assert 'daemon_request("GET", f"/api/memories?limit=200&offset={offset}")' in forget
     assert "delete_from_daemon" in forget
-    assert 'daemon_request("DELETE", path)' in delete
-    assert 'daemon_request("PATCH", path, {"content": new_content})' in update
+    # preserve_not_found: an unknown id is NOT_FOUND, not "daemon unavailable".
+    assert 'daemon_request("DELETE", path, preserve_not_found=True)' in delete
+    assert 'body = {"content": new_content}' in update
+    assert 'daemon_request("PATCH", path, body, preserve_not_found=True)' in update
     for block in (forget, delete, update):
         assert "MemoryEngine(" not in block
         assert "engine._db.delete_fact" not in block

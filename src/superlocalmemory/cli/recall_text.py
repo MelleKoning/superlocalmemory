@@ -63,3 +63,23 @@ def remember_receipt_text(result: dict) -> str:
         line += ("\nFindable now by its words; meaning-based search catches "
                  "up when background indexing finishes (usually seconds).")
     return line
+
+
+def replaced_text(replaced: dict) -> str:
+    """What ``slm remember --replaces`` replaced, and the exact way to undo it.
+
+    The undo hint used to say "call review_correction with each case_id ...
+    and that case's version" without printing either, so a person at a shell
+    had nothing to type. Each case now gets the literal command.
+    """
+    count = len(replaced.get("fact_ids") or [])
+    lines = [f"Replaced ✓ {count} fact(s) of {replaced.get('replaces')}."]
+    cases = [c for c in (replaced.get("cases") or []) if isinstance(c, dict)
+             and c.get("case_id") and isinstance(c.get("version"), int)]
+    if cases:
+        lines.append("To undo, run:")
+        lines.extend(f"  slm review-correction {c['case_id']} rollback {c['version']}"
+                     for c in cases)
+    elif replaced.get("undo"):
+        lines.append(str(replaced["undo"]))
+    return "\n".join(lines)

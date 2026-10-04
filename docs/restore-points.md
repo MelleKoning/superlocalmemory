@@ -40,8 +40,8 @@ previous release without losing anything:
 
 ```bash
 slm db prepare-downgrade
-# then install the previous version, for example:
-pip install "superlocalmemory==<previous version>"
+# it names the version to go back to and prints the exact command, for example:
+pipx install --force "superlocalmemory==4.1.19"   # or: npm install -g superlocalmemory@4.1.19
 ```
 
 Preparation is allowed only when every change since that version is one the

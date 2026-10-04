@@ -168,7 +168,7 @@ required sign-in) refuses remote keys in this release. Remote calls share the
 rate limiter with other network callers (`SLM_RATE_LIMIT_WRITE`, default 30
 per minute per computer); raise it for a busy agent.
 
-**Client recipes.** Hermes: see [Hermes: remote](hermes.md#remote). No SLM
+**Client recipes.** Hermes: see [Hermes: remote](hermes.md#use-an-slm-that-runs-on-another-computer). No SLM
 environment variable points a client at a server; the address lives in each
 client's own MCP configuration: `https://<slm-host>:8443/mcp/<agent>` with `Authorization:
 Bearer <remote key>`. Stdio-only clients can use the `mcp-remote` bridge:

@@ -8,6 +8,7 @@ import ast
 import copy
 import json
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -201,7 +202,19 @@ def _plugin_package(repo: Path, _client_id: str, _work: Path) -> str:
     block = data["mcpServers"]["superlocalmemory"]
     command = block.get("command", "")
     prefix = "${CLAUDE_PLUGIN_ROOT}/"
-    if not command.startswith(prefix) or block.get("args") != []:
+    # Since #139 one entry serves every platform: "${ComSpec:-<launcher>}"
+    # runs cmd.exe on Windows (args start the installed slm) and the bundled
+    # launcher everywhere else. The launcher is still what POSIX hosts start.
+    split = re.fullmatch(r"\$\{ComSpec:-(\$\{CLAUDE_PLUGIN_ROOT\}/[^}]+)\}", command)
+    args = block.get("args")
+    if split:
+        command = split.group(1)
+        if (not isinstance(args, list) or args[:3] != ["/d", "/s", "/c"]
+                or len(args) != 4 or not str(args[3]).rstrip().endswith("slm mcp")):
+            raise AssertionError(f"invalid Claude plugin start command: {block!r}")
+    elif args != []:
+        raise AssertionError(f"invalid Claude plugin start command: {block!r}")
+    if not command.startswith(prefix):
         raise AssertionError(f"invalid Claude plugin start command: {block!r}")
     launcher = repo / "plugin" / command.removeprefix(prefix)
     if not launcher.is_file() or not launcher.stat().st_mode & stat.S_IXUSR:

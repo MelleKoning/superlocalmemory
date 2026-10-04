@@ -51,6 +51,10 @@ _CLAIM_SHAPES = (
     re.compile(rf"\b(?P<name>{_NAMES})`? profile[^)\n]*?(?P<count>\d+) tools"),
     # "Use `full` (50 tools)"
     re.compile(rf"`(?P<name>{_NAMES})` \((?P<count>\d+) tools\)"),
+    # A table row whose second column is the count: "| `core` | 18 | ..." and
+    # "| `full` (and unset) | 54 |". The rewritten README states its counts
+    # only in such a table, which no shape above read.
+    re.compile(rf"^\| `(?P<name>{_NAMES})`[^|`\n]*\| (?P<count>\d+) \|", re.MULTILINE),
 )
 
 
