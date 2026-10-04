@@ -120,6 +120,16 @@ jobs:
               tests/stress/test_386_canonical_legacy_multiprocess_contention.py::test_386_canonical_remember_survives_legacy_multiprocess_contention \
               "tests/test_core/test_embedding_fallback.py::TestEmbeddingServiceTimeout"
           done
+      # Windows-only tests skip everywhere else, so this job is the only place
+      # a focused Windows run proves them: the plugin starting the installed
+      # slm through cmd.exe (#139, 8 tests) and owner-only access lists on the
+      # remote TLS key and key store.
+      - name: Windows-only behaviour
+        shell: bash
+        run: |
+          python -m pytest -q -o "addopts=" -o faulthandler_timeout=60 -rs \
+            tests/test_plugin/test_windows_mcp_starts_installed_slm.py \
+            tests/server/test_remote_secrets_owner_only.py
 
   native-lancedb:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.focused_windows }}
