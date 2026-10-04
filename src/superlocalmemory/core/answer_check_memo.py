@@ -18,8 +18,10 @@ reuses it — inside or outside the time budget — and says so
 the judge, and the key changes.
 
 And when a recall has to skip the check because retrieval used its budget, the
-check is finished after the recall returns, on a worker that is free right now
-(``assess_if_idle``), so the next run of that question is judged.
+check is finished after the recall returns (``finish_later``, carried out by
+``answer_check_deferred``), so the next run of that question is judged. A live
+recall always comes first: that work runs only while no recall is in flight or
+waiting for the check, one memory at a time, and stops as soon as one arrives.
 
 Scope, on purpose:
 
@@ -29,7 +31,8 @@ Scope, on purpose:
   nobody asked to wait for.
 * One judge, one memo. The memo hangs off the judge object, so a switch of
   provider or settings starts empty and a verdict from one provider can never
-  answer for another.
+  answer for another. A judge that has been shut down answers nothing from its
+  memo, and stopping it forgets the memo outright (``clear``).
 * In memory only. Nothing is written; memory text is never kept — only a hash.
 """
 
@@ -42,7 +45,8 @@ import threading
 import time
 import weakref
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -53,6 +57,8 @@ MAX_ENTRIES = 512
 #: A verdict is reused for this long. The judge is deterministic, so this is
 #: hygiene (bounded staleness if anything outside the key changes), not accuracy.
 TTL_S = 900.0
+#: Questions waiting to be finished later, per judge. The newest are kept.
+MAX_PENDING = 16
 
 _MEMO_BACKENDS = frozenset({"laya"})
 
@@ -61,7 +67,14 @@ class _Memo:
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self.entries: OrderedDict[str, tuple[float, Any]] = OrderedDict()
-        self.filling = False
+        #: Per-memory verdicts of a check finished later that a recall
+        #: interrupted, so the next idle moment carries on where it stopped.
+        self.partials: OrderedDict[str, tuple[float, tuple[Any, ...]]] = OrderedDict()
+        #: Questions waiting to be finished later: key -> (query, documents, by).
+        self.pending: OrderedDict[str, tuple[str, tuple[Any, ...], float]] = OrderedDict()
+        self.worker: threading.Thread | None = None
+        #: Live recalls asking this judge right now (or waiting for its worker).
+        self.live = 0
 
 
 _memos: weakref.WeakKeyDictionary[Any, _Memo] = weakref.WeakKeyDictionary()
@@ -85,6 +98,13 @@ def _memo_for(judge: Any) -> _Memo | None:
             return None
 
 
+def _usable(judge: Any) -> _Memo | None:
+    """The judge's memo, or None when it has none or has been shut down."""
+    if not remembers(judge) or getattr(judge, "closed", False) is True:
+        return None
+    return _memo_for(judge)
+
+
 def _text(document: Any) -> str:
     content = getattr(document, "content", document)
     return content if isinstance(content, str) else repr(content)
@@ -102,84 +122,121 @@ def key_for(judge: Any, query: str, documents: Sequence[Any]) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def _fresh(table: OrderedDict, key: str, current: float) -> Any:
+    """``table[key]``'s value if it has not expired. Caller holds the lock."""
+    hit = table.get(key)
+    if hit is None:
+        return None
+    if current - hit[0] > TTL_S:
+        del table[key]
+        return None
+    table.move_to_end(key)
+    return hit[1]
+
+
+def _put(table: OrderedDict, key: str, value: Any, current: float) -> None:
+    """Caller holds the lock."""
+    table[key] = (current, value)
+    table.move_to_end(key)
+    while len(table) > MAX_ENTRIES:
+        table.popitem(last=False)
+
+
 def lookup(judge: Any, query: str, documents: Sequence[Any], *,
            now: float | None = None) -> Any:
     """The remembered verdict for exactly this input, or None."""
-    memo = _memo_for(judge) if remembers(judge) else None
+    memo = _usable(judge)
     if memo is None:
         return None
     key = key_for(judge, query, documents)
     current = time.monotonic() if now is None else now
     with memo.lock:
-        hit = memo.entries.get(key)
-        if hit is None:
-            return None
-        stored_at, verdict = hit
-        if current - stored_at > TTL_S:
-            del memo.entries[key]
-            return None
-        memo.entries.move_to_end(key)
-        return verdict
+        return _fresh(memo.entries, key, current)
 
 
 def store(judge: Any, query: str, documents: Sequence[Any], verdict: Any, *,
           now: float | None = None) -> None:
     """Remember a genuine verdict. Callers pass only verdicts the judge gave."""
-    memo = _memo_for(judge) if remembers(judge) else None
+    memo = _usable(judge)
     if memo is None or verdict is None:
         return
     key = key_for(judge, query, documents)
     current = time.monotonic() if now is None else now
     with memo.lock:
-        memo.entries[key] = (current, verdict)
-        memo.entries.move_to_end(key)
-        while len(memo.entries) > MAX_ENTRIES:
-            memo.entries.popitem(last=False)
+        _put(memo.entries, key, verdict, current)
+        memo.partials.pop(key, None)
+
+
+@contextmanager
+def live_check(judge: Any) -> Iterator[None]:
+    """Mark a live recall asking ``judge``: work finished later yields to it."""
+    memo = _usable(judge)
+    if memo is None:
+        yield
+        return
+    with memo.lock:
+        memo.live += 1
+    try:
+        yield
+    finally:
+        with memo.lock:
+            memo.live = max(0, memo.live - 1)
+
+
+def live_checks(judge: Any) -> int:
+    """How many live recalls are asking ``judge`` right now."""
+    memo = _usable(judge)
+    if memo is None:
+        return 0
+    with memo.lock:
+        return memo.live
 
 
 def finish_later(judge: Any, query: str, documents: Sequence[Any]) -> threading.Thread | None:
     """Judge after the recall returned, so the next identical recall is judged.
 
-    One at a time per judge; only on a warm worker that is free right now
-    (``assess_if_idle``). Returns the thread (tests join it), or None when
-    nothing was started.
+    Queued per judge and carried out by one thread (``answer_check_deferred``),
+    only on a warm worker, only while no recall is in flight or asking the
+    check. Returns that thread (tests join it), or None when nothing was queued.
     """
-    assess = getattr(judge, "assess_if_idle", None)
-    memo = _memo_for(judge) if remembers(judge) and callable(assess) else None
-    if memo is None or not getattr(judge, "ready", False) or getattr(judge, "closed", False):
+    from superlocalmemory.core import answer_check_deferred
+
+    if not callable(getattr(judge, "assess_if_idle", None)):
         return None
+    memo = _usable(judge)
+    if memo is None or not getattr(judge, "ready", False):
+        return None
+    snapshot = tuple(documents)
+    if not snapshot:
+        return None
+    key = key_for(judge, query, snapshot)
+    by = time.monotonic() + answer_check_deferred.WAIT_FOR_IDLE_S
     with memo.lock:
-        if memo.filling:
+        if _fresh(memo.entries, key, time.monotonic()) is not None:
             return None
-        memo.filling = True
-    snapshot = list(documents)
-
-    def _run() -> None:
-        from superlocalmemory.core.answer_check_stage import genuine_verdict
-        try:
-            outcome = assess(query, snapshot)
-            verdict = genuine_verdict(getattr(outcome, "verdict", None))
-            if verdict is not None:
-                store(judge, query, snapshot, verdict)
-        except Exception as exc:  # noqa: BLE001 — best effort, never surfaces
-            logger.debug("answer check finished later: failed (%s)", type(exc).__name__)
-        finally:
-            with memo.lock:
-                memo.filling = False
-
-    thread = threading.Thread(target=_run, daemon=True, name="answer-check-finish-later")
-    thread.start()
-    return thread
+        memo.pending[key] = (query, snapshot, by)
+        memo.pending.move_to_end(key)
+        while len(memo.pending) > MAX_PENDING:
+            memo.pending.popitem(last=False)
+        if memo.worker is not None:
+            return memo.worker
+        memo.worker = answer_check_deferred.start_worker(judge, memo)
+        return memo.worker
 
 
 def clear(judge: Any) -> None:
-    """Forget every verdict this judge gave (tests; a judge being replaced)."""
+    """Forget every verdict this judge gave (a judge being stopped or replaced)."""
     with _memos_lock:
         try:
-            _memos.pop(judge, None)
+            memo = _memos.pop(judge, None)
         except TypeError:
-            pass
+            memo = None
+    if memo is not None:
+        with memo.lock:
+            memo.entries.clear()
+            memo.partials.clear()
+            memo.pending.clear()
 
 
-__all__ = ["MAX_ENTRIES", "TTL_S", "clear", "finish_later", "key_for", "lookup",
-           "remembers", "store"]
+__all__ = ["MAX_ENTRIES", "MAX_PENDING", "TTL_S", "clear", "finish_later", "key_for",
+           "live_check", "live_checks", "lookup", "remembers", "store"]

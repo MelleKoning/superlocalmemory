@@ -130,7 +130,7 @@ def _run(judge, config, monkeypatch, *, delay: float = FAST_S,
 
 def _join_finishers(timeout: float = 5.0) -> None:
     for t in threading.enumerate():
-        if t.name == "answer-check-finish-later":
+        if t.name == "answer-check-finish-later":  # answer_check_deferred.THREAD_NAME
             t.join(timeout)
 
 
@@ -219,7 +219,9 @@ class TestTheSameQuestionGetsTheSameVerdict:
         seen = _statuses(judge, mode_a_config, monkeypatch, self.DELAYS)
         assert seen[0] == ("skipped", None)          # honest: no time on run 1
         assert set(seen[1:]) == {("judged", 0.42)}   # then always the same verdict
-        assert judge.asks + judge.idle_asks == 1     # one question, asked once
+        # One question, each of its 3 memories asked once (a check finished
+        # later asks one memory at a time, so a live recall can cut in).
+        assert judge.asks == 0 and judge.idle_asks == 3
 
     def test_vacuity_without_the_memo_runs_disagree(
             self, mode_a_config, monkeypatch) -> None:
@@ -416,7 +418,7 @@ class TestTheOnDeviceCheckFinishesLater:
         assert first.answer_check_status == "skipped"
         assert second.answer_check_status == "judged"
         assert second.answer_check_detail == "reused"
-        assert _judge_requests(log) == 1
+        assert _judge_requests(log) == 3  # one per memory, each asked once
 
     def test_finishing_later_never_waits_for_a_busy_worker(self, laya) -> None:
         judge, _log = laya
