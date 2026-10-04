@@ -10,6 +10,25 @@ via `_atomic_write_creds` in `src/superlocalmemory/infra/cloud_backup.py`) —
 not encrypted. Protect that file and the data root with volume encryption and
 owner-only modes; prefer a keychain-capable host when possible.
 
+## Encryption (4.1.19+)
+
+Every cloud backup file is encrypted on this machine before upload (AES-256-GCM,
+streamed in chunks), so GitHub and Google Drive only store ciphertext. One
+256-bit key per machine encrypts every backup; it lives in the same credential
+store as the GitHub token, never beside the backup files.
+
+```bash
+slm backup status                  # encryption status and any notices
+slm backup recovery-key            # show this computer's recovery key (SLMBK1-...)
+slm backup recovery-key --import   # put a recovery key on a new computer (read from stdin)
+slm backup decrypt FILE -o OUT.db  # turn a downloaded backup into a plain .db file
+```
+
+Keep the recovery key somewhere safe: without it, a backup cannot be restored
+on another machine. Backups made by earlier releases still restore. Google
+Drive does not rotate old backups, so delete plain-text backups made before
+4.1.19 yourself.
+
 ## GitHub Backup (Recommended)
 
 GitHub backup works out of the box. No additional setup needed beyond a Personal Access Token.
