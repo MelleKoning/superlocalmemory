@@ -9,6 +9,12 @@ WHAT IT ADDS
 enums, counts and timings. There is deliberately no column that could hold
 question text, memory text, memory ids, session ids or agent names.
 
+Timings are milliseconds, numbers only: the whole recall (``total_ms``),
+finding memories (``retrieval_ms``), and within it waiting for the query's
+embedding (``embed_ms``) and ranking (``rerank_ms``); then the check itself
+(``judge_ms``). The stage columns tell a slow answer's owner where its time
+went.
+
 ``answer_check_erasures``: one row per profile whose history was erased, with
 the instant. Every insert of history is conditional on there being no erasure
 at or after the event's own time, so a batch that was already in flight in the
@@ -25,6 +31,14 @@ NO CHECK CONSTRAINTS
 Values are validated before they are recorded
 (``core.answer_check_history.event_from_response``). A CHECK failure would roll
 back a whole batch of otherwise good rows.
+
+DEVELOPMENT STORES
+------------------
+``embed_ms`` and ``rerank_ms`` were added to this migration before 4.1.20 was
+released (no released build ever ran M053: v4.1.19 has no M053). A store
+created by an earlier 4.1.20 development build has the table without them;
+``verify`` reports that and ``repair`` adds the two nullable columns, so the
+earlier DDL fingerprint is allowlisted in ``_migration_internals``.
 
 OLDER BUILDS
 ------------
@@ -66,6 +80,8 @@ CREATE TABLE IF NOT EXISTS answer_check_events (
     query_type TEXT NOT NULL DEFAULT '',
     retrieval_ms REAL,
     judge_ms REAL,
+    embed_ms REAL,
+    rerank_ms REAL,
     total_ms REAL,
     calibration_id TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (profile_id, event_id)
@@ -81,18 +97,30 @@ COMMIT;
 
 _TABLES = ("answer_check_events", "answer_check_erasures")
 _INDEX = "idx_answer_check_events_profile_time"
+#: Columns a development build of this migration did not have (nullable REAL).
+_STAGE_COLUMNS = ("embed_ms", "rerank_ms")
+
+
+def _missing_stage_columns(conn: sqlite3.Connection) -> list[str]:
+    have = {row[1] for row in conn.execute("PRAGMA table_info(answer_check_events)")}
+    return [c for c in _STAGE_COLUMNS if c not in have]
 
 
 def verify(conn: sqlite3.Connection) -> bool:
-    """Both tables and the index exist."""
+    """Both tables, the index and every timing column exist."""
     names = {row[0] for row in conn.execute(
         "SELECT name FROM sqlite_master WHERE type IN ('table', 'index')")}
-    return all(t in names for t in _TABLES) and _INDEX in names
+    if not (all(t in names for t in _TABLES) and _INDEX in names):
+        return False
+    return not _missing_stage_columns(conn)
 
 
 def repair(conn: sqlite3.Connection) -> None:
-    """Re-create whatever is missing. Every statement is IF NOT EXISTS."""
+    """Re-create whatever is missing. Every statement is IF NOT EXISTS, and
+    the stage columns are added (nullable, so existing rows are untouched)."""
     conn.executescript(DDL)
+    for column in _missing_stage_columns(conn):
+        conn.execute(f"ALTER TABLE answer_check_events ADD COLUMN {column} REAL")  # noqa: S608
     if not verify(conn):
         raise sqlite3.OperationalError("M053 schema did not reach its required end-state")
 

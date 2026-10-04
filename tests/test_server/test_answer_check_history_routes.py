@@ -157,7 +157,7 @@ def test_feed_payload_has_no_query_or_content(app) -> None:
     assert set(item) == {"seq", "id", "at", "outcome", "status", "detail", "judge", "origin",
                          "abstained", "abstention_reason", "answer_confidence", "threshold",
                          "reordered", "result_count", "query_type", "retrieval_ms",
-                         "judge_ms", "total_ms", "over_ceiling"}
+                         "judge_ms", "total_ms", "over_ceiling", "embed_ms", "rerank_ms"}
 
 
 def test_cursor_validation_400(app) -> None:
@@ -235,3 +235,43 @@ def test_profile_switch_feed_follows_active_profile(app) -> None:
     assert len(client.get("/api/v3/answer-check/history/live").json()["items"]) == 2
     app.state.profile["name"] = "work"
     assert len(client.get("/api/v3/answer-check/history/live").json()["items"]) == 3
+
+
+def _staged(embed: float | None, rerank: float | None):
+    resp = make_response()
+    resp.stage_ms = {k: v for k, v in (("query_embedding", embed), ("rerank", rerank),
+                                       ("channels", 650.0)) if v is not None}
+    return resp
+
+
+def test_stage_timings_survive_the_save_and_reach_the_feed_and_summary(app) -> None:
+    """Where a recall's time went is saved with the check and read back from the
+    database -- not only from the in-memory ring -- in the feed and summary."""
+    for embed, rerank in ((40.0, 30.0), (60.0, 50.0), (900.5, 70.0)):
+        h.record_recall_verdict(_staged(embed, rerank), profile_id="default")
+    h.record_recall_verdict(_staged(None, None), profile_id="default")
+    store.flush_once()
+    h._reset_for_testing()                               # the ring is gone: database only
+    h.enable(True)
+    client = _client(app)
+    items = client.get("/api/v3/answer-check/history").json()["items"]
+    assert sorted((i["embed_ms"], i["rerank_ms"]) for i in items if i["embed_ms"]) == [
+        (40.0, 30.0), (60.0, 50.0), (900.5, 70.0)]
+    assert [i for i in items if i["embed_ms"] is None][0]["rerank_ms"] is None
+    stages = client.get("/api/v3/answer-check/history/summary").json()["latency"]["stages"]
+    assert stages["embed"] == {"n": 3, "p50": 60.0, "p95": 900.5}
+    assert stages["rerank"] == {"n": 3, "p50": 50.0, "p95": 70.0}
+    assert stages["retrieval"]["n"] == 4 and stages["retrieval"]["p50"] == 700.0
+    with sqlite3.connect(store._state["learning_db"]) as conn:
+        cols = {r[1]: r[2] for r in conn.execute("PRAGMA table_info(answer_check_events)")}
+    assert cols["embed_ms"] == cols["rerank_ms"] == "REAL"        # numbers only
+
+
+def test_a_stage_timing_that_is_not_a_number_is_not_recorded() -> None:
+    resp = make_response()
+    resp.stage_ms = {"query_embedding": "SECRET-Q", "rerank": float("nan")}
+    ev = h.event_from_response(resp, "default", now_ms=1, origin_name="")
+    assert ev is not None and ev.embed_ms is None and ev.rerank_ms is None
+    resp.stage_ms = {"query_embedding": 10**9, "rerank": -5}
+    ev = h.event_from_response(resp, "default", now_ms=1, origin_name="")
+    assert ev.embed_ms == 600_000.0 and ev.rerank_ms == 0.0

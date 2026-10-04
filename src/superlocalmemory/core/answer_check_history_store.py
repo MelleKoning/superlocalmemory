@@ -66,7 +66,7 @@ RETENTION_DAYS_RANGE = (1, 365)
 COLUMNS = ("event_id", "profile_id", "occurred_ms", "status", "detail", "backend",
            "origin", "abstained", "abstention_reason", "answer_confidence", "threshold",
            "reordered", "result_count", "query_type", "retrieval_ms", "judge_ms",
-           "total_ms", "calibration_id")
+           "total_ms", "calibration_id", "embed_ms", "rerank_ms")
 INSERT_SQL = (
     f"INSERT OR IGNORE INTO answer_check_events ({','.join(COLUMNS)}) "
     f"SELECT {','.join('?' * len(COLUMNS))} WHERE NOT EXISTS ("

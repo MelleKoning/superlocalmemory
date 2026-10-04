@@ -98,6 +98,10 @@ class VerdictEvent:
     judge_ms: float | None
     total_ms: float | None
     calibration_id: str
+    #: Within ``retrieval_ms``: waiting for the query's embedding, and ranking.
+    #: None when that stage did not run or was not measured.
+    embed_ms: float | None = None
+    rerank_ms: float | None = None
 
 
 _lock = threading.Lock()
@@ -182,6 +186,14 @@ def _matching(value: Any, pattern: re.Pattern) -> str:
     return value if isinstance(value, str) and pattern.match(value) else ""
 
 
+def _stage(response: Any, name: str) -> float | None:
+    """One recall stage's milliseconds from ``RecallResponse.stage_ms``."""
+    stages = getattr(response, "stage_ms", None)
+    if not isinstance(stages, dict):
+        return None
+    return _number(stages.get(name), 0.0, _MAX_MS)
+
+
 def event_from_response(response: Any, profile_id: str, *, now_ms: int,
                         origin_name: str) -> VerdictEvent | None:
     """The record for one recall, every field validated. Pure; never raises."""
@@ -213,6 +225,8 @@ def event_from_response(response: Any, profile_id: str, *, now_ms: int,
             total_ms=_number(getattr(trace, "total_ms", None), 0.0, _MAX_MS),
             calibration_id=_matching(getattr(response, "calibration_id", "") or "",
                                      _CALIBRATION_RE),
+            embed_ms=_stage(response, "query_embedding"),
+            rerank_ms=_stage(response, "rerank"),
         )
     except Exception:  # noqa: BLE001 — a malformed response is simply not recorded
         return None

@@ -60,7 +60,7 @@ def test_event_has_no_text_fields() -> None:
         "event_id", "profile_id", "occurred_ms", "status", "detail", "backend", "origin",
         "abstained", "abstention_reason", "answer_confidence", "threshold", "reordered",
         "result_count", "query_type", "retrieval_ms", "judge_ms", "total_ms",
-        "calibration_id"}
+        "calibration_id", "embed_ms", "rerank_ms"}
 
 
 def test_event_carries_nothing_of_the_query_or_memories() -> None:

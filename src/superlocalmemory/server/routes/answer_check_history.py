@@ -152,6 +152,7 @@ def _item(src: Any) -> dict[str, Any]:
         "reordered": bool(row["reordered"]), "result_count": int(row["result_count"] or 0),
         "query_type": row["query_type"], "retrieval_ms": row["retrieval_ms"],
         "judge_ms": row["judge_ms"], "total_ms": total,
+        "embed_ms": row.get("embed_ms"), "rerank_ms": row.get("rerank_ms"),
         "over_ceiling": bool(total is not None and total > CEILING_MS),
     }
 

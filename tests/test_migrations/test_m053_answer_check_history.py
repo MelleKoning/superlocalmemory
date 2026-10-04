@@ -73,3 +73,50 @@ def test_downgrade_to_4_1_19_and_4_1_18_not_blocked(tmp_path) -> None:
     assert not [p for p in _blockers(learning, memory, 52) if M053.NAME in p]
     assert not [p for p in _blockers(learning, memory, 51) if M053.NAME in p]
     assert M053.BREAKING_VERSION == 0
+
+
+#: The unreleased development M053, before the stage-timing columns. No released
+#: build ran M053 (v4.1.19 has none); a 4.1.20 development store might have.
+_DEV_EVENTS_DDL = """
+CREATE TABLE answer_check_events (
+    event_id TEXT NOT NULL, profile_id TEXT NOT NULL, occurred_ms INTEGER NOT NULL,
+    status TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', backend TEXT NOT NULL DEFAULT '',
+    origin TEXT NOT NULL DEFAULT '', abstained INTEGER NOT NULL DEFAULT 0,
+    abstention_reason TEXT, answer_confidence REAL, threshold REAL,
+    reordered INTEGER NOT NULL DEFAULT 0, result_count INTEGER NOT NULL DEFAULT 0,
+    query_type TEXT NOT NULL DEFAULT '', retrieval_ms REAL, judge_ms REAL, total_ms REAL,
+    calibration_id TEXT NOT NULL DEFAULT '', PRIMARY KEY (profile_id, event_id));
+CREATE INDEX idx_answer_check_events_profile_time
+    ON answer_check_events (profile_id, occurred_ms DESC);
+"""
+_DEV_HASH = "3ff0b2d15dd73eb00ffae2347386234f015032e6889391924aa34ed9b8bb89e9"
+
+
+def test_the_stage_timing_columns_are_part_of_m053(tmp_path) -> None:
+    learning, memory = _stores(tmp_path)
+    mr.apply_all(learning, memory)
+    with sqlite3.connect(learning) as conn:
+        cols = {r[1]: r[2] for r in conn.execute("PRAGMA table_info(answer_check_events)")}
+    assert cols["embed_ms"] == "REAL" and cols["rerank_ms"] == "REAL"
+    assert not [m for m in mr.MIGRATIONS if m.name.startswith("M054")]
+
+
+def test_a_development_store_without_the_stage_columns_is_repaired(tmp_path) -> None:
+    learning, memory = _stores(tmp_path)
+    mr.apply_all(learning, memory)
+    with sqlite3.connect(learning) as conn:          # what a dev build left behind
+        conn.execute("DROP TABLE answer_check_events")
+        conn.executescript(_DEV_EVENTS_DDL)
+        conn.execute("INSERT INTO answer_check_events (event_id, profile_id, occurred_ms, "
+                     "status, retrieval_ms) VALUES ('e1', 'default', 1, 'judged', 700.0)")
+        conn.execute("UPDATE migration_log SET ddl_sha256 = ? WHERE name = ?",
+                     (_DEV_HASH, M053.NAME))
+        assert M053.verify(conn) is False
+    result = mr.apply_all(learning, memory)
+    assert result["failed"] == [], result
+    with sqlite3.connect(learning) as conn:
+        assert M053.verify(conn) is True
+        row = conn.execute("SELECT retrieval_ms, embed_ms, rerank_ms FROM "
+                           "answer_check_events").fetchone()
+    assert row == (700.0, None, None)                 # existing rows kept, untouched
+    assert mr.apply_all(learning, memory)["failed"] == []
