@@ -31,7 +31,12 @@
 # user's decision, and a plugin that narrows it takes away tools they configured.
 
 _SLM_DATA="${SLM_DATA_DIR:-$HOME/.superlocalmemory}"
-_PLUGIN_BIN="${CLAUDE_PLUGIN_DATA:+${CLAUDE_PLUGIN_DATA}/venv/bin/slm}"
+
+# Which slm to run is decided in ONE place, shared with the hooks and the venv
+# bootstrap, so the three can never disagree about which install is in play.
+# shellcheck source=slm-resolve.sh
+. "$(dirname "${BASH_SOURCE[0]}")/slm-resolve.sh"
+_PLUGIN_BIN="$(slm_plugin_bin)"
 
 # Is a daemon already up for this data dir? If so we join it rather than boot a
 # second one — one writer for every session that shares the store.
@@ -41,91 +46,78 @@ if [ -f "${_SLM_DATA}/daemon.pid" ] \
     _daemon_running=1
 fi
 
-# Expand a leading ~ WITHOUT eval — eval on an environment value is a
-# command-injection foot-gun. Only tilde expansion; pass expanded paths for vars.
-_expand_tilde() {
-    case "$1" in
-        "~"*) printf '%s' "${HOME}${1#\~}" ;;
-        *)    printf '%s' "$1" ;;
-    esac
-}
-
 # Start a daemon with the chosen binary unless one is already serving.
 _ensure_daemon() {
     [ "${_daemon_running}" -eq 1 ] && return 0
     "$1" serve start >&2
 }
 
-case "${SLM_LAUNCHER:-auto}" in
-    auto)
-        # 1. An slm already on PATH — the pip, pipx or npm install the user has.
-        #    This is the common case and the one that must not be forked.
-        if command -v slm >/dev/null 2>&1; then
-            # Both orderings end up here, and both must converge on ONE
-            # environment:
-            #   installed first, plugin second -> nothing was ever forked;
-            #   plugin first, installed second -> the plugin venv is now the
-            #     older copy and must stop being used.
-            # They already share one store, because this launcher sets no
-            # SLM_DATA_DIR and both resolve ~/.superlocalmemory. What is left to
-            # go wrong is two DIFFERENT VERSIONS serving that one store: whoever
-            # starts the daemon first decides which code the other one talks to.
-            # So when a leftover plugin venv is found beside a real install, say
-            # so, with both versions named. Silent duplication is how a store
-            # ends up served by a release nobody thinks they are running.
-            if [ -n "${_PLUGIN_BIN}" ] && [ -x "${_PLUGIN_BIN}" ]; then
-                _sys_v="$(slm --version 2>/dev/null | awk '{print $NF}')"
-                _plg_v="$("${_PLUGIN_BIN}" --version 2>/dev/null | awk '{print $NF}')"
-                if [ -n "${_plg_v}" ] && [ "${_sys_v}" != "${_plg_v}" ]; then
-                    echo "SLM plugin: using the installed slm ${_sys_v:-?} and IGNORING a leftover plugin venv at ${_PLUGIN_BIN} (${_plg_v})." >&2
-                    echo "  One store, one version. Remove the venv to stop it drifting:  rm -rf \"${CLAUDE_PLUGIN_DATA}/venv\"" >&2
-                fi
-            fi
-            _ensure_daemon "$(command -v slm)" || \
-                echo "SLM plugin: daemon did not start; continuing as a direct MCP writer." >&2
-            exec slm mcp
-        fi
-        # 2. No system install. Use the plugin's own venv if this host gave us
-        #    somewhere to keep one.
+if ! slm_choose; then
+    echo "${SLM_RESOLVE_ERROR}" >&2
+    exit 1
+fi
+
+case "${SLM_LAUNCHER:-auto}:${SLM_CHOICE}" in
+    auto:system)
+        # An slm already on PATH — the pip, pipx or npm install the user has.
+        # This is the common case and the one that must not be forked.
+        #
+        # Both orderings end up here, and both must converge on ONE
+        # environment:
+        #   installed first, plugin second -> nothing was ever forked;
+        #   plugin first, installed second -> the plugin venv is now the
+        #     older copy and must stop being used.
+        # They already share one store, because this launcher sets no
+        # SLM_DATA_DIR and both resolve ~/.superlocalmemory. What is left to
+        # go wrong is two DIFFERENT VERSIONS serving that one store: whoever
+        # starts the daemon first decides which code the other one talks to.
+        # So when a leftover plugin venv is found beside a real install, say
+        # so, with both versions named. Silent duplication is how a store
+        # ends up served by a release nobody thinks they are running.
         if [ -n "${_PLUGIN_BIN}" ] && [ -x "${_PLUGIN_BIN}" ]; then
-            if ! _ensure_daemon "${_PLUGIN_BIN}"; then
-                echo "SLM plugin: unable to start the owned daemon; refusing a direct MCP writer." >&2
-                exit 1
+            _sys_v="$(slm --version 2>/dev/null | awk '{print $NF}')"
+            _plg_v="$("${_PLUGIN_BIN}" --version 2>/dev/null | awk '{print $NF}')"
+            if [ -n "${_plg_v}" ] && [ "${_sys_v}" != "${_plg_v}" ]; then
+                echo "SLM plugin: using the installed slm ${_sys_v:-?} and IGNORING a leftover plugin venv at ${_PLUGIN_BIN} (${_plg_v})." >&2
+                echo "  One store, one version. Remove the venv to stop it drifting:  rm -rf \"${CLAUDE_PLUGIN_DATA}/venv\"" >&2
             fi
-            exec "${_PLUGIN_BIN}" mcp
         fi
-        # 3. Neither. Say which two things were looked for, so the fix is obvious.
-        echo "SLM plugin: no SuperLocalMemory found." >&2
-        echo "  Looked for: 'slm' on PATH, and ${_PLUGIN_BIN:-a plugin venv (this host sets no plugin data dir)}." >&2
-        echo "  Install it with:  pipx install superlocalmemory" >&2
-        exit 1
-        ;;
-    system)
-        if ! command -v slm >/dev/null 2>&1; then
-            echo "SLM_LAUNCHER=system but no 'slm' on PATH." >&2
-            exit 1
-        fi
-        _ensure_daemon "$(command -v slm)" || true
+        _ensure_daemon "${SLM_CHOICE_BIN}" || \
+            echo "SLM plugin: daemon did not start; continuing as a direct MCP writer." >&2
         exec slm mcp
         ;;
-    plugin)
-        if [ -z "${_PLUGIN_BIN}" ]; then
-            echo "SLM_LAUNCHER=plugin but this host sets no CLAUDE_PLUGIN_DATA." >&2
+    auto:plugin)
+        # No system install. Use the plugin's own venv, once SessionStart has
+        # built it. If it is not there either, say which two things were looked
+        # for, so the fix is obvious.
+        if [ "${SLM_CHOICE_READY}" -ne 1 ]; then
+            slm_not_found_message >&2
+            echo >&2
             exit 1
         fi
-        if ! _ensure_daemon "${_PLUGIN_BIN}"; then
+        if ! _ensure_daemon "${SLM_CHOICE_BIN}"; then
             echo "SLM plugin: unable to start the owned daemon; refusing a direct MCP writer." >&2
             exit 1
         fi
-        exec "${_PLUGIN_BIN}" mcp
+        exec "${SLM_CHOICE_BIN}" mcp
         ;;
-    *)
-        _SLM_BIN="$(_expand_tilde "${SLM_LAUNCHER}")"
-        if [ ! -x "${_SLM_BIN}" ]; then
-            echo "SLM_LAUNCHER is not an executable slm binary: ${_SLM_BIN}" >&2
+    system:system)
+        _ensure_daemon "${SLM_CHOICE_BIN}" || true
+        exec slm mcp
+        ;;
+    plugin:plugin)
+        if ! _ensure_daemon "${SLM_CHOICE_BIN}"; then
+            echo "SLM plugin: unable to start the owned daemon; refusing a direct MCP writer." >&2
             exit 1
         fi
-        _ensure_daemon "${_SLM_BIN}" || true
-        exec "${_SLM_BIN}" mcp
+        exec "${SLM_CHOICE_BIN}" mcp
+        ;;
+    *:explicit)
+        _ensure_daemon "${SLM_CHOICE_BIN}" || true
+        exec "${SLM_CHOICE_BIN}" mcp
+        ;;
+    *)
+        echo "SLM plugin: internal error: unexpected launcher choice '${SLM_LAUNCHER:-auto}:${SLM_CHOICE}'." >&2
+        exit 1
         ;;
 esac

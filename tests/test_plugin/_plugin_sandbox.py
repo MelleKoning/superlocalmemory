@@ -1,0 +1,86 @@
+# Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar
+# Licensed under AGPL-3.0-or-later — see LICENSE file
+"""Sandbox helpers for running the plugin's POSIX scripts for real.
+
+Every run gets its own HOME, SLM_DATA_DIR and CLAUDE_PLUGIN_DATA under the
+test's tmp_path, and a PATH built from scratch: a directory of stubs first,
+then the system directories. Nothing the developer has installed (a pipx slm,
+a real python3) can leak into the answer.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+SRC_SCRIPTS = REPO / "plugin-src" / "scripts"
+BUILT_PLUGIN = REPO / "plugin"
+
+SYSTEM_PATH = "/usr/bin:/bin"
+
+
+def system_path_has_slm() -> bool:
+    return shutil.which("slm", path=SYSTEM_PATH) is not None
+
+
+def write_exe(path: Path, body: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def stub_slm(path: Path, tag: str, *, exit_code: int = 0, stderr: str = "") -> Path:
+    """An slm stand-in that reports who it is, its argv and its stdin."""
+    err = f'echo "{stderr}" >&2\n' if stderr else ""
+    return write_exe(
+        path,
+        "#!/bin/sh\n"
+        'case "$1" in --version) echo "superlocalmemory 9.9.9"; exit 0 ;; serve) exit 0 ;; esac\n'
+        'IN="$(cat)"\n'
+        f'echo "RAN:{tag} ARGS:$* STDIN:$IN"\n'
+        f"{err}"
+        f"exit {exit_code}\n",
+    )
+
+
+def stub_python(directory: Path, version: str) -> Path:
+    """A python3 that answers the version guard as `version` would."""
+    major, minor = (int(x) for x in version.split(".")[:2])
+    ok = 0 if (major, minor) >= (3, 12) else 1
+    return write_exe(
+        directory / "python3",
+        "#!/bin/sh\n"
+        f'case "$*" in *--version*) echo "Python {version}"; exit 0 ;; '
+        f'*sys.version_info*) exit {ok} ;; esac\n'
+        'echo "unexpected python3 call: $*" >&2\n'
+        "exit 97\n",
+    )
+
+
+def sandbox_env(tmp_path: Path, stub_dir: Path, **extra: str | None) -> dict[str, str]:
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    env = {
+        "HOME": str(home),
+        "PATH": f"{stub_dir}:{SYSTEM_PATH}",
+        "SLM_DATA_DIR": str(tmp_path / "slm-data"),
+        "CLAUDE_PLUGIN_ROOT": str(BUILT_PLUGIN),
+        "CLAUDE_PLUGIN_DATA": str(tmp_path / "plugin-data"),
+        "LANG": os.environ.get("LANG", "C"),
+    }
+    for key, value in extra.items():
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
+    return env
+
+
+def run(argv: list[str], env: dict[str, str], *, stdin: str = "", timeout: int = 30):
+    return subprocess.run(
+        argv, env=env, input=stdin, capture_output=True, text=True, timeout=timeout,
+    )

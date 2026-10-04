@@ -60,7 +60,15 @@ def _run_venv_sh(
     timeout: int = 120,
 ) -> subprocess.CompletedProcess:
     """Run ensure-venv.sh with given ROOT and DATA dirs."""
-    env = {**os.environ, "CLAUDE_PLUGIN_ROOT": str(root), "CLAUDE_PLUGIN_DATA": str(data)}
+    # SLM_LAUNCHER=plugin: these tests are about building the venv. Without it
+    # an slm already on the developer's PATH means the venv is not needed and
+    # the script (correctly, #140) skips the build.
+    env = {
+        **os.environ,
+        "CLAUDE_PLUGIN_ROOT": str(root),
+        "CLAUDE_PLUGIN_DATA": str(data),
+        "SLM_LAUNCHER": "plugin",
+    }
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
@@ -285,6 +293,8 @@ def test_rejects_python_less_than_3_11(tmp_path: pytest.TempPathFactory) -> None
         **os.environ,
         "CLAUDE_PLUGIN_ROOT": str(root),
         "CLAUDE_PLUGIN_DATA": str(data),
+        # The guard applies when the plugin venv is the one that will run (#140).
+        "SLM_LAUNCHER": "plugin",
         "PATH": f"{fake_py_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
     }
     result = subprocess.run(
