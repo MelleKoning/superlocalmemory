@@ -5636,7 +5636,14 @@ def _register_daemon_routes(application: FastAPI) -> None:
         )
         mode = getattr(getattr(config, "mode", None), "value", "unknown")
         provider = getattr(getattr(config, "llm", None), "provider", "") or "none"
+        # Saves accepted while the writer was busy and not yet indexed, and
+        # saves set aside because they cannot be read back. -1: unknown.
+        admission = {"saves_waiting": 0, "unreadable_saves": 0}
+        writer_runtime = getattr(application.state, "canonical_remember_runtime", None)
+        if writer_runtime is not None:
+            admission = await asyncio.to_thread(writer_runtime.admission_status)
         return {
+            **admission,
             "status": "running",
             "pid": os.getpid(),
             "uptime_s": round(time.monotonic() - (_start_time or time.monotonic())),

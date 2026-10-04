@@ -461,6 +461,15 @@ class CanonicalRememberRuntime:
         """Remembers accepted under contention and not yet committed."""
         return self._deferred.pending
 
+    def admission_status(self) -> dict[str, int]:
+        """Counts an operator needs: saves still being indexed, saves set aside."""
+        try:
+            unreadable = self.journal.quarantined_count()
+        except Exception as exc:  # noqa: BLE001 - status must answer
+            logger.warning("admission journal status unavailable (%s)", type(exc).__name__)
+            unreadable = -1
+        return {"saves_waiting": self.deferred_count, "unreadable_saves": unreadable}
+
     def wait_for_deferred(self, timeout: float) -> bool:
         """Block until every accepted remember is committed; False on timeout."""
         return self._deferred.wait_idle(timeout)

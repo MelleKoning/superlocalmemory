@@ -470,3 +470,53 @@ def test_receipt_and_transition_validation_are_bounded(tmp_path, actor, admissio
 def journal_path_text(path) -> str:
     """Inspect the SQLite bytes only to prove plaintext content was excluded."""
     return path.read_bytes().decode("latin-1")
+
+
+def test_one_unreadable_entry_is_quarantined_and_replay_continues(tmp_path, actor) -> None:
+    """A corrupt entry is set aside with its bytes kept; every other one replays once."""
+    journal = AdmissionJournal(tmp_path / "admission_journal.db", codec=_TestCodec())
+    entries = [
+        journal.prepare(
+            RememberRequest(
+                content=f"Replay isolation witness {i}.",
+                profile_id="default",
+                source_type="mcp",
+                idempotency_key=f"replay-isolation:{i}",
+            ),
+            actor,
+        )
+        for i in range(5)
+    ]
+    bad = entries[1]  # an early one, so a stop-at-first-error replay is caught
+    corrupt = '{"ciphertext_b64": "not-base64!"}'
+    with journal._connection() as conn:  # test-only corruption of opaque payload
+        conn.execute(
+            "UPDATE admission_journal SET command_json=? WHERE journal_id=?",
+            (corrupt, bad.journal_id),
+        )
+        conn.commit()
+    dispatched: list[str] = []
+
+    def dispatch(entry, decoded):
+        dispatched.append(entry.journal_id)
+        return {"operation_id": f"op-{entry.journal_id}", "fact_ids": ["f"]}
+
+    assert journal.replay_pending(lambda _entry: None, dispatch) == 5
+    good = [e.journal_id for e in entries if e is not bad]
+    assert dispatched == good
+    assert all(journal.get(j).state == "committed" for j in good)
+    quarantined = journal.get(bad.journal_id)
+    assert quarantined.state == "rejected"
+    assert quarantined.error_code == "UNREADABLE_COMMAND"
+    assert journal.quarantined_count() == 1
+    with journal._connection() as conn:
+        kept = conn.execute(
+            "SELECT command_json FROM admission_journal WHERE journal_id=?",
+            (bad.journal_id,),
+        ).fetchone()[0]
+    assert kept == corrupt
+    # Nothing is replayed twice and the quarantined entry is not retried.
+    assert journal.replay_pending(
+        lambda _entry: None, lambda *_args: pytest.fail("replayed twice"),
+    ) == 0
+    journal.close()

@@ -2339,6 +2339,24 @@ def cmd_review_correction(args: Namespace) -> None:
 # -- Diagnostics (all support --json) -------------------------------------
 
 
+def _admission_status_text(daemon_status: dict) -> str:
+    """Lines for saves still being indexed and saves set aside; "" when none."""
+    lines = ""
+    waiting = int(daemon_status.get("saves_waiting", 0) or 0)
+    unreadable = int(daemon_status.get("unreadable_saves", 0) or 0)
+    if waiting > 0:
+        lines += f"  Saves being indexed: {waiting} (searchable within seconds)\n"
+    if unreadable > 0:
+        lines += (
+            f"  Saves set aside: {unreadable} could not be read back by this "
+            "machine's key and were kept unchanged in the admission journal. "
+            "See the daemon log for their ids.\n"
+        )
+    elif unreadable < 0:
+        lines += "  Saves set aside: unknown (the admission journal did not answer)\n"
+    return lines
+
+
 def cmd_status(args: Namespace) -> None:
     """Show system status."""
     from superlocalmemory.core.config import SLMConfig
@@ -2388,6 +2406,8 @@ def cmd_status(args: Namespace) -> None:
                 "projection_queue_depth": int(
                     daemon_status.get("projection_queue_depth", 0)
                 ),
+                "saves_waiting": int(daemon_status.get("saves_waiting", 0)),
+                "unreadable_saves": int(daemon_status.get("unreadable_saves", 0)),
             }
             json_print("status", data=data, next_actions=[
                 {"command": "slm health --json", "description": "Check math layer health"},
@@ -2469,6 +2489,8 @@ def cmd_status(args: Namespace) -> None:
     if config.db_path.exists():
         size_mb = round(config.db_path.stat().st_size / 1024 / 1024, 2)
         print(f"  DB size: {size_mb} MB")
+    if daemon_status:
+        print(_admission_status_text(daemon_status), end="")
 
     # S9-UX-07 / S9-UX-13: --verbose surfaces the disabled marker,
     # last-version marker, and daemon port so users who are debugging

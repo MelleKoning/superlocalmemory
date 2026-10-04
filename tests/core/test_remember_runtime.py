@@ -398,3 +398,63 @@ def test_runtime_defers_other_profile_recovery_until_rebind(tmp_path) -> None:
         assert db.search_facts_fts("Beta recovery waits", "beta")[0].fact_id in fact_ids
     finally:
         runtime.stop()
+
+
+def test_one_unreadable_journal_entry_cannot_block_daemon_start(tmp_path) -> None:
+    """Start succeeds; good saves commit exactly once; the bad one is set aside."""
+    from superlocalmemory.core.engine_ingestion import build_immediate_admission_handler
+    from superlocalmemory.core.remember_runtime import CanonicalRememberRuntime
+    from superlocalmemory.storage import schema
+    from superlocalmemory.storage.admission_journal import Actor, RememberRequest
+    from superlocalmemory.storage.database import DatabaseManager
+
+    db_path = tmp_path / "memory.db"
+    _install_write_commits(db_path)
+    db = DatabaseManager(db_path)
+    db.initialize(schema)
+
+    def runtime():
+        return CanonicalRememberRuntime(
+            db=db,
+            profile_id="default",
+            writer=build_immediate_admission_handler(db, profile_id="default"),
+            journal_path=tmp_path / "admission_journal.db",
+        )
+
+    first = runtime()
+    actor = Actor("actor", frozenset({"default"}), frozenset({"personal"}))
+    entries = [
+        first.journal.prepare(
+            RememberRequest(
+                content=f"Startup isolation witness {i}: the lock keeper logs tides.",
+                profile_id="default",
+                source_type="http",
+                idempotency_key=f"startup-isolation:{i}",
+                trusted_actor_id="actor",
+            ),
+            actor,
+        )
+        for i in range(4)
+    ]
+    first.journal.close()
+    with first.journal._connection() as conn:
+        conn.execute(
+            "UPDATE admission_journal SET command_json='{\"ciphertext_b64\": \"AAAA\"}' "
+            "WHERE journal_id=?",
+            (entries[0].journal_id,),
+        )
+        conn.commit()
+
+    restarted = runtime()
+    restarted.start()
+    try:
+        assert restarted.wait_for_deferred(timeout=15.0)
+        states = [restarted.journal.get(e.journal_id) for e in entries]
+        assert states[0].state == "rejected"
+        assert states[0].error_code == "UNREADABLE_COMMAND"
+        assert [s.state for s in states[1:]] == ["committed"] * 3
+        assert restarted.journal.quarantined_count() == 1
+        assert len(db.execute("SELECT * FROM write_commits")) == 3
+        assert len(db.execute("SELECT * FROM atomic_facts")) == 3
+    finally:
+        restarted.stop()

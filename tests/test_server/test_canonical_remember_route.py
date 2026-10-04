@@ -567,3 +567,31 @@ def test_saturated_journal_is_an_honest_503_with_retry_after(
     assert len(engine_with_mock_deps._db.execute(
         "SELECT * FROM ingestion_operations"
     )) == 1
+
+
+def test_status_counts_saves_set_aside_as_unreadable(engine_with_mock_deps) -> None:
+    """An operator can see that a save was set aside, without reading logs."""
+    from superlocalmemory.cli.commands import _admission_status_text
+    from superlocalmemory.storage.admission_journal import Actor, RememberRequest
+
+    with _client(engine_with_mock_deps) as client:
+        runtime = client.app.state.canonical_remember_runtime
+        clean = client.get("/status").json()
+        entry = runtime.journal.prepare(
+            RememberRequest(
+                content="A save whose bytes this machine can no longer read.",
+                profile_id=engine_with_mock_deps._profile_id,
+                source_type="http",
+                idempotency_key="status-unreadable-1",
+            ),
+            Actor("a", frozenset({engine_with_mock_deps._profile_id}),
+                  frozenset({"personal"})),
+        )
+        runtime.journal.quarantine(entry.journal_id)
+        flagged = client.get("/status").json()
+
+    assert clean["unreadable_saves"] == 0
+    assert clean["saves_waiting"] == 0
+    assert flagged["unreadable_saves"] == 1
+    assert _admission_status_text(clean) == ""
+    assert "Saves set aside: 1" in _admission_status_text(flagged)

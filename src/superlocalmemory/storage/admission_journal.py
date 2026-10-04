@@ -17,6 +17,7 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 import re
 import sqlite3
 import time
@@ -37,11 +38,17 @@ from superlocalmemory.storage.journal_writer import (
     is_sqlite_busy,
 )
 
+logger = logging.getLogger("superlocalmemory.storage.admission_journal")
+
 _MAX_COMMAND_BYTES = 256 * 1024
 _MAX_RECEIPT_BYTES = 16 * 1024
 _MAX_METADATA_DEPTH = 8
 _IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9._:-]{1,256}$")
 _STATES = frozenset({"prepared", "dispatched", "committed", "rejected"})
+#: Error code of an entry set aside because its command cannot be read back
+#: (corrupt bytes, or written under another machine key). The row and its
+#: original encrypted bytes are kept untouched for an operator.
+UNREADABLE_COMMAND = "UNREADABLE_COMMAND"
 
 _JOURNAL_DDL = """
 CREATE TABLE IF NOT EXISTS admission_journal (
@@ -465,15 +472,46 @@ class AdmissionJournal:
                 if canonical is None:
                     request = self.request_for(entry)
                     canonical = dispatch(entry, request)
+                if after_commit is not None:
+                    after_commit(entry, request, canonical)
             except TerminalAdmissionError as exc:
                 self.mark_rejected(entry.journal_id, exc.error_code)
                 recovered += 1
                 continue
-            if after_commit is not None:
-                after_commit(entry, request, canonical)
+            except AdmissionPayloadError:
+                # One unreadable entry must never block the others (or the
+                # daemon's start): set it aside, keep its bytes, carry on.
+                self.quarantine(entry.journal_id)
+                recovered += 1
+                continue
+            except Exception as exc:  # noqa: BLE001 - one entry, not the whole replay
+                # Busy or failing writer: the entry stays pending and durable;
+                # the caller hands what is left to its background committer.
+                logger.warning(
+                    "pending remember %s not recovered yet (%s); it stays queued",
+                    entry.journal_id, type(exc).__name__,
+                )
+                continue
             self.mark_committed(entry.journal_id, canonical)
             recovered += 1
         return recovered
+
+    def quarantine(self, journal_id: str) -> AdmissionEntry:
+        """Set aside an entry whose command cannot be read; nothing is deleted."""
+        logger.error(
+            "a saved memory cannot be read back by this machine's key and was set "
+            "aside (journal entry %s); its original bytes are kept", journal_id,
+        )
+        return self.mark_rejected(journal_id, UNREADABLE_COMMAND)
+
+    def quarantined_count(self) -> int:
+        """How many saves were set aside as unreadable."""
+        with self._read_connection() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM admission_journal WHERE state='rejected' "
+                "AND error_code=?", (UNREADABLE_COMMAND,),
+            ).fetchone()
+        return int(row[0])
 
     def _transition(
         self,
