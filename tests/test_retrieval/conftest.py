@@ -10,16 +10,15 @@ from superlocalmemory.core.thread_join import join_threads
 from superlocalmemory.retrieval.engine import RetrievalEngine
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def closes_retrieval_engines(monkeypatch):
     """Close every ``RetrievalEngine`` the test builds, and join its workers.
 
     A ``RetrievalEngine`` owns a channel pool (``slm-recall-channel``) and a
     query-embed pool. Tests here build engines inline and through module
-    helpers; a module opts in with
-    ``pytestmark = pytest.mark.usefixtures("closes_retrieval_engines")`` and
-    every engine built during the test is closed when it ends, the way the
-    daemon closes its engine on shutdown.
+    helpers. Every engine built during any test in this folder is closed when
+    the test ends, the way the daemon closes its engine on shutdown, so a new
+    test cannot leak one by forgetting to opt in.
     """
     built: list[RetrievalEngine] = []
     original_init = RetrievalEngine.__init__
