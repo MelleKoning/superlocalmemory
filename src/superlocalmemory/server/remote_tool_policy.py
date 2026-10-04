@@ -163,12 +163,23 @@ def denial_message(tool: str, key_name: str, scope: str) -> str:
 
 
 async def _send_json(send: Callable[..., Awaitable[None]], status: int,
-                     payload: dict[str, Any]) -> None:
+                     payload: dict[str, Any],
+                     extra_headers: tuple[tuple[bytes, bytes], ...] = ()) -> None:
     body = json.dumps(payload).encode("utf-8")
     await send({"type": "http.response.start", "status": status,
                 "headers": [(b"content-type", b"application/json"),
-                            (b"content-length", str(len(body)).encode())]})
+                            (b"content-length", str(len(body)).encode()),
+                            *extra_headers]})
     await send({"type": "http.response.body", "body": body})
+
+
+#: Answer to any non-POST request from another computer. The MCP transport is
+#: stateless here, so a GET event stream could never carry a message; it would
+#: only hold a connection (and a worker) open for as long as the caller liked.
+METHOD_NOT_ALLOWED = {
+    "error": "remote_method_not_allowed",
+    "message": "Remote MCP accepts POST only.",
+}
 
 
 async def _read_body(receive: Callable[[], Awaitable[dict[str, Any]]]) -> bytes | None:
@@ -311,7 +322,7 @@ class RemoteToolScopeASGI:
             await _send_json(send, 401, {"error": "remote_auth_required"})
             return
         if scope.get("method") != "POST":
-            await self.app(scope, receive, send)
+            await _send_json(send, 405, METHOD_NOT_ALLOWED, ((b"allow", b"POST"),))
             return
         body = await _read_body(receive)
         if body is None:
@@ -353,6 +364,7 @@ __all__ = [
     "DENIAL_CODE",
     "HOST_ONLY_TOOLS",
     "MAX_BODY_BYTES",
+    "METHOD_NOT_ALLOWED",
     "PolicyViolation",
     "READ_ONLY_TAG",
     "READ_TOOLS",

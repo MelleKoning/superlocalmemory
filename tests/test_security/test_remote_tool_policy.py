@@ -98,10 +98,11 @@ class _StubMcp:
         await send({"type": "http.response.body", "body": payload})
 
 
-def _run(body: bytes, principal=WRITE_KEY, stub: _StubMcp | None = None, chunks: int = 1):
+def _run(body: bytes, principal=WRITE_KEY, stub: _StubMcp | None = None, chunks: int = 1,
+         method: str = "POST", sent_out: list | None = None):
     stub = stub or _StubMcp()
     app = policy.RemoteToolScopeASGI(stub)
-    scope = {"type": "http", "method": "POST", "path": "/mcp/hermes", "root_path": "/mcp",
+    scope = {"type": "http", "method": method, "path": "/mcp/hermes", "root_path": "/mcp",
              "headers": [], "client": ("remote-listener-peer", 1),
              "slm_remote_listener": True}
     if principal is not None:
@@ -110,7 +111,7 @@ def _run(body: bytes, principal=WRITE_KEY, stub: _StubMcp | None = None, chunks:
     parts = [body[i:i + size] for i in range(0, len(body), size)] or [b""]
     queue = [{"type": "http.request", "body": p, "more_body": i < len(parts) - 1}
              for i, p in enumerate(parts)]
-    sent: list[dict] = []
+    sent: list[dict] = [] if sent_out is None else sent_out
 
     async def receive():
         return queue.pop(0) if queue else {"type": "http.disconnect"}
@@ -237,3 +238,14 @@ def test_audit_line_names_the_key_and_tool_but_never_arguments(caplog) -> None:
     assert "key_name=hermes" in text and "tool=remember" in text and "decision=allow" in text
     assert "tool=switch_profile" in text and "decision=deny" in text
     assert "SECRET-CONTENT-123" not in text
+
+
+@pytest.mark.parametrize("method", ["GET", "DELETE", "PUT", "PATCH", "OPTIONS", "HEAD"])
+def test_non_post_from_a_remote_caller_is_405_without_reaching_mcp(method) -> None:
+    """A GET used to open an event stream that never carries a message (stateless)."""
+    sent: list[dict] = []
+    status, payload, stub = _run(b"", WRITE_KEY, method=method, sent_out=sent)
+    assert status == 405 and payload["error"] == "remote_method_not_allowed"
+    assert stub.reached == []
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    assert (b"allow", b"POST") in start["headers"]
