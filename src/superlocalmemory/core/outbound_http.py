@@ -204,13 +204,30 @@ async def astream_json(method: str, url: str, payload: Any, *,
 # -- urllib (the stdlib-only callers) -----------------------------------------------
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Turns every 3xx into an ``HTTPError`` carrying that status.
+
+    urllib's default handler re-sends a request, headers included, to
+    wherever the ``Location`` points. Returning ``None`` makes it stop.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
+def _opener(*, direct: bool) -> urllib.request.OpenerDirector:
+    # Built per call: ProxyHandler() reads the environment when constructed.
+    proxies = urllib.request.ProxyHandler({}) if direct else urllib.request.ProxyHandler()
+    return urllib.request.build_opener(proxies, _NoRedirect())
+
+
 def urlopen(request: urllib.request.Request | str, *, timeout: float) -> Any:
     """``urllib.request.urlopen`` through the gate.
 
     The body is screened for another machine. For this machine an
-    environment or system proxy is never used: when one is configured the
-    request goes through an opener with no proxy handler; when none is, the
-    standard opener is already direct.
+    environment or system proxy is never used. A redirect is never followed
+    for any machine: it is raised as ``urllib.error.HTTPError`` with the 3xx
+    status, so headers such as the hook token never reach a second origin.
     """
     req = request if isinstance(request, urllib.request.Request) else (
         urllib.request.Request(request))
@@ -223,10 +240,12 @@ def urlopen(request: urllib.request.Request | str, *, timeout: float) -> Any:
                 url, data=screened, headers=dict(req.header_items()),
                 method=req.get_method(),
             )
-    if is_local_endpoint(url) and urllib.request.getproxies():
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        return opener.open(req, timeout=timeout)
-    return urllib.request.urlopen(req, timeout=timeout)
+    return _send(req, timeout=timeout)
+
+
+def _send(req: urllib.request.Request, timeout: float) -> Any:
+    """Open ``req`` with no redirects; direct (no proxy) for this machine."""
+    return _opener(direct=is_local_endpoint(req.full_url)).open(req, timeout=timeout)
 
 
 __all__ = [

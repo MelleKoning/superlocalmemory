@@ -124,6 +124,10 @@ def test_unified_daemon_blocks_remote_mutation_before_route_execution(
             return await call_next(request)
 
     monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path))
+    # Allowlisted for LAN use, so the 4.1.20 access gate lets it in and the
+    # write-identity check behind it is what answers.
+    monkeypatch.setenv("SLM_REMOTE", "1")
+    monkeypatch.setenv("SLM_MCP_ALLOWED_HOSTS", "192.0.2.0/24")
     app = create_app()
     app.add_middleware(_RemotePeer)
     response = TestClient(app, raise_server_exceptions=False).post(
@@ -150,6 +154,10 @@ def test_unified_daemon_blocks_remote_recall_telemetry_without_principal(
             return await call_next(request)
 
     monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path))
+    # Allowlisted for LAN use, so the 4.1.20 access gate lets it in and the
+    # write-identity check behind it is what answers.
+    monkeypatch.setenv("SLM_REMOTE", "1")
+    monkeypatch.setenv("SLM_MCP_ALLOWED_HOSTS", "192.0.2.0/24")
     app = create_app()
     app.add_middleware(_RemotePeer)
     response = TestClient(app, raise_server_exceptions=False).get(

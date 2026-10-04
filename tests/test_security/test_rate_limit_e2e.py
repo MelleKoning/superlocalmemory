@@ -116,8 +116,10 @@ class TestWritesOverLimit:
         client = _make_client(rate_limit_app, "203.0.113.10")
 
         last_resp = None
+        # /health: another computer's uncredentialed request to any data path
+        # is refused (401) before the rate limiter (4.1.20 access gate).
         for _ in range(4):
-            last_resp = client.post("/nonexistent-path")
+            last_resp = client.post("/health")
 
         # Find the 429
         retry_after = last_resp.headers.get("Retry-After")
@@ -127,7 +129,7 @@ class TestWritesOverLimit:
         else:
             # Try harder — exhaust the limiter by sending more requests
             for _ in range(10):
-                resp = client.post("/nonexistent-path")
+                resp = client.post("/health")
                 if resp.status_code == 429:
                     assert resp.headers.get("Retry-After") is not None
                     assert int(resp.headers["Retry-After"]) > 0

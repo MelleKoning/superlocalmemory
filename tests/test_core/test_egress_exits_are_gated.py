@@ -61,6 +61,10 @@ def wire(monkeypatch):
     monkeypatch.setattr(httpx, "post", _httpx_post)
     monkeypatch.setattr(httpx.Client, "post", _client_post)
     monkeypatch.setattr(urllib.request, "urlopen", _urlopen)
+    # The gate opens through its own no-redirect opener, not the module-level
+    # urlopen, so record at the opener too.
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open",
+                        lambda self, req, *a, **kw: _urlopen(req))
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     import superlocalmemory.llm.backbone as backbone
     monkeypatch.setattr(backbone.time, "sleep", lambda _s: None)

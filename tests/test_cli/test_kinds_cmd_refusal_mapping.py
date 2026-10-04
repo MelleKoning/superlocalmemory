@@ -21,6 +21,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from superlocalmemory.cli import kinds_cmd
+from tests._urlopen_fake import setattr_urlopen
 from tests.test_server.test_memory_kinds_routes import _client, _fact
 
 
@@ -44,7 +45,7 @@ def _bind_real_daemon_request(monkeypatch, tc) -> None:
             )
         return io.BytesIO(resp.content)
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    setattr_urlopen(monkeypatch, fake_urlopen)
 
 
 def _args(**kw) -> Namespace:

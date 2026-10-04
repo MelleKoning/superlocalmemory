@@ -37,6 +37,30 @@ Environment=SLM_DAEMON_HOST=0.0.0.0
 > front of any non-loopback listener. Do not expose the daemon directly to the
 > public internet.
 
+### Other computers must sign in (4.1.20+)
+
+A request from another computer — including a browser on the LAN opening the
+dashboard by IP — gets `401 remote_auth_required` for anything that carries
+memory, reads included, unless it presents one of:
+
+- the SLM API key in `X-SLM-API-Key` (the key is the `api_key` file in the
+  SLM data folder; see [auth-write-gate.md](auth-write-gate.md));
+- a team-account session token in `X-SLM-User-Session` (see [rbac-teams.md](rbac-teams.md));
+- the mesh shared secret, on `/mesh/*` routes only;
+- or it comes from an address you allowlisted for LAN use:
+
+```bash
+export SLM_REMOTE=1
+export SLM_MCP_ALLOWED_HOSTS=192.168.50.0/24   # the computers you trust
+```
+
+The dashboard page, its static files and `/health` load without credentials;
+`/mcp` keeps its own API-key check. Up to 4.1.19 reads from the LAN needed no
+credentials, so a LAN dashboard that worked by IP now needs one of the above —
+usually the `SLM_REMOTE=1` allowlist. A Docker port mapping makes your own
+computer's requests arrive from the bridge address (for example `172.17.0.1`),
+not loopback: allowlist that address or send the API key.
+
 ---
 
 ## Host names SLM answers to (4.1.18+)
@@ -54,6 +78,29 @@ SLM_ALLOWED_HOSTS=slm.lan,*.office.lan slm serve start
 
 Names you already list in `SLM_MCP_ALLOWED_HOSTS` (for example `slm.lan:*`)
 are accepted too, so existing LAN setups keep working unchanged.
+
+## Behind a reverse proxy (4.1.20+)
+
+SLM decides whether a caller is on this computer from the TCP connection
+alone. It ignores `X-Forwarded-For`, `Forwarded`, `X-Real-IP` and similar
+headers, and a request that arrives from `127.0.0.1` carrying any of them is
+treated as coming from another computer: it gets no local trust and must
+present credentials like any network caller.
+
+If you run a TLS proxy on another host and want SLM to see each client's real
+address (for `SLM_MCP_ALLOWED_HOSTS` or rate limiting), name the proxy:
+
+```bash
+SLM_TRUSTED_PROXIES=10.0.0.5 slm serve start      # addresses or networks, comma-separated
+```
+
+SLM then reads `X-Forwarded-For` / `X-Forwarded-Proto` from those addresses
+only. Naming a proxy never makes its callers local.
+
+> **Warning:** a proxy on the same computer that strips every forwarding
+> header makes all of its callers look like `127.0.0.1`, and SLM cannot tell
+> them from a local program. Do not run such a proxy in front of SLM: configure
+> it to send `X-Forwarded-For` (most proxies do by default).
 
 ## Opening the HTTP MCP transport to LAN clients (v3.6.9+)
 
@@ -251,6 +298,7 @@ agent id; pick a stable, lowercase name per tool.
 |----------|---------|---------|
 | `SLM_MCP_EMBEDDED` | Set `1` when running MCP inside the daemon (suppresses warmup threads) | — |
 | `SLM_MCP_ALLOWED_HOSTS` | **NEW** Comma-separated allowlist (`host:port*`, exact IP, CIDR, prefix`*`, or `*`) for HTTP MCP + LAN token/origin/rate-limit (see above) | localhost-only |
+| `SLM_TRUSTED_PROXIES` | **NEW (4.1.20)** Proxies whose `X-Forwarded-For` / `X-Forwarded-Proto` SLM reads (addresses or networks). Unset: forwarding headers are ignored. Never grants local trust | — |
 | `SLM_REMOTE` | One-switch LAN mode: serves token to allowlisted LAN clients, relaxes origin guard, and exempts LAN from rate limit. It does not change the default stateless MCP transport. Default OFF | — |
 | `SLM_MCP_STATELESS` | Explicitly select stateless MCP transport; stateless is already the V4 default | — |
 | `SLM_MCP_STATEFUL` | Set `1` only for a compatibility integration that requires stateful Streamable HTTP | — |

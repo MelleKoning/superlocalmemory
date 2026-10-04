@@ -170,7 +170,7 @@ def test_the_gate_itself_is_where_the_clients_are_built() -> None:
     gate = scan_tree(_REPO / "src/superlocalmemory/core", _REPO)
     calls = {c for (f, _q, c) in gate if f == _GATE}
     assert {"httpx.post", "httpx.Client", "httpx.AsyncClient",
-            "urllib.request.urlopen"} <= calls
+            "urllib.request.build_opener"} <= calls
 
 
 @pytest.mark.parametrize("source,expected", [

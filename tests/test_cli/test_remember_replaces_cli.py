@@ -17,6 +17,8 @@ from unittest.mock import patch
 
 import pytest
 
+from tests._urlopen_fake import patch_urlopen
+
 CONTENT = "The release train leaves on Thursday at 09:00 UTC."
 OLD_ID = "3f2a9c0d11e84b7a"
 
@@ -127,7 +129,7 @@ def _post(error, **flags):
     from superlocalmemory.cli.daemon import daemon_request
 
     descriptor = SimpleNamespace(port=1, capability="cap", instance_id="inst")
-    with patch("urllib.request.urlopen", side_effect=error):
+    with patch_urlopen(side_effect=error):
         return daemon_request("POST", "/remember", {"content": "x"},
                               expected_descriptor=descriptor, verify_health=False, **flags)
 
