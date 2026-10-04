@@ -452,6 +452,28 @@ class CanonicalRememberRuntime:
         if self._deferred.stopped:  # a restart of this same runtime
             self._deferred = DeferredCommitter(self.journal, self._commit_deferred)
         self._started = True
+        # Everything still pending - saves for other profiles, and any the
+        # synchronous replay above could not finish - is committed in the
+        # background, so no accepted save waits for a rebind or a restart.
+        self._hand_pending_to_committer()
+
+    def _hand_pending_to_committer(self) -> int:
+        """Queue every pending journal entry, of every profile, for commit.
+
+        Never raises: the entries are durable whatever happens here, and the
+        next start recovers anything that could not be queued now.
+        """
+        try:
+            entries = self.journal.pending_entries()
+        except Exception as exc:  # noqa: BLE001 - durable regardless
+            logger.warning(
+                "pending saves could not be listed (%s); they stay durable and "
+                "are recovered at the next start", type(exc).__name__,
+            )
+            return 0
+        for entry in entries:
+            self._deferred.defer(entry)
+        return len(entries)
 
     @property
     def ready(self) -> bool:
