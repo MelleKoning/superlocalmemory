@@ -1195,7 +1195,11 @@ async def recall_trace(request: Request):
         body = await request.json()
         query = body.get("query", "")
         limit = body.get("limit", CANONICAL_RECALL_LIMIT)
-        window = body.get("window", "") or ""
+        # 4.1.20 (R5): an unreadable window is a 400, never an unfiltered trace.
+        from superlocalmemory.server.time_filter_error import checked_window_or_400
+        window = checked_window_or_400(body.get("window", "") or "")
+        if not isinstance(window, str):
+            return window
         as_of_raw = (body.get("as_of", "") or "").strip()
         raw_known_as_of = body.get("known_as_of", "")
         raw_valid_at = body.get("valid_at", "")

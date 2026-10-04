@@ -727,6 +727,17 @@ async def search_memories(request: Request, body: SearchRequest):
     except InvalidKind as exc:
         from superlocalmemory.server.kind_error import invalid_kind_http
         raise invalid_kind_http(exc)
+    # T-window: prefer an explicit ``window`` spec; otherwise derive a range
+    # from the legacy date_from/date_to pair when both are set. 4.1.20 (R5):
+    # checked here, before anything runs — an unreadable one is a 400, never a
+    # search that silently ignores it.
+    _window = getattr(body, "window", None) or ""
+    if not _window and getattr(body, "date_from", None) and getattr(body, "date_to", None):
+        _window = f"{body.date_from}..{body.date_to}"
+    from superlocalmemory.server.time_filter_error import checked_window_or_400
+    _window = checked_window_or_400(_window)
+    if not isinstance(_window, str):
+        return _window
     from superlocalmemory.core.recall_gate import begin_recall, end_recall
     begin_recall()
     try:
@@ -750,11 +761,6 @@ async def search_memories(request: Request, body: SearchRequest):
         if engine is not None:
             loop = asyncio.get_running_loop()
             t0 = _time.monotonic()
-            # T-window: prefer an explicit ``window`` spec; otherwise derive a
-            # range from the legacy date_from/date_to pair when both are set.
-            _window = getattr(body, "window", None) or ""
-            if not _window and getattr(body, "date_from", None) and getattr(body, "date_to", None):
-                _window = f"{body.date_from}..{body.date_to}"
             # v3.8.3: bound the synchronous recall. Under a concurrent
             # maintenance pass or a busy embedder it can run tens of seconds
             # and the browser aborts the fetch. If it exceeds the budget we

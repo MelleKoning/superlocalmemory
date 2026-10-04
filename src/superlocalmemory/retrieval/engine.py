@@ -241,6 +241,11 @@ class RetrievalEngine:
         from superlocalmemory.retrieval.temporal_utils import normalize_strict_boundary
         known_as_of = normalize_strict_boundary(known_as_of, "known_as_of")
         valid_at = normalize_strict_boundary(valid_at, "valid_at")
+        # 4.1.20 (R5): an explicit window that cannot be read is refused here,
+        # the root every door reaches, instead of quietly applying no filter.
+        # Blank means "no window", exactly as before.
+        from superlocalmemory.retrieval.time_filter import check_window
+        window = check_window(window)
         t0 = time.monotonic()
         # NOTE: extra_disabled_channels is passed as an explicit local argument
         # to _run_channels() — it is NOT stored on self.  Storing it as a shared

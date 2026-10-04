@@ -651,11 +651,14 @@ class TestTimeWindowRecall:
         assert {"f_recent", "f_old"} <= ids
         db.get_fact_event_times.assert_not_called()  # no window -> no lookup
 
-    def test_unparseable_window_applies_no_filter(self) -> None:
+    def test_unparseable_window_is_refused(self) -> None:
+        # 4.1.20 (R5): an explicit window that cannot be read used to apply no
+        # filter at all, silently returning every date. It is now refused.
+        from superlocalmemory.retrieval.time_filter import InvalidTimeFilter
+
         engine, _ = self._engine()
-        response = engine.recall("q", "default", window="someday")
-        ids = {r.fact.fact_id for r in response.results}
-        assert {"f_recent", "f_old"} <= ids  # bad spec => additive no-op
+        with pytest.raises(InvalidTimeFilter):
+            engine.recall("q", "default", window="someday")
 
     def test_query_infers_window(self) -> None:
         # T3: no explicit window, but "last week" in the query auto-windows to 7d.

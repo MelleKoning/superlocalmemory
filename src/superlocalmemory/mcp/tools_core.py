@@ -551,6 +551,14 @@ def register_core_tools(server, get_engine: Callable) -> None:
         except InvalidKind as exc:
             return {"success": False, "code": "INVALID_KIND", "retryable": False,
                     "error": str(exc)}
+        # 4.1.20 (R5): an unreadable window is refused, not passed on to run
+        # unfiltered — the same check and code as the CLI and HTTP.
+        from superlocalmemory.retrieval.time_filter import InvalidTimeFilter, check_window
+        try:
+            window = check_window(window) or ""
+        except InvalidTimeFilter as exc:
+            return {"success": False, "code": exc.code, "retryable": False,
+                    "field": exc.field, "error": str(exc)}
         import asyncio
         try:
             from superlocalmemory.mcp._daemon_proxy import choose_pool
