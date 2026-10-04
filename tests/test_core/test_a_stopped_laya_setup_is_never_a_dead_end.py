@@ -120,8 +120,8 @@ def test_the_reason_a_setup_failed_is_shown_after_it_failed(monkeypatch):
     status = lr.detect()
     assert status.state == lr.STATE_FAILED
     assert status.action == lr.ACTION_SETUP
-    assert "stopped making progress" in status.error
-    assert "existing install" in status.error
+    assert "Can't reach the model download server" in status.error
+    assert "Use an install you already have" in status.error
 
 
 # -- remove: clears a stopped setup, keeps someone else's install ---------------

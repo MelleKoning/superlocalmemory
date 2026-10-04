@@ -110,6 +110,13 @@
       lines.push('On-device checking needs Apple Silicon. Online checking with Jev is available in Settings.');
     }
     if (laya.state === 'installing') lines.push('Setting up the on-device model…');
+    if (laya.state === 'failed') {
+      lines.push('The on-device check needs attention: ' + String(laya.error || laya.step || 'it is not ready') +
+        ' Fix it in Settings.');
+    }
+    if (s.jev && s.jev.rerank && s.jev.rerank.enabled && s.active !== 'jev') {
+      lines.push('Reordering with Jev is off while Jev isn’t chosen; it comes back when you choose Jev.');
+    }
     if (s.mode === 'jev') lines.push('Consent: ' + (jev.consent ? 'given' : 'not given'));
     if (s.active === 'jev') lines.push('Reordering: ' + (jev.rerank && jev.rerank.active ? 'on' : 'off'));
     var headline = summary || (s.active === 'off' || !s.active ? 'Off' : String(s.active));

@@ -80,12 +80,13 @@ _PIP_TIMEOUT_S = 600.0
 _DOWNLOAD_TIMEOUT_S = 1800.0
 
 _NETWORK_MESSAGE = (
-    "Couldn't reach the download server. If your network blocks downloads, "
-    "use 'Use an existing install'."
+    "Can't reach the model download server. If your network blocks it, choose "
+    "'Use an install you already have'; otherwise choose Repair to try again."
 )
 _STALLED_MESSAGE = (
-    "The download stopped making progress, so it was stopped. Your network may block "
-    "the download server — use 'Use an existing install', or choose Repair to try again."
+    "Can't reach the model download server — the download stopped making progress, so "
+    "it was stopped. If your network blocks it, choose 'Use an install you already "
+    "have'; otherwise choose Repair to try again."
 )
 _CANCELLED_MESSAGE = ("Setup was cancelled. Choose Repair to continue — what was "
                       "already downloaded is kept.")
