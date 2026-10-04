@@ -143,14 +143,20 @@ def called_tool(message: dict[str, Any]) -> str | None:
     return name
 
 
+#: Appended to a refusal for a read-only key, so a client can stop sending
+#: writes it will never be allowed (the Hermes plugin does).
+READ_ONLY_TAG = "[remote_key_read_only]"
+
+
 def denial_message(tool: str, key_name: str, scope: str) -> str:
     if tool in HOST_ONLY_TOOLS:
         return (f"'{tool}' manages the SLM computer and is not available over remote "
-                f"access. Run it on the SLM computer.")
+                f"access. Run it on the SLM computer. [{DENIAL_CODE}]")
     if tool in WRITE_ONLY_TOOLS and scope == "read":
         return (f"'{tool}' changes memory, and remote key '{key_name}' is read-only. "
-                f"Use a write key (slm remote keys add <name>) to save from this tool.")
-    return f"'{tool}' is not available to remote key '{key_name}'."
+                f"Use a write key (slm remote keys add <name>) to save from this tool. "
+                f"{READ_ONLY_TAG}")
+    return f"'{tool}' is not available to remote key '{key_name}'. [{DENIAL_CODE}]"
 
 
 # -- ASGI helpers --------------------------------------------------------------------
@@ -328,6 +334,7 @@ __all__ = [
     "HOST_ONLY_TOOLS",
     "MAX_BODY_BYTES",
     "PolicyViolation",
+    "READ_ONLY_TAG",
     "READ_TOOLS",
     "RemoteToolScopeASGI",
     "WRITE_ONLY_TOOLS",

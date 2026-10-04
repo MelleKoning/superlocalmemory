@@ -8,11 +8,14 @@ console entry point only for user-invoked CLI compatibility commands.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
+import logging
 import re
 import shlex
 import shutil
 import subprocess
+import sys
 import threading
 import uuid
 from pathlib import Path
@@ -20,6 +23,21 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parent
+logger = logging.getLogger("superlocalmemory.hermes")
+
+
+def _load_sibling(name: str) -> Any:
+    """Load a sibling module by path (Hermes and the tests load this file directly)."""
+    module_name = f"_slm_hermes_{name[:-3]}"
+    spec = importlib.util.spec_from_file_location(module_name, ROOT / name)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    sys.modules[module_name] = module  # dataclasses resolve their module by name
+    spec.loader.exec_module(module)
+    return module
+
+
+_REMOTE = _load_sibling("remote.py")
 INVENTORY = json.loads((ROOT / "command-inventory.json").read_text(encoding="utf-8"))
 COMMANDS = tuple(INVENTORY["primary_commands"])
 HIGH_IMPACT = frozenset(INVENTORY["high_impact"])
@@ -103,12 +121,42 @@ def _supported_slm(binary: str) -> bool:
     return tuple(int(part) for part in raw.split(".")) == _RELEASE_SLM_VERSION
 
 
-def _safe_mcp(ctx: Any, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Use Hermes's capability-gated MCP path; observers must always fail open."""
+def _safe_mcp(ctx: Any, tool: str, arguments: dict[str, Any], timeout: float = 3,
+              health: Any = None) -> dict[str, Any]:
+    """Use Hermes's capability-gated MCP path; observers must always fail open.
+
+    With a remote connection (``health`` given) a call is skipped and counted
+    while the server is unreachable, and every outcome is recorded so
+    ``/slm status`` can show what was lost.
+    """
+    if health is not None and not health.lifecycle_allowed(tool):
+        return {"ok": False, "skipped": True}
     try:
-        return ctx.call_mcp("superlocalmemory", tool, arguments, timeout=3)
-    except Exception:
-        return {"ok": False}
+        result = ctx.call_mcp("superlocalmemory", tool, arguments, timeout=timeout)
+    except Exception as exc:
+        result = {"ok": False, "error": str(exc)[:300]}
+    if health is not None:
+        if isinstance(result, dict) and result.get("ok") is True:
+            health.record(True)
+        elif _REMOTE.is_read_only_refusal((result or {}).get("error")):
+            health.mark_read_only()
+        else:
+            health.record(False, str((result or {}).get("error") or "no answer"))
+    return result if isinstance(result, dict) else {"ok": False}
+
+
+def connection_mode(ctx: Any) -> str:
+    """``remote`` only when the setting is exactly ``remote``; anything else is local."""
+    try:
+        value = ctx.get_config("connection", "local")
+    except Exception as exc:
+        logger.debug("SLM plugin: connection setting unreadable (%s); using local", exc)
+        return "local"
+    if value == "remote":
+        return "remote"
+    if value not in (None, "local"):
+        logger.warning("SLM plugin: connection=%r is not 'local' or 'remote'; using local", value)
+    return "local"
 
 
 def _session_args(kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -125,12 +173,20 @@ class SlmHermesPlugin:
         self.ctx = ctx
         self._sessions: set[str] = set()
         self._lock = threading.Lock()
+        self._remote_health = _REMOTE.RemoteHealth()
+
+    def _mode(self) -> str:
+        return connection_mode(self.ctx)
+
+    def _mcp(self, tool: str, arguments: dict[str, Any], timeout: float = 3) -> dict[str, Any]:
+        health = self._remote_health if self._mode() == "remote" else None
+        return _safe_mcp(self.ctx, tool, arguments, timeout=timeout, health=health)
 
     def on_session_start(self, **kwargs: Any) -> None:
         args = _session_args(kwargs)
         if not args["session_id"]:
             return
-        _safe_mcp(self.ctx, "session_init", args)
+        self._mcp("session_init", args)
         with self._lock:
             self._sessions.add(args["session_id"])
 
@@ -139,7 +195,8 @@ class SlmHermesPlugin:
         query = _redact(kwargs.get("user_message"), 4_000)
         if not session_id or not query:
             return None
-        result = _safe_mcp(self.ctx, "recall", {"query": query, "session_id": session_id, "agent_id": "hermes", "limit": 5})
+        timeout = 5 if self._mode() == "remote" else 3  # the 3 s recall ceiling plus network
+        result = self._mcp("recall", {"query": query, "session_id": session_id, "agent_id": "hermes", "limit": 5}, timeout=timeout)
         if not result.get("ok"):
             return None
         rendered = _redact(result.get("result"), 6_000)
@@ -156,12 +213,12 @@ class SlmHermesPlugin:
             "input_summary": _redact(kwargs.get("args"), 2_000), "output_summary": _redact(kwargs.get("result"), 2_000),
             "metadata": json.dumps({"tool_call_id": str(kwargs.get("tool_call_id") or ""), "status": str(kwargs.get("status") or "")}, sort_keys=True),
         }
-        _safe_mcp(self.ctx, "log_tool_event", args)
+        self._mcp("log_tool_event", args)
 
     def post_llm_call(self, **kwargs: Any) -> None:
         if self.ctx.get_config("capture_turns", False) is not True:
             return
-        _safe_mcp(self.ctx, "observe", {
+        self._mcp("observe", {
             "session_id": str(kwargs.get("session_id") or ""), "agent_id": "hermes",
             "content": "User: " + _redact(kwargs.get("user_message"), 4_000) + "\nAssistant: " + _redact(kwargs.get("assistant_response"), 6_000),
         })
@@ -170,16 +227,16 @@ class SlmHermesPlugin:
         # Hermes emits this after every turn. Per-turn settlement selects only
         # outcomes that already carry real engagement evidence; evidence-free
         # recalls remain pending for later turns or durable finalization.
-        _safe_mcp(self.ctx, "settle_session_outcomes", {
+        self._mcp("settle_session_outcomes", {
             "session_id": str(kwargs.get("session_id") or ""), "agent_id": "hermes",
         })
 
     def on_session_finalize(self, **kwargs: Any) -> None:
         session_id = str(kwargs.get("session_id") or "")
-        _safe_mcp(self.ctx, "settle_session_outcomes", {
+        self._mcp("settle_session_outcomes", {
             "session_id": session_id, "agent_id": "hermes", "finalize": True,
         })
-        _safe_mcp(self.ctx, "close_session", {"session_id": session_id, "agent_id": "hermes"})
+        self._mcp("close_session", {"session_id": session_id, "agent_id": "hermes"})
         with self._lock:
             self._sessions.discard(session_id)
 
@@ -192,14 +249,14 @@ class SlmHermesPlugin:
             self.on_session_start(session_id=new_id, model=kwargs.get("model"), platform=kwargs.get("platform"))
 
     def on_skill_lifecycle(self, **kwargs: Any) -> None:
-        _safe_mcp(self.ctx, "log_tool_event", {
+        self._mcp("log_tool_event", {
             "session_id": str(kwargs.get("session_id") or ""), "agent_id": "hermes",
             "tool_name": "skill:" + str(kwargs.get("skill_name") or ""), "event_type": "complete",
             "metadata": json.dumps({"status": str(kwargs.get("status") or "")}, sort_keys=True),
         })
 
     def subagent_start(self, **kwargs: Any) -> None:
-        _safe_mcp(self.ctx, "log_tool_event", {
+        self._mcp("log_tool_event", {
             "session_id": str(kwargs.get("parent_session_id") or ""), "agent_id": "hermes",
             "tool_name": "slm-advisor:" + str(kwargs.get("child_role") or ""), "event_type": "invoke",
             "metadata": json.dumps({"status": "started"}, sort_keys=True),
@@ -207,7 +264,7 @@ class SlmHermesPlugin:
 
     def subagent_stop(self, **kwargs: Any) -> None:
         result = _redact(kwargs.get("child_summary"), 4_000)
-        _safe_mcp(self.ctx, "log_tool_event", {
+        self._mcp("log_tool_event", {
             "session_id": str(kwargs.get("parent_session_id") or ""), "agent_id": "hermes",
             "tool_name": "slm-advisor:" + str(kwargs.get("child_role") or ""), "event_type": "complete",
             "output_summary": result,
@@ -220,6 +277,8 @@ class SlmHermesPlugin:
     def _launch(self, role: str, goal: str) -> dict[str, Any]:
         if role not in ROLES:
             return {"ok": False, "error": "role must be memory, governance, optimize, or loop"}
+        if role in _REMOTE.HOST_ONLY_ROLES and self._mode() == "remote":
+            return {"ok": False, "error": f"The {role} advisor manages the SLM computer and is not available over a remote connection."}
         if not goal.strip():
             return {"ok": False, "error": "goal is required"}
         from agent.subagent_lifecycle import SubagentLaunchRequest
@@ -294,9 +353,14 @@ class SlmHermesPlugin:
         if needs_confirm and "CONFIRM" not in argv:
             return f"Preview required. Re-run /slm {' '.join(argv)} CONFIRM to execute this high-impact command."
         argv = [arg for arg in argv if arg != "CONFIRM"]
+        argv[0] = command
+        if self._mode() == "remote":
+            return _REMOTE.run_remote(self.ctx, argv, "", self._remote_health, _RELEASE_SLM_VERSION)
         binary = shutil.which("slm")
         if not binary:
-            return "SLM CLI is unavailable. Install the owning runtime; the Hermes plugin never installs Python packages."
+            return ("SLM CLI is unavailable on this machine. If SLM runs on another computer, set "
+                    "plugins.entries.superlocalmemory.settings.connection: remote (docs/hermes.md#remote). "
+                    "The Hermes plugin never installs Python packages.")
         if not _supported_slm(binary):
             release = ".".join(str(part) for part in _RELEASE_SLM_VERSION)
             return f"Hermes SLM plugin requires exactly SLM CLI {release} from the owning runtime; refusing an incompatible or unverifiable executable."
@@ -312,6 +376,16 @@ class SlmHermesPlugin:
 
 def register(ctx: Any) -> None:
     plugin = SlmHermesPlugin(ctx)
+    if connection_mode(ctx) == "remote":
+        # Only skills that work against an SLM on another computer.
+        for skill in _REMOTE.REMOTE_SKILLS:
+            ctx.register_skill(skill, ROOT / "skills" / skill / "SKILL.md")
+    else:
+        _register_all_skills(ctx)
+    _register_runtime(ctx, plugin)
+
+
+def _register_all_skills(ctx: Any) -> None:
     # Explicit registrations keep generated output auditable and make a missing skill visible in doctor tests.
     ctx.register_skill("slm-cache", ROOT / "skills" / "slm-cache" / "SKILL.md")
     ctx.register_skill("slm-compress", ROOT / "skills" / "slm-compress" / "SKILL.md")
@@ -325,6 +399,9 @@ def register(ctx: Any) -> None:
     ctx.register_skill("slm-scope", ROOT / "skills" / "slm-scope" / "SKILL.md")
     ctx.register_skill("slm-session", ROOT / "skills" / "slm-session" / "SKILL.md")
     ctx.register_skill("slm-status", ROOT / "skills" / "slm-status" / "SKILL.md")
+
+
+def _register_runtime(ctx: Any, plugin: SlmHermesPlugin) -> None:
     for hook in ("on_session_start", "pre_llm_call", "post_tool_call", "post_llm_call", "on_session_end", "on_session_finalize", "on_session_reset", "on_skill_lifecycle", "subagent_start", "subagent_stop"):
         ctx.register_hook(hook, getattr(plugin, hook))
     ctx.register_command("slm", plugin.slash_router, "Run a SuperLocalMemory command", "<command> [args]")
