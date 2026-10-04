@@ -137,3 +137,6 @@ class DowngradeReport(_AsDict):
     point_id: str | None
     message: str
     marker: str | None = None
+    #: The release to install, and the exact commands, when known.
+    target_version: str | None = None
+    install_commands: list[str] = field(default_factory=list)

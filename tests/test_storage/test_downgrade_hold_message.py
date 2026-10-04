@@ -64,3 +64,29 @@ def test_cli_cancel_message_is_true(store, capsys) -> None:
     assert "next start" in out
     _next_start(learning_db, memory_db)
     assert sv.read_schema_version(memory_db) == sv.SUPPORTED_SCHEMA_VERSION
+
+
+@pytest.mark.parametrize("current, expected", [
+    ("4.1.20", "4.1.19"), ("4.1.19", "4.1.18"), ("4.1.25", "4.1.24"),
+    ("not-a-version", "4.1.18"),
+])
+def test_the_target_release_is_the_one_before_this(current, expected) -> None:
+    from superlocalmemory.storage._downgrade import downgrade_target_release
+
+    assert downgrade_target_release(51, current) == expected
+
+
+def test_message_names_the_version_and_the_exact_install_command(store, monkeypatch) -> None:
+    """Audit 4.1.20 L6: "install the older version" named neither."""
+    root, learning_db, memory_db = store
+    monkeypatch.setattr(sm, "package_version", lambda: "4.1.20")
+    report = ur.prepare_downgrade(requested_by="t", data_root=root, memory_db=memory_db,
+                                  learning_db=learning_db)
+
+    assert "Ready to go back to 4.1.19" in report.message
+    assert 'pipx install --force "superlocalmemory==4.1.19"' in report.message
+    assert "npm install -g superlocalmemory@4.1.19" in report.message
+    assert "any version from 4.1.18 on" in report.message
+    data = report.as_dict()
+    assert data["target_version"] == "4.1.19"
+    assert 'pip install "superlocalmemory==4.1.19"' in data["install_commands"]
