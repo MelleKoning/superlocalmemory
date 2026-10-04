@@ -3527,6 +3527,24 @@ def _configure_mcp_transport_settings() -> dict:
     # (host=127.0.0.1). Set SLM_MCP_ALLOWED_HOSTS=... to open to a LAN, or
     # "*" to disable protection entirely (trusted private network only).
     _mcp_allowed = os.environ.get("SLM_MCP_ALLOWED_HOSTS", "").strip()
+    # The remote listener answers to the names on its own certificate.
+    from superlocalmemory.server.remote_listener import mcp_allowed_hosts, try_load_config
+
+    _remote_cfg, _ = try_load_config()
+    if _remote_cfg is not None and _mcp_allowed != "*":
+        from mcp.server.transport_security import TransportSecuritySettings
+
+        _hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+        _hosts += [h.strip() for h in _mcp_allowed.split(",") if h.strip()]
+        _hosts += mcp_allowed_hosts(_remote_cfg)
+        kwargs["transport_security"] = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=_hosts,
+            allowed_origins=([f"http://{h}" for h in _hosts]
+                             + [f"https://{h}" for h in _hosts]),
+        )
+        logger.info("MCP transport security: allowed_hosts=%r", _hosts)
+        return kwargs
     if _mcp_allowed:
         from mcp.server.transport_security import TransportSecuritySettings
 
@@ -3772,7 +3790,10 @@ def create_app() -> FastAPI:
         # (tests/test_mcp/test_agent_context.py) rather than buried inline here.
         from superlocalmemory.mcp.agent_context import AgentIDExtractorASGI
 
-        application.mount("/mcp", AgentIDExtractorASGI(_mcp_app))
+        from superlocalmemory.server.remote_tool_policy import RemoteToolScopeASGI
+
+        # Remote callers: only the tools their key allows (default deny).
+        application.mount("/mcp", RemoteToolScopeASGI(AgentIDExtractorASGI(_mcp_app)))
         logger.info(
             "MCP HTTP transport mounted at /mcp (Streamable HTTP, mcp 2.0.0, "
             "stateless=%s, port %d; per-agent routing enabled)",
@@ -3907,9 +3928,15 @@ def _register_dashboard_routes(application: FastAPI) -> None:
     # Auth middleware (graceful)
     try:
         from superlocalmemory.infra.auth_middleware import (
-            authorize_http_mcp_request,
             check_api_key,
             loopback_strict_mode_enabled,
+        )
+        from superlocalmemory.server.remote_access import (
+            PRINCIPAL_SCOPE_KEY as REMOTE_PRINCIPAL_KEY,
+        )
+        from superlocalmemory.server.remote_access import (
+            gate_remote_mcp,
+            is_trusted_local_peer,
         )
         from superlocalmemory.server.write_identity import (
             require_http_mutation_actor,
@@ -3931,18 +3958,24 @@ def _register_dashboard_routes(application: FastAPI) -> None:
             records_recall_telemetry = request.url.path.startswith("/recall")
             requires_mutation_actor = is_write or records_recall_telemetry
             headers = dict(request.headers)
-            client_host = request.client.host if request.client else ""
-            if request.url.path.startswith("/mcp") and not authorize_http_mcp_request(
-                headers,
-                client_host=client_host,
+            # MCP from another computer (or through the remote listener): HTTPS,
+            # a named remote key or the API key, never company mode. The tool
+            # policy then runs per tool (server/remote_access, remote_tool_policy).
+            if request.url.path.startswith("/mcp") and not is_trusted_local_peer(
+                request.scope,
             ):
                 from fastapi.responses import JSONResponse
-                return JSONResponse(
-                    status_code=401,
-                    content={
-                        "error": "Remote HTTP MCP requires a configured SLM API key."
-                    },
-                )
+                _decision = gate_remote_mcp(request.scope, headers, application.state)
+                if not _decision.allowed:
+                    return JSONResponse(status_code=_decision.status,
+                                        content=_decision.body)
+                request.scope[REMOTE_PRINCIPAL_KEY] = _decision.principal
+                if request.scope.get("path") == "/mcp":
+                    # Serve /mcp as /mcp/: a remote caller never gets a redirect.
+                    request.scope["path"] = "/mcp/"
+                    request.scope["raw_path"] = b"/mcp/"
+                request.state.authenticated_actor = _decision.principal.actor_id
+                return await call_next(request)
             # Defense-in-depth CSRF/DNS-rebinding guard. A loopback hostname is
             # not, by itself, a trusted web origin: a different local process can
             # serve a page on another port. Credentialless browser writes must
@@ -6696,21 +6729,59 @@ def start_server(port: int = _DEFAULT_PORT) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
 
     from superlocalmemory.server.forwarded_guard import uvicorn_proxy_options
-    config = uvicorn.Config(
-        app="superlocalmemory.server.unified_daemon:create_app",
-        factory=True,
-        host=bind_host,
-        port=port,
-        log_level="warning",
-        timeout_graceful_shutdown=10,
-        **uvicorn_proxy_options(),
+    from superlocalmemory.server.remote_listener import (
+        REFUSAL_TEMPLATE,
+        bind_socket,
+        make_servers,
+        serve_pair,
+        try_load_config,
     )
-    server = uvicorn.Server(config)
 
+    remote, remote_error = try_load_config(main_port=port)
+    remote_sock = None
+    if remote_error is not None:
+        logger.error(REFUSAL_TEMPLATE.format(reason=str(remote_error)))
+    elif remote is not None:
+        try:
+            remote_sock = bind_socket(remote.host, remote.port)
+        except OSError as exc:
+            logger.error(REFUSAL_TEMPLATE.format(
+                reason=f"{remote.host}:{remote.port} cannot be opened ({exc})."))
+    if remote_sock is None:
+        config = uvicorn.Config(
+            app="superlocalmemory.server.unified_daemon:create_app",
+            factory=True,
+            host=bind_host,
+            port=port,
+            log_level="warning",
+            timeout_graceful_shutdown=10,
+            **uvicorn_proxy_options(),
+        )
+        server = uvicorn.Server(config)
+        try:
+            server.run(sockets=[listener])
+        finally:
+            listener.close()
+            _cleanup_process_descriptor(_ACTIVE_DAEMON_DESCRIPTOR)
+        return
+
+    # Remote access on: one application, two listeners, one lifespan (owned by
+    # the main listener). The remote listener stops before the app shuts down.
+    from uvicorn._compat import asyncio_run
+
+    main_config = uvicorn.Config(
+        create_app(), host=bind_host, port=port, log_level="warning",
+        timeout_graceful_shutdown=10, **uvicorn_proxy_options(),
+    )
+    main_srv, remote_srv = make_servers(main_config.app, main_config, remote)
+    logger.warning("Remote access listening on https://%s:%d (TLS; /mcp and /health only)",
+                   remote.host, remote.port)
     try:
-        server.run(sockets=[listener])
+        asyncio_run(serve_pair(main_srv, [listener], remote_srv, [remote_sock]),
+                    loop_factory=main_config.get_loop_factory())
     finally:
         listener.close()
+        remote_sock.close()
         _cleanup_process_descriptor(_ACTIVE_DAEMON_DESCRIPTOR)
 
 

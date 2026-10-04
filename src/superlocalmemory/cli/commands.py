@@ -430,6 +430,11 @@ def _cmd_escape_benchmark(args: Namespace) -> None:
     cmd_benchmark(args)
 
 
+def _cmd_remote(args: Namespace) -> None:
+    from superlocalmemory.cli.remote_commands import cmd_remote
+    cmd_remote(args)
+
+
 def _cmd_escape_rotate_token(args: Namespace) -> None:
     """S-M07: rotate the install token."""
     from superlocalmemory.cli.escape_hatch import cmd_rotate_token
@@ -612,6 +617,7 @@ def dispatch(args: Namespace) -> None:
         "reconfigure": _cmd_escape_reconfigure,
         "benchmark": _cmd_escape_benchmark,
         "rotate-token": _cmd_escape_rotate_token,
+        "remote": _cmd_remote,
         "evidence": _cmd_evidence,
         "diagnostics": _cmd_diagnostics,
         # LLD-06 — `slm wrap <agent> [args...]` activates the Optimize proxy.
