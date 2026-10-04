@@ -1827,8 +1827,8 @@ def cmd_remember(args: Namespace) -> None:
                 print(remember_receipt_text(result))
                 replaced = result.get("replaced")
                 if isinstance(replaced, dict) and replaced.get("ok"):
-                    print(f"Replaced \u2713 {len(replaced.get('fact_ids') or [])} fact(s) "
-                          f"of {replaced.get('replaces')}. {replaced.get('undo', '')}".rstrip())
+                    from superlocalmemory.cli.recall_text import replaced_text
+                    print(replaced_text(replaced))
                 elif isinstance(replaced, dict):
                     print(f"Saved, but {replaced.get('replaces')} was NOT replaced: "
                           f"{replaced.get('reason')}", file=sys.stderr)
