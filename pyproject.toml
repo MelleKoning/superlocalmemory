@@ -225,6 +225,7 @@ markers = [
     "ollama: marks tests that require a running Ollama instance",
     "benchmark: marks CI-only evo-memory benchmark tests (run with: pytest tests/test_benchmarks/ -m benchmark)",
     "native: marks optional native-backend tests that run in a dedicated process lane",
+    "e2e_remote: two real daemons over TLS (opt-in: SLM_E2E_REMOTE=1)",
     "asyncio: marks tests as async — runs via pytest-asyncio (auto-mode in this project)",
 ]
 filterwarnings = [

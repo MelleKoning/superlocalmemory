@@ -24,7 +24,7 @@ const stamp = (name, text) => {
   if (!rule[0].test(text)) { console.error(`${name}: no version line to stamp`); process.exit(2); }
   return text.replace(rule[0], rule[1]);
 };
-for (const name of ['plugin.yaml', 'README.md', '__init__.py', 'command-inventory.json']) put(name, stamp(name, read(path.join(SRC, name))));
+for (const name of ['plugin.yaml', 'README.md', '__init__.py', 'remote.py', 'command-inventory.json']) put(name, stamp(name, read(path.join(SRC, name))));
 
 // L3-08: docs/hermes.md and the root README.md's Hermes section quote the
 // pinned GitHub release in prose (install command, release tag, download

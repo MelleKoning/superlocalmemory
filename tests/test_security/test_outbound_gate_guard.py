@@ -48,6 +48,9 @@ _S = "src/superlocalmemory/"
 REVIEWED: dict[tuple[str, str, str], tuple[int, str]] = {
     (_S + "cli/commands.py", "cmd_doctor", "httpx.get"):
         (1, "PROBE: `slm doctor` lists Ollama models (GET /api/tags)"),
+    (_S + "cli/remote_commands.py", "_probe", "socket.create_connection"):
+        (1, "PROBE: `slm remote check` TLS handshake to this SLM's own remote "
+            "listener (configured host:port), verified with its CA; sends no data"),
     (_S + "cli/daemon.py", "_fetch_health", "urllib.request.urlopen"):
         (1, "PROBE: GET /health on 127.0.0.1, no body; identity checked after"),
     (_S + "cli/optimize_cmd.py", "cmd_optimize_status", "urllib.request.urlopen"):

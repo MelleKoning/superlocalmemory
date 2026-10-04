@@ -46,7 +46,7 @@ PUBLIC_PATHS = frozenset({"/", "/health", "/favicon.ico"})
 #: Reviewed: packaged static files (HTML/JS/CSS/icons). No memory content.
 PUBLIC_PREFIXES = ("/static/",)
 #: Reviewed: these paths run their own credential check for network callers.
-#: ``/mcp`` requires ``X-SLM-API-Key`` (``authorize_http_mcp_request``).
+#: ``/mcp`` requires HTTPS and a remote key (``server.remote_access``).
 #: ``/v1``, ``/v1beta`` are the optional LLM proxy: the caller brings its own
 #: provider key and the route returns the provider's answer, not memory.
 SELF_GATED_PREFIXES = ("/mcp/", "/v1/", "/v1beta/")
@@ -78,7 +78,7 @@ def path_policy(path: str) -> str:
 
 def is_local_peer(scope: dict[str, Any]) -> bool:
     """The socket peer is this computer and no proxy carried the request."""
-    if scope.get("slm_forwarded_demoted"):
+    if scope.get("slm_forwarded_demoted") or scope.get("slm_remote_listener"):
         return False
     host = (scope.get("client") or ("", 0))[0]
     if is_loopback(host):

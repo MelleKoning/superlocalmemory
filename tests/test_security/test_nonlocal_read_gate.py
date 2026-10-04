@@ -38,7 +38,7 @@ _REVIEWED_OPEN = {
     "/health": "liveness probe",
     "/favicon.ico": "redirect to a static icon",
     "/static": "packaged HTML/JS/CSS",
-    "/mcp": "own check: network callers need X-SLM-API-Key",
+    "/mcp": "own check: network callers need HTTPS and a remote key (remote_access)",
 }
 
 
@@ -215,8 +215,14 @@ def test_the_gate_wraps_every_route(app) -> None:
 
 def test_the_mcp_mount_answers_for_itself(app) -> None:
     client = _lan(app)
-    assert client.post("/mcp/", json={}).status_code == 401
-    assert client.post("/mcp/hermes", json={}).status_code == 401
+    # 4.1.20: plain HTTP from another computer is refused before the key
+    # check (remote_requires_tls); over HTTPS a missing key is 401.
+    assert client.post("/mcp/", json={}).status_code == 403
+    assert client.post("/mcp/hermes", json={}).status_code == 403
+    secure = TestClient(app, client=_LAN_PEER, base_url="https://192.168.50.144:8765",
+                        raise_server_exceptions=False)
+    assert secure.post("/mcp/", json={}).status_code == 401
+    assert secure.post("/mcp/hermes", json={}).status_code == 401
 
 
 def test_the_gate_and_the_reviewed_list_agree() -> None:

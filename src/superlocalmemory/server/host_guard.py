@@ -111,8 +111,8 @@ class HostGuardMiddleware:
         self.app = app
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
-        if scope.get("type") in ("http", "websocket") and not host_allowed(
-                _header(scope, b"host")):
+        if scope.get("type") in ("http", "websocket") and not scope.get(
+                "slm_remote_host_verified") and not host_allowed(_header(scope, b"host")):
             if scope["type"] == "http":
                 await send({
                     "type": "http.response.start",

@@ -1,0 +1,366 @@
+# Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar
+# Licensed under AGPL-3.0-or-later - see LICENSE file
+# Part of SuperLocalMemory V4 | https://qualixar.com | https://varunpratap.com
+
+"""Which MCP tools an AI tool on another computer may call.
+
+Default deny. A tool that is in neither :data:`READ_TOOLS` nor
+:data:`WRITE_TOOLS` is host-only: no remote caller can run it, whatever its key.
+Host-only tools manage the SLM computer itself - switching its active profile,
+indexing local folders, maintenance, retention, mesh, loops, deleting by
+pattern. ``tests/test_security/test_remote_tool_policy.py`` fails when a tool is
+registered without being classified here.
+
+:class:`RemoteToolScopeASGI` enforces the policy on every MCP request that
+carries a remote principal (set by :mod:`server.remote_access`):
+
+* only ``initialize``, ``ping``, ``tools/list``, ``tools/call`` and client
+  notifications are accepted; every other MCP method is refused;
+* tool names are matched exactly - there are no aliases, so ``Remember`` or
+  ``remember `` is simply an unknown, refused name;
+* a body with a repeated JSON key, a batch (JSON array), or a body over 1 MiB
+  is refused before the MCP server parses it;
+* ``tools/list`` answers list only the tools the key may call.
+
+A refused ``tools/call`` is answered as an MCP tool error (``isError``), so the
+caller sees the reason in the tool result.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+logger = logging.getLogger("superlocalmemory.remote")
+audit_logger = logging.getLogger("superlocalmemory.remote.audit")
+
+MAX_BODY_BYTES = 1_048_576
+
+READ_TOOLS: frozenset[str] = frozenset({
+    "fetch", "get_assertions", "get_attribution", "get_behavioral_patterns",
+    "get_brain_evidence_status", "get_learned_patterns", "get_lifecycle_status",
+    "get_memory_summary", "get_mode", "get_retention_stats", "get_soft_prompts",
+    "get_status", "get_version", "health", "list_corrections", "list_recent",
+    "memory_kinds_status", "memory_used", "prestage_context", "recall", "recall_trace",
+    "review_memory_kinds", "search", "skill_health", "skill_lineage", "slm_cache_get",
+    "slm_loop_history", "slm_loop_show", "slm_optimize_stats", "slm_retrieve",
+})
+
+WRITE_ONLY_TOOLS: frozenset[str] = frozenset({
+    "close_session", "confirm_memory_kinds", "contradict_assertion", "core_memory",
+    "correct_pattern", "delete_memory", "finalize_cognitive_turn", "log_tool_event",
+    "observe", "record_agent_experience", "record_cognitive_turn",
+    "reinforce_assertion", "remember", "report_feedback", "report_outcome",
+    "review_correction", "session_init", "set_memory_kind", "settle_session_outcomes",
+    "slm_cache_set", "slm_compress", "update_memory",
+})
+
+WRITE_TOOLS: frozenset[str] = READ_TOOLS | WRITE_ONLY_TOOLS
+
+HOST_ONLY_TOOLS: frozenset[str] = frozenset({
+    "apply_refactor", "audit_trail", "backup_status", "build_code_graph", "build_graph",
+    "code_entity_history", "code_memory_search", "code_stale_check", "compact_memories",
+    "consistency_check", "consolidate_cognitive", "detect_changes", "enrich_blast_radius",
+    "evolve_skill", "find_large_functions", "forget", "get_affected_flows",
+    "get_architecture_overview", "get_blast_radius", "get_community", "get_flow",
+    "get_review_context", "link_memory_to_code", "list_communities",
+    "list_failed_operations", "list_flows", "list_graph_stats", "mesh_events",
+    "mesh_inbox", "mesh_lock", "mesh_peers", "mesh_send", "mesh_state", "mesh_status",
+    "mesh_summary", "observe_bounded_loop_evidence",
+    "observe_bounded_loop_execution_learning", "quantize", "query_graph",
+    "reap_processes", "refactor_preview", "resolve_operation", "run_maintenance",
+    "semantic_search_code", "set_mode", "set_retention_policy", "slm_loop_run",
+    "switch_profile", "update_code_graph",
+})
+
+#: MCP methods a remote caller may send. Everything else is refused.
+ALLOWED_METHODS: frozenset[str] = frozenset({
+    "initialize", "ping", "tools/list", "tools/call",
+    "notifications/initialized", "notifications/cancelled",
+})
+
+DENIAL_CODE = "remote_tool_not_allowed"
+
+
+def tool_allowed(scope: str, name: object) -> bool:
+    """Exact-name membership; anything unexpected is a no."""
+    if not isinstance(name, str):
+        return False
+    if scope == "read":
+        return name in READ_TOOLS
+    if scope == "write":
+        return name in WRITE_TOOLS
+    return False
+
+
+class PolicyViolation(ValueError):
+    def __init__(self, status: int, code: str, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+        self.code = code
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    seen: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in seen:
+            raise PolicyViolation(400, "duplicate_json_key",
+                                  f"The request repeats the JSON key '{key}'.")
+        seen[key] = value
+    return seen
+
+
+def parse_message(body: bytes) -> dict[str, Any]:
+    """The single JSON-RPC message in ``body``. Raises :class:`PolicyViolation`."""
+    try:
+        message = json.loads(body.decode("utf-8"), object_pairs_hook=_no_duplicate_keys)
+    except PolicyViolation:
+        raise
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise PolicyViolation(400, "invalid_jsonrpc", "The request is not valid JSON.") from exc
+    if isinstance(message, list):
+        raise PolicyViolation(400, "batch_not_supported",
+                              "Batched MCP requests are not accepted over remote access.")
+    if not isinstance(message, dict):
+        raise PolicyViolation(400, "invalid_jsonrpc", "The request is not a JSON-RPC message.")
+    method = message.get("method")
+    if not isinstance(method, str):
+        raise PolicyViolation(400, "invalid_jsonrpc",
+                              "Only JSON-RPC requests and notifications are accepted.")
+    return message
+
+
+def called_tool(message: dict[str, Any]) -> str | None:
+    """The tool name of a ``tools/call`` message, ``None`` for other methods."""
+    if message.get("method") != "tools/call":
+        return None
+    params = message.get("params")
+    name = params.get("name") if isinstance(params, dict) else None
+    if not isinstance(name, str):
+        raise PolicyViolation(400, "invalid_jsonrpc", "tools/call needs a string tool name.")
+    return name
+
+
+#: Appended to a refusal for a read-only key, so a client can stop sending
+#: writes it will never be allowed (the Hermes plugin does).
+READ_ONLY_TAG = "[remote_key_read_only]"
+
+
+def denial_message(tool: str, key_name: str, scope: str) -> str:
+    if tool in HOST_ONLY_TOOLS:
+        return (f"'{tool}' manages the SLM computer and is not available over remote "
+                f"access. Run it on the SLM computer. [{DENIAL_CODE}]")
+    if tool in WRITE_ONLY_TOOLS and scope == "read":
+        return (f"'{tool}' changes memory, and remote key '{key_name}' is read-only. "
+                f"Use a write key (slm remote keys add <name>) to save from this tool. "
+                f"{READ_ONLY_TAG}")
+    return f"'{tool}' is not available to remote key '{key_name}'. [{DENIAL_CODE}]"
+
+
+# -- ASGI helpers --------------------------------------------------------------------
+
+
+async def _send_json(send: Callable[..., Awaitable[None]], status: int,
+                     payload: dict[str, Any]) -> None:
+    body = json.dumps(payload).encode("utf-8")
+    await send({"type": "http.response.start", "status": status,
+                "headers": [(b"content-type", b"application/json"),
+                            (b"content-length", str(len(body)).encode())]})
+    await send({"type": "http.response.body", "body": body})
+
+
+async def _read_body(receive: Callable[[], Awaitable[dict[str, Any]]]) -> bytes | None:
+    """The whole request body, or ``None`` when it is over the cap."""
+    chunks: list[bytes] = []
+    size = 0
+    while True:
+        message = await receive()
+        if message["type"] == "http.disconnect":
+            break
+        chunk = message.get("body", b"") or b""
+        size += len(chunk)
+        if size > MAX_BODY_BYTES:
+            return None
+        chunks.append(chunk)
+        if not message.get("more_body", False):
+            break
+    return b"".join(chunks)
+
+
+def _replay(body: bytes, receive: Callable[[], Awaitable[dict[str, Any]]]):
+    delivered = False
+
+    async def _receive() -> dict[str, Any]:
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        return await receive()
+
+    return _receive
+
+
+def _filter_tools_list(body: bytes, scope: str) -> bytes:
+    try:
+        payload = json.loads(body.decode("utf-8"))
+        tools = payload["result"]["tools"]
+    except (UnicodeDecodeError, ValueError, KeyError, TypeError):
+        return body
+    if not isinstance(tools, list):
+        return body
+    kept = [t for t in tools if isinstance(t, dict) and tool_allowed(scope, t.get("name"))]
+    result = dict(payload["result"], tools=kept)
+    return json.dumps(dict(payload, result=result)).encode("utf-8")
+
+
+def _redact_call_answer(body: bytes) -> bytes:
+    from superlocalmemory.server.remote_redaction import redact_tool_result
+
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return body
+    if not isinstance(payload, dict) or not isinstance(payload.get("result"), dict):
+        return body
+    return json.dumps(dict(payload, result=redact_tool_result(payload["result"]))).encode()
+
+
+class _JsonAnswerFilter:
+    """Buffers the single JSON answer and rewrites it with ``transform``. A
+    streamed (non-JSON) answer is not forwarded at all (fail closed)."""
+
+    def __init__(self, send: Callable[..., Awaitable[None]],
+                 transform: Callable[[bytes], bytes]) -> None:
+        self._send = send
+        self._transform = transform
+        self._start: dict[str, Any] | None = None
+        self._chunks: list[bytes] = []
+
+    async def __call__(self, message: dict[str, Any]) -> None:
+        if message["type"] == "http.response.start":
+            self._start = message
+            return
+        if message["type"] != "http.response.body":
+            await self._send(message)
+            return
+        self._chunks.append(message.get("body", b"") or b"")
+        if message.get("more_body", False):
+            return
+        start = self._start or {"type": "http.response.start", "status": 500, "headers": []}
+        headers = dict((k.lower(), v) for k, v in start.get("headers", []))
+        if b"application/json" not in headers.get(b"content-type", b""):
+            await _send_json(self._send, 502, {"error": "remote_answer_unfilterable"})
+            return
+        body = self._transform(b"".join(self._chunks))
+        new_headers = [(k, v) for k, v in start.get("headers", [])
+                       if k.lower() != b"content-length"]
+        new_headers.append((b"content-length", str(len(body)).encode()))
+        await self._send(dict(start, headers=new_headers))
+        await self._send({"type": "http.response.body", "body": body})
+
+
+def _audit(principal: Any, scope: dict[str, Any], tool: str, decision: str) -> None:
+    from superlocalmemory.mcp.agent_context import sanitize_agent_id
+
+    root = scope.get("root_path", "") or ""
+    path = scope.get("path", "") or ""
+    agent = path[len(root):].lstrip("/").split("/")[0] if path.startswith(root) else ""
+    audit_logger.info(
+        "remote tools/call key_id=%s key_name=%s scope=%s agent=%s tool=%s decision=%s",
+        principal.key_id, principal.name, principal.scope,
+        sanitize_agent_id(agent) or "-", sanitize_agent_id(tool), decision,
+    )
+
+
+def _tool_error(message: dict[str, Any], text: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": message.get("id"),
+            "result": {"content": [{"type": "text", "text": text}], "isError": True,
+                       "structuredContent": {"error": DENIAL_CODE, "message": text}}}
+
+
+def _method_error(message: dict[str, Any], method: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": message.get("id"),
+            "error": {"code": -32601,
+                      "message": f"'{method}' is not available over remote access."}}
+
+
+class RemoteToolScopeASGI:
+    """Wraps the MCP app. Local callers pass straight through."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        from superlocalmemory.server.remote_access import (
+            is_trusted_local_peer,
+            principal_from_scope,
+        )
+
+        principal = principal_from_scope(scope)
+        if principal is None:
+            if is_trusted_local_peer(scope):
+                await self.app(scope, receive, send)
+                return
+            # Fail closed: a network request reached the MCP app without a
+            # principal (the auth middleware did not run or was bypassed).
+            await _send_json(send, 401, {"error": "remote_auth_required"})
+            return
+        if scope.get("method") != "POST":
+            await self.app(scope, receive, send)
+            return
+        body = await _read_body(receive)
+        if body is None:
+            await _send_json(send, 413, {"error": "body_too_large",
+                                         "message": "Remote MCP requests are limited to 1 MiB."})
+            return
+        try:
+            message = parse_message(body)
+            method = message["method"]
+            if method not in ALLOWED_METHODS:
+                await _send_json(send, 200, _method_error(message, method))
+                return
+            tool = called_tool(message)
+        except PolicyViolation as violation:
+            await _send_json(send, violation.status,
+                             {"error": violation.code, "message": str(violation)})
+            return
+        if tool is not None:
+            allowed = tool_allowed(principal.scope, tool)
+            _audit(principal, scope, tool, "allow" if allowed else "deny")
+            if not allowed:
+                await _send_json(send, 200, _tool_error(
+                    message, denial_message(tool, principal.name, principal.scope)))
+                return
+        if message["method"] == "tools/list":
+            downstream_send = _JsonAnswerFilter(
+                send, lambda raw: _filter_tools_list(raw, principal.scope))
+        elif tool is not None:
+            # Host details (paths, home, account, environment) never leave
+            # this computer in a tool answer (server/remote_redaction).
+            downstream_send = _JsonAnswerFilter(send, _redact_call_answer)
+        else:
+            downstream_send = send
+        await self.app(scope, _replay(body, receive), downstream_send)
+
+
+__all__ = [
+    "ALLOWED_METHODS",
+    "DENIAL_CODE",
+    "HOST_ONLY_TOOLS",
+    "MAX_BODY_BYTES",
+    "PolicyViolation",
+    "READ_ONLY_TAG",
+    "READ_TOOLS",
+    "RemoteToolScopeASGI",
+    "WRITE_ONLY_TOOLS",
+    "WRITE_TOOLS",
+    "called_tool",
+    "denial_message",
+    "parse_message",
+    "tool_allowed",
+]

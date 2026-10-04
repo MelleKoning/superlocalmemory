@@ -18,12 +18,14 @@ The write gate accepts one of four credentials in priority order:
 | **Daemon capability** | Internal daemon process (process/filesystem state) | MCP `remember` / `recall` calls routed through the resident daemon itself |
 | **Install token** | Same-origin dashboard browser | Dashboard writes and config tests at `http://127.0.0.1:8765` |
 | **API key** (`X-SLM-API-Key` header) | Remote callers with a configured key | Non-loopback HTTP MCP and direct API writes when API key auth is enabled |
+| **Remote key** (`Authorization: Bearer slmr_...`) | AI tools on other computers (`slm remote keys add`) | MCP only, over HTTPS, scoped `read` or `write`; host-management tools are refused (see [distributed-deployment.md](distributed-deployment.md#remote-access-over-tls-4120)) |
 | **Uncredentialed loopback** | Any caller on `127.0.0.1` | Local CLI, local MCP clients, and local IDE connections (the default local-first posture) |
 
 A caller on loopback with no credentials is trusted as the local OS-user
 boundary. This is the default and covers all standard single-machine use.
 
-Read endpoints are always open regardless of auth configuration.
+Read endpoints are open to this computer. Other computers need a key or the
+`SLM_REMOTE` LAN allowlist (4.1.20+).
 
 ---
 
@@ -47,6 +49,11 @@ curl -X POST http://<slm-host>:8765/api/memories \
   -H "Content-Type: application/json" \
   -d '{"content": "..."}'
 ```
+
+`curl` without `-L` never follows a redirect; do not add `-L` (or any
+"follow redirects" option) to a request that carries `X-SLM-API-Key`, because
+clients forward custom headers to wherever a redirect points. SLM itself never
+answers these routes with a redirect.
 
 Loopback callers (CLI, local IDE) are still trusted without a credential.
 To require the key even on loopback (shared-host operators), set:
@@ -113,8 +120,12 @@ export SLM_MCP_ALLOWED_HOSTS=192.168.1.100:*
 slm serve start
 ```
 
-Remote callers then present `X-SLM-API-Key` in their MCP config or HTTP
-headers. See [distributed-deployment.md](distributed-deployment.md) for the
+For MCP clients on other computers, use the remote listener and a named
+remote key (`slm remote keys add`), sent as `Authorization: Bearer <key>`. If
+you keep the API key for MCP, send it the same way, as `Authorization: Bearer
+<api key>`: MCP clients drop `Authorization` when a redirect points at another
+site, but they forward `X-SLM-API-Key`. `X-SLM-API-Key` remains accepted for
+HTTP API calls. See [distributed-deployment.md](distributed-deployment.md) for the
 full LAN setup guide.
 
 ---

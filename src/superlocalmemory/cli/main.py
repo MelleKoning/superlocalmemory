@@ -77,6 +77,8 @@ _NO_DAEMON_COMMANDS = {
     # v3.4.22 escape hatches — never auto-start the daemon on these.
     "disable", "enable", "clear-cache", "reconfigure", "benchmark",
     "rotate-token",
+    # 4.1.20: remote access settings, keys and certificates are files only.
+    "remote",
     "evidence",
     # v4.0.2 receipt summary is a direct read-only learning.db query.
     "brain",
@@ -954,6 +956,10 @@ def main() -> None:
         "rotate-token",
         help="Rotate the SLM install token (run `slm restart` afterwards)",
     )
+
+    # 4.1.20: remote access for AI tools on other computers (TLS, named keys).
+    from superlocalmemory.cli.remote_commands import add_parser as _add_remote_parser
+    _add_remote_parser(sub)
 
     # ---- SLM v3.6 Optimize subcommands (additive, never modify above) ----
 

@@ -136,6 +136,9 @@ def authorize_http_mcp_request(
     keeps the local-first compatibility contract, while every non-loopback
     peer must present the configured SLM API key.  The LAN allowlist limits
     reachability but deliberately does not grant a write identity.
+
+    Superseded for live requests by ``server.remote_access.gate_remote_mcp``
+    (4.1.20), which adds HTTPS, named remote keys and the tool policy.
     """
     from superlocalmemory.server.loopback import is_loopback as _is_loopback_host
 

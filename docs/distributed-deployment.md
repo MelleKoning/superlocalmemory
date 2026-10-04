@@ -32,10 +32,11 @@ Environment=SLM_DAEMON_HOST=0.0.0.0
 ```
 
 > **Security:** Host allowlists are DNS-rebinding/origin controls, not
-> authentication. Remote HTTP MCP requires a configured SLM API key; mesh
-> routes require their configured shared secret. Use TLS and network policy in
-> front of any non-loopback listener. Do not expose the daemon directly to the
-> public internet.
+> authentication. For AI tools on other computers, use SLM's own encrypted
+> remote listener ([Remote access over TLS](#remote-access-over-tls-4120)) rather
+> than binding the main daemon to the network. Remote HTTP MCP requires HTTPS
+> and a key; mesh routes require their configured shared secret. Do not expose
+> the daemon directly to the public internet.
 
 ### Other computers must sign in (4.1.20+)
 
@@ -55,13 +56,83 @@ export SLM_MCP_ALLOWED_HOSTS=192.168.50.0/24   # the computers you trust
 ```
 
 The dashboard page, its static files and `/health` load without credentials;
-`/mcp` keeps its own API-key check. Up to 4.1.19 reads from the LAN needed no
+`/mcp` keeps its own check (HTTPS plus a remote key or the API key; see
+[Remote access over TLS](#remote-access-over-tls-4120)). Up to 4.1.19 reads from the LAN needed no
 credentials, so a LAN dashboard that worked by IP now needs one of the above —
 usually the `SLM_REMOTE=1` allowlist. A Docker port mapping makes your own
 computer's requests arrive from the bridge address (for example `172.17.0.1`),
 not loopback: allowlist that address or send the API key.
 
 ---
+
+## Remote access over TLS (4.1.20+)
+
+The recommended way for AI tools on other computers (Hermes, Claude Code
+`type: http`, `mcp-remote`) to use this SLM. It is off by default. The main
+daemon keeps listening on `127.0.0.1` exactly as before; remote access is a
+second listener that:
+
+- speaks **TLS only** (plain HTTP to its port fails);
+- serves **only** `/mcp`, `/mcp/<agent>` and `GET /health` — the dashboard,
+  the HTTP API and the internal hook endpoints return 404 there;
+- treats **every** caller as remote, even one on `127.0.0.1`;
+- never answers with a redirect.
+
+```bash
+slm remote tls init --name slm.lan --ip 192.168.50.144   # CA + server certificate
+slm remote enable --listen 192.168.50.144:8443
+slm restart
+slm remote keys add hermes-laptop             # write key, shown once
+slm remote keys add dashboards --read-only    # recall-only key
+slm remote check                              # exit 1 on any problem
+```
+
+`tls init` writes `ca.pem`, `ca.key`, `server.pem` and `server.key` under
+`remote/tls/` in the SLM data folder. The CA can only vouch for the names and
+addresses you give it, so even a stolen CA key cannot impersonate another
+site. Copy `ca.pem` (public) to each client. `--force` issues a new server
+certificate with the same CA; the server certificate lasts at most 397 days
+and `slm remote check` warns 30 days before it expires.
+
+**Keys.** Each client gets its own named key, sent as `Authorization: Bearer
+slmr_...`. SLM stores only a hash. `slm remote keys list` shows names, scopes
+and dates, never secrets. `slm remote keys revoke <name>` takes effect on the
+next request, without a restart. The key file must be readable only by the SLM
+user; otherwise every remote key is refused. The SLM API key also
+works as a write key; send it as `Authorization: Bearer <api key>`, not as
+`X-SLM-API-Key`, because MCP clients drop `Authorization` on a redirect to
+another site but forward custom headers. SLM never answers `/mcp` with a
+redirect.
+
+**What a remote key can do.** A `read` key can recall, search, fetch, list and
+read status. A `write` key can also save, update and delete individual
+memories and record session activity. Tools that manage the SLM computer —
+switching its active profile, indexing local folders for the code graph,
+maintenance, retention, mesh, loops, `forget` by pattern, `set_mode` — are
+refused to every remote caller, and are not listed in `tools/list`. Only
+`initialize`, `ping`, `tools/list` and `tools/call` are accepted; batched
+requests and bodies over 1 MiB are refused. One audit line per remote tool
+call records the key name, tool and decision (never arguments or content).
+
+**Limits.** A remote key reaches every profile on this SLM; use separate SLM
+data folders or hosts to separate them. Company mode (team accounts with
+required sign-in) refuses remote keys in this release. Remote calls share the
+rate limiter with other network callers (`SLM_RATE_LIMIT_WRITE`, default 30
+per minute per computer); raise it for a busy agent.
+
+**Client recipes.** Hermes: see [Hermes: remote](hermes.md#remote). No SLM
+environment variable points a client at a server; the address lives in each
+client's own MCP configuration: `https://<slm-host>:8443/mcp/<agent>` with `Authorization:
+Bearer <remote key>`. Stdio-only clients can use the `mcp-remote` bridge:
+`npx -y mcp-remote https://<slm-host>:8443/mcp/<agent> --header
+"Authorization:${AUTH_HEADER}"` with `AUTH_HEADER="Bearer <key>"` and
+`NODE_EXTRA_CA_CERTS=/path/to/slm-ca.pem` in its `env`. Never use
+`--allow-http` against another computer.
+
+**Hooks stay local.** SLM's own hook scripts only ever talk to the daemon on
+this computer (`SLM_HOOK_DAEMON_URL` accepts loopback addresses only), and the
+install token, hook token and daemon capability are never accepted on the
+remote listener.
 
 ## Host names SLM answers to (4.1.18+)
 
@@ -122,9 +193,12 @@ The value is a comma-separated list of `host:port-wildcard` patterns, e.g.
 CIDRs. `*` widens the rebinding/origin surface and is not recommended, even on
 a private LAN.
 
-Remote HTTP MCP requests must also present the configured SLM API key. The
-allowlist decides which hosts may reach the transport; it does not create an
-authenticated actor.
+Remote HTTP MCP requests must also arrive over HTTPS and present a key (a
+named remote key, or the SLM API key). The allowlist decides which hosts may
+reach the transport; it does not create an authenticated actor. Since 4.1.20,
+MCP from another computer over plain HTTP is refused (`403
+remote_requires_tls`) unless you set `SLM_REMOTE_ALLOW_PLAINTEXT=1`; prefer the
+remote listener below.
 
 ---
 
@@ -156,8 +230,10 @@ What `SLM_REMOTE=1` does:
 > **Security:** Remote mode widens the attack surface. Stateless MCP relaxes
 > per-session isolation, and serving an install token to a LAN host gives that
 > host a local dashboard credential. Keep `SLM_MCP_ALLOWED_HOSTS` specific,
-> configure the SLM API key for remote MCP, configure
-> `SLM_MESH_SHARED_SECRET` for mesh, and terminate TLS at a trusted gateway.
+> use the remote listener (TLS built in) for remote MCP, configure
+> `SLM_MESH_SHARED_SECRET` for mesh, and if you put a reverse proxy in front of
+> SLM, make it send `X-Forwarded-For`: SLM never treats a forwarded request as
+> local.
 
 ### Tuning the dashboard rate limiter (v3.6.12)
 
@@ -298,6 +374,9 @@ agent id; pick a stable, lowercase name per tool.
 |----------|---------|---------|
 | `SLM_MCP_EMBEDDED` | Set `1` when running MCP inside the daemon (suppresses warmup threads) | — |
 | `SLM_MCP_ALLOWED_HOSTS` | **NEW** Comma-separated allowlist (`host:port*`, exact IP, CIDR, prefix`*`, or `*`) for HTTP MCP + LAN token/origin/rate-limit (see above) | localhost-only |
+| `SLM_REMOTE_LISTEN` | **NEW (4.1.20)** `HOST:PORT` for the TLS remote listener; overrides `slm remote enable`. Unset and not enabled: no remote listener | — |
+| `SLM_REMOTE_TLS_CERT` / `SLM_REMOTE_TLS_KEY` | **NEW (4.1.20)** Server certificate and private key (PEM) for the remote listener; the key must not be readable by other users | `remote/tls/server.pem`, `server.key` |
+| `SLM_REMOTE_ALLOW_PLAINTEXT` | **NEW (4.1.20)** `1` accepts MCP from other computers over plain HTTP on the main listener (logged). Never applies to the remote listener | — |
 | `SLM_TRUSTED_PROXIES` | **NEW (4.1.20)** Proxies whose `X-Forwarded-For` / `X-Forwarded-Proto` SLM reads (addresses or networks). Unset: forwarding headers are ignored. Never grants local trust | — |
 | `SLM_REMOTE` | One-switch LAN mode: serves token to allowlisted LAN clients, relaxes origin guard, and exempts LAN from rate limit. It does not change the default stateless MCP transport. Default OFF | — |
 | `SLM_MCP_STATELESS` | Explicitly select stateless MCP transport; stateless is already the V4 default | — |
