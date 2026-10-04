@@ -228,6 +228,7 @@ def _cmd_ops_status(args: Namespace) -> None:
         "writer_stalled": data.get("writer_stalled", False),
         "writer_stalled_op_id": data.get("writer_stalled_op_id"),
         "writer_stalled_age_s": data.get("writer_stalled_age_s"),
+        "unreadable_saves": data.get("unreadable_saves", 0),
     }
 
     if getattr(args, "json", False):
@@ -238,6 +239,7 @@ def _cmd_ops_status(args: Namespace) -> None:
         fields["dead_letter_count"]
         + fields["degraded_operations"]
         + fields["exhausted_obligations"]
+        + max(0, int(fields["unreadable_saves"] or 0))
     )
     stalled = fields["writer_stalled"]
 
@@ -252,6 +254,8 @@ def _cmd_ops_status(args: Namespace) -> None:
         print(f"  degraded manifests     : {fields['degraded_operations']}")
     if fields["exhausted_obligations"]:
         print(f"  exhausted obligations  : {fields['exhausted_obligations']}")
+    if fields["unreadable_saves"] and fields["unreadable_saves"] > 0:
+        print(f"  unreadable saves       : {fields['unreadable_saves']} (kept, set aside)")
     if stalled:
         op_id = fields["writer_stalled_op_id"] or "?"
         age = fields["writer_stalled_age_s"]

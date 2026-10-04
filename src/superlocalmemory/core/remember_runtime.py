@@ -102,6 +102,18 @@ class CanonicalRememberUnavailable(RuntimeError):
     """The daemon cannot accept a bounded canonical remember request."""
 
 
+class CanonicalRememberBusy(CanonicalRememberUnavailable):
+    """The save was refused before anything was written; retrying is safe.
+
+    Raised when the admission journal is saturated (its queue is full or the
+    caller's budget ran out while queued). Nothing about this save was stored.
+    """
+
+    def __init__(self, message: str, *, retry_after_seconds: int = 1) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = max(1, int(retry_after_seconds))
+
+
 class DaemonAlreadyServing(RuntimeError):
     """A healthy SLM daemon is already serving; this instance should exit 0.
 
@@ -256,7 +268,26 @@ class _CoordinatorAdapter:
             )
         except CommandRejectedError as exc:
             raise TerminalAdmissionError(exc.error_code) from exc
+        except WriteCoordinatorError as exc:
+            if _caused_by_unknown_profile(exc):
+                # Final, not contention: a deleted profile never comes back,
+                # so retrying would loop forever. Recorded as a rejection.
+                raise TerminalAdmissionError("UNKNOWN_PROFILE") from exc
+            raise
         return {"state": "committed", "receipt": dict(result.receipt)}
+
+
+def _caused_by_unknown_profile(error: BaseException) -> bool:
+    from superlocalmemory.core.ingestion_command import UnknownProfileError
+
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, UnknownProfileError):
+            return True
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
 
 
 class CanonicalRememberRuntime:
@@ -299,6 +330,9 @@ class CanonicalRememberRuntime:
         # Commits remembers that were accepted while the writer was busy.
         self._deferred = DeferredCommitter(self.journal, self._commit_deferred)
         self._started = False
+        # Mutations may run as soon as the writer does - during start()'s own
+        # recovery too, which applies replacements of replayed saves.
+        self._writer_open = False
         self._obligation_schema_ok: bool | None = None
 
     @classmethod
@@ -414,13 +448,37 @@ class CanonicalRememberRuntime:
                 CommandKind.REPLACE_BY_CALLER, self._handle_mutation,
             )
             self.coordinator.start()
+            self._writer_open = True
             self.replay_pending()
         except BaseException:
+            self._writer_open = False
             self.coordinator.release_ownership()
             raise
         if self._deferred.stopped:  # a restart of this same runtime
             self._deferred = DeferredCommitter(self.journal, self._commit_deferred)
         self._started = True
+        # Everything still pending - saves for other profiles, and any the
+        # synchronous replay above could not finish - is committed in the
+        # background, so no accepted save waits for a rebind or a restart.
+        self._hand_pending_to_committer()
+
+    def _hand_pending_to_committer(self) -> int:
+        """Queue every pending journal entry, of every profile, for commit.
+
+        Never raises: the entries are durable whatever happens here, and the
+        next start recovers anything that could not be queued now.
+        """
+        try:
+            entries = self.journal.pending_entries()
+        except Exception as exc:  # noqa: BLE001 - durable regardless
+            logger.warning(
+                "pending saves could not be listed (%s); they stay durable and "
+                "are recovered at the next start", type(exc).__name__,
+            )
+            return 0
+        for entry in entries:
+            self._deferred.defer(entry)
+        return len(entries)
 
     @property
     def ready(self) -> bool:
@@ -439,12 +497,25 @@ class CanonicalRememberRuntime:
         # fails cleanly, and anything still queued stays in the journal for
         # replay_pending at the next start.
         self._deferred.stop()
+        self._writer_open = False
         self.coordinator.release_ownership()
+        # Drains queued journal marks, then frees the writer thread and the
+        # pooled connections; a later start reopens them.
+        self.journal.close()
 
     @property
     def deferred_count(self) -> int:
         """Remembers accepted under contention and not yet committed."""
         return self._deferred.pending
+
+    def admission_status(self) -> dict[str, int]:
+        """Counts an operator needs: saves still being indexed, saves set aside."""
+        try:
+            unreadable = self.journal.quarantined_count()
+        except Exception as exc:  # noqa: BLE001 - status must answer
+            logger.warning("admission journal status unavailable (%s)", type(exc).__name__)
+            unreadable = -1
+        return {"saves_waiting": self.deferred_count, "unreadable_saves": unreadable}
 
     def wait_for_deferred(self, timeout: float) -> bool:
         """Block until every accepted remember is committed; False on timeout."""
@@ -460,9 +531,47 @@ class CanonicalRememberRuntime:
             profile_id=entry.profile_id,
             idempotency_key=entry.idempotency_key,
         )
-        return _CoordinatorAdapter(self.coordinator).submit(
+        receipt = _CoordinatorAdapter(self.coordinator).submit(
             command, wait_ms=_DEFERRED_COMMIT_WAIT_MS,
         )["receipt"]
+        # Before the journal marks it committed, so a crash in between replays
+        # the replacement too (it is idempotent, keyed on the operation id).
+        self._apply_replacement(request, receipt)
+        return receipt
+
+    def _apply_replacement(
+        self, request: RememberRequest, receipt: Mapping[str, Any],
+    ) -> None:
+        """Retire what a save named in ``replaces``, after a background commit.
+
+        A foreground save is answered by the daemon, which applies (and
+        reports) its own replacement; a save accepted under contention or
+        recovered after a restart has no caller waiting, so it is applied
+        here. Never raises: the save stands either way, and the outcome is
+        logged and returned to whoever resends the same idempotency key.
+        """
+        if not request.replaces:
+            return
+        from types import SimpleNamespace
+
+        from superlocalmemory.core.remember_replaces import replace_after_save
+
+        with self._binding_lock:
+            db, active = self._db, self._profile_id
+        result = replace_after_save(
+            self, SimpleNamespace(_db=db), replaces=request.replaces,
+            profile_id=request.profile_id,
+            successor_fact_ids=list(receipt.get("fact_ids") or ()),
+            operation_id=str(receipt.get("operation_id") or ""),
+            trusted_actor_id=request.trusted_actor_id,
+            routed=request.profile_id != active,
+        )
+        if result.get("ok"):
+            logger.info("a deferred save retired %d fact(s) it replaces",
+                        len(result.get("fact_ids") or ()))
+        else:
+            logger.warning("a deferred save did not replace what it named: %s",
+                           result.get("reason"))
 
     def rebind_engine(self, engine: Any) -> None:
         """Atomically follow a drained daemon mode/profile transition."""
@@ -489,11 +598,9 @@ class CanonicalRememberRuntime:
             max_verbatim_chars=max_verbatim_chars,
             max_ingest_bytes=max_ingest_bytes,
         )
+        # Everything that can fail (building the handler) is done above, so
+        # the swap below is all-or-nothing and needs no rollback.
         with self._binding_lock:
-            previous = (
-                self._db, self._profile_id, self._writer,
-                self._max_verbatim_chars, self._max_ingest_bytes,
-            )
             self._db = db
             self._profile_id = profile_id
             self._writer = writer
@@ -503,21 +610,10 @@ class CanonicalRememberRuntime:
             # the next routed request rebuilds against the new one.
             self._routed_writers.clear()
             self._generation += 1
-        try:
-            self.replay_pending()
-        except BaseException:
-            with self._binding_lock:
-                # Roll back the WHOLE binding, not just the writer triple: a
-                # stale limits pair or a routed-handler cache built against
-                # the failed binding would outlive the rebind that never
-                # happened.
-                (
-                    self._db, self._profile_id, self._writer,
-                    self._max_verbatim_chars, self._max_ingest_bytes,
-                ) = previous
-                self._routed_writers.clear()
-                self._generation -= 1
-            raise
+        # Pending saves (for this profile or any other) are handed to the
+        # background committer rather than replayed here: a switch must not
+        # wait on, or fail because of, a writer that is busy right now.
+        self._hand_pending_to_committer()
 
     def remember(
         self,
@@ -540,6 +636,14 @@ class CanonicalRememberRuntime:
                 request, actor, deadline_ms=deadline_ms, defer=self._deferred.defer,
                 accept_after_ms=accept_after_ms,
             )
+        except AdmissionJournalUnavailable as exc:
+            # Only the journal prepare can raise this out of the service (a
+            # busy journal after prepare is answered "accepted"), and the
+            # journal guarantees a refused prepare was not written.
+            raise CanonicalRememberBusy(
+                "too many saves are arriving at once; this one was not saved",
+                retry_after_seconds=getattr(exc, "retry_after_seconds", 1),
+            ) from exc
         except (
             AdmissionJournalUnavailable,
             OwnershipRequiredError,
@@ -596,9 +700,30 @@ class CanonicalRememberRuntime:
                 find,
                 dispatch,
                 profile_id=self._profile_id,
+                after_commit=self._after_replayed_commit,
             )
         except (WriteCoordinatorError, ValueError, json.JSONDecodeError) as exc:
             raise CanonicalRememberUnavailable("pending remember recovery failed") from exc
+
+    def _after_replayed_commit(
+        self,
+        entry: AdmissionEntry,
+        request: RememberRequest | None,
+        receipt: Mapping[str, Any],
+    ) -> None:
+        if request is None:
+            # Found already committed: read the command back only to learn
+            # whether it carried a replacement still to apply. The save
+            # itself stands even if the command can no longer be read.
+            try:
+                request = self.journal.request_for(entry)
+            except AdmissionPayloadError:
+                logger.error(
+                    "a recovered save's command cannot be read back, so any "
+                    "replacement it asked for was not applied (%s)", entry.journal_id,
+                )
+                return
+        self._apply_replacement(request, receipt)
 
     def delete_fact(
         self, profile_id: str, fact_id: str, *, idempotency_key: str | None = None,
@@ -797,7 +922,7 @@ class CanonicalRememberRuntime:
         *,
         idempotency_key: str | None,
     ) -> Mapping[str, Any]:
-        if not self._started:
+        if not self._writer_open:
             raise CanonicalRememberUnavailable("canonical mutation writer is not ready")
         if not profile_id:
             raise ValueError("profile_id is required")

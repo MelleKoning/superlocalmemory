@@ -528,3 +528,70 @@ def test_remember_under_a_held_write_lock_is_202_accepted_then_saved_once(
     assert len(engine_with_mock_deps._db.execute(
         "SELECT * FROM ingestion_operations"
     )) == 1
+
+
+def test_saturated_journal_is_an_honest_503_with_retry_after(
+    engine_with_mock_deps, monkeypatch,
+) -> None:
+    """A full save queue says so, says nothing was saved, and says when to retry.
+
+    It must not blame the disk: nothing is wrong with storage, the daemon is
+    simply receiving more saves at once than its journal queues.
+    """
+    from superlocalmemory.storage.journal_writer import AdmissionJournalOverloaded
+
+    body = {
+        "content": "Ines files the ferry manifest before the evening sailing.",
+        "idempotency_key": "saturated-journal-route-1",
+    }
+    with _client(engine_with_mock_deps) as client:
+        journal = client.app.state.canonical_remember_runtime.journal
+
+        def overloaded(*_args, **_kwargs):
+            raise AdmissionJournalOverloaded(
+                "too many saves are waiting", retry_after_seconds=1,
+            )
+
+        monkeypatch.setattr(journal._writer, "submit", overloaded)
+        refused = client.post("/remember", json=body)
+        monkeypatch.undo()
+        retried = client.post("/remember", json=body)
+
+    assert refused.status_code == 503, refused.text
+    assert refused.headers.get("retry-after") == "1"
+    detail = refused.json()["detail"]
+    assert "not saved" in detail
+    assert "disk" not in detail
+    assert "idempotency_key" in detail
+    assert retried.status_code == 200, retried.text
+    assert len(engine_with_mock_deps._db.execute(
+        "SELECT * FROM ingestion_operations"
+    )) == 1
+
+
+def test_status_counts_saves_set_aside_as_unreadable(engine_with_mock_deps) -> None:
+    """An operator can see that a save was set aside, without reading logs."""
+    from superlocalmemory.cli.commands import _admission_status_text
+    from superlocalmemory.storage.admission_journal import Actor, RememberRequest
+
+    with _client(engine_with_mock_deps) as client:
+        runtime = client.app.state.canonical_remember_runtime
+        clean = client.get("/status").json()
+        entry = runtime.journal.prepare(
+            RememberRequest(
+                content="A save whose bytes this machine can no longer read.",
+                profile_id=engine_with_mock_deps._profile_id,
+                source_type="http",
+                idempotency_key="status-unreadable-1",
+            ),
+            Actor("a", frozenset({engine_with_mock_deps._profile_id}),
+                  frozenset({"personal"})),
+        )
+        runtime.journal.quarantine(entry.journal_id)
+        flagged = client.get("/status").json()
+
+    assert clean["unreadable_saves"] == 0
+    assert clean["saves_waiting"] == 0
+    assert flagged["unreadable_saves"] == 1
+    assert _admission_status_text(clean) == ""
+    assert "Saves set aside: 1" in _admission_status_text(flagged)

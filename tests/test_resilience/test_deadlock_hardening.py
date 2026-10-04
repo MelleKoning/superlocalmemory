@@ -189,11 +189,9 @@ class TestDoubleSpawnRace:
                 "superlocalmemory.core.remember_runtime._get_daemon_port",
                 return_value=8781,
             ):
-                from superlocalmemory.core.remember_runtime import CanonicalRememberRuntime
+                from tests.test_resilience.runtime_factory import runtime_with_coordinator
 
-                runtime = CanonicalRememberRuntime.__new__(CanonicalRememberRuntime)
-                runtime._started = False
-                runtime.coordinator = mock_coordinator
+                runtime = runtime_with_coordinator(tmp_path, mock_coordinator)
 
                 with pytest.raises(DaemonAlreadyServing) as exc_info:
                     runtime.start()
@@ -221,8 +219,6 @@ class TestDoubleSpawnRace:
           call 2 (loop iter 0): False → health=False → self-heal (first iter)
           call 3 (loop iter 1): True → break, proceed
         """
-        from superlocalmemory.core.remember_runtime import CanonicalRememberRuntime
-
         mock_coordinator = MagicMock()
         # Three calls: outer=False, loop-iter0=False, loop-iter1=True
         mock_coordinator.claim_ownership.side_effect = [False, False, True]
@@ -243,9 +239,9 @@ class TestDoubleSpawnRace:
             "superlocalmemory.core.remember_runtime._boot_self_heal",
             side_effect=_record_self_heal,
         ), patch("time.sleep"):  # don't actually sleep 1s between retries
-            runtime = CanonicalRememberRuntime.__new__(CanonicalRememberRuntime)
-            runtime._started = False
-            runtime.coordinator = mock_coordinator
+            from tests.test_resilience.runtime_factory import runtime_with_coordinator
+
+            runtime = runtime_with_coordinator(tmp_path, mock_coordinator)
 
             mock_coordinator.register_handler = MagicMock()
             mock_coordinator.start = MagicMock()

@@ -253,3 +253,62 @@ def test_acknowledgement_latency_under_contention_within_ceiling(runtime, data_d
     assert p95 <= _REMEMBER_TOTAL_CEILING_SECONDS
     assert runtime.wait_for_deferred(timeout=20.0)
     assert _count(db_path, "SELECT COUNT(*) FROM atomic_facts") == 12
+
+
+def test_accepted_save_for_a_deleted_profile_ends_with_a_recorded_failure(
+    runtime, data_dir,
+):
+    """A profile deleted before its accepted save commits: one failure, recorded.
+
+    Retrying can never succeed (a deleted profile does not come back), so the
+    committer must stop, record why in the journal, and not retry forever.
+    """
+    db_path = data_dir / "memory.db"
+    lock = _HeldWriteLock(db_path)
+    try:
+        receipt = runtime.remember(
+            _request("deleted-profile-1", profile="other"), _actor("other"),
+            deadline_ms=_SHORT_DEADLINE_MS,
+        )
+        assert receipt.payload["status"] == "accepted"
+        lock._conn.execute("DELETE FROM profiles WHERE profile_id='other'")
+        lock._conn.execute("COMMIT")
+        lock._conn.close()
+        lock._conn = None
+    finally:
+        lock.release()
+    assert runtime.wait_for_deferred(timeout=10.0), "the committer kept retrying"
+    entry = runtime.journal.get(receipt.payload["admission_id"])
+    assert entry.state == "rejected"
+    assert entry.error_code == "UNKNOWN_PROFILE"
+    assert _count(db_path, "SELECT COUNT(*) FROM write_commits") == 0
+
+
+def test_profile_switch_with_a_pending_save_hands_it_off_cleanly(runtime, data_dir):
+    """Switching to a profile whose accepted save is still pending never fails.
+
+    The switch completes at once; the save is committed in the background
+    once the writer is free, exactly once.
+    """
+    from types import SimpleNamespace
+
+    db_path = data_dir / "memory.db"
+    lock = _HeldWriteLock(db_path)
+    try:
+        receipt = runtime.remember(
+            _request("rebind-pending-1", profile="other"), _actor("other"),
+            deadline_ms=_SHORT_DEADLINE_MS,
+        )
+        assert receipt.payload["status"] == "accepted"
+        started = time.monotonic()
+        runtime.rebind_engine(
+            SimpleNamespace(_db=runtime._db, _profile_id="other", _config=None)
+        )
+        switch_seconds = time.monotonic() - started
+        assert runtime._profile_id == "other"
+    finally:
+        lock.release()
+    assert switch_seconds < 0.5, f"switch waited {switch_seconds:.2f}s on the save"
+    assert runtime.wait_for_deferred(timeout=15.0)
+    assert runtime.journal.get(receipt.payload["admission_id"]).state == "committed"
+    assert _count(db_path, "SELECT COUNT(*) FROM write_commits") == 1

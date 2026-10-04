@@ -260,6 +260,28 @@ _REMEMBER_ADMISSION_DEADLINE_MS = 1_200
 _REMEMBER_JOURNAL_DEADLINE_MS = 2_000
 
 
+def _remember_writer_failure_detail(exc: BaseException) -> str:
+    """Say what failed, and mention the disk only when the disk said so."""
+    disk = False
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        text = str(current).casefold()
+        if isinstance(current, OSError) or "disk" in text or "i/o" in text:
+            disk = True
+        current = current.__cause__ or current.__context__
+    reason = type(exc.__cause__ or exc).__name__
+    hint = (
+        "the database reported a storage error; check free disk space"
+        if disk else "see the daemon log for the cause"
+    )
+    return (
+        f"the memory writer could not finish this save ({reason}); {hint}. "
+        "Resending with the same idempotency_key is safe and never stores it twice."
+    )
+
+
 def _accepted_remember_response(payload: dict, profile: str, *, replaces=None):
     """HTTP 202 for a remember that is durable but not yet committed."""
     from starlette.responses import JSONResponse
@@ -290,10 +312,12 @@ def _accepted_remember_response(payload: dict, profile: str, *, replaces=None):
     if replaces is not None:
         body["replaced"] = {
             "ok": False,
+            "pending": True,
             "replaces": replaces,
             "reason": (
-                "the new memory is saved but not yet indexed, so the old one "
-                "was not retired; resend with the same idempotency_key"
+                "the new memory is saved durably and what it replaces will be "
+                "retired as soon as it is indexed (within seconds); resend "
+                "with the same idempotency_key to see the result"
             ),
         }
     return JSONResponse(body, status_code=202)
@@ -5213,6 +5237,10 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 trusted_actor_id=trusted_actor_id,
                 session_id=req.session_id,
                 session_date=req.session_date,
+                # Journaled with the save: if the writer is busy and the save
+                # is accepted (202), the replacement is applied when the
+                # background commit lands rather than silently dropped.
+                replaces=replaces_id or "",
             )
             actor = Actor(
                 principal_id=trusted_actor_id,
@@ -5413,20 +5441,32 @@ def _register_daemon_routes(application: FastAPI) -> None:
                     _unknown_profile_body(req_profile or write_profile),
                     status_code=404,
                 )
+            from superlocalmemory.core.remember_runtime import CanonicalRememberBusy
+
+            if isinstance(exc, CanonicalRememberBusy):
+                # Saturation, not a fault: nothing was stored, and the caller
+                # is told when to come back.
+                logger.warning("remember refused under load: %s", exc)
+                raise HTTPException(
+                    503,
+                    detail=(
+                        "too many saves are arriving at once, so this one was "
+                        f"not saved. Retry in {exc.retry_after_seconds} s; "
+                        "resending with the same idempotency_key is safe and "
+                        "never stores it twice."
+                    ),
+                    headers={"Retry-After": str(exc.retry_after_seconds)},
+                ) from exc
             if isinstance(exc, CanonicalRememberUnavailable) or (
                 isinstance(exc, AdmissionRejected) and exc.retryable
             ):
                 # Contention no longer lands here (it is accepted, 202). What
-                # remains is a writer that is not working: say so plainly.
+                # remains is a writer that could not finish: say which part.
                 logger.error("canonical remember writer failed: %s", exc)
                 raise HTTPException(
                     503,
-                    detail=(
-                        "the memory writer is not working "
-                        f"({type(exc.__cause__ or exc).__name__}); check disk "
-                        "space and database health. Resending with the same "
-                        "idempotency_key is safe and never stores it twice."
-                    ),
+                    detail=_remember_writer_failure_detail(exc),
+                    headers={"Retry-After": "5"},
                 ) from exc
             if isinstance(exc, AdmissionRejected):
                 raise HTTPException(
@@ -5633,7 +5673,14 @@ def _register_daemon_routes(application: FastAPI) -> None:
         )
         mode = getattr(getattr(config, "mode", None), "value", "unknown")
         provider = getattr(getattr(config, "llm", None), "provider", "") or "none"
+        # Saves accepted while the writer was busy and not yet indexed, and
+        # saves set aside because they cannot be read back. -1: unknown.
+        admission = {"saves_waiting": 0, "unreadable_saves": 0}
+        writer_runtime = getattr(application.state, "canonical_remember_runtime", None)
+        if writer_runtime is not None:
+            admission = await asyncio.to_thread(writer_runtime.admission_status)
         return {
+            **admission,
             "status": "running",
             "pid": os.getpid(),
             "uptime_s": round(time.monotonic() - (_start_time or time.monotonic())),

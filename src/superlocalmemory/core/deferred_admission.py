@@ -149,12 +149,9 @@ class DeferredCommitter:
             )
             return True
         except AdmissionPayloadError:
-            # Retrying cannot help; the entry stays in the journal for an
-            # operator, and the failure is loud rather than silent.
-            logger.error(
-                "an accepted remember cannot be decrypted by this machine's key; "
-                "it remains in the admission journal (%s)", journal_id,
-            )
+            # Retrying cannot help. Set it aside with its bytes kept, so it is
+            # counted in status and never replayed (or blocks a start) again.
+            self._journal.quarantine(journal_id)
             return True
         except Exception as exc:  # contention, a stalled writer, I/O
             logger.warning(

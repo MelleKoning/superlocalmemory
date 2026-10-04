@@ -154,7 +154,7 @@ class RememberService:
         if prepared.state == "rejected":
             raise AdmissionRejected(prepared.error_code or "COMMAND_REJECTED")
         try:
-            return self._commit_prepared(prepared, commit_deadline)
+            return self._commit_prepared(prepared, request, commit_deadline)
         except _CONTENTION:
             if defer is None:
                 raise
@@ -166,19 +166,14 @@ class RememberService:
             return accepted_receipt(prepared)
 
     def _commit_prepared(
-        self, prepared: PreparedAdmission, deadline: float,
+        self, prepared: PreparedAdmission, command_request: RememberRequest, deadline: float,
     ) -> RememberReceipt:
-        command_request = self._journal.request_for(
-            prepared,
-            deadline=deadline,
-        )
-        dispatched = self._journal.mark_dispatched(
-            prepared.journal_id,
-            deadline=deadline,
-            known_prepared=prepared.state == "prepared",
-        )
-        if dispatched.original_receipt is not None:
-            return RememberReceipt.from_mapping(dispatched.original_receipt)
+        # The caller's request is the journaled command: prepare returned this
+        # entry only because its request hash matches. Reading it back and
+        # decrypting it again, or recording the advisory ``dispatched`` state
+        # (replay treats prepared and dispatched alike), would only add
+        # journal traffic to every save.
+        _remaining_seconds(deadline)
         try:
             result = self._coordinator.submit(
                 RememberAdmissionCommand.from_prepared(prepared, command_request),

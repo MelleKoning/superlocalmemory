@@ -1742,6 +1742,22 @@ def cmd_list(args: Namespace) -> None:
         pass
 
 
+def _cli_remember_idempotency_key(body: dict) -> str:
+    """The same ``slm remember`` command always carries the same key.
+
+    Re-running a command is the only resend a CLI user has, so it must be
+    recognised as the same request: the daemon then answers with the first
+    receipt instead of storing the memory again. Anything that makes it a
+    different request (wording, tags, scope, kind, replaces) gives a
+    different key. Keys are scoped per profile by the daemon.
+    """
+    import hashlib
+    import json as _json
+
+    material = _json.dumps(body, sort_keys=True, ensure_ascii=False, default=str)
+    return "cli:" + hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
 def cmd_remember(args: Namespace) -> None:
     """Store a memory through the owned daemon."""
 
@@ -1809,6 +1825,7 @@ def cmd_remember(args: Namespace) -> None:
         if replaces is not None:
             body["replaces"] = replaces
             extra["preserve_unprocessable"] = True
+        body["idempotency_key"] = _cli_remember_idempotency_key(body)
         try:
             result = daemon_request("POST", path, body, timeout_seconds=30, **extra)
         except DaemonUnprocessable as exc:
@@ -1829,6 +1846,9 @@ def cmd_remember(args: Namespace) -> None:
                 if isinstance(replaced, dict) and replaced.get("ok"):
                     from superlocalmemory.cli.recall_text import replaced_text
                     print(replaced_text(replaced))
+                elif isinstance(replaced, dict) and replaced.get("pending"):
+                    print(f"{replaced.get('replaces')} will be replaced as soon as the "
+                          "new memory is indexed (within seconds).")
                 elif isinstance(replaced, dict):
                     print(f"Saved, but {replaced.get('replaces')} was NOT replaced: "
                           f"{replaced.get('reason')}", file=sys.stderr)
@@ -2388,6 +2408,24 @@ def cmd_review_correction(args: Namespace) -> None:
 # -- Diagnostics (all support --json) -------------------------------------
 
 
+def _admission_status_text(daemon_status: dict) -> str:
+    """Lines for saves still being indexed and saves set aside; "" when none."""
+    lines = ""
+    waiting = int(daemon_status.get("saves_waiting", 0) or 0)
+    unreadable = int(daemon_status.get("unreadable_saves", 0) or 0)
+    if waiting > 0:
+        lines += f"  Saves being indexed: {waiting} (searchable within seconds)\n"
+    if unreadable > 0:
+        lines += (
+            f"  Saves set aside: {unreadable} could not be read back by this "
+            "machine's key and were kept unchanged in the admission journal. "
+            "See the daemon log for their ids.\n"
+        )
+    elif unreadable < 0:
+        lines += "  Saves set aside: unknown (the admission journal did not answer)\n"
+    return lines
+
+
 def cmd_status(args: Namespace) -> None:
     """Show system status."""
     from superlocalmemory.core.config import SLMConfig
@@ -2437,6 +2475,8 @@ def cmd_status(args: Namespace) -> None:
                 "projection_queue_depth": int(
                     daemon_status.get("projection_queue_depth", 0)
                 ),
+                "saves_waiting": int(daemon_status.get("saves_waiting", 0)),
+                "unreadable_saves": int(daemon_status.get("unreadable_saves", 0)),
             }
             json_print("status", data=data, next_actions=[
                 {"command": "slm health --json", "description": "Check math layer health"},
@@ -2518,6 +2558,8 @@ def cmd_status(args: Namespace) -> None:
     if config.db_path.exists():
         size_mb = round(config.db_path.stat().st_size / 1024 / 1024, 2)
         print(f"  DB size: {size_mb} MB")
+    if daemon_status:
+        print(_admission_status_text(daemon_status), end="")
 
     # S9-UX-07 / S9-UX-13: --verbose surfaces the disabled marker,
     # last-version marker, and daemon port so users who are debugging

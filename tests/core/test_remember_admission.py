@@ -166,7 +166,9 @@ def test_committed_receipt_survives_auxiliary_journal_deadline(tmp_path, monkeyp
     assert first.payload == receipt
     entry = journal.get_by_idempotency_key("default", _request().idempotency_key)
     assert entry is not None
-    assert entry.state == "dispatched"
+    # Still replayable: prepared and dispatched entries recover alike, and
+    # the advisory dispatched mark is no longer written on the request path.
+    assert entry.state == "prepared"
 
     monkeypatch.setattr(journal, "mark_committed", original_mark_committed)
     duplicate = RememberService(journal, coordinator).remember(
@@ -234,7 +236,7 @@ def test_nonpositive_deadline_and_retryable_result_do_not_acknowledge(tmp_path) 
 
     entry = journal.get_by_idempotency_key("default", _request().idempotency_key)
     assert entry is not None
-    assert entry.state == "dispatched"
+    assert entry.state == "prepared"
 
 
 def test_terminal_dispatch_exception_is_rejected_and_remains_terminal(tmp_path) -> None:
