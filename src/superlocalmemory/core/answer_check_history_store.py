@@ -51,9 +51,9 @@ _LOG_EVERY_S = 60.0
 
 DEFAULT_RETENTION_DAYS = 30
 DEFAULT_MAX_ROWS = 10_000
-#: The ceiling is 10,000 because a data export reads at most 10,000 rows per
-#: learning.db table (compliance/gdpr.py). A larger history would be exported
-#: incompletely. Raise both together or neither.
+#: Most rows kept per profile once a sweep has run. Between sweeps (every
+#: ``SWEEP_INTERVAL_S``) a profile can briefly hold more; a data export
+#: (compliance/gdpr.py) returns every row there is either way.
 MAX_ROWS_CEILING = 10_000
 MAX_ROWS_FLOOR = 1_000
 RETENTION_DAYS_RANGE = (1, 365)

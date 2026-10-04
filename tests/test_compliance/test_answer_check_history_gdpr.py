@@ -78,8 +78,22 @@ def test_gdpr_export_includes_all_rows_at_cap(root) -> None:
     exported = _gdpr(root).export_profile_data("alice")
     rows = exported["learning_signals"]["answer_check_events"]
     assert len(rows) == store.MAX_ROWS_CEILING
-    assert store.clamp_settings(30, 10**9)[1] <= len(rows), \
-        "retention may never keep more rows than an export carries"
+
+
+def test_gdpr_export_is_never_capped(root) -> None:
+    """Between sweeps a profile holds more than the retention ceiling (an agent
+    recalling every 2 s adds 300 rows in 10 minutes). The export carries all of
+    them, and so for every learning table, not just this one."""
+    _seed(root, "alice", store.MAX_ROWS_CEILING + 300)
+    with sqlite3.connect(root / "learning.db") as conn:
+        conn.execute("CREATE TABLE zz_signals (profile_id TEXT, n INTEGER)")
+        conn.executemany("INSERT INTO zz_signals VALUES ('alice', ?)",
+                         [(i,) for i in range(25_001)])
+    signals = _gdpr(root).export_profile_data("alice")["learning_signals"]
+    rows = signals["answer_check_events"]
+    assert len(rows) == store.MAX_ROWS_CEILING + 300 == _rows(root, "alice")
+    assert len({r["event_id"] for r in rows}) == len(rows)
+    assert len(signals["zz_signals"]) == 25_001
 
 
 def test_profile_delete_removes_history(root, monkeypatch) -> None:
