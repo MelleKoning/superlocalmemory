@@ -19,6 +19,9 @@ from superlocalmemory.retrieval.engine import RetrievalEngine
 from superlocalmemory.retrieval.fusion import FusionResult
 from superlocalmemory.storage.models import AtomicFact, Mode
 
+# Every RetrievalEngine a test builds is closed when the test ends.
+pytestmark = pytest.mark.usefixtures("closes_retrieval_engines")
+
 
 # ---------------------------------------------------------------------------
 # Helpers

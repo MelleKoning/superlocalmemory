@@ -95,6 +95,13 @@ for _unsafe_env in (
 import numpy as np  # noqa: E402  (isolation must be installed before imports)
 import pytest  # noqa: E402  (isolation must be installed before imports)
 
+# A test that leaves a product thread (slm-*, LanceDB's loop) or a child
+# process (embedding/reranker worker) running fails by name (audit C-3).
+from tests.thread_leak_guard import (  # noqa: E402,F401  (pytest hook registration)
+    pytest_runtest_setup,
+    pytest_runtest_teardown,
+)
+
 
 @pytest.fixture(autouse=True, scope="function")
 def _block_live_slm_home_writes(tmp_path, monkeypatch):
