@@ -210,9 +210,29 @@ class TestEveryWayOfTurningItOff:
         ready = laya_runtime.LayaRuntimeStatus(state=laya_runtime.STATE_READY)
         monkeypatch.setattr(laya_runtime, "detect", lambda cfg=None: ready)
         _reordering_on(tmp_path)
-        assert client.post("/api/v3/answer-check/mode", json={"mode": mode}).status_code == 200
-        assert _flags(tmp_path) == (False, False)
+        response = client.post("/api/v3/answer-check/mode", json={"mode": mode})
+        assert response.status_code == 200
+        # Reordering is part of Jev: nothing is sent for it while another option
+        # is chosen (k == 0 in every rebuild) — and the choice is remembered,
+        # said plainly, not silently reset.
         assert all(k == 0 for _, k in attached)
+        assert _flags(tmp_path) == (True, True)
+        rerank = response.json()["jev"]["rerank"]
+        assert rerank["enabled"] is True and rerank["active"] is False
+        assert "Reordering with Jev is off while it isn't chosen" in response.json()["message"]
+
+    def test_choosing_jev_again_restores_the_remembered_choice(
+        self, client, tmp_path, monkeypatch, attached,  # noqa: F811
+    ):
+        from superlocalmemory.core import laya_runtime
+
+        ready = laya_runtime.LayaRuntimeStatus(state=laya_runtime.STATE_READY)
+        monkeypatch.setattr(laya_runtime, "detect", lambda cfg=None: ready)
+        _reordering_on(tmp_path)
+        assert client.post("/api/v3/answer-check/mode", json={"mode": "laya"}).status_code == 200
+        assert attached[-1][1] == 0
+        assert client.post("/api/v3/answer-check/mode", json={"mode": "jev"}).status_code == 200
+        assert attached[-1] == ("jev", 20)
 
     def test_choosing_jev_again_keeps_it(self, client, tmp_path):  # noqa: F811
         _reordering_on(tmp_path)

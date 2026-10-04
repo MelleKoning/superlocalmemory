@@ -307,10 +307,14 @@ def jev_rerank_k(retrieval_config: Any) -> int:
 
     Both the toggle and its own consent must be the boolean True: it sends more
     memories than the answer check alone, so the answer check's consent does
-    not cover it. This says nothing about whether Jev itself runs — that is
-    ``_jev_target`` — and Laya never reads it.
+    not cover it. Reordering is part of Jev: while any other option is chosen
+    it is 0, so nothing is sent for it — the person's choice is kept and
+    counts again once Jev is chosen. Whether Jev itself may run is
+    ``_jev_target``; Laya never reads this.
     """
     global _rerank_k_warned
+    if _mode(retrieval_config) != MODE_JEV:
+        return 0
     on = getattr(retrieval_config, "sufficiency_jev_rerank", False)
     consent = getattr(retrieval_config, "sufficiency_jev_rerank_consent", False)
     if on is not True or consent is not True:

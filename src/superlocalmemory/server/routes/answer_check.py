@@ -61,13 +61,6 @@ _MODE_PATTERN = "^(laya|jev|off)$"
 _PROVIDER_PATTERN = "^(" + "|".join(judge_keys.PROVIDERS) + ")$"
 _APPLIABLE_MODES = (judge_selection.MODE_LAYA, judge_selection.MODE_AUTO)
 
-#: Plain-language label per mode, for the confirmation message after a switch.
-_MODE_LABELS = {
-    "laya": "on this Mac",
-    "jev": "online with Jev",
-    "off": "off",
-}
-
 #: Each Jev connection test is one billed request — never more than one per
 #: provider every ten seconds. Module-level because the daemon is one process;
 #: a lock guards the read-then-write against concurrent requests.
@@ -221,8 +214,8 @@ def _job_hooks(app_state: Any):
 
 def _a_laya_job_is_running() -> bool:
     return (laya_runtime.LayaAdoptJob.instance().running
-            or laya_runtime.LayaInstallJob.instance().status().state
-            == laya_runtime.STATE_INSTALLING)
+            or laya_runtime.LayaTestJob.instance().running
+            or laya_runtime.LayaInstallJob.instance().running)
 
 
 # ---------------------------------------------------------------------------
@@ -268,15 +261,14 @@ def post_mode(request: Request, body: ModeUpdate):
             if refusal is not None:
                 return refusal
             mode = body.mode
-            retrieval = support.save(lambda v: {
-                **(v if mode == "jev" else support.without_rerank(v)),
-                "sufficiency_judge": mode})
+            # Reordering is part of Jev: it runs only while Jev is chosen, and
+            # the person's choice is remembered for when they come back to it.
+            retrieval = support.save(lambda v: {**v, "sufficiency_judge": mode})
             support.attach(app_state, retrieval)
             if not support.enforce(app_state, retrieval):
                 return _not_confirmed()
             status_body = support.build_status(app_state)
-        status_body["message"] = (
-            f"Answer check is now {_MODE_LABELS[mode]}. Only one option runs at a time.")
+        status_body["message"] = support.switched_message(mode, retrieval)
         return status_body
     except Exception:
         return _internal_error()
@@ -343,22 +335,35 @@ def post_laya_adopt(request: Request, body: LayaAdoptRequest):
 
 @router.post("/laya/remove")
 def post_laya_remove(request: Request):
+    """Stop using the on-device check. SLM's own install (finished or not) is
+    deleted; an install made elsewhere is only forgotten — its files stay."""
     _gate(request)
     try:
         app_state = request.app.state
         with support.MUTATION_LOCK:
             if _a_laya_job_is_running():
-                return _error("Wait for the current setup to finish.", 409)
+                return _error("Wait for the current setup or check to finish.", 409)
+            before = laya_runtime.detect(support.effective_retrieval())
             stopped = support.detach_laya(app_state)  # before its files go
-            status = laya_runtime.remove()
-            if status.state == laya_runtime.STATE_NOT_INSTALLED:
-                retrieval = support.save(support.forget_managed_install)
-            else:
-                retrieval = support.effective_retrieval()
+            result = laya_runtime.remove()
+            if result.state != laya_runtime.STATE_NOT_INSTALLED and \
+                    result.error != "No managed install to remove.":
+                return _error(result.error)
+            external = not before.managed and before.state != laya_runtime.STATE_NOT_INSTALLED
+            if external:
+                laya_runtime.forget_adopted()
+            retrieval = support.save(
+                lambda v: support.forget_managed_install(v, every_path=external))
+            for job in (laya_runtime.LayaInstallJob, laya_runtime.LayaAdoptJob,
+                        laya_runtime.LayaTestJob):
+                forget = getattr(job.instance(), "forget", None)
+                if callable(forget):
+                    forget()
+            support.forget_test("laya")
             if stopped and retrieval.sufficiency_judge != judge_selection.MODE_OFF:
-                support.attach(app_state, retrieval)  # e.g. an adopted install
+                support.attach(app_state, retrieval)  # e.g. an adopted install kept
             support.enforce(app_state, retrieval)
-            return status.to_dict()
+            return laya_runtime.detect(retrieval).to_dict()
     except Exception:
         return _internal_error()
 
@@ -381,6 +386,18 @@ def post_jev_key(request: Request, body: JevKeyRequest):
     except Exception:
         # SEC: never interpolate the key itself into a log line.
         logger.exception("answer_check: saving the %s key failed", body.provider)
+        return _internal_error()
+    support.forget_test("jev")  # the last test was of another key
+    try:
+        with support.MUTATION_LOCK:
+            # A key saved while Jev is the chosen check takes effect now, not
+            # at the next restart.
+            retrieval = support.effective_retrieval()
+            if (retrieval.sufficiency_judge == judge_selection.MODE_JEV
+                    and retrieval.sufficiency_jev_provider == body.provider):
+                support.attach(request.app.state, retrieval)
+            support.enforce(request.app.state, retrieval)
+    except Exception:
         return _internal_error()
     key = support.key_state(body.provider)
     return {"has_key": key["has_key"], "key_hint": key["key_hint"]}
@@ -426,8 +443,11 @@ def post_jev_test(request: Request, body: JevTestRequest):
             return _error("Wait a few seconds before testing again.", 429)
         _last_jev_test[provider] = now
     try:
+        started = time.monotonic()
         ok, message = _test_jev_connection(provider)
-        return {"ok": ok, "message": message}
+        seconds = time.monotonic() - started
+        result = support.record_test("jev", ok, message, seconds)
+        return {"ok": ok, "message": message, "result": result}
     except Exception:
         return _internal_error()
 
