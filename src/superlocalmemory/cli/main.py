@@ -652,7 +652,14 @@ def main() -> None:
 
     # -- Services ------------------------------------------------------
     sub.add_parser("mcp", help="Start MCP server (stdio transport for IDE integration)")
-    sub.add_parser("warmup", help="Pre-download embedding model (~500MB, one-time)")
+    warmup_p = sub.add_parser(
+        "warmup",
+        help="Load the embedding model (~500MB download the first time) and "
+             "confirm recall is ready; exits non-zero if it is not")
+    warmup_p.add_argument(
+        "--timeout", type=float, default=None, metavar="SECONDS",
+        help="How long to wait for a starting daemon to become ready "
+             "(default 120; 0 checks once without waiting)")
 
     dashboard_p = sub.add_parser("dashboard", help="Open web dashboard")
     dashboard_p.add_argument(

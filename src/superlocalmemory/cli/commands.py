@@ -3898,40 +3898,27 @@ def cmd_warmup(_args: Namespace) -> None:
     print(f"  Model:  nomic-ai/nomic-embed-text-v1.5 (~500MB)")
     print()
 
-    # v3.4.42 — daemon-aware fast path. If the daemon is up and reports
-    # engine=initialized, the embedding model is already loaded inside
-    # the daemon's worker subprocess. No need to spawn a redundant one;
-    # in fact, the machine-wide singleton would refuse to do so anyway.
+    # v3.4.42 — daemon-aware path. When the daemon is up it owns the
+    # machine-wide embedding worker; a local one would be refused anyway.
     try:
         from superlocalmemory.cli.daemon import (
             is_daemon_running, daemon_request,
         )
-        if is_daemon_running():
-            health = daemon_request("GET", "/health")
-            if health and health.get("engine") == "initialized":
-                from superlocalmemory.core.config import EmbeddingConfig
-                cfg = EmbeddingConfig()
-                print("[PASS] Daemon is running with embedding model loaded.")
-                print(f"       Model: {cfg.model_name} ({cfg.dimension}-dim)")
-                print("Semantic search is fully operational.")
-                return
-            # Daemon up but engine not yet initialized — warn and return
-            # rather than racing the daemon for the singleton lock.
-            engine_state = (health or {}).get("engine", "unknown")
-            print(f"[INFO] Daemon is up but engine state is '{engine_state}'.")
-            print("       Wait ~30s and retry, or run: slm doctor")
-            return
+        daemon_up = is_daemon_running()
     except Exception:
-        # Any failure in the daemon path falls through to local warmup —
+        # Any failure in the daemon probe falls through to local warmup --
         # better to spawn a local worker than block warmup entirely.
-        pass
+        daemon_up = False
+    if daemon_up:
+        _warmup_via_daemon(daemon_request, _args)
+        return
 
     # Local-warmup fallback path: daemon is unreachable, so it's safe
     # to spawn our own embedding worker (no singleton conflict).
     # Increase timeout for first-time download.
     original_timeout = _emb_mod._SUBPROCESS_RESPONSE_TIMEOUT
     _emb_mod._SUBPROCESS_RESPONSE_TIMEOUT = 180  # 3 min for cold start
-
+    failed = False
     try:
         from superlocalmemory.core.config import EmbeddingConfig
         from superlocalmemory.core.embeddings import EmbeddingService
@@ -3944,27 +3931,76 @@ def cmd_warmup(_args: Namespace) -> None:
         if not svc.is_available:
             print("\n[FAIL] Embedding service not available.")
             _warmup_diagnose()
-            return
-
-        print("Step 2/3: Loading model (may download ~500MB on first run)...")
-        emb = svc.embed("warmup test")
-
-        if emb and len(emb) == config.dimension:
-            print("Step 3/3: Verifying embedding output...")
-            print(f"\n[PASS] Model ready: {config.model_name} ({config.dimension}-dim)")
-            print("Semantic search is fully operational.")
+            failed = True
         else:
-            print("\n[FAIL] Model loaded but embedding verification failed.")
-            _warmup_diagnose()
+            print("Step 2/3: Loading model (may download ~500MB on first run)...")
+            emb = svc.embed("warmup test")
+            if emb and len(emb) == config.dimension:
+                print("Step 3/3: Verifying embedding output...")
+                print(f"\n[PASS] Model ready: {config.model_name} ({config.dimension}-dim)")
+                print("Semantic search is fully operational.")
+            else:
+                print("\n[FAIL] Model loaded but embedding verification failed.")
+                _warmup_diagnose()
+                failed = True
 
     except ImportError as exc:
         print(f"\n[FAIL] Missing dependency: {exc}")
         print("Fix: pip install sentence-transformers einops torch")
+        failed = True
     except Exception as exc:
         print(f"\n[FAIL] Warmup failed: {exc}")
         _warmup_diagnose()
+        failed = True
     finally:
         _emb_mod._SUBPROCESS_RESPONSE_TIMEOUT = original_timeout
+    if failed:
+        sys.exit(1)
+
+
+def _warmup_via_daemon(daemon_request, args: Namespace) -> None:
+    """Report warmup against a running daemon; exit non-zero unless ready.
+
+    PASS requires the daemon to report ``ready`` AND ``embedding_warm``. An
+    engine object alone is not enough -- the first recall after such a PASS
+    still paid the whole model load. A starting daemon is waited on up to
+    ``--timeout`` seconds; if it is still not ready, that is said plainly and
+    the command exits 1 so a script does not mistake it for success.
+    """
+    from superlocalmemory.cli.warmup_readiness import (
+        DEFAULT_WAIT_SECONDS, wait_until_warm,
+    )
+
+    timeout = getattr(args, "timeout", None)
+    timeout = DEFAULT_WAIT_SECONDS if timeout is None else max(0.0, float(timeout))
+
+    def _fetch():
+        try:
+            return daemon_request("GET", "/health")
+        except Exception:
+            return None
+
+    def _announce_wait() -> None:
+        print(f"Daemon is running; waiting up to {int(timeout)} s for it to be ready...")
+
+    verdict = wait_until_warm(_fetch, timeout, on_first_wait=_announce_wait)
+
+    if verdict.ready:
+        from superlocalmemory.core.config import EmbeddingConfig
+        cfg = EmbeddingConfig()
+        print("[PASS] Daemon is ready and the embedding model is loaded.")
+        print(f"       Model: {cfg.model_name} ({cfg.dimension}-dim)")
+        print("Semantic search is fully operational.")
+        return
+    if not verdict.reachable:
+        print("[FAIL] The daemon stopped answering while warmup waited.")
+        print("       Run: slm status   (or: slm doctor)")
+        sys.exit(1)
+    print(f"[INFO] The daemon is running but not ready yet: {verdict.detail}.")
+    print(f"       Waited {int(round(verdict.waited_seconds))} s. "
+          "Run `slm warmup` again in a minute, or `slm warmup --timeout 300` "
+          "to wait longer. If it stays like this, run: slm doctor")
+    sys.exit(1)
 
 
 def _warmup_diagnose() -> None:
