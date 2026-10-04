@@ -84,7 +84,6 @@ _KNOWN_DEAD: dict[str, str] = {
     "code_graph/watcher.py": "seeded 4.0.6 — triage",
     "core/embedding_worker.py": "ALIVE — subprocess-spawned by infra/self_heal.py",
     "core/engine_lock.py": "seeded 4.0.6 — triage",
-    "core/rate_limit.py": "seeded 4.0.6 — triage",
     "core/recall_worker.py": "ALIVE — subprocess-spawned by infra/self_heal.py",
     "core/reranker_worker.py": "ALIVE — subprocess reranker backend",
     "core/laya_worker.py": "ALIVE — run by file path in Laya's own Python, which cannot "
