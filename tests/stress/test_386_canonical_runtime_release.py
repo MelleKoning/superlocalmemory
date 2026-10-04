@@ -193,6 +193,16 @@ def test_release_386_128_concurrent_remembers_are_exactly_once_and_queryable(
         assert not errors, f"concurrent remember failures: {errors!r}"
         _assert_no_busy(errors)
         assert len(receipts) == _REQUEST_COUNT
+        # Committed in time, or durably accepted while the writer was busy
+        # (then committed by the runtime itself). Never refused.
+        assert all(
+            receipt["status"] in {"queryable", "accepted"} for _, receipt in receipts
+        )
+        assert harness.runtime.wait_for_deferred(timeout=30.0)
+        receipts = [
+            (unique_request, _final_receipt(harness, receipt))
+            for unique_request, receipt in receipts
+        ]
         assert all(receipt["status"] == "queryable" for _, receipt in receipts)
         fact_ids_by_request: dict[int, set[str]] = {}
         commits_by_request: dict[int, set[int]] = {}
@@ -222,6 +232,16 @@ def test_release_386_128_concurrent_remembers_are_exactly_once_and_queryable(
         ) == _UNIQUE_REQUEST_COUNT
     finally:
         harness.stop()
+
+
+def _final_receipt(harness, receipt: dict[str, object]) -> dict[str, object]:
+    """The canonical receipt an accepted remember ended with (read, not resent)."""
+    if receipt["status"] != "accepted":
+        return receipt
+    entry = harness.runtime.journal.get(str(receipt["admission_id"]))
+    assert entry.state == "committed", entry.state
+    assert entry.original_receipt is not None
+    return dict(entry.original_receipt)
 
 
 def test_release_386_strict_read_snapshots_remain_available_while_remembers_commit(

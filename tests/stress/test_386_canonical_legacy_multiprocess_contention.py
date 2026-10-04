@@ -26,7 +26,10 @@ _FOREGROUND_WRITES = 48
 _FOREGROUND_CONCURRENCY = 8
 _LEGACY_WRITES_PER_PROCESS = 48
 _READER_THREADS = 4
-_REMEMBER_DEADLINE_MS = 2_000
+_REMEMBER_DEADLINE_MS = 2_000  # the daemon's journal (durability) budget
+_ACCEPT_AFTER_MS = 1_200  # the daemon's wait for the canonical commit
+_FOREGROUND_TOTAL_SECONDS = 60.0  # all 48 calls through 8 workers, queueing included
+_DRAIN_SECONDS = 30.0
 _PROCESS_DEADLINE_SECONDS = 8.0
 _ACTOR_ID = "multiprocess-contention-daemon"
 
@@ -230,7 +233,8 @@ def test_386_canonical_remember_survives_legacy_multiprocess_contention(
 ) -> None:
     """Canonical writes, legacy DML, and strict RO FTS snapshots all finish.
 
-    The individual 2s remember deadline is the foreground service contract;
+    The daemon's remember budgets are the foreground service contract: each
+    remember is committed, or durably accepted, never refused;
     legacy child processes have an 8s total cap.  Counts prove that contention
     caused neither duplicated work nor silently lost writes.
     """
@@ -262,6 +266,7 @@ def test_386_canonical_remember_survives_legacy_multiprocess_contention(
     foreground_errors: list[BaseException] = []
     reader_errors: list[BaseException] = []
     foreground_elapsed: list[float] = []
+    statuses: list[str] = []
     writes_complete = threading.Event()
     errors_lock = threading.Lock()
     try:
@@ -275,8 +280,13 @@ def test_386_canonical_remember_survives_legacy_multiprocess_contention(
                     _remember_request(sequence),
                     _actor(),
                     deadline_ms=_REMEMBER_DEADLINE_MS,
+                    accept_after_ms=_ACCEPT_AFTER_MS,
                 )
-                assert receipt.payload["status"] == "queryable"
+                # Committed in time, or durably accepted while the writer was
+                # busy. Never refused: contention is not a failure.
+                assert receipt.payload["status"] in {"queryable", "accepted"}
+                with errors_lock:
+                    statuses.append(receipt.payload["status"])
             except BaseException as exc:
                 with errors_lock:
                     foreground_errors.append(exc)
@@ -313,9 +323,15 @@ def test_386_canonical_remember_survives_legacy_multiprocess_contention(
                 snapshot_futures = [
                     reader_pool.submit(strict_reader) for _ in range(_READER_THREADS)
                 ]
-                for future in foreground_futures:
-                    future.result(timeout=_PROCESS_DEADLINE_SECONDS)
-                writes_complete.set()
+                try:
+                    # The per-call contract is asserted on foreground_elapsed;
+                    # this bound covers queueing 48 calls through 8 workers.
+                    for future in foreground_futures:
+                        future.result(timeout=_FOREGROUND_TOTAL_SECONDS)
+                finally:
+                    # Always release the readers, or a timeout above leaves
+                    # them spinning and the executor exit hangs forever.
+                    writes_complete.set()
                 snapshot_counts = [
                     future.result(timeout=_PROCESS_DEADLINE_SECONDS) for future in snapshot_futures
                 ]
@@ -346,6 +362,15 @@ def test_386_canonical_remember_survives_legacy_multiprocess_contention(
             for result in child_results
         )
         assert sum(snapshot_counts) > 0
+        # Every accepted memory is committed, exactly once, without a resend.
+        assert harness.runtime.wait_for_deferred(timeout=_DRAIN_SECONDS), (
+            f"{harness.runtime.deferred_count} accepted remember(s) never committed"
+        )
+        print(
+            f"\n386: {statuses.count('queryable')} queryable, "
+            f"{statuses.count('accepted')} accepted; max ack "
+            f"{max(foreground_elapsed):.3f}s"
+        )
         assert (
             _strict_read_count(
                 harness.db_path,

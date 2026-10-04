@@ -28,7 +28,7 @@ class _RememberRuntime:
         self.scope_calls = []
         self.ready = True
 
-    def remember(self, admission, actor, *, deadline_ms):
+    def remember(self, admission, actor, *, deadline_ms, accept_after_ms=None):
         from superlocalmemory.core.remember_admission import RememberReceipt
 
         self.calls.append((admission, actor, deadline_ms))

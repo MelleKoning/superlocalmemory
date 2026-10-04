@@ -302,6 +302,28 @@ def register_core_tools(server, get_engine: Callable) -> None:
                                 "complete" if resp.get("status") == "stored" else "queryable"
                             )
                         pending = materialization_state != "complete"
+                        if resp.get("status") == "accepted":
+                            # Durable but not yet searchable: the writer was
+                            # busy. Never reported as "queryable now".
+                            accepted_reply = {
+                                "success": True,
+                                "fact_ids": [],
+                                "count": 0,
+                                "pending": True,
+                                "pending_id": None,
+                                "operation_id": None,
+                                "materialization_state": "accepted",
+                                "admission_id": resp.get("admission_id"),
+                                "idempotency_key": resp.get("idempotency_key"),
+                                "message": (
+                                    "Saved durably; being indexed now and searchable "
+                                    "within seconds. Resend with the same "
+                                    "idempotency_key for the final receipt."
+                                ),
+                            }
+                            if resp.get("replaced") is not None:
+                                accepted_reply["replaced"] = resp["replaced"]
+                            return accepted_reply
                         stored_reply = {
                             "success": True,
                             "fact_ids": fids,

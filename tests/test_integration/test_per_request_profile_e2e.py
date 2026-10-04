@@ -312,28 +312,50 @@ class RealDaemon:
         assert code == 200, payload
         return payload
 
-    #: 503 is remember's documented "retry shortly" answer when its 2 s
-    #: admission deadline passes (a loaded machine: 4.1.19 and 4.1.20 both
-    #: returned it here at load average 25). A client honouring the contract
-    #: resends the SAME idempotency key; the exact-count assertions then also
-    #: prove such a retry never stores a memory twice. Any other status fails
-    #: at once, and the retry budget is small and counted.
-    RETRYABLE_ATTEMPTS = 5
-    retries = 0
+    #: Each remember is sent exactly ONCE. Under machine load the writer may
+    #: be busy past the admission deadline; the contract is then 202
+    #: "accepted": durable, not yet searchable, committed moments later by
+    #: the daemon itself. A 503 (what 4.1.19/4.1.20 answered here at load
+    #: average 25) fails at once — no resend hides it.
+    accepted = 0
+    COMMIT_WAIT_SECONDS = 30.0
 
     def remember(self, content: str, profile_id: str, idempotency_key: str) -> dict:
         body = {"content": content, "idempotency_key": idempotency_key}
         if profile_id:
             body["profile_id"] = profile_id
-        for attempt in range(self.RETRYABLE_ATTEMPTS):
-            code, payload = self.request("POST", "/remember", body)
-            if code != 503:
-                break
-            self.retries += 1
-            time.sleep(0.2 * (attempt + 1))
-        assert code == 200, payload
+        code, payload = self.request("POST", "/remember", body)
+        assert code in (200, 202), payload
         assert payload.get("ok") is True, payload
+        if code == 202:
+            assert payload["status"] == "accepted", payload
+            assert payload["durable"] is True and payload["queryable"] is False
+            assert payload["fact_ids"] == [], payload
+            self.accepted += 1
+            self._wait_committed(profile_id or payload["profile"], idempotency_key)
         return payload
+
+    def _wait_committed(self, profile_id: str, idempotency_key: str) -> None:
+        """Observe (read-only) the daemon commit an accepted remember."""
+        deadline = time.monotonic() + self.COMMIT_WAIT_SECONDS
+        while time.monotonic() < deadline:
+            conn = sqlite3.connect(
+                f"file:{self.data_root / 'memory.db'}?mode=ro", uri=True, timeout=30,
+            )
+            try:
+                found = conn.execute(
+                    "SELECT COUNT(*) FROM ingestion_operations "
+                    "WHERE profile_id=? AND idempotency_key=?",
+                    (profile_id, idempotency_key),
+                ).fetchone()[0]
+            finally:
+                conn.close()
+            if found:
+                return
+            time.sleep(0.05)
+        raise AssertionError(
+            f"accepted remember {idempotency_key!r} was never committed"
+        )
 
     def recall(self, query: str, profile_id: str) -> dict:
         code, payload = self.request(

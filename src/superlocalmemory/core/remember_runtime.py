@@ -32,6 +32,7 @@ from superlocalmemory.core.ingestion_command import (
     IngestionRequest,
     MaterializationResult,
 )
+from superlocalmemory.core.deferred_admission import DeferredCommitter
 from superlocalmemory.core.mutation_routing import MutationTarget, classify_target
 from superlocalmemory.core.remember_admission import (
     RememberAdmissionCommand,
@@ -81,6 +82,10 @@ Materializer = Callable[
 
 logger = logging.getLogger("superlocalmemory.core.remember_runtime")
 _OBLIGATION_LEDGER = ObligationLedger()
+
+#: How long one deferred commit attempt may wait for the writer before the
+#: committer backs off and tries again. Short enough that stop() stays prompt.
+_DEFERRED_COMMIT_WAIT_MS = 5_000
 
 
 def _obligation_schema_present(conn) -> bool:
@@ -291,6 +296,8 @@ class CanonicalRememberRuntime:
             codec=MachineKeyCommandCodec(Path(journal_path).with_name("admission-key.bin")),
         )
         self._service = RememberService(self.journal, _CoordinatorAdapter(self.coordinator))
+        # Commits remembers that were accepted while the writer was busy.
+        self._deferred = DeferredCommitter(self.journal, self._commit_deferred)
         self._started = False
         self._obligation_schema_ok: bool | None = None
 
@@ -411,6 +418,8 @@ class CanonicalRememberRuntime:
         except BaseException:
             self.coordinator.release_ownership()
             raise
+        if self._deferred.stopped:  # a restart of this same runtime
+            self._deferred = DeferredCommitter(self.journal, self._commit_deferred)
         self._started = True
 
     @property
@@ -426,7 +435,34 @@ class CanonicalRememberRuntime:
     def stop(self) -> None:
         """Release the daemon writer lease after callers and workers have stopped."""
         self._started = False
+        # Before the lease goes: an in-flight deferred commit finishes or
+        # fails cleanly, and anything still queued stays in the journal for
+        # replay_pending at the next start.
+        self._deferred.stop()
         self.coordinator.release_ownership()
+
+    @property
+    def deferred_count(self) -> int:
+        """Remembers accepted under contention and not yet committed."""
+        return self._deferred.pending
+
+    def wait_for_deferred(self, timeout: float) -> bool:
+        """Block until every accepted remember is committed; False on timeout."""
+        return self._deferred.wait_idle(timeout)
+
+    def _commit_deferred(
+        self, entry: AdmissionEntry, request: RememberRequest,
+    ) -> Mapping[str, Any]:
+        command = RememberAdmissionCommand(
+            journal_id=entry.journal_id,
+            request_hash=entry.request_hash,
+            request=request,
+            profile_id=entry.profile_id,
+            idempotency_key=entry.idempotency_key,
+        )
+        return _CoordinatorAdapter(self.coordinator).submit(
+            command, wait_ms=_DEFERRED_COMMIT_WAIT_MS,
+        )["receipt"]
 
     def rebind_engine(self, engine: Any) -> None:
         """Atomically follow a drained daemon mode/profile transition."""
@@ -484,7 +520,12 @@ class CanonicalRememberRuntime:
             raise
 
     def remember(
-        self, request: RememberRequest, actor: Actor, *, deadline_ms: int = 2_000,
+        self,
+        request: RememberRequest,
+        actor: Actor,
+        *,
+        deadline_ms: int = 2_000,
+        accept_after_ms: int | None = None,
     ) -> RememberReceipt:
         """Journal then commit one bounded queryable admission receipt."""
         if not self._started:
@@ -495,7 +536,10 @@ class CanonicalRememberRuntime:
             admitted = self._generation
         record_admission_epoch(request.profile_id, request.idempotency_key, admitted)
         try:
-            return self._service.remember(request, actor, deadline_ms=deadline_ms)
+            return self._service.remember(
+                request, actor, deadline_ms=deadline_ms, defer=self._deferred.defer,
+                accept_after_ms=accept_after_ms,
+            )
         except (
             AdmissionJournalUnavailable,
             OwnershipRequiredError,

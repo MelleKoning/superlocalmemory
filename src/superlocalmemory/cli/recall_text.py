@@ -51,6 +51,12 @@ def remember_receipt_text(result: dict) -> str:
     miss it until then, and the receipt says so instead of implying more.
     """
     state = str(result.get("materialization_state") or "queryable")
+    if state == "accepted":
+        return (
+            "Saved ✓ (durable). The memory writer is busy, so it is being "
+            "indexed now and will be searchable within seconds "
+            f"(admission={result.get('admission_id', 'unknown')})."
+        )
     line = (f"{state.capitalize()} ✓ {result.get('count', 0)} facts "
             f"(operation={result.get('operation_id', 'unknown')}).")
     if state in ("queryable", "enriching"):

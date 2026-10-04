@@ -249,6 +249,54 @@ _FACT_ENTITY_REPAIR_MAX_RETRY_SECONDS = 30.0
 # second gets what the first left rather than a fresh grant.
 _REMEMBER_TOTAL_CEILING_SECONDS = 1.5
 _REMEMBER_ENRICHMENT_WAIT_SECONDS = 1.2
+# How long a remember waits for the canonical commit before answering
+# "accepted" instead: inside the 1.5 s ceiling with room for the response.
+# Past the old single 2.0 s deadline the answer was a 503 for a memory the
+# journal already held.
+_REMEMBER_ADMISSION_DEADLINE_MS = 1_200
+# The journal prepare is the point of durability; nothing can be accepted
+# before it, so it keeps its full 2.0 s budget (unchanged) rather than being
+# squeezed into the commit wait and refused sooner.
+_REMEMBER_JOURNAL_DEADLINE_MS = 2_000
+
+
+def _accepted_remember_response(payload: dict, profile: str, *, replaces=None):
+    """HTTP 202 for a remember that is durable but not yet committed."""
+    from starlette.responses import JSONResponse
+
+    body = {
+        "ok": True,
+        "profile": profile,
+        "fact_ids": [],
+        "count": 0,
+        "status": "accepted",
+        "materialization_state": "accepted",
+        "durable": True,
+        "queryable": False,
+        "searchable_by": "not_yet",
+        "enriched_now": 0,
+        "admission_id": payload.get("admission_id"),
+        "idempotency_key": payload.get("idempotency_key"),
+        "operation_id": None,
+        "pending_id": None,
+        "commit_sequence": None,
+        "note": (
+            "saved durably; the memory writer is busy, so it is being indexed "
+            "now and will be searchable within seconds. Resend with the same "
+            "idempotency_key to get its final receipt."
+        ),
+        "wait_ignored": True,
+    }
+    if replaces is not None:
+        body["replaced"] = {
+            "ok": False,
+            "replaces": replaces,
+            "reason": (
+                "the new memory is saved but not yet indexed, so the old one "
+                "was not retired; resend with the same idempotency_key"
+            ),
+        }
+    return JSONResponse(body, status_code=202)
 
 # Enrichment runs off the event loop, but NOT on the loop's default executor.
 # `asyncio.to_thread` uses that default pool, so N simultaneous writers really did
@@ -5148,9 +5196,17 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 runtime.remember,
                 admission,
                 actor,
-                deadline_ms=2_000,
+                deadline_ms=_REMEMBER_JOURNAL_DEADLINE_MS,
+                accept_after_ms=_REMEMBER_ADMISSION_DEADLINE_MS,
             )
             payload = dict(receipt.payload)
+            if payload.get("status") == "accepted":
+                # The writer was busy past the deadline. The memory is durable
+                # in the admission journal and is being committed now; it is
+                # not searchable yet, and the answer says exactly that.
+                return _accepted_remember_response(
+                    payload, write_profile, replaces=req.replaces,
+                )
             fact_ids = list(payload.get("fact_ids") or [])
             # Only now, with the new memory durably saved, is the old one marked.
             # Never raises: a failed mark is reported in ``replaced``.
@@ -5329,9 +5385,17 @@ def _register_daemon_routes(application: FastAPI) -> None:
             if isinstance(exc, CanonicalRememberUnavailable) or (
                 isinstance(exc, AdmissionRejected) and exc.retryable
             ):
+                # Contention no longer lands here (it is accepted, 202). What
+                # remains is a writer that is not working: say so plainly.
+                logger.error("canonical remember writer failed: %s", exc)
                 raise HTTPException(
                     503,
-                    detail="canonical remember is temporarily unavailable; retry shortly",
+                    detail=(
+                        "the memory writer is not working "
+                        f"({type(exc.__cause__ or exc).__name__}); check disk "
+                        "space and database health. Resending with the same "
+                        "idempotency_key is safe and never stores it twice."
+                    ),
                 ) from exc
             if isinstance(exc, AdmissionRejected):
                 raise HTTPException(

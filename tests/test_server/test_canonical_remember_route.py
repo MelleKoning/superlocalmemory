@@ -476,3 +476,55 @@ def test_authenticated_mcp_correction_lifecycle_uses_the_same_resident_daemon(
     assert [item["case_id"] for item in listed["corrections"]] == [case_id]
     assert applied["success"] is True
     assert applied["correction_case"]["status"] == "applied"
+
+
+def test_remember_under_a_held_write_lock_is_202_accepted_then_saved_once(
+    engine_with_mock_deps,
+) -> None:
+    """A busy writer answers 202 'accepted, not yet searchable' — never 503.
+
+    The write lock is held by a second connection (what a long enrichment or
+    maintenance transaction does under load), so the canonical commit cannot
+    land inside the caller deadline. The memory must still be saved exactly
+    once, and the answer must not claim it is searchable before it is.
+    """
+    import sqlite3
+    import time
+
+    body = {
+        "content": (
+            "Priya rotates the harbour pilot schedule every second Tuesday "
+            "while the writer is under load."
+        ),
+        "idempotency_key": "held-lock-route-1",
+    }
+    db_path = engine_with_mock_deps._db.db_path
+    with _client(engine_with_mock_deps) as client:
+        runtime = client.app.state.canonical_remember_runtime
+        holder = sqlite3.connect(str(db_path), timeout=5, isolation_level=None)
+        holder.execute("BEGIN IMMEDIATE")
+        try:
+            started = time.monotonic()
+            accepted = client.post("/remember", json=body)
+            elapsed = time.monotonic() - started
+        finally:
+            holder.execute("ROLLBACK")
+            holder.close()
+        assert runtime.wait_for_deferred(timeout=15.0)
+        final = client.post("/remember", json=body)
+
+    assert accepted.status_code == 202, accepted.text
+    payload = accepted.json()
+    assert payload["ok"] is True
+    assert payload["status"] == "accepted"
+    assert payload["durable"] is True
+    assert payload["queryable"] is False
+    assert payload["fact_ids"] == []
+    assert payload["idempotency_key"] == "held-lock-route-1"
+    assert elapsed <= 1.5, f"acknowledgement took {elapsed:.3f}s"
+    assert final.status_code == 200, final.text
+    assert final.json()["status"] == "queryable"
+    assert len(final.json()["fact_ids"]) >= 1
+    assert len(engine_with_mock_deps._db.execute(
+        "SELECT * FROM ingestion_operations"
+    )) == 1
