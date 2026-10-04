@@ -40,7 +40,9 @@ $ slm recall "what did we decide about rollback" --kind decision
   1. [0.54] We deploy the API blue-green; rollback is a DNS flip.
 
 $ slm remember "Staging DB moved to Postgres 17 on port 5434." --replaces 0f57a17af3dd46e5
-Replaced ✓ 1 fact(s) of 0f57a17af3dd46e5. To undo, call review_correction ...
+Replaced ✓ 1 fact(s) of 0f57a17af3dd46e5.
+To undo, run:
+  slm review-correction ... rollback 1
 $ slm recall "which port does staging postgres use"
   1. [0.68] Staging DB moved to Postgres 17 on port 5434.
 ```
