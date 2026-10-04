@@ -848,29 +848,28 @@ async def search_memories(request: Request, body: SearchRequest):
         kind_clause = " AND memory_kind = ?" if apply_kind_filter else ""
         kind_params = (parsed_kind,) if apply_kind_filter else ()
         kind_select = ", memory_kind" if has_kind_columns else ""
-        cursor.execute(f"""
+        # Same word-based match as the daemon's /recall fallback, so the
+        # dashboard, CLI and MCP find the same rows (server/recall_fallback.py).
+        from superlocalmemory.server.recall_fallback import (
+            abandoned_channel_metadata, keyword_match_sql)
+        sql = keyword_match_sql(body.query, column="content")
+        rows = [] if sql is None else cursor.execute(f"""
             SELECT fact_id, content, confidence as memory_confidence,
                    fact_type as category, created_at{kind_select}
-            FROM atomic_facts
-            WHERE profile_id = ? AND content LIKE ?{kind_clause}
-            ORDER BY confidence DESC LIMIT ?
-        """, (active_profile, f'%{body.query}%', *kind_params, body.limit))
-        rows = cursor.fetchall()
+            FROM atomic_facts WHERE profile_id = ? AND {sql[0]}{kind_clause}
+            ORDER BY {sql[2]}, confidence DESC LIMIT ?
+        """, (active_profile, *sql[1], *kind_params, *sql[3], body.limit)).fetchall()
         conn.close()
 
         results = [{
-            **row,
-            "score": None,
-            "relevance_score": None,
-            "ranking_score": None,
-            "confidence": row.get("memory_confidence"),
-            "rank_position": position,
+            **row, "score": None, "relevance_score": None, "ranking_score": None,
+            "confidence": row.get("memory_confidence"), "rank_position": position,
         } for position, row in enumerate(rows, start=1)]
 
         return {
             "query": body.query, "results": results, "total": len(results),
             "query_type": "text_search", "retrieval_time_ms": 0,
-            "retrieval_mode": "degraded_lexical",
+            "retrieval_mode": "degraded_lexical", **abandoned_channel_metadata(),
             "score_contract_version": "2",
             "calibration_status": "uncalibrated",
             "calibration_id": None,

@@ -29,7 +29,10 @@ from superlocalmemory.retrieval import channel_status as chstat
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["recall_keyword_fallback", "fallback_terms"]
+__all__ = [
+    "abandoned_channel_metadata", "fallback_terms", "keyword_match_sql",
+    "recall_keyword_fallback",
+]
 
 # Bounded: each term is one LIKE in the WHERE and one in the ORDER BY.
 _MAX_TERMS = 8
@@ -63,17 +66,40 @@ def _like(term: str) -> str:
     return f"%{escaped}%"
 
 
-def _fetch_candidates(db, pid: str, query: str, pool_limit: int) -> list[dict]:
+def keyword_match_sql(
+    query: str, column: str = "af.content",
+) -> tuple[str, list[str], str, list[str]] | None:
+    """(where, where_params, order_by, order_params) for a word-based match.
+
+    Shared by every over-budget surface (daemon ``/recall`` and the dashboard
+    ``/api/search``) so the CLI, MCP and dashboard find the same rows. A row
+    matches when it contains the phrase or any content word; rows are ranked by
+    how many they contain, the exact phrase counting double. ``None`` when the
+    query has nothing to match on.
+    """
     terms = fallback_terms(query)
     if not terms:
-        return []
+        return None
     likes = [_like(t) for t in terms]
-    match_any = " OR ".join("af.content LIKE ? ESCAPE '\\'" for _ in likes)
-    # The phrase counts double so an exact hit always outranks a word-bag hit.
-    score = " + ".join(
-        ("2 * " if i == 0 else "") + "(af.content LIKE ? ESCAPE '\\')"
-        for i in range(len(likes))
-    )
+    match = f"{column} LIKE ? ESCAPE '\\'"
+    where = "(" + " OR ".join(match for _ in likes) + ")"
+    order = "(" + " + ".join(
+        ("2 * " if i == 0 else "") + f"({match})" for i in range(len(likes))
+    ) + ") DESC"
+    return where, list(likes), order, list(likes)
+
+
+def abandoned_channel_metadata() -> dict:
+    """Every channel reported as abandoned: nothing from full recall ran."""
+    status = {name: chstat.TIMEOUT for name in chstat.CHANNEL_NAMES}
+    return {"channel_status": status, "incomplete_channels": sorted(status)}
+
+
+def _fetch_candidates(db, pid: str, query: str, pool_limit: int) -> list[dict]:
+    sql = keyword_match_sql(query)
+    if sql is None:
+        return []
+    where, where_params, order, order_params = sql
     # The "af" alias matters: current_fact_clause's temporal-validity check is
     # a correlated subquery against fact_temporal_validity, which has its own
     # fact_id/profile_id columns. Unqualified, SQLite resolves the outer
@@ -83,9 +109,9 @@ def _fetch_candidates(db, pid: str, query: str, pool_limit: int) -> list[dict]:
     rows = db.execute(
         "SELECT af.fact_id AS fact_id, af.content AS content, "
         "af.confidence AS confidence FROM atomic_facts AS af "
-        f"WHERE af.profile_id = ? AND ({match_any}) {current_clause} "
-        f"ORDER BY ({score}) DESC, af.confidence DESC LIMIT ?",
-        (pid, *likes, *likes, pool_limit),
+        f"WHERE af.profile_id = ? AND {where} {current_clause} "
+        f"ORDER BY {order}, af.confidence DESC LIMIT ?",
+        (pid, *where_params, *order_params, pool_limit),
     )
     return [dict(r) for r in rows]
 
@@ -149,11 +175,11 @@ def recall_keyword_fallback(
     # Nothing from full recall reached this answer: every channel was
     # abandoned when the budget ran out. Saying "{}" here made a degraded
     # answer look like a complete one that found nothing.
-    abandoned = {name: chstat.TIMEOUT for name in chstat.CHANNEL_NAMES}
+    abandoned = abandoned_channel_metadata()
     contract = recall_response_metadata(RecallResponse(
         query=query,
-        incomplete_channels=tuple(sorted(abandoned)),
-        channel_status=abandoned,
+        incomplete_channels=tuple(abandoned["incomplete_channels"]),
+        channel_status=abandoned["channel_status"],
     ))
     return {
         **contract,
