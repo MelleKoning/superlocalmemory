@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import re
+import sqlite3
 import threading
 import uuid
 from collections.abc import Callable, Mapping
@@ -275,6 +276,22 @@ class _CoordinatorAdapter:
                 raise TerminalAdmissionError("UNKNOWN_PROFILE") from exc
             raise
         return {"state": "committed", "receipt": dict(result.receipt)}
+
+
+def _journal_was_busy(error: BaseException) -> bool:
+    """True when the journal refused for overload or time, not for storage."""
+    from superlocalmemory.storage.journal_writer import (
+        _BUSY_MESSAGE,
+        AdmissionJournalOverloaded,
+        is_sqlite_busy,
+    )
+
+    if isinstance(error, AdmissionJournalOverloaded) or str(error) == _BUSY_MESSAGE:
+        return True
+    cause = error.__cause__
+    if cause is None:
+        return True  # raised by the journal itself, without a storage error
+    return isinstance(cause, sqlite3.Error) and is_sqlite_busy(cause)
 
 
 def _caused_by_unknown_profile(error: BaseException) -> bool:
@@ -639,7 +656,15 @@ class CanonicalRememberRuntime:
         except AdmissionJournalUnavailable as exc:
             # Only the journal prepare can raise this out of the service (a
             # busy journal after prepare is answered "accepted"), and the
-            # journal guarantees a refused prepare was not written.
+            # journal guarantees a refused prepare was not written. A full
+            # queue or a spent budget is overload; anything else (a failed
+            # COMMIT: full disk, I/O error) is storage and must say so.
+            if not _journal_was_busy(exc):
+                raise CanonicalRememberUnavailable(
+                    "this save could not be written to disk "
+                    f"({type(exc.__cause__ or exc).__name__}); nothing was saved. "
+                    "Check free disk space and that the SLM data folder is writable."
+                ) from exc
             raise CanonicalRememberBusy(
                 "too many saves are arriving at once; this one was not saved",
                 retry_after_seconds=getattr(exc, "retry_after_seconds", 1),
