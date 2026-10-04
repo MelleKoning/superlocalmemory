@@ -10,7 +10,6 @@ Covers hard rules B1, B2, B4, B5, B6, B7.
 from __future__ import annotations
 
 import itertools
-import secrets as _secrets
 import sqlite3
 from pathlib import Path
 
@@ -246,27 +245,33 @@ def test_update_already_settled_is_noop(bandit: ContextualBandit):
 
 
 # ---------------------------------------------------------------------------
-# B1: SystemRandom used (NOT random.betavariate)
+# B1: the draw is keyed by the install secret (4.1.20)
 # ---------------------------------------------------------------------------
 
 
-def test_secure_rng_used(bandit_db: Path, monkeypatch):
-    """B1: choose() must call into secrets.SystemRandom().betavariate."""
-    call_counter = {"n": 0}
-    real_system_random = _secrets.SystemRandom
+def test_draw_is_keyed_by_the_install_secret(bandit_db: Path, tmp_path: Path,
+                                             monkeypatch):
+    """B1: without the install secret the draw cannot be reproduced.
 
-    class _Spy(real_system_random):
-        def betavariate(self, a, b):  # type: ignore[override]
-            call_counter["n"] += 1
-            return super().betavariate(a, b)
+    The arm is a deterministic function of (secret, question, posterior) — see
+    test_one_question_draws_one_arm — so the secret is what keeps it from being
+    predictable. A different secret must give a different sequence of arms.
+    """
+    from superlocalmemory.core import security_primitives as sp
 
-    monkeypatch.setattr("superlocalmemory.learning.bandit.secrets.SystemRandom",
-                        _Spy)
-    b = ContextualBandit(bandit_db, profile_id="rng",
-                         cache=_BanditCache(max_entries=8))
-    b.choose(_ctx(), query_id="rng-q")
-    # 40 arms × 1 call each = 40 invocations.
-    assert call_counter["n"] >= 40
+    token = tmp_path / ".install_token"
+    monkeypatch.setattr(sp, "_install_token_path", lambda: token)
+
+    def arms(secret: str) -> list[str]:
+        token.write_text(secret, encoding="utf-8")
+        b = ContextualBandit(bandit_db, profile_id="rng",
+                             cache=_BanditCache(max_entries=8))
+        return [b.choose_readonly(_ctx(), draw_key=f"q{i}").arm_id
+                for i in range(30)]
+
+    first = arms("a" * 64)
+    assert arms("a" * 64) == first
+    assert arms("b" * 64) != first
 
 
 # ---------------------------------------------------------------------------

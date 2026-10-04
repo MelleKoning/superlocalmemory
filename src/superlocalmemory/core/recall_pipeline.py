@@ -1007,10 +1007,12 @@ def apply_v2_bandit_ensemble(
         # samples the same arm from a read-only snapshot and returns
         # ``play_id=None``, so taking that branch means this query can never be
         # settled and the arm can never move off its prior.
+        # The draw is keyed by the question (never stored): the same question
+        # over the same posterior gets the same weights, hence the same order.
         choice = (
-            bandit.choose(context, query_id)
+            bandit.choose(context, query_id, draw_key=query)
             if record_plays
-            else bandit.choose_readonly(context)
+            else bandit.choose_readonly(context, draw_key=query)
         )
 
         # --- 2. apply channel weights -------------------------------------
