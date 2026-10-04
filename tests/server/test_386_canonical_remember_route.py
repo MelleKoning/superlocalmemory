@@ -47,7 +47,7 @@ def test_remember_runs_trust_hook_before_journal_runtime_and_ignores_wait(
             assert sequence == ["hook"]
             assert admission.content == "canonical route witness"
             assert actor.principal_id == "trusted-actor"
-            assert deadline_ms == 2_000
+            assert deadline_ms == 1_200  # inside the 1.5 s remember ceiling
             sequence.append("journal-coordinator")
             return RememberReceipt({
                 "operation_id": "operation-1",
