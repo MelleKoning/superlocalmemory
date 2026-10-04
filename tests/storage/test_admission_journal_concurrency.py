@@ -210,25 +210,27 @@ def test_deadline_refusal_is_never_written_later(tmp_path) -> None:
 def test_withdrawal_during_execution_reruns_batch_without_it(tmp_path) -> None:
     """Cancel before commit: a withdrawn operation is rolled out of its batch."""
     writer = _scratch_writer(tmp_path, linger_seconds=0.2)
+    deadline = time.monotonic() + 1.0
     slow_runs = 0
 
     def slow(conn):
+        # Still executing when its caller's deadline passes.
         nonlocal slow_runs
         slow_runs += 1
         conn.execute("INSERT INTO t VALUES ('slow')")
-        time.sleep(0.15)
+        time.sleep(max(0.0, deadline - time.monotonic()) + 0.2)
 
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
             keeper = pool.submit(
                 writer.submit, lambda c: c.execute("INSERT INTO t VALUES ('keep')"),
             )
-            quitter = pool.submit(writer.submit, slow, deadline=time.monotonic() + 0.25)
+            quitter = pool.submit(writer.submit, slow, deadline=deadline)
             with pytest.raises(AdmissionJournalUnavailable):
-                quitter.result(timeout=5.0)
-            keeper.result(timeout=5.0)
+                quitter.result(timeout=10.0)
+            keeper.result(timeout=10.0)
+        assert slow_runs == 1, "the withdrawal must have happened mid-execution"
         assert _rows(tmp_path / "scratch.db") == {"keep"}
-        assert slow_runs == 1
     finally:
         writer.close()
 
