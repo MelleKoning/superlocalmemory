@@ -26,7 +26,8 @@ _FOREGROUND_WRITES = 48
 _FOREGROUND_CONCURRENCY = 8
 _LEGACY_WRITES_PER_PROCESS = 48
 _READER_THREADS = 4
-_REMEMBER_DEADLINE_MS = 2_000
+_REMEMBER_DEADLINE_MS = 1_200  # the daemon's own admission deadline
+_DRAIN_SECONDS = 30.0
 _PROCESS_DEADLINE_SECONDS = 8.0
 _ACTOR_ID = "multiprocess-contention-daemon"
 
@@ -230,7 +231,8 @@ def test_386_canonical_remember_survives_legacy_multiprocess_contention(
 ) -> None:
     """Canonical writes, legacy DML, and strict RO FTS snapshots all finish.
 
-    The individual 2s remember deadline is the foreground service contract;
+    The individual 1.2 s remember deadline is the foreground service contract:
+    each remember is committed or durably accepted inside it, never refused;
     legacy child processes have an 8s total cap.  Counts prove that contention
     caused neither duplicated work nor silently lost writes.
     """
@@ -262,6 +264,7 @@ def test_386_canonical_remember_survives_legacy_multiprocess_contention(
     foreground_errors: list[BaseException] = []
     reader_errors: list[BaseException] = []
     foreground_elapsed: list[float] = []
+    statuses: list[str] = []
     writes_complete = threading.Event()
     errors_lock = threading.Lock()
     try:
@@ -276,7 +279,11 @@ def test_386_canonical_remember_survives_legacy_multiprocess_contention(
                     _actor(),
                     deadline_ms=_REMEMBER_DEADLINE_MS,
                 )
-                assert receipt.payload["status"] == "queryable"
+                # Committed in time, or durably accepted while the writer was
+                # busy. Never refused: contention is not a failure.
+                assert receipt.payload["status"] in {"queryable", "accepted"}
+                with errors_lock:
+                    statuses.append(receipt.payload["status"])
             except BaseException as exc:
                 with errors_lock:
                     foreground_errors.append(exc)
@@ -346,6 +353,15 @@ def test_386_canonical_remember_survives_legacy_multiprocess_contention(
             for result in child_results
         )
         assert sum(snapshot_counts) > 0
+        # Every accepted memory is committed, exactly once, without a resend.
+        assert harness.runtime.wait_for_deferred(timeout=_DRAIN_SECONDS), (
+            f"{harness.runtime.deferred_count} accepted remember(s) never committed"
+        )
+        print(
+            f"\n386: {statuses.count('queryable')} queryable, "
+            f"{statuses.count('accepted')} accepted; max ack "
+            f"{max(foreground_elapsed):.3f}s"
+        )
         assert (
             _strict_read_count(
                 harness.db_path,
