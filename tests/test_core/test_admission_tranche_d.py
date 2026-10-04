@@ -146,6 +146,10 @@ class TestCliRecallScopeClamped:
             args.fast = False
             args.window = ""
             args.as_of = ""
+            # Every time filter is checked before the scope clamp; a MagicMock
+            # attribute is not a readable time, so each must be set.
+            args.known_as_of = ""
+            args.valid_at = ""
             # A MagicMock attribute is not a valid kind; recall refuses it
             # before the scope clamp is reached.
             args.kind = ""
