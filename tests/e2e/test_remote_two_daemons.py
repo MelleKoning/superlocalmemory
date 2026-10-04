@@ -55,6 +55,8 @@ def _env(root: Path, port: int) -> dict:
         "SLM_DAEMON_PORT": str(port), "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
         "HF_HOME": str(root / "cache" / "hf"), "XDG_CACHE_HOME": str(root / "cache"),
         "SENTENCE_TRANSFORMERS_HOME": str(root / "cache" / "st"), "CI": "1",
+        # Never bind or redirect from the shared legacy port on this machine.
+        "SLM_DISABLE_LEGACY_PORT": "1",
         "SLM_NON_INTERACTIVE": "1", "SLM_DISABLE_HF_DOWNLOAD": "1", "OMP_NUM_THREADS": "1",
         "TOKENIZERS_PARALLELISM": "false", "NO_PROXY": "127.0.0.1,localhost",
         # Each one-shot client call here is initialize + notification + call.
@@ -187,6 +189,8 @@ def pair(tmp_path_factory):
     try:
         s.start()
         h.start()
+        # A second workspace on S that no remote key is bound to.
+        _slm(s.env, "profile", "create", "clientx")
         ca = str(root / "s" / "data" / "remote" / "tls" / "ca.pem")
         yield {"s": s, "h": h, "key": key, "read_key": read_key, "ca": ca,
                "port": remote_port, "url": f"https://localhost:{remote_port}/mcp/hermes"}
@@ -331,3 +335,103 @@ def test_no_read_tool_shows_a_remote_caller_the_hosts_paths(pair) -> None:
     # The same tool on this computer keeps the full detail.
     local = mcp_call(f"http://127.0.0.1:{pair['s'].port}/mcp/hermes", None, True, "get_status")
     assert str(pair["s"].root) in _text(local)
+
+
+# -- exploit regressions: a remote key stays inside its own cache and its own profile ---
+
+
+def _local_url(pair, agent: str = "claude") -> str:
+    return f"http://127.0.0.1:{pair['s'].port}/mcp/{agent}"
+
+
+def _remote_url(pair, agent: str = "claude") -> str:
+    return f"https://localhost:{pair['port']}/mcp/{agent}"
+
+
+def _answer(result) -> dict:
+    return json.loads(_text(result))
+
+
+def _secret(stdout: str) -> str:
+    return next(t for t in stdout.split() if t.startswith("slmr_"))
+
+
+def test_remote_keys_cannot_read_or_overwrite_a_local_agents_cache(pair) -> None:
+    """Audit L2 F1: /mcp/claude from another computer used to be the local claude's cache."""
+    ctx = ssl.create_default_context(cafile=pair["ca"])
+    entry = "read:/Users/me/project/.env"
+    secret = f"API_TOKEN=local-only-{os.getpid()}"
+    stored = mcp_call(_local_url(pair), None, True, "slm_cache_set",
+                      {"key": entry, "value": secret})
+    assert _answer(stored)["stored"] is True
+    for key in (pair["read_key"], pair["key"]):
+        got = mcp_call(_remote_url(pair), key, ctx, "slm_cache_get", {"key": entry})
+        assert secret not in _text(got)
+        assert _answer(got)["hit"] is False
+    planted = mcp_call(_remote_url(pair), pair["key"], ctx, "slm_cache_set",
+                       {"key": entry, "value": "INJECTED"})
+    assert _answer(planted)["stored"] is True  # into the key's own cache
+    local = _answer(mcp_call(_local_url(pair), None, True, "slm_cache_get", {"key": entry}))
+    assert local["hit"] is True and local["value"] == secret
+    # The remote key keeps a working cache of its own that no other key can read.
+    own = _answer(mcp_call(_remote_url(pair), pair["key"], ctx, "slm_cache_get", {"key": entry}))
+    assert own["hit"] is True and own["value"] == "INJECTED"
+    other = _answer(mcp_call(_remote_url(pair), pair["read_key"], ctx, "slm_cache_get",
+                             {"key": entry}))
+    assert other["hit"] is False
+
+
+def test_a_remote_key_reaches_only_the_profile_it_is_bound_to(pair) -> None:
+    """Audit L2 F2: a read key used to recall another profile by naming it."""
+    ctx = ssl.create_default_context(cafile=pair["ca"])
+    token = f"clientx-secret-{os.getpid()}"
+    saved = mcp_call(_local_url(pair), None, True, "remember",
+                     {"content": f"{token} the merger closes on friday", "profile_id": "clientx"})
+    assert _answer(saved)["success"] is True
+    remote = _remote_url(pair, "hermes")
+    for key in (pair["read_key"], pair["key"]):
+        for tool, args in (("recall", {"query": f"{token} merger", "profile_id": "clientx"}),
+                           ("list_corrections", {"profile_id": "clientx"}),
+                           ("prestage_context", {"query": token, "profile_id": "clientx"})):
+            refused = mcp_call(remote, key, ctx, tool, args)
+            assert refused.is_error, (tool, _text(refused))
+            assert token not in _text(refused)
+            assert "bound to profile 'default'" in _text(refused), _text(refused)
+    for args in ({"content": "planted into clientx", "profile_id": "clientx"},
+                 {"content": "planted everywhere", "scope": "global"},
+                 {"content": "planted for clientx", "scope": "shared", "shared_with": "clientx"}):
+        refused = mcp_call(remote, pair["key"], ctx, "remember", args)
+        assert refused.is_error, (args, _text(refused))
+    # Its own profile still works, named or not.
+    for args in ({"query": "pier"}, {"query": "pier", "profile_id": "default"}):
+        assert not mcp_call(remote, pair["read_key"], ctx, "recall", args).is_error
+
+
+def test_a_key_bound_to_another_profile_works_only_while_that_profile_is_active(pair) -> None:
+    ctx = ssl.create_default_context(cafile=pair["ca"])
+    env = pair["s"].env
+    key = _secret(_slm(env, "remote", "keys", "add", "cx-viewer", "--read-only",
+                       "--profile", "clientx").stdout)
+    refused = mcp_call(_remote_url(pair, "hermes"), key, ctx, "recall", {"query": "merger"})
+    assert refused.is_error and "'clientx'" in _text(refused), _text(refused)
+    rows = {r["name"]: r for r in json.loads(_slm(env, "remote", "keys", "list",
+                                                  "--json").stdout)["keys"]}
+    assert rows["cx-viewer"]["profile"] == "clientx"
+    assert rows["hermes"]["profile"] == "default" and rows["viewer"]["profile"] == "default"
+    bad = subprocess.run([sys.executable, "-m", "superlocalmemory.cli.main", "remote", "keys",
+                          "add", "ghost", "--profile", "no-such-profile"], env=env,
+                         capture_output=True, text=True, timeout=120)
+    assert bad.returncode != 0 and "slmr_" not in bad.stdout
+
+
+@pytest.mark.parametrize("method", ["GET", "DELETE", "PUT"])
+def test_non_post_on_the_mcp_endpoint_from_a_remote_caller_is_405_at_once(pair, method) -> None:
+    """Audit L2: GET /mcp/ with a valid key used to hold an empty event stream open."""
+    ctx = ssl.create_default_context(cafile=pair["ca"])
+    request = urllib.request.Request(_remote_url(pair, "hermes"), method=method, headers={
+        "Authorization": f"Bearer {pair['key']}", "Accept": "text/event-stream"})
+    started = time.monotonic()
+    with pytest.raises(urllib.error.HTTPError) as err:
+        urllib.request.urlopen(request, timeout=10, context=ctx)
+    assert err.value.code == 405
+    assert time.monotonic() - started < 5
