@@ -996,120 +996,12 @@ def _recall_budget_s() -> float:
         return 25.0
 
 
-def _recall_keyword_fallback(
-    engine, query: str, limit: int, *, profile_id: str | None = None,
-    profile: str | None = None, profile_generation: int | None = None,
-    facets: Any = None,
-) -> dict:
-    """Fast profile-scoped keyword (LIKE) fallback for /recall.
+# The over-budget keyword answer lives in server/recall_fallback.py; the old
+# name stays importable for callers and tests.
+from superlocalmemory.server.recall_fallback import (  # noqa: E402
+    recall_keyword_fallback as _recall_keyword_fallback,
+)
 
-    Used only when semantic recall exceeds its budget, so CLI/MCP callers get
-    a bounded response instead of hanging. Mirrors the dashboard /api/search
-    fallback shape (retrieval_mode=degraded_lexical). ``profile_id`` follows
-    the per-request routing convention: None/"" means the active profile.
-
-    4.1.14 audit: the envelope echoes the SERVED namespace (profile +
-    profile_generation), exactly like the success path — a degraded routed
-    recall must never be readable as an active-profile answer.
-
-    4.1.19 L2-09/L3-10: this is the ONLY recall path that used to skip every
-    hard filter. It now excludes quarantined and caller-replaced (temporal
-    validity) rows in SQL via ``current_fact_clause`` — the same predicate
-    every other "what do I know now" surface applies — and, when ``facets``
-    (project / agent / about / kind) is given, narrows through the shared
-    ``retrieval.facets.matching_fact_ids`` exactly like full recall and
-    ``core.kind_query`` do. A facet that cannot be verified (the matcher
-    raised) keeps NOTHING rather than silently serving the unfiltered pool,
-    and ``facet_filter_error`` in the envelope says why — never an unfiltered
-    answer with no word about it.
-    """
-    results: list[dict] = []
-    has_facets = facets is not None and not facets.empty
-    facet_filter_error: str | None = None
-    try:
-        db = engine._db
-        pid = profile_id or engine.profile_id
-        # A facet filter runs AFTER this fetch, so overfetch the candidate
-        # pool the same way core.kind_query / retrieval.kind_filter do —
-        # otherwise a filtered answer could come back short even though
-        # enough matches exist further down the unfiltered LIKE order.
-        from superlocalmemory.retrieval.kind_filter import overfetch_limit
-        pool_limit = overfetch_limit(limit) if has_facets else limit
-        # The "af" alias matters: current_fact_clause's temporal-validity
-        # check is a correlated subquery against fact_temporal_validity,
-        # which has its own fact_id/profile_id columns. An unqualified
-        # prefix ("") leaves the outer reference unqualified too, so SQLite
-        # resolves it against the subquery's OWN table instead of the outer
-        # atomic_facts row — turning "this row was not replaced" into "no
-        # row anywhere was ever replaced" and excluding every row once any
-        # one fact in the whole profile had been superseded.
-        current_clause = db.current_fact_clause("af")
-        rows = db.execute(
-            "SELECT af.fact_id AS fact_id, af.content AS content, "
-            "af.confidence AS confidence FROM atomic_facts AS af "
-            f"WHERE af.profile_id = ? AND af.content LIKE ? {current_clause} "
-            "ORDER BY af.confidence DESC LIMIT ?",
-            (pid, f"%{query}%", pool_limit),
-        )
-        candidates = [dict(r) for r in rows]
-        if has_facets:
-            try:
-                from superlocalmemory.core.kind_query import (
-                    engine_display_min_confidence,
-                )
-                from superlocalmemory.retrieval.facets import matching_fact_ids
-                keep = matching_fact_ids(
-                    db, [c["fact_id"] for c in candidates], pid, facets,
-                    # M3: the configured threshold, same as full recall.
-                    display_min_confidence=engine_display_min_confidence(engine),
-                )
-                candidates = [c for c in candidates if c["fact_id"] in keep]
-            except Exception as exc:  # noqa: BLE001 - a filter that cannot
-                # run must cost results, never silently skip the filter.
-                facet_filter_error = type(exc).__name__
-                candidates = []
-        for pos, d in enumerate(candidates[:limit], start=1):
-            results.append({
-                "fact_id": d.get("fact_id"),
-                "content": (d.get("content") or "")[:2400],
-                "score": None, "relevance_score": None, "ranking_score": None,
-                "confidence": d.get("confidence"),
-                "rank_position": pos,
-            })
-    except Exception as exc:
-        logger.warning("recall keyword fallback failed (non-fatal): %s", exc)
-        if has_facets and facet_filter_error is None:
-            facet_filter_error = type(exc).__name__
-    # Every other recall carries the full response contract; this one never ran
-    # the answer check, ranking or channels, and says so with the defaults
-    # (answer_check_status "skipped") instead of leaving the fields out.
-    from superlocalmemory.server.recall_serializer import recall_response_metadata
-    from superlocalmemory.storage.models import RecallResponse
-
-    contract = recall_response_metadata(RecallResponse(query=query))
-    return {
-        **contract,
-        "ok": True,
-        "query": query,
-        "query_type": "text_search",
-        "retrieval_mode": "degraded_lexical",
-        "degraded_reason": "recall_budget_exceeded",
-        # None on the common path (no facet, or a facet that was applied
-        # cleanly); the exception's type name when a requested facet could
-        # not be verified and the response above is filtered down to nothing
-        # rather than silently unfiltered.
-        "facet_filter_error": facet_filter_error,
-        "profile": profile if profile else engine.profile_id,
-        "profile_generation": profile_generation,
-        "result_count": len(results),
-        "results": results,
-        "count": len(results),
-        "no_confident_match": True,
-        # PR #101: every other recall path returns this key, so clients format
-        # it unconditionally. Omitting it here made the degraded path — the one
-        # that fires when recall is ALREADY struggling — crash the CLI.
-        "retrieval_time_ms": 0,
-    }
 
 # v3.4.52: Embedding model warm state. Set to True by the async pre-warm
 # thread once Ollama has loaded the embedding model. /health reports this

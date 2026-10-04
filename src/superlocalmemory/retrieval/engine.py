@@ -182,12 +182,12 @@ class RetrievalEngine:
         self._close_lock = threading.Lock()
         self._closed = False
 
-        # V3.3.4: LRU cache for query embeddings (avoids redundant Ollama API calls)
-        # V3.4.40 (2026-05-09): bumped 64 -> 512. Each cached embedding is ~3KB
-        # (768 floats × 4 bytes). 512 entries ~1.5MB — trivial memory cost,
-        # massive latency win on repeated queries (sub-ms vs 200-2000ms ollama).
-        self._query_embedding_cache: dict[str, list[float]] = {}
-        self._cache_max_size = 512
+        # Query embeddings: 512-entry cache (~1.5 MB), single-flight, and a
+        # bounded wait so a loading model cannot hold a whole recall
+        # (see retrieval/query_embedding.py).
+        from superlocalmemory.retrieval.query_embedding import QueryEmbedder
+        self._query_embedder = QueryEmbedder(lambda: self._embedder, cache_max_size=512)
+        self._query_embedding_cache = self._query_embedder.cache
 
         # V3.2: ChannelRegistry for self-registration (Phase 0.5)
         from superlocalmemory.retrieval.channel_registry import ChannelRegistry
@@ -947,20 +947,12 @@ class RetrievalEngine:
 
     # -- Channel execution --------------------------------------------------
 
-    def _embed_query(self, query: str) -> list[float] | None:
-        """Embed query with LRU cache. Avoids redundant Ollama/API calls."""
-        if self._embedder is None:
-            return None
-        cached = self._query_embedding_cache.get(query)
-        if cached is not None:
-            return cached
-        emb = self._embedder.embed(query)
-        # Evict oldest if cache full
-        if len(self._query_embedding_cache) >= self._cache_max_size:
-            oldest = next(iter(self._query_embedding_cache))
-            del self._query_embedding_cache[oldest]
-        self._query_embedding_cache[query] = emb
-        return emb
+    def _embed_query(self, query: str) -> tuple[list[float] | None, str | None]:
+        """(vector, status). Bounded by the hang guard ONLY while the embedder
+        is not ready (status WARMING: vector channels not run); a ready one is
+        waited for exactly as in 4.1.19. See retrieval/query_embedding.py.
+        """
+        return self._query_embedder.embed(query, CHANNEL_HANG_GUARD_SECONDS)
 
     def _semantic_rank_for_unenriched(
         self, ch_results: dict[str, list[tuple[str, float]]],
@@ -1101,6 +1093,7 @@ class RetrievalEngine:
 
         # V3.3.4: Embed query ONCE, reuse for semantic + hopfield channels
         q_emb: list[float] | None = None
+        emb_wait: str | None = None  # WARMING: model not ready, recall stopped waiting
         needs_embedding = (
             (self._semantic is not None and "semantic" not in disabled)
             or (self._hopfield is not None and "hopfield" not in disabled)
@@ -1108,8 +1101,8 @@ class RetrievalEngine:
         )
         if needs_embedding:
             try:
-                q_emb = self._embed_query(query)
-                if q_emb is None:
+                q_emb, emb_wait = self._embed_query(query)
+                if q_emb is None and emb_wait is None:
                     logger.warning(
                         "Query embedding returned None — semantic, hopfield, "
                         "spreading_activation channels will be skipped this recall"
@@ -1136,7 +1129,11 @@ class RetrievalEngine:
                 elif _name in disabled:
                     channel_status[_name] = chstat.DISABLED
                 elif _needs_emb and q_emb is None:
-                    channel_status[_name] = chstat.NO_EMBEDDING
+                    channel_status[_name] = emb_wait or chstat.NO_EMBEDDING
+        if emb_wait and dropped_channels is not None and channel_status is not None:
+            # Not run because the vector was late: the answer is incomplete.
+            dropped_channels.update(
+                n for n, st in channel_status.items() if st == emb_wait)
 
         # v3.4.53: collect channel callables and run in parallel.
         # Each channel is a standalone search — no shared mutable state,
@@ -1275,6 +1272,7 @@ class RetrievalEngine:
                 return
             self._closed = True
         self._channel_executor.shutdown(wait=wait, cancel_futures=True)
+        self._query_embedder.close()
 
     # -- Fact loading -------------------------------------------------------
 

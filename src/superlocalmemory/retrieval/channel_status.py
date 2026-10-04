@@ -53,6 +53,7 @@ __all__ = [
     "NO_EMBEDDING",
     "OK",
     "TIMEOUT",
+    "WARMING",
     "is_fault",
 ]
 
@@ -65,6 +66,7 @@ ChannelStatus = Literal[
     "not_configured",
     "no_embedding",
     "no_candidates",
+    "warming",
 ]
 
 #: Ran and contributed candidates.
@@ -87,10 +89,15 @@ NO_EMBEDDING: ChannelStatus = "no_embedding"
 #: at all when there were none, and if the reason there were none is that the
 #: others failed, calling this "found nothing" hides the actual fault.
 NO_CANDIDATES: ChannelStatus = "no_candidates"
+#: Needed the query embedding, but the embedding model was still loading when
+#: this recall stopped waiting (a just-started daemon). Transient: the same
+#: question shortly afterwards gets this channel back. Reported as incomplete,
+#: never as "found nothing".
+WARMING: ChannelStatus = "warming"
 
 ALL_STATUSES: frozenset[str] = frozenset({
     OK, EMPTY, ERROR, TIMEOUT, DISABLED, NOT_CONFIGURED, NO_EMBEDDING,
-    NO_CANDIDATES,
+    NO_CANDIDATES, WARMING,
 })
 
 #: Every channel a recall can report on, so a caller can tell "this channel had
@@ -109,7 +116,7 @@ CHANNEL_NAMES: tuple[str, ...] = (
 #: Statuses that mean the answer is worse than it should have been. ``empty``,
 #: ``disabled`` and ``not_configured`` are deliberately absent: the first is a
 #: valid finding and the other two are somebody's decision.
-_FAULTS: frozenset[str] = frozenset({ERROR, TIMEOUT, NO_EMBEDDING})
+_FAULTS: frozenset[str] = frozenset({ERROR, TIMEOUT, NO_EMBEDDING, WARMING})
 
 
 def is_fault(status: str | None) -> bool:

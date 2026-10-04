@@ -1780,12 +1780,8 @@ def cmd_remember(args: Namespace) -> None:
                 from superlocalmemory.cli.json_output import json_print
                 json_print("remember", data=result)
             else:
-                state = result.get("materialization_state", "queryable")
-                operation_id = result.get("operation_id", "unknown")
-                print(
-                    f"{state.capitalize()} \u2713 {result['count']} facts "
-                    f"(operation={operation_id})."
-                )
+                from superlocalmemory.cli.recall_text import remember_receipt_text
+                print(remember_receipt_text(result))
                 replaced = result.get("replaced")
                 if isinstance(replaced, dict) and replaced.get("ok"):
                     print(f"Replaced \u2713 {len(replaced.get('fact_ids') or [])} fact(s) "
@@ -1925,11 +1921,10 @@ def cmd_recall(args: Namespace) -> None:
                         {"command": "slm list --json", "description": "List recent memories"},
                     ])
                     return
+                from superlocalmemory.cli.recall_text import empty_result_line, incomplete_line
+                incomplete = incomplete_line(result)
                 if not result["results"]:
-                    print("No confident match."
-                          if result.get("no_confident_match")
-                          else "No matching memories found.")
-                    return
+                    return print("\n".join(filter(None, [empty_result_line(result), incomplete])))
                 # Text output.
                 # PR #101: ``dict.get(k, 0)`` returns the DEFAULT only when the
                 # key is ABSENT — a present-but-null value still reaches the
@@ -1942,9 +1937,8 @@ def cmd_recall(args: Namespace) -> None:
                 for i, r in enumerate(result["results"], 1):
                     score = r.get('score') or 0
                     print(f"  {i}. [{score:.2f}] {r['content']}")
-                answer_check = _answer_check_line(result)
-                if answer_check:
-                    print(f"\n{answer_check}")
+                for note in filter(None, (incomplete, _answer_check_line(result))):
+                    print(f"\n{note}")
                 return
     except Exception as _exc:  # noqa: BLE001
         logger.warning(
