@@ -69,5 +69,9 @@ def test_unified_daemon_does_not_exempt_mcp_from_authentication() -> None:
     source = inspect.getsource(unified_daemon._register_dashboard_routes)
     assert '_AUTH_EXEMPT_PREFIXES = ("/v1/", "/v1beta/")' in source
     assert 'startswith(("/v1/", "/v1beta/", "/mcp"))' not in source
-    assert "authorize_http_mcp_request" in source
+    # 4.1.20: network /mcp goes through the remote gate (HTTPS + named key or
+    # API key, then the default-deny tool policy); authorize_http_mcp_request
+    # remains the reviewed primitive for the same loopback/API-key contract.
+    assert "gate_remote_mcp" in source
+    assert "is_trusted_local_peer" in source
     assert "require_http_mutation_actor" in source
