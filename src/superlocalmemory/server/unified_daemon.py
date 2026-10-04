@@ -4237,6 +4237,10 @@ def _register_dashboard_routes(application: FastAPI) -> None:
     # Answer-check settings (4.1.18): on-device Laya, hosted Jev, or off.
     from superlocalmemory.server.routes.answer_check import router as answer_check_router
     application.include_router(answer_check_router)
+    from superlocalmemory.server.routes.answer_check_actions import (
+        router as answer_check_actions_router,
+    )
+    application.include_router(answer_check_actions_router)
     from superlocalmemory.server.routes.answer_check_history import (
         router as answer_check_history_router,
     )

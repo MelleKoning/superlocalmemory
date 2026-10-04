@@ -476,7 +476,12 @@ def test_jev_test_with_key_calls_check_connection(client, monkeypatch):
     )
     response = client.post("/api/v3/answer-check/jev/test", json={"provider": "typesafe"})
     assert response.status_code == 200, response.text
-    assert response.json() == {"ok": True, "message": "Reached typesafe."}
+    body = response.json()
+    assert {k: body[k] for k in ("ok", "message")} == {"ok": True, "message": "Reached typesafe."}
+    # The result is kept, with when and how long, so a reload still shows it.
+    assert body["result"]["ok"] is True and body["result"]["at"]
+    assert client.get("/api/v3/answer-check").json()["tests"]["jev"]["message"] == \
+        "Reached typesafe."
 
 
 def test_jev_test_is_rate_limited(client, monkeypatch):

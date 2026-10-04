@@ -91,10 +91,12 @@ def laya_paths(status: Any) -> dict[str, str]:
     return paths
 
 
-def forget_managed_install(values: Mapping[str, Any]) -> dict[str, Any]:
+def forget_managed_install(values: Mapping[str, Any], *,
+                           every_path: bool = False) -> dict[str, Any]:
     """After the managed install is deleted: its paths go (so the dashboard
     says "Not installed", not "Needs a check"), and an explicit on-device
-    choice becomes Off. Paths to an install someone adopted are kept."""
+    choice becomes Off. Paths to an install someone adopted are kept — unless
+    ``every_path``: the person chose to stop using that install too."""
     run_dir = laya_runtime.runtime_dir()
     roots = {str(run_dir), str(run_dir.resolve())}
 
@@ -103,14 +105,34 @@ def forget_managed_install(values: Mapping[str, Any]) -> dict[str, Any]:
         return any(text == root or text.startswith(root + os.sep) for root in roots)
 
     out = dict(values)
-    if any(inside(values.get(k)) for k in ("sufficiency_python", "sufficiency_model",
-                                           "sufficiency_hf_home")):
+    if every_path or any(inside(values.get(k)) for k in (
+            "sufficiency_python", "sufficiency_model", "sufficiency_hf_home")):
         defaults = answer_check_state.field_defaults()
         for key in ("sufficiency_python", "sufficiency_hf_home", "sufficiency_model"):
             out[key] = defaults[key]
     if values.get("sufficiency_judge") == judge_selection.MODE_LAYA:
         out["sufficiency_judge"] = judge_selection.MODE_OFF
     return out
+
+
+_MODE_LABELS = {"laya": "on this Mac", "jev": "online with Jev", "off": "off"}
+
+
+def rerank_chosen(retrieval: Any) -> bool:
+    """Whether the person turned Jev's reordering on (and accepted its notice) —
+    remembered while another option is chosen, when it does not run."""
+    return (getattr(retrieval, "sufficiency_jev_rerank", False) is True
+            and getattr(retrieval, "sufficiency_jev_rerank_consent", False) is True)
+
+
+def switched_message(mode: str, retrieval: Any) -> str:
+    """What the person is told after choosing ``mode`` — including, plainly,
+    that Jev's reordering pauses while another option is chosen."""
+    text = f"Answer check is now {_MODE_LABELS.get(mode, mode)}. Only one option runs at a time."
+    if mode != judge_selection.MODE_JEV and rerank_chosen(retrieval):
+        text += (" Reordering with Jev is off while it isn't chosen; it comes back "
+                 "when you choose Jev again.")
+    return text
 
 
 # -- the running check ------------------------------------------------------------
@@ -244,8 +266,8 @@ def active_backend(app_state: Any, retrieval: Any, laya_status: Any) -> str:
 def rerank_status(retrieval: Any, active: str, judge: Any) -> dict[str, Any]:
     from superlocalmemory.retrieval.jev_rerank import clamp_rerank_k
 
-    enabled = judge_selection.jev_rerank_k(retrieval) > 0
-    running = enabled and active == judge_selection.MODE_JEV
+    enabled = rerank_chosen(retrieval)
+    running = judge_selection.jev_rerank_k(retrieval) > 0 and active == judge_selection.MODE_JEV
     if running and judge is not None:
         running_k = getattr(judge, "rerank_k", 0)
         running = isinstance(running_k, int) and running_k > 0
@@ -268,6 +290,61 @@ def adopt_status() -> dict[str, Any]:
     return {"running": job.running, **job.status().to_dict()}
 
 
+# -- "Test" results: kept, so a reload still shows when it last worked -------------
+
+_TESTS_FILE = "answer-check-tests.json"
+_tests_lock = threading.Lock()
+
+
+def _tests_path() -> Path:
+    return state_dir() / _TESTS_FILE
+
+
+def record_test(kind: str, ok: bool, message: str, seconds: float | None) -> dict[str, Any]:
+    """Save the outcome of a Test ("laya" or "jev"); returns what was saved.
+    ``message`` is plain language and never contains a key."""
+    import json
+    from datetime import datetime, timezone
+
+    result = {"ok": bool(ok), "message": str(message)[:300],
+              "seconds": None if seconds is None else round(float(seconds), 1),
+              "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    with _tests_lock:
+        data = read_tests()
+        data[kind] = result
+        path = _tests_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(f".tmp-{os.getpid()}")
+            tmp.write_text(json.dumps(data), encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError:
+            logger.warning("answer_check: couldn't save the test result")
+    return result
+
+
+def read_tests() -> dict[str, Any]:
+    import json
+
+    try:
+        data = json.loads(_tests_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in data.items() if k in ("laya", "jev") and isinstance(v, dict)} \
+        if isinstance(data, dict) else {}
+
+
+def forget_test(kind: str) -> None:
+    with _tests_lock:
+        data = read_tests()
+        if data.pop(kind, None) is None:
+            return
+        try:
+            _tests_path().write_text(__import__("json").dumps(data), encoding="utf-8")
+        except OSError:
+            logger.warning("answer_check: couldn't clear the test result")
+
+
 def build_status(app_state: Any) -> dict[str, Any]:
     """The dashboard's view. Reads only: writes nothing, starts nothing."""
     retrieval = effective_retrieval()
@@ -281,6 +358,9 @@ def build_status(app_state: Any) -> dict[str, Any]:
         "active": active,
         "laya": laya_status.to_dict(),
         "adopt": adopt_status(),
+        "setup_running": laya_runtime.LayaInstallJob.instance().running,
+        "laya_test_running": laya_runtime.LayaTestJob.instance().running,
+        "tests": read_tests(),
         "jev": {
             "provider": provider,
             **key_state(provider),
@@ -305,6 +385,9 @@ __all__ = [
     "effective_retrieval",
     "enforce",
     "forget_managed_install",
+    "forget_test",
+    "read_tests",
+    "record_test",
     "key_state",
     "laya_paths",
     "live_engine",
