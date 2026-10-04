@@ -501,6 +501,10 @@ class RecallResponse:
     # caller comparing two runs tell "not judged this time" from "nothing
     # answers". Additive — backward compatible.
     answer_check_status: str = "skipped"
+    # 4.1.20: why the check gave no verdict ("budget", "not_a_question", ...),
+    # or "reused" for a verdict repeated from an identical earlier check
+    # (``retrieval.answer_check_status.DETAIL_*``). Additive.
+    answer_check_detail: str = ""
     # 4.1.20: timing and provenance of the answer check (an AnswerCheckTrace).
     # In-process only — deliberately absent from recall_response_metadata, so
     # MCP and HTTP recall envelopes are unchanged. Typed Any to keep the

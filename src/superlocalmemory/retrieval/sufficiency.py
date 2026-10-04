@@ -461,8 +461,29 @@ class LayaSufficiencyJudge:
         rendered = [self._recipe.render(d) for d in docs]
         return self._ask(query, rendered, effective_deadline(deadline, self._timeout_s))
 
-    def _ask(self, query: str, rendered: list[str], deadline: float) -> JudgeOutcome:
-        if not self._lock.acquire(timeout=max(0.0, seconds_left(deadline) - self._min_ask_s)):
+    def assess_if_idle(self, query: str,
+                       documents: Sequence[JudgeDocument | str]) -> JudgeOutcome:
+        """``assess`` for work nobody is waiting on, which never makes a recall wait.
+
+        Asks only a warm worker that is free right now (``busy`` otherwise,
+        without waiting), bounded by this judge's own timeout. Never starts a
+        warm-up: a check finished after its recall returned is not a reason to
+        load a model.
+        """
+        docs = coerce_documents(documents[: self.top_k])
+        if not isinstance(query, str) or not query or not docs:
+            return JudgeOutcome(None, STATUS_SKIPPED)
+        if self._shutdown.is_set() or not self._ready:
+            return JudgeOutcome(None, STATUS_UNAVAILABLE)
+        rendered = [self._recipe.render(d) for d in docs]
+        return self._ask(query, rendered, effective_deadline(None, self._timeout_s),
+                         wait=False)
+
+    def _ask(self, query: str, rendered: list[str], deadline: float, *,
+             wait: bool = True) -> JudgeOutcome:
+        acquired = (self._lock.acquire(timeout=max(0.0, seconds_left(deadline) - self._min_ask_s))
+                    if wait else self._lock.acquire(blocking=False))
+        if not acquired:
             return JudgeOutcome(None, STATUS_BUSY)
         proc = self._proc  # read once: shutdown() swaps it without the lock
         try:

@@ -1809,7 +1809,7 @@ def _answer_check_line(result: dict) -> str:
     to hide what was actually retrieved.
     """
     if result.get("calibration_status", "uncalibrated") == "uncalibrated":
-        return ""
+        return _not_checked_line(result)
     confidence = result.get("answer_confidence")
     confidence = float(confidence) if confidence is not None else 0.0
     if result.get("abstention_reason") == "judged_insufficient":
@@ -1820,6 +1820,21 @@ def _answer_check_line(result: dict) -> str:
         )
     if not result.get("abstained", False):
         return f"Answer check: likely answered (confidence {confidence:.2f})."
+    return ""
+
+
+def _not_checked_line(result: dict) -> str:
+    """4.1.20: say so when a configured check gave no verdict on this recall.
+
+    Silent when no check is configured ("off") and when the reason is unknown
+    (an older daemon, the keyword fallback), so output without a check is
+    byte-identical to before.
+    """
+    status = result.get("answer_check_status")
+    reason = result.get("answer_check_reason", "")
+    if status in ("busy", "warming", "unavailable") or (status == "skipped" and reason):
+        from superlocalmemory.retrieval.answer_check_status import answer_check_note
+        return answer_check_note(status, reason)
     return ""
 
 
@@ -3648,6 +3663,10 @@ def cmd_trace(args: Namespace) -> None:
                         "answer_confidence": result.get("answer_confidence"),
                         "abstained": bool(result.get("abstained", False)),
                         "abstention_reason": result.get("abstention_reason"),
+                        **{k: result[k] for k in (
+                            "answer_check_status", "answer_check_ran",
+                            "answer_check_reason", "answer_check_note",
+                        ) if k in result},
                     }, next_actions=[
                         {
                             "command": "slm recall '<query>' --json",

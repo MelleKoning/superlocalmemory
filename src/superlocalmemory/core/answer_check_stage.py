@@ -31,6 +31,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from superlocalmemory.core import answer_check_memo
 from superlocalmemory.core.answer_check_scope import answer_check_skipped
 from superlocalmemory.retrieval.answer_check_status import (
     ANSWER_CHECK_DETAILS,
@@ -40,6 +41,7 @@ from superlocalmemory.retrieval.answer_check_status import (
     DETAIL_NO_RESULTS,
     DETAIL_NOT_A_QUESTION,
     DETAIL_OTHER_PROFILE,
+    DETAIL_REUSED,
     REQUEST_FULL,
     STATUS_JUDGED,
     STATUS_OFF,
@@ -85,15 +87,52 @@ def run_answer_check(retrieval_engine: Any, query: str, response: Any, *,
         logger.debug("Answer check skipped: the online check would read another "
                      "profile's memory")
         return JudgeOutcome(None, STATUS_SKIPPED, DETAIL_OTHER_PROFILE)
-    deadline = None
-    if recall_started is not None:
-        deadline = judge_deadline(recall_started)
-        if deadline is None:
-            logger.debug("Answer check skipped: too little of the recall budget left")
-            return JudgeOutcome(None, STATUS_SKIPPED, DETAIL_BUDGET)
     if request == REQUEST_FULL and reorders(judge):
+        deadline = _deadline_or_skip(recall_started)
+        if deadline is _SKIP:
+            return JudgeOutcome(None, STATUS_SKIPPED, DETAIL_BUDGET)
         return rerank_and_judge(judge, query, response, deadline)
-    return _plain_check(judge, query, response, deadline)
+    # 4.1.20: the same question over the same memories gets the same verdict,
+    # whatever retrieval cost this time (core.answer_check_memo; on-device only).
+    documents = _top_documents(judge, response)
+    remembered = answer_check_memo.lookup(judge, query, documents)
+    if remembered is not None:
+        return JudgeOutcome(remembered, STATUS_JUDGED, DETAIL_REUSED)
+    deadline = _deadline_or_skip(recall_started)
+    if deadline is _SKIP:
+        # Results are unchanged; finish the check off the recall's clock so the
+        # next run of this question is judged instead of skipped again.
+        answer_check_memo.finish_later(judge, query, documents)
+        return JudgeOutcome(None, STATUS_SKIPPED, DETAIL_BUDGET)
+    outcome = _plain_check(judge, query, documents, deadline)
+    if outcome.status == STATUS_JUDGED:
+        answer_check_memo.store(judge, query, documents, outcome.verdict)
+    return outcome
+
+
+_SKIP = object()
+
+
+def _deadline_or_skip(recall_started: float | None) -> Any:
+    """The check's deadline, None for "the backend's own timeout", or ``_SKIP``."""
+    if recall_started is None:
+        return None
+    deadline = judge_deadline(recall_started)
+    if deadline is None:
+        logger.debug("Answer check skipped: too little of the recall budget left")
+        return _SKIP
+    return deadline
+
+
+def _top_documents(judge: Any, response: Any) -> list[Any]:
+    """What the plain check reads: the top ``top_k`` memories' text. Never raises."""
+    from superlocalmemory.retrieval.judge_recipe import document_from_fact
+    from superlocalmemory.retrieval.sufficiency import DEFAULT_TOP_K
+
+    top_k = getattr(judge, "top_k", DEFAULT_TOP_K)
+    if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k < 1:
+        top_k = DEFAULT_TOP_K
+    return [document_from_fact(getattr(r, "fact", None)) for r in response.results[:top_k]]
 
 
 def _would_send_another_profiles_memory(judge: Any, response: Any,
@@ -126,10 +165,14 @@ def reorders(judge: Any) -> bool:
             and callable(getattr(judge, "rerank_and_judge", None)))
 
 
-def _genuine(verdict: Any) -> Any:
+def genuine_verdict(verdict: Any) -> Any:
+    """``verdict`` if it is a real SufficiencyVerdict, else None."""
     from superlocalmemory.retrieval.sufficiency import SufficiencyVerdict
 
     return verdict if isinstance(verdict, SufficiencyVerdict) else None
+
+
+_genuine = genuine_verdict
 
 
 def _settled(verdict: Any, status: Any) -> JudgeOutcome:
@@ -146,16 +189,9 @@ def _settled(verdict: Any, status: Any) -> JudgeOutcome:
     return JudgeOutcome(None, status)
 
 
-def _plain_check(judge: Any, query: str, response: Any,
+def _plain_check(judge: Any, query: str, documents: list[Any],
                  deadline: float | None) -> JudgeOutcome:
-    from superlocalmemory.retrieval.judge_recipe import document_from_fact
-    from superlocalmemory.retrieval.sufficiency import DEFAULT_TOP_K
-
-    top_k = getattr(judge, "top_k", DEFAULT_TOP_K)
-    if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k < 1:
-        top_k = DEFAULT_TOP_K
     try:
-        documents = [document_from_fact(r.fact) for r in response.results[:top_k]]
         assess = getattr(judge, "assess", None)
         if callable(assess):
             outcome = assess(query, documents, deadline=deadline)
@@ -267,5 +303,5 @@ def _trace(retrieval_engine: Any, outcome: JudgeOutcome, response: Any,
     )
 
 
-__all__ = ["apply_order", "build_trace", "reorders", "rerank_and_judge",
-           "run_answer_check"]
+__all__ = ["apply_order", "build_trace", "genuine_verdict", "reorders",
+           "rerank_and_judge", "run_answer_check"]

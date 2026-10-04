@@ -24,6 +24,11 @@ _ENVELOPE_4_1_19 = {
     "thematic_context", "incomplete_channels", "channel_status", "reranker_status",
     "local_reranker_status", "answer_check_status",
 }
+#: 4.1.20 adds exactly three keys that say whether the check ran and why not
+#: (WP14). The timing trace is still never on the envelope.
+_ENVELOPE_4_1_20 = _ENVELOPE_4_1_19 | {
+    "answer_check_ran", "answer_check_reason", "answer_check_note",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -79,10 +84,10 @@ def test_no_results_is_explained(mode_a_config, monkeypatch) -> None:
     assert out.answer_check_trace.judge_ms < 5.0
 
 
-def test_envelope_unchanged_from_4_1_19(mode_a_config, monkeypatch) -> None:
+def test_envelope_adds_only_the_check_explanation(mode_a_config, monkeypatch) -> None:
     out = _run(_SlowJudge(), mode_a_config, monkeypatch)
     meta = recall_response_metadata(out)
-    assert set(meta) == _ENVELOPE_4_1_19
+    assert set(meta) == _ENVELOPE_4_1_20
     assert "answer_check_trace" not in repr(meta)
 
 
