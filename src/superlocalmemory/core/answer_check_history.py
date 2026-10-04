@@ -238,11 +238,27 @@ def record_recall_verdict(response: Any, *, profile_id: str) -> None:
 
 # -- the writer side (writer thread only) ----------------------------------------
 
+def _unsaved_suffix() -> list[tuple[int, VerdictEvent]]:
+    """Unsaved entries, oldest first. Caller holds ``_lock``.
+
+    The ring is ordered by seq, so the unsaved entries are a suffix of it:
+    walk back from the newest end only as far as needed (O(unsaved), not
+    O(RING_CAPACITY)) — the recall path waits on this lock.
+    """
+    out = []
+    for entry in reversed(_ring):
+        if entry[0] <= _saved_seq:
+            break
+        out.append(entry)
+    out.reverse()
+    return out
+
+
 def snapshot_unsaved(max_items: int) -> list[tuple[int, VerdictEvent]]:
     """The oldest unsaved entries, at most ``max_items``; marks them in flight."""
     global _inflight_seq
     with _lock:
-        batch = [entry for entry in _ring if entry[0] > _saved_seq][:max_items]
+        batch = _unsaved_suffix()[:max_items]
         _inflight_seq = batch[-1][0] if batch else _saved_seq
     return batch
 
@@ -280,7 +296,7 @@ def recent(profile_id: str, *, after_seq: int,
 
 def unsaved_for(profile_id: str) -> list[VerdictEvent]:
     with _lock:
-        return [ev for seq, ev in _ring if seq > _saved_seq and ev.profile_id == profile_id]
+        return [ev for _, ev in _unsaved_suffix() if ev.profile_id == profile_id]
 
 
 def forget_profile(profile_id: str, *, occurred_before_ms: int | None = None) -> int:
@@ -306,7 +322,7 @@ def forget_profile(profile_id: str, *, occurred_before_ms: int | None = None) ->
 def counters() -> dict[str, int]:
     with _lock:
         out = dict(_counters)
-        out["unsaved"] = sum(1 for seq, _ in _ring if seq > _saved_seq)
+        out["unsaved"] = len(_unsaved_suffix())
     return out
 
 
