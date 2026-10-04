@@ -138,6 +138,16 @@
       style: 'font-size:20px;font-weight:700;margin:0 0 6px;color:var(--' +
              (tone === 'neutral' ? 'fg' : tone) + ')', text: OUTCOME_TEXT[key] });
     col.appendChild(heading);
+    // Why it was not checked, in the server's own words (answer_check_note):
+    // a recall that was not checked must never read like one that was.
+    if (typeof body.answer_check_note === 'string' && body.answer_check_note) {
+      col.appendChild(el('p', { class: 'ac-note', style: 'font-size:13px;margin:0 0 6px',
+                                text: body.answer_check_note }));
+    }
+    if (block.detail === 'reused') {
+      col.appendChild(el('p', { class: 'ac-reused', style: 'font-size:12.5px;color:var(--fg-2);margin:0 0 4px',
+        text: 'Same question, same memories: the verdict from the earlier check was reused.' }));
+    }
     if (typeof block.answer_confidence === 'number') {
       var line = 'Confidence ' + block.answer_confidence.toFixed(2);
       if (typeof block.threshold === 'number') {

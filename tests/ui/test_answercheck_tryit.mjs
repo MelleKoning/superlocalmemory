@@ -69,6 +69,25 @@ describe('Try it', function () {
     assert.match(label(p).textContent, /Not checked — answer check is off/);
   });
 
+  it('a skip says why, in the server\'s words', async function () {
+    const note = 'Answer check did not run: retrieval used the recall\'s time budget, so there ' +
+      'was no time left to ask. The results are complete; only the verdict is missing.';
+    const p = mount({ status: 200, body: { result_count: 2, results: results(2), answer_check_note: note,
+      answer_check: block({ status: 'skipped', detail: 'budget', answer_confidence: null, threshold: null }) } });
+    await ask(p);
+    assert.equal(label(p).dataset.outcome, 'not_checked_time');
+    assert.equal(p.d.querySelector('.ac-note').textContent, note);
+  });
+
+  it('a judged recall carries no note, and a reused verdict says so', async function () {
+    const p = mount({ status: 200, body: { result_count: 2, results: results(2), answer_check_note: '',
+      answer_check: block({ detail: 'reused' }) } });
+    await ask(p);
+    assert.equal(label(p).dataset.outcome, 'answered');
+    assert.equal(p.d.querySelector('.ac-note'), null);
+    assert.match(p.d.querySelector('.ac-reused').textContent, /verdict from the earlier check was reused/);
+  });
+
   it('zero results', async function () {
     const p = mount({ status: 200, body: { result_count: 0, results: [],
       answer_check: block({ status: 'skipped', detail: 'no_results', abstained: true, answer_confidence: null }) } });
