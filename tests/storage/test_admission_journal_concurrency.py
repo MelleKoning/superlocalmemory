@@ -1,26 +1,38 @@
 # Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar
 # Licensed under AGPL-3.0-or-later - see LICENSE file
 
-"""Concurrency contracts for the daemon-owned admission journal."""
+"""Concurrency contracts for the daemon-owned admission journal.
+
+One writer thread group-commits journal mutations; reads use a bounded pool of
+persistent connections. These tests pin what callers rely on: concurrent saves
+share commits instead of queueing on a lock, a deadline is honoured and a
+refused save is never written, a full queue is refused at once and honestly,
+and a crash in the middle of a batch keeps all of it or none of it.
+"""
 
 from __future__ import annotations
 
+import multiprocessing
 import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from superlocalmemory.storage import journal_writer
 from superlocalmemory.storage.admission_journal import (
     Actor,
     AdmissionJournal,
+    AdmissionJournalOverloaded,
     AdmissionJournalUnavailable,
+    IdempotencyConflict,
     RememberRequest,
 )
+from superlocalmemory.storage.journal_writer import GroupCommitWriter
 
 
 @dataclass(frozen=True)
@@ -35,460 +47,310 @@ class _TestCodec:
         return ciphertext[len(self.prefix) :][::-1]
 
 
-class _TransactionProbe:
-    """Observe overlapping BEGIN attempts without changing SQLite semantics."""
-
-    def __init__(self) -> None:
-        self._state_lock = threading.Lock()
-        self._second_begin_attempted = threading.Event()
-        self._first_transaction = True
-        self.active_transactions = 0
-        self.max_active_transactions = 0
-
-    def wrap(self, connection: Any) -> "_ObservedConnection":
-        return _ObservedConnection(connection, self)
-
-    def begin(self, connection: Any, sql: str, parameters: tuple[Any, ...]) -> Any:
-        with self._state_lock:
-            is_first = self._first_transaction
-            self._first_transaction = False
-            self.active_transactions += 1
-            self.max_active_transactions = max(
-                self.max_active_transactions,
-                self.active_transactions,
-            )
-            if not is_first:
-                self._second_begin_attempted.set()
-        try:
-            result = connection.execute(sql, parameters)
-        except BaseException:
-            self.finish()
-            raise
-        if is_first:
-            self._second_begin_attempted.wait(timeout=0.25)
-        return result
-
-    def finish(self) -> None:
-        with self._state_lock:
-            self.active_transactions -= 1
+_ACTOR = Actor("daemon:test", frozenset({"default"}), frozenset({"personal"}))
 
 
-class _ObservedConnection:
-    def __init__(self, connection: Any, probe: _TransactionProbe) -> None:
-        self._connection = connection
-        self._probe = probe
-        self._transaction_open = False
-
-    def execute(self, sql: str, parameters: tuple[Any, ...] = ()) -> Any:
-        if sql == "BEGIN IMMEDIATE":
-            result = self._probe.begin(self._connection, sql, parameters)
-            self._transaction_open = True
-            return result
-        return self._connection.execute(sql, parameters)
-
-    def commit(self) -> None:
-        try:
-            self._connection.commit()
-        finally:
-            self._finish()
-
-    def rollback(self) -> None:
-        try:
-            self._connection.rollback()
-        finally:
-            self._finish()
-
-    def _finish(self) -> None:
-        if self._transaction_open:
-            self._transaction_open = False
-            self._probe.finish()
-
-
-def test_concurrent_prepare_serializes_journal_write_transactions(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """Parallel remember calls never race BEGIN on admission_journal.db."""
-    journal = AdmissionJournal(tmp_path / "admission_journal.db", codec=_TestCodec())
-    actor = Actor(
-        "daemon:test",
-        frozenset({"default"}),
-        frozenset({"personal"}),
-    )
-    original_connection = journal._connection
-    probe = _TransactionProbe()
-
-    @contextmanager
-    def observed_connection(*, timeout: float = 1.0):
-        with original_connection(timeout=timeout) as connection:
-            yield probe.wrap(connection)
-
-    monkeypatch.setattr(journal, "_connection", observed_connection)
-
-    def prepare(sequence: int) -> None:
-        journal.prepare(
-            RememberRequest(
-                content=f"Concurrent journal evidence {sequence}.",
-                profile_id="default",
-                source_type="test",
-                idempotency_key=f"journal-concurrency:{sequence}",
-            ),
-            actor,
-        )
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [pool.submit(prepare, sequence) for sequence in range(2)]
-        for future in futures:
-            future.result(timeout=3.0)
-
-    assert probe.max_active_transactions == 1
-    assert journal.count() == 2
-
-
-def test_write_transaction_opens_connection_before_writer_slot(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """SQLite connection setup stays outside the serialized writer section."""
-    journal = AdmissionJournal(tmp_path / "admission_journal.db", codec=_TestCodec())
-    original_connection = journal._connection
-    original_write_slot = journal._write_slot
-    connection_is_open = False
-
-    @contextmanager
-    def observed_connection(*, timeout: float = 1.0):
-        nonlocal connection_is_open
-        with original_connection(timeout=timeout) as connection:
-            connection_is_open = True
-            try:
-                yield connection
-            finally:
-                connection_is_open = False
-
-    @contextmanager
-    def observed_write_slot(*, deadline: float | None = None):
-        assert connection_is_open
-        with original_write_slot(deadline=deadline):
-            yield
-
-    monkeypatch.setattr(journal, "_connection", observed_connection)
-    monkeypatch.setattr(journal, "_write_slot", observed_write_slot)
-
-    with journal._write_transaction():
-        pass
-
-
-def test_queued_writers_bound_preopened_connections(tmp_path, monkeypatch) -> None:
-    """Queued mutations cannot retain an unbounded number of SQLite handles."""
-    journal = AdmissionJournal(tmp_path / "admission_journal.db", codec=_TestCodec())
-    actor = Actor("daemon:test", frozenset({"default"}), frozenset({"personal"}))
-    original_connection = journal._connection
-    original_connection_slot = journal._write_connection_slot
-    connection_lock = threading.Lock()
-    connection_state = threading.local()
-    eight_connections_open = threading.Event()
-    open_connections = 0
-    max_open_connections = 0
-
-    @contextmanager
-    def observed_connection(*, timeout: float = 1.0):
-        nonlocal open_connections, max_open_connections
-        with original_connection(timeout=timeout) as connection:
-            is_mutation_connection = getattr(connection_state, "in_write_slot", False)
-            if is_mutation_connection:
-                with connection_lock:
-                    open_connections += 1
-                    max_open_connections = max(max_open_connections, open_connections)
-                    if open_connections >= 8:
-                        eight_connections_open.set()
-            try:
-                yield connection
-            finally:
-                if is_mutation_connection:
-                    with connection_lock:
-                        open_connections -= 1
-
-    @contextmanager
-    def observed_connection_slot(*, deadline: float | None = None):
-        with original_connection_slot(deadline=deadline):
-            connection_state.in_write_slot = True
-            try:
-                yield
-            finally:
-                connection_state.in_write_slot = False
-
-    monkeypatch.setattr(journal, "_connection", observed_connection)
-    monkeypatch.setattr(journal, "_write_connection_slot", observed_connection_slot)
-    journal._write_lock.acquire()
-    writer_lock_held = True
-    try:
-        with ThreadPoolExecutor(max_workers=16) as pool:
-            futures = [
-                pool.submit(
-                    _prepare_unique,
-                    journal,
-                    actor,
-                    sequence,
-                )
-                for sequence in range(16)
-            ]
-            # Generous waits: this checks how many handles queue, not how
-            # fast a loaded disk syncs. A full-sync commit can take seconds
-            # under heavy I/O, and that is not what is under test.
-            reached_eight_connections = eight_connections_open.wait(timeout=15.0)
-            time.sleep(0.05)
-            with connection_lock:
-                observed_max = max_open_connections
-            journal._write_lock.release()
-            writer_lock_held = False
-            for future in futures:
-                future.result(timeout=30.0)
-            assert reached_eight_connections
-            assert observed_max <= 8
-    finally:
-        if writer_lock_held:
-            journal._write_lock.release()
-
-
-def test_write_connection_gate_honors_caller_deadline(tmp_path, monkeypatch) -> None:
-    """Connection admission cannot extend a remember caller's wait budget."""
-    journal = AdmissionJournal(tmp_path / "admission_journal.db", codec=_TestCodec())
-    observed_timeouts: list[float] = []
-
-    class UnavailableConnectionGate:
-        def acquire(self, *, timeout: float = -1.0) -> bool:
-            observed_timeouts.append(timeout)
-            return False
-
-        def release(self) -> None:
-            raise AssertionError("an unacquired connection gate must not be released")
-
-    monkeypatch.setattr(
-        journal,
-        "_write_connection_slots",
-        UnavailableConnectionGate(),
-    )
-
-    with pytest.raises(AdmissionJournalUnavailable, match="connection"):
-        with journal._write_transaction(deadline=time.monotonic() + 0.05):
-            pass
-
-    assert len(observed_timeouts) == 1
-    assert 0 < observed_timeouts[0] <= 0.05 + 1e-9
-
-
-def test_idempotent_retry_bypasses_saturated_write_connection_gate(tmp_path) -> None:
-    """A duplicate receipt remains readable while mutation admission is full."""
-    journal = AdmissionJournal(tmp_path / "admission_journal.db", codec=_TestCodec())
-    actor = Actor("daemon:test", frozenset({"default"}), frozenset({"personal"}))
-    request = RememberRequest(
-        content="A duplicate admission stays read-only.",
+def _request(key: str, content: str | None = None) -> RememberRequest:
+    return RememberRequest(
+        content=content or f"Concurrent journal evidence {key}.",
         profile_id="default",
         source_type="test",
-        idempotency_key="journal-retry:saturated-write-gate",
+        idempotency_key=f"journal-concurrency:{key}",
     )
-    original = journal.prepare(request, actor)
 
-    for _ in range(8):
-        assert journal._write_connection_slots.acquire(blocking=False)
+
+def _journal(tmp_path: Path) -> AdmissionJournal:
+    return AdmissionJournal(tmp_path / "admission_journal.db", codec=_TestCodec())
+
+
+def _scratch_writer(tmp_path: Path, **kwargs: Any) -> GroupCommitWriter:
+    path = tmp_path / "scratch.db"
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE IF NOT EXISTS t(k TEXT PRIMARY KEY)")
+    conn.commit()
+    conn.close()
+    return GroupCommitWriter(path, **kwargs)
+
+
+def _rows(path: Path) -> set[str]:
+    conn = sqlite3.connect(path)
     try:
-        duplicate = journal.prepare(
-            request,
-            actor,
-            deadline=time.monotonic() + 0.05,
-        )
+        return {row[0] for row in conn.execute("SELECT k FROM t")}
     finally:
-        for _ in range(8):
-            journal._write_connection_slots.release()
-
-    assert duplicate.journal_id == original.journal_id
+        conn.close()
 
 
-def test_prepare_deadline_bounds_process_lock_wait(tmp_path, monkeypatch) -> None:
-    """A queued journal mutation fails with a typed error inside its budget."""
-    journal = AdmissionJournal(tmp_path / "admission_journal.db", codec=_TestCodec())
-    actor = Actor("daemon:test", frozenset({"default"}), frozenset({"personal"}))
-    observed_timeouts: list[float] = []
-
-    class UnavailableRecordingLock:
-        def acquire(self, *, timeout: float = -1.0) -> bool:
-            observed_timeouts.append(timeout)
-            return False
-
-        def release(self) -> None:
-            raise AssertionError("an unacquired journal lock must not be released")
-
-    monkeypatch.setattr(journal, "_write_lock", UnavailableRecordingLock())
-
-    with pytest.raises(AdmissionJournalUnavailable, match="deadline"):
-        journal.prepare(
-            RememberRequest(
-                content="A bounded process lock wait.",
-                profile_id="default",
-                source_type="test",
-                idempotency_key="journal-deadline:process-lock",
-            ),
-            actor,
-            deadline=time.monotonic() + 0.05,
-        )
-
-    assert len(observed_timeouts) == 1
-    assert 0 < observed_timeouts[0] <= 0.05 + 1e-9
-    assert journal.count() == 0
+def test_concurrent_prepares_share_commits_on_one_writer(tmp_path) -> None:
+    """32 parallel saves all land, through batched commits, never racing BEGIN."""
+    journal = _journal(tmp_path)
+    batches: list[int] = []
+    journal._writer.before_commit = lambda live: batches.append(len(live))
+    try:
+        with ThreadPoolExecutor(max_workers=32) as pool:
+            futures = [
+                pool.submit(journal.prepare, _request(str(i)), _ACTOR,
+                            deadline=time.monotonic() + 5.0)
+                for i in range(128)
+            ]
+            for future in futures:
+                future.result(timeout=10.0)
+        assert journal.count() == 128
+        assert sum(batches) == 128
+        assert len(batches) < 128, "every save paid its own commit"
+        assert max(batches) <= journal_writer.MAX_BATCH
+    finally:
+        journal.close()
 
 
-def _prepare_unique(
-    journal: AdmissionJournal,
-    actor: Actor,
-    sequence: int,
-) -> None:
-    journal.prepare(
-        RememberRequest(
-            content=f"Bounded queued admission {sequence}.",
-            profile_id="default",
-            source_type="test",
-            idempotency_key=f"journal-bounded-queue:{sequence}",
-        ),
-        actor,
-    )
+def test_a_save_opens_no_connection_in_steady_state(tmp_path, monkeypatch) -> None:
+    """Persistent writer and reader connections: no per-save sqlite3.connect."""
+    journal = _journal(tmp_path)
+    receipt = {"operation_id": "op", "fact_ids": ["f"], "commit_sequence": 1}
+    try:
+        warm = journal.prepare(_request("warm"), _ACTOR)
+        journal.mark_committed(warm.journal_id, receipt)
+        connects: list[str] = []
+        original = journal_writer.sqlite3.connect
+
+        def counting_connect(*args, **kwargs):
+            connects.append(str(args[0]))
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(journal_writer.sqlite3, "connect", counting_connect)
+        for i in range(20):
+            entry = journal.prepare(_request(f"steady-{i}"), _ACTOR)
+            journal.mark_committed(entry.journal_id, receipt)
+        assert connects == []
+    finally:
+        journal.close()
 
 
-def test_prepare_deadline_caps_external_sqlite_busy_wait(tmp_path, monkeypatch) -> None:
-    """A foreign SQLite writer cannot force remember past its journal budget."""
+def test_one_failing_operation_does_not_spoil_its_batch(tmp_path) -> None:
+    """Each operation runs in its own SAVEPOINT inside the shared transaction."""
+    writer = _scratch_writer(tmp_path, linger_seconds=0.2)
+    batches: list[int] = []
+    writer.before_commit = lambda live: batches.append(len(live))
+
+    def failing(conn):
+        conn.execute("INSERT INTO t VALUES ('half-done')")
+        raise IdempotencyConflict("refused after writing")
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            bad = pool.submit(writer.submit, failing)
+            good = pool.submit(writer.submit, lambda c: c.execute("INSERT INTO t VALUES ('ok')"))
+            with pytest.raises(IdempotencyConflict):
+                bad.result(timeout=5.0)
+            good.result(timeout=5.0)
+        assert batches == [2]
+        assert _rows(tmp_path / "scratch.db") == {"ok"}
+    finally:
+        writer.close()
+
+
+def test_full_queue_is_refused_at_once_with_retry_after(tmp_path) -> None:
+    writer = _scratch_writer(tmp_path, queue_cap=2)
+    gate = threading.Event()
+
+    def held(conn):
+        gate.wait(5.0)
+        conn.execute("INSERT INTO t VALUES ('held')")
+
+    try:
+        first = threading.Thread(target=writer.submit, args=(held,))
+        first.start()
+        time.sleep(0.05)  # writer is now executing ``held``
+        queued = [
+            threading.Thread(
+                target=writer.submit,
+                args=(lambda c, k=k: c.execute("INSERT INTO t VALUES (?)", (k,)),),
+            )
+            for k in ("q1", "q2")
+        ]
+        for thread in queued:
+            thread.start()
+        time.sleep(0.05)
+        started = time.monotonic()
+        with pytest.raises(AdmissionJournalOverloaded) as refused:
+            writer.submit(lambda c: c.execute("INSERT INTO t VALUES ('over')"))
+        assert time.monotonic() - started < 0.05
+        assert refused.value.retry_after_seconds >= 1
+        gate.set()
+        first.join(5.0)
+        for thread in queued:
+            thread.join(5.0)
+        assert _rows(tmp_path / "scratch.db") == {"held", "q1", "q2"}
+    finally:
+        gate.set()
+        writer.close()
+
+
+def test_deadline_refusal_is_never_written_later(tmp_path) -> None:
+    """A caller told 'not saved' at its deadline is never saved afterwards."""
     path = tmp_path / "admission_journal.db"
     journal = AdmissionJournal(path, codec=_TestCodec())
-    actor = Actor("daemon:test", frozenset({"default"}), frozenset({"personal"}))
     blocker = sqlite3.connect(path)
     blocker.execute("BEGIN IMMEDIATE")
-    original_connection = journal._connection
-    observed_busy_timeout_ms: list[int] = []
-
-    @contextmanager
-    def observed_connection(*, timeout: float = 1.0):
-        with original_connection(timeout=timeout) as connection:
-            observed_busy_timeout_ms.append(
-                int(connection.execute("PRAGMA busy_timeout").fetchone()[0])
-            )
-            yield connection
-
-    monkeypatch.setattr(journal, "_connection", observed_connection)
     try:
+        started = time.monotonic()
         with pytest.raises(AdmissionJournalUnavailable, match="busy"):
-            journal.prepare(
-                RememberRequest(
-                    content="A bounded external SQLite wait.",
-                    profile_id="default",
-                    source_type="test",
-                    idempotency_key="journal-deadline:sqlite",
-                ),
-                actor,
-                deadline=time.monotonic() + 0.05,
-            )
+            journal.prepare(_request("blocked"), _ACTOR, deadline=started + 0.05)
+        assert time.monotonic() - started < 0.05 + 0.05
     finally:
         blocker.rollback()
         blocker.close()
-
-    assert len(observed_busy_timeout_ms) == 2
-    assert all(1 <= timeout_ms <= 50 for timeout_ms in observed_busy_timeout_ms)
-    assert observed_busy_timeout_ms[1] <= observed_busy_timeout_ms[0]
+    time.sleep(0.2)  # give the writer every chance to (wrongly) commit it
     assert journal.count() == 0
+    # The journal is healthy again for the next caller.
+    assert journal.prepare(_request("after"), _ACTOR).state == "prepared"
+    journal.close()
 
 
-def test_prepare_refreshes_sqlite_budget_after_process_lock_wait(tmp_path, monkeypatch) -> None:
-    """Local and external contention share one caller deadline."""
+def test_withdrawal_during_execution_reruns_batch_without_it(tmp_path) -> None:
+    """Cancel before commit: a withdrawn operation is rolled out of its batch."""
+    writer = _scratch_writer(tmp_path, linger_seconds=0.2)
+    slow_runs = 0
+
+    def slow(conn):
+        nonlocal slow_runs
+        slow_runs += 1
+        conn.execute("INSERT INTO t VALUES ('slow')")
+        time.sleep(0.15)
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            keeper = pool.submit(
+                writer.submit, lambda c: c.execute("INSERT INTO t VALUES ('keep')"),
+            )
+            quitter = pool.submit(writer.submit, slow, deadline=time.monotonic() + 0.25)
+            with pytest.raises(AdmissionJournalUnavailable):
+                quitter.result(timeout=5.0)
+            keeper.result(timeout=5.0)
+        assert _rows(tmp_path / "scratch.db") == {"keep"}
+        assert slow_runs == 1
+    finally:
+        writer.close()
+
+
+def test_claimed_commit_reports_the_truth_past_the_deadline(tmp_path) -> None:
+    """Once COMMIT is under way the caller waits for it, never a false 'no'."""
+    writer = _scratch_writer(tmp_path)
+    writer.before_commit = lambda _live: time.sleep(0.1)
+    try:
+        started = time.monotonic()
+        writer.submit(
+            lambda c: c.execute("INSERT INTO t VALUES ('late')"),
+            deadline=started + 0.05,
+        )
+        assert _rows(tmp_path / "scratch.db") == {"late"}
+    finally:
+        writer.close()
+
+
+def test_idempotent_retry_is_answered_while_the_writer_is_blocked(tmp_path) -> None:
     path = tmp_path / "admission_journal.db"
     journal = AdmissionJournal(path, codec=_TestCodec())
-    actor = Actor("daemon:test", frozenset({"default"}), frozenset({"personal"}))
-    original_connection = journal._connection
-    initial_busy_timeout_ms: list[int] = []
-    refreshed_busy_timeout_ms: list[int] = []
-
-    class SlowAvailableLock:
-        def acquire(self, *, timeout: float = -1.0) -> bool:
-            assert timeout > 0
-            time.sleep(0.04)
-            return True
-
-        def release(self) -> None:
-            pass
-
-    class BusyAfterLocalWaitConnection:
-        def __init__(self, connection: sqlite3.Connection) -> None:
-            self._connection = connection
-
-        def execute(self, sql: str, parameters: tuple[Any, ...] = ()) -> Any:
-            if sql.startswith("PRAGMA busy_timeout="):
-                refreshed_busy_timeout_ms.append(
-                    int(sql.removeprefix("PRAGMA busy_timeout="))
-                )
-            if sql == "BEGIN IMMEDIATE":
-                raise sqlite3.OperationalError("database is locked")
-            return self._connection.execute(sql, parameters)
-
-        def commit(self) -> None:
-            self._connection.commit()
-
-        def rollback(self) -> None:
-            self._connection.rollback()
-
-    @contextmanager
-    def observed_connection(*, timeout: float = 1.0):
-        initial_busy_timeout_ms.append(max(1, int(timeout * 1_000)))
-        with original_connection(timeout=timeout) as connection:
-            yield BusyAfterLocalWaitConnection(connection)
-
-    monkeypatch.setattr(journal, "_write_lock", SlowAvailableLock())
-    monkeypatch.setattr(journal, "_connection", observed_connection)
-    started = time.monotonic()
-    with pytest.raises(AdmissionJournalUnavailable, match="busy"):
-        journal.prepare(
-            RememberRequest(
-                content="One deadline covers local and external journal contention.",
-                profile_id="default",
-                source_type="test",
-                idempotency_key="journal-deadline:combined-contention",
-            ),
-            actor,
-            deadline=started + 0.20,
+    original = journal.prepare(_request("retry"), _ACTOR)
+    blocker = sqlite3.connect(path)
+    blocker.execute("BEGIN IMMEDIATE")
+    try:
+        duplicate = journal.prepare(
+            _request("retry"), _ACTOR, deadline=time.monotonic() + 0.05,
         )
+    finally:
+        blocker.rollback()
+        blocker.close()
+        journal.close()
+    assert duplicate.journal_id == original.journal_id
 
-    assert initial_busy_timeout_ms
-    assert refreshed_busy_timeout_ms
-    assert 1 <= refreshed_busy_timeout_ms[-1] < initial_busy_timeout_ms[-1]
-    assert time.monotonic() - started < 0.20
-    assert journal.count() == 0
 
-
-def test_request_read_translates_sqlite_busy_to_typed_unavailable(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """The encrypted command read cannot leak a raw SQLite lock error."""
-    journal = AdmissionJournal(tmp_path / "admission_journal.db", codec=_TestCodec())
-    actor = Actor("daemon:test", frozenset({"default"}), frozenset({"personal"}))
-    prepared = journal.prepare(
-        RememberRequest(
-            content="A typed busy error protects the journal read.",
-            profile_id="default",
-            source_type="test",
-            idempotency_key="journal-deadline:read",
-        ),
-        actor,
-    )
-    original_connection = journal._connection
+def test_read_busy_is_a_typed_unavailable(tmp_path, monkeypatch) -> None:
+    """A journal read cannot leak a raw SQLite lock error."""
+    journal = _journal(tmp_path)
+    prepared = journal.prepare(_request("read"), _ACTOR)
 
     class BusyReadConnection:
+        in_transaction = False
+
         def execute(self, sql: str, parameters: tuple[Any, ...] = ()) -> Any:
-            if sql.startswith("SELECT command_json"):
-                raise sqlite3.OperationalError("database is locked")
-            raise AssertionError(f"unexpected SQL: {sql}")
+            if sql.startswith("PRAGMA busy_timeout"):
+                return None
+            raise sqlite3.OperationalError("database is locked")
 
-    @contextmanager
-    def busy_connection(*, timeout: float = 1.0):
-        with original_connection(timeout=timeout):
-            yield BusyReadConnection()
+        def close(self) -> None:
+            pass
 
-    monkeypatch.setattr(journal, "_connection", busy_connection)
-
+    monkeypatch.setattr(journal._readers, "_acquire", lambda _deadline: BusyReadConnection())
     with pytest.raises(AdmissionJournalUnavailable, match="busy"):
         journal.request_for(prepared, deadline=time.monotonic() + 0.05)
+    journal.close()
+
+
+def test_reader_pool_is_bounded_and_honours_the_deadline(tmp_path) -> None:
+    journal = _journal(tmp_path)
+    holders: list[Any] = []
+    try:
+        for _ in range(journal_writer.READ_POOL_SIZE):
+            context = journal._read_connection()
+            context.__enter__()
+            holders.append(context)
+        started = time.monotonic()
+        with pytest.raises(AdmissionJournalUnavailable):
+            with journal._read_connection(deadline=started + 0.05):
+                pass
+        assert time.monotonic() - started < 0.2
+    finally:
+        for context in holders:
+            context.__exit__(None, None, None)
+        journal.close()
+
+
+# -- crash in the middle of a batch ------------------------------------------
+
+_CRASH_BATCH = 8
+
+
+def _crash_child(path: str, when: str) -> None:
+    import os
+    import signal
+
+    journal = AdmissionJournal(Path(path), codec=_TestCodec())
+    journal._writer._linger = 0.5  # every save below lands in one batch
+
+    def kill(live) -> None:
+        if len(live) == _CRASH_BATCH:
+            os.kill(os.getpid(), signal.SIGKILL)
+
+    if when == "before":
+        journal._writer.before_commit = kill
+    else:
+        journal._writer.after_commit = kill
+    threads = [
+        threading.Thread(target=journal.prepare, args=(_request(f"crash-{i}"), _ACTOR))
+        for i in range(_CRASH_BATCH)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10.0)
+    os._exit(3)  # the batch never reached the kill: the test must fail
+
+
+@pytest.mark.parametrize(("when", "expected"), [("before", 0), ("after", _CRASH_BATCH)])
+def test_kill_mid_batch_keeps_all_of_it_or_none(tmp_path, when, expected) -> None:
+    import signal
+
+    path = tmp_path / "admission_journal.db"
+    AdmissionJournal(path, codec=_TestCodec()).close()
+    child = multiprocessing.get_context("spawn").Process(
+        target=_crash_child, args=(str(path), when),
+    )
+    child.start()
+    child.join(30.0)
+    assert child.exitcode == -signal.SIGKILL
+    survivor = AdmissionJournal(path, codec=_TestCodec())
+    try:
+        assert survivor.count() == expected
+    finally:
+        survivor.close()

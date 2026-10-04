@@ -260,6 +260,28 @@ _REMEMBER_ADMISSION_DEADLINE_MS = 1_200
 _REMEMBER_JOURNAL_DEADLINE_MS = 2_000
 
 
+def _remember_writer_failure_detail(exc: BaseException) -> str:
+    """Say what failed, and mention the disk only when the disk said so."""
+    disk = False
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        text = str(current).casefold()
+        if isinstance(current, OSError) or "disk" in text or "i/o" in text:
+            disk = True
+        current = current.__cause__ or current.__context__
+    reason = type(exc.__cause__ or exc).__name__
+    hint = (
+        "the database reported a storage error; check free disk space"
+        if disk else "see the daemon log for the cause"
+    )
+    return (
+        f"the memory writer could not finish this save ({reason}); {hint}. "
+        "Resending with the same idempotency_key is safe and never stores it twice."
+    )
+
+
 def _accepted_remember_response(payload: dict, profile: str, *, replaces=None):
     """HTTP 202 for a remember that is durable but not yet committed."""
     from starlette.responses import JSONResponse
@@ -5382,20 +5404,32 @@ def _register_daemon_routes(application: FastAPI) -> None:
                     _unknown_profile_body(req_profile or write_profile),
                     status_code=404,
                 )
+            from superlocalmemory.core.remember_runtime import CanonicalRememberBusy
+
+            if isinstance(exc, CanonicalRememberBusy):
+                # Saturation, not a fault: nothing was stored, and the caller
+                # is told when to come back.
+                logger.warning("remember refused under load: %s", exc)
+                raise HTTPException(
+                    503,
+                    detail=(
+                        "too many saves are arriving at once, so this one was "
+                        f"not saved. Retry in {exc.retry_after_seconds} s; "
+                        "resending with the same idempotency_key is safe and "
+                        "never stores it twice."
+                    ),
+                    headers={"Retry-After": str(exc.retry_after_seconds)},
+                ) from exc
             if isinstance(exc, CanonicalRememberUnavailable) or (
                 isinstance(exc, AdmissionRejected) and exc.retryable
             ):
                 # Contention no longer lands here (it is accepted, 202). What
-                # remains is a writer that is not working: say so plainly.
+                # remains is a writer that could not finish: say which part.
                 logger.error("canonical remember writer failed: %s", exc)
                 raise HTTPException(
                     503,
-                    detail=(
-                        "the memory writer is not working "
-                        f"({type(exc.__cause__ or exc).__name__}); check disk "
-                        "space and database health. Resending with the same "
-                        "idempotency_key is safe and never stores it twice."
-                    ),
+                    detail=_remember_writer_failure_detail(exc),
+                    headers={"Retry-After": "5"},
                 ) from exc
             if isinstance(exc, AdmissionRejected):
                 raise HTTPException(

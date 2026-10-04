@@ -82,9 +82,9 @@ def test_idempotent_retries_do_not_open_redundant_write_transactions(
     dispatched = journal.mark_dispatched(prepared.journal_id)
 
     def fail_write(*_args, **_kwargs):
-        raise AssertionError("idempotent retry acquired the writer slot")
+        raise AssertionError("idempotent retry queued a journal write")
 
-    monkeypatch.setattr(journal, "_write_slot", fail_write)
+    monkeypatch.setattr(journal._writer, "submit", fail_write)
     assert journal.prepare(admission_request, actor) == dispatched
     assert journal.mark_dispatched(prepared.journal_id) == dispatched
 
@@ -96,14 +96,14 @@ def test_idempotent_retries_do_not_open_redundant_write_transactions(
         "commit_sequence": 3,
     }
     committed = journal.mark_committed(prepared.journal_id, receipt)
-    monkeypatch.setattr(journal, "_write_slot", fail_write)
+    monkeypatch.setattr(journal._writer, "submit", fail_write)
 
     assert journal.prepare(admission_request, actor) == committed
     assert journal.mark_dispatched(prepared.journal_id) == committed
     assert journal.mark_committed(prepared.journal_id, receipt) == committed
 
 
-def test_known_prepared_dispatch_skips_redundant_read_connection(
+def test_known_prepared_dispatch_skips_redundant_read(
     tmp_path,
     actor,
     admission_request,
@@ -111,17 +111,17 @@ def test_known_prepared_dispatch_skips_redundant_read_connection(
 ) -> None:
     journal = AdmissionJournal(tmp_path / "admission_journal.db", codec=_TestCodec())
     prepared = journal.prepare(admission_request, actor)
-    original_connection = journal._connection
-    connection_count = 0
+    original_read = journal._read_connection
+    reads = 0
 
     @contextmanager
-    def observed_connection(*, timeout: float = 1.0):
-        nonlocal connection_count
-        connection_count += 1
-        with original_connection(timeout=timeout) as connection:
+    def observed_read(*, deadline: float | None = None):
+        nonlocal reads
+        reads += 1
+        with original_read(deadline=deadline) as connection:
             yield connection
 
-    monkeypatch.setattr(journal, "_connection", observed_connection)
+    monkeypatch.setattr(journal, "_read_connection", observed_read)
 
     dispatched = journal.mark_dispatched(
         prepared.journal_id,
@@ -129,28 +129,7 @@ def test_known_prepared_dispatch_skips_redundant_read_connection(
     )
 
     assert dispatched.state == "dispatched"
-    assert connection_count == 1
-
-
-def test_dispatched_transition_is_advisory_not_a_second_full_fsync(
-    tmp_path, actor, admission_request, monkeypatch
-) -> None:
-    journal = AdmissionJournal(tmp_path / "admission_journal.db", codec=_TestCodec())
-    prepared = journal.prepare(admission_request, actor)
-    original_connection = journal._connection
-    statements: list[str] = []
-
-    @contextmanager
-    def observed_connection(*, timeout: float = 1.0):
-        with original_connection(timeout=timeout) as connection:
-            connection.set_trace_callback(statements.append)
-            yield connection
-
-    monkeypatch.setattr(journal, "_connection", observed_connection)
-    dispatched = journal.mark_dispatched(prepared.journal_id)
-
-    assert dispatched.state == "dispatched"
-    assert "PRAGMA synchronous=NORMAL" in statements
+    assert reads == 0
 
 
 def test_changed_payload_with_same_key_conflicts(tmp_path, actor, admission_request) -> None:

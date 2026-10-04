@@ -102,6 +102,18 @@ class CanonicalRememberUnavailable(RuntimeError):
     """The daemon cannot accept a bounded canonical remember request."""
 
 
+class CanonicalRememberBusy(CanonicalRememberUnavailable):
+    """The save was refused before anything was written; retrying is safe.
+
+    Raised when the admission journal is saturated (its queue is full or the
+    caller's budget ran out while queued). Nothing about this save was stored.
+    """
+
+    def __init__(self, message: str, *, retry_after_seconds: int = 1) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = max(1, int(retry_after_seconds))
+
+
 class DaemonAlreadyServing(RuntimeError):
     """A healthy SLM daemon is already serving; this instance should exit 0.
 
@@ -440,6 +452,9 @@ class CanonicalRememberRuntime:
         # replay_pending at the next start.
         self._deferred.stop()
         self.coordinator.release_ownership()
+        # Drains queued journal marks, then frees the writer thread and the
+        # pooled connections; a later start reopens them.
+        self.journal.close()
 
     @property
     def deferred_count(self) -> int:
@@ -540,6 +555,14 @@ class CanonicalRememberRuntime:
                 request, actor, deadline_ms=deadline_ms, defer=self._deferred.defer,
                 accept_after_ms=accept_after_ms,
             )
+        except AdmissionJournalUnavailable as exc:
+            # Only the journal prepare can raise this out of the service (a
+            # busy journal after prepare is answered "accepted"), and the
+            # journal guarantees a refused prepare was not written.
+            raise CanonicalRememberBusy(
+                "too many saves are arriving at once; this one was not saved",
+                retry_after_seconds=getattr(exc, "retry_after_seconds", 1),
+            ) from exc
         except (
             AdmissionJournalUnavailable,
             OwnershipRequiredError,
