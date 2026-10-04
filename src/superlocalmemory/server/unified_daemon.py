@@ -397,6 +397,7 @@ _SENSITIVE_READ_PREFIXES = (
     # expose cross-agent coordination signals and behavioral profiles.
     "/events", "/api/events", "/api/agents", "/api/trust/",
     "/api/v3/abstraction", "/api/v3/insights",
+    "/api/v3/answer-check/history",
 )
 _SENSITIVE_READ_EXACT_PATHS = (
     "/api/search", "/api/v3/recall/trace", "/api/patterns",
@@ -2512,6 +2513,16 @@ async def lifespan(application: FastAPI):
             start_worker(_memory_db)
         except Exception as _oqexc:  # pragma: no cover — defensive
             logger.debug("outcome_queue start failed (non-fatal): %s", _oqexc)
+        # 4.1.20: the Answer Check history writer — the only writer of its table.
+        try:
+            _rc = engine._config.retrieval
+            if getattr(_rc, "answer_check_history", True) is not False:
+                from superlocalmemory.core.answer_check_history_store import start_writer
+                start_writer(_learning_db_for_config(engine._config),
+                             retention_days=_rc.answer_check_history_days,
+                             max_rows=_rc.answer_check_history_max_rows)
+        except Exception as _acexc:  # pragma: no cover — defensive
+            logger.debug("answer-check history start failed (non-fatal): %s", _acexc)
 
         # Set up observe buffer
         _observe_buffer.set_engine(engine)
@@ -3466,6 +3477,13 @@ async def lifespan(application: FastAPI):
             )
     except Exception as exc:  # pragma: no cover — defensive
         logger.warning("outcome_queue stop failed: %s", exc)
+    try:
+        from superlocalmemory.core.answer_check_history_store import stop_writer
+        _ac_left = stop_writer(timeout_s=2.0)
+        if _ac_left:
+            logger.info("answer-check history shutdown: %d checks not saved", _ac_left)
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning("answer-check history stop failed: %s", exc)
 
     # Cancel bandit asyncio tasks (LLD-03). ``bandit_loops`` stashes
     # them at ``application.state.bandit_tasks``; if the attr is
@@ -4331,6 +4349,10 @@ def _register_dashboard_routes(application: FastAPI) -> None:
     # Answer-check settings (4.1.18): on-device Laya, hosted Jev, or off.
     from superlocalmemory.server.routes.answer_check import router as answer_check_router
     application.include_router(answer_check_router)
+    from superlocalmemory.server.routes.answer_check_history import (
+        router as answer_check_history_router,
+    )
+    application.include_router(answer_check_history_router)
     from superlocalmemory.server.routes.facets import router as facets_router
     application.include_router(facets_router)
     from superlocalmemory.server.routes.upgrade_restore import register as register_upgrade

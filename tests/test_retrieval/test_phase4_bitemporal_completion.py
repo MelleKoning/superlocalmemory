@@ -490,6 +490,9 @@ class TestRecallTraceHttpWithAsOf:
 
         class _MockRequest:
             app = _MockApp()
+            # 4.1.20: the route checks READ first (personal mode: no RBAC engine).
+            headers: dict = {}
+            cookies: dict = {}
 
             async def json(self_inner):
                 return body

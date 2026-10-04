@@ -639,6 +639,11 @@ class GDPRCompliance:
                 learning_db = LearningDatabase(data_root / "learning.db")
                 learning_db.reset(profile_id)
                 counts["learning_db"] = 1
+                from superlocalmemory.core.answer_check_history_store import (
+                    erase_profile_everywhere,
+                )
+                counts["answer_check_history"] = erase_profile_everywhere(
+                    data_root / "learning.db", profile_id)
             except Exception as exc:
                 logger.warning("GDPR erase: learning-db reset failed: %s", exc)
                 counts["learning_db_failed"] = 1
