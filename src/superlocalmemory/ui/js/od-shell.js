@@ -226,7 +226,19 @@
   /* ================================================================
      Tab activation — single-page SPA switching
   ================================================================ */
+  // On a phone the sidebar is an off-canvas menu over the page. Choosing a
+  // page must close it, or the page you asked for stays hidden behind it.
+  function closeMobileNav() {
+    var sidebarEl = document.getElementById('sidebar');
+    var scrim = document.getElementById('scrim');
+    var menuBtn = document.getElementById('menuBtn');
+    if (sidebarEl) sidebarEl.classList.remove('open');
+    if (scrim) scrim.classList.remove('on');
+    if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
+  }
+
   function activateTab(paneId) {
+    closeMobileNav();
     // Hide all Bootstrap tab panes
     document.querySelectorAll('.tab-pane').forEach(function (p) {
       p.classList.remove('show', 'active');
@@ -622,13 +634,15 @@
     var scrim    = document.getElementById('scrim');
     var sidebarEl = document.getElementById('sidebar');
     if (menuBtn && sidebarEl && scrim) {
+      menuBtn.setAttribute('aria-expanded', 'false');
       menuBtn.addEventListener('click', function () {
-        sidebarEl.classList.toggle('open');
-        scrim.classList.toggle('on');
+        var open = sidebarEl.classList.toggle('open');
+        scrim.classList.toggle('on', open);
+        menuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
       });
-      scrim.addEventListener('click', function () {
-        sidebarEl.classList.remove('open');
-        scrim.classList.remove('on');
+      scrim.addEventListener('click', closeMobileNav);
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && sidebarEl.classList.contains('open')) closeMobileNav();
       });
     }
 

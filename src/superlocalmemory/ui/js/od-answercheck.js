@@ -301,8 +301,11 @@
       older = el('button', { type: 'button', class: 'btn sm ghost ac-older', text: 'Load older' });
       older.addEventListener('click', function () { loadOlder(c); });
     }
+    // Six columns do not fit a phone. The table scrolls sideways inside its
+    // own box, so the page itself never scrolls horizontally.
+    var scroller = el('div', { class: 'ac-feed-scroll', style: 'overflow-x:auto;max-width:100%;-webkit-overflow-scrolling:touch' }, [table]);
     fill(b, [
-      c.feed.length ? table : note('No checks yet. Ask a question above, or let your agent recall something.'),
+      c.feed.length ? scroller : note('No checks yet. Ask a question above, or let your agent recall something.'),
       older,
       el('div', { class: 'ac-footnote', style: 'margin-top:10px' }),
       clearControl(c),
