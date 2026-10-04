@@ -106,6 +106,23 @@ Or edit `~/.claude.json`:
 
 Restart Claude Code. Verify with: `slm status` in a Claude Code session.
 
+**Claude Code plugin on native Windows — install SLM first.** On Windows the
+plugin's MCP server runs the SuperLocalMemory you installed; it does not build
+its own copy. Install it before enabling the plugin, and confirm `slm` is on
+PATH:
+
+```powershell
+pipx install superlocalmemory   # or: pip install superlocalmemory
+slm --version
+```
+
+If `slm` is not on PATH the server does not start, and its log (`/mcp` in
+Claude Code) says `SLM plugin: slm is not on PATH` with the install command.
+Install it, then restart Claude Code. Use pipx or pip: they install `slm.exe`,
+which the editor can start directly. macOS and Linux are unchanged — the
+plugin uses an installed `slm` when there is one and falls back to its own
+environment otherwise.
+
 ---
 
 ## Claude Desktop

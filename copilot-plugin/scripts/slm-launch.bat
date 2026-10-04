@@ -9,7 +9,8 @@
 :: .bat: CreateProcess cannot start a batch file and only appends .exe to a
 :: name without an extension. This file runs only when started through cmd.exe
 :: (for example a hand-written MCP entry using "cmd /c"). It does not read
-:: SLM_LAUNCHER; see MCP_JSON_NOTES.md and issue #139.
+:: SLM_LAUNCHER; see MCP_JSON_NOTES.md and issue #139. Since 4.1.20 the plugin's
+:: .mcp.json starts the INSTALLED slm on Windows through %ComSpec% instead.
 :: Proven on the Windows CI runner: tests/test_plugin/test_windows_mcp_spawn_premise.py
 ::
 :: Resolves the correct venv binary for Windows and joins the namespace daemon

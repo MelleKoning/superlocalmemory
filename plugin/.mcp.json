@@ -1,8 +1,13 @@
 {
   "mcpServers": {
     "superlocalmemory": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/slm-launch",
-      "args": [],
+      "command": "${ComSpec:-${CLAUDE_PLUGIN_ROOT}/scripts/slm-launch}",
+      "args": [
+        "/d",
+        "/s",
+        "/c",
+        "where.exe /q slm || (echo SLM plugin: slm is not on PATH. On Windows the plugin runs the SuperLocalMemory you installed. Install it first with: pipx install superlocalmemory  or: pip install superlocalmemory  then restart your editor. 1>&2 & exit 1) & slm serve start 1>&2 & slm mcp"
+      ],
       "env": {
         "SLM_AGENT_ID": "claude_code"
       }

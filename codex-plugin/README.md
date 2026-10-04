@@ -30,6 +30,10 @@ SuperLocalMemory v4.1.19 · Qualixar · AGPL-3.0-or-later
   ```
 
 - Verify: `slm --version`
+- **Windows:** install with pipx or pip (they put `slm.exe` on PATH). On
+  native Windows the MCP server always runs that installed `slm`; with no
+  `slm` on PATH it does not start, and its log says `slm is not on PATH` with
+  the install command.
 
 ---
 

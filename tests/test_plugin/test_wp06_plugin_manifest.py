@@ -208,10 +208,15 @@ class TestMcpJson:
         # If command is a launcher wrapper, args can be empty
         # If command is the direct slm binary, args must include 'mcp'
         if "slm-launch" in cmd:
-            # Launcher passes mcp internally — args should be empty
-            assert args == [] or args == ["mcp"], (
-                f"With slm-launch wrapper, args must be [] or ['mcp'], got {args!r}"
-            )
+            # Launcher passes mcp internally. #139: the args are cmd.exe's on
+            # Windows (${ComSpec}); the POSIX launcher ignores them.
+            # test_mcp_command_per_platform.py checks both expansions.
+            if cmd.startswith("${ComSpec:-"):
+                assert args[:3] == ["/d", "/s", "/c"] and args[-1].endswith("slm mcp"), args
+            else:
+                assert args == [] or args == ["mcp"], (
+                    f"With slm-launch wrapper, args must be [] or ['mcp'], got {args!r}"
+                )
         else:
             # Direct binary — must pass 'mcp'
             assert args == ["mcp"], (
