@@ -1705,6 +1705,22 @@ def cmd_list(args: Namespace) -> None:
         pass
 
 
+def _cli_remember_idempotency_key(body: dict) -> str:
+    """The same ``slm remember`` command always carries the same key.
+
+    Re-running a command is the only resend a CLI user has, so it must be
+    recognised as the same request: the daemon then answers with the first
+    receipt instead of storing the memory again. Anything that makes it a
+    different request (wording, tags, scope, kind, replaces) gives a
+    different key. Keys are scoped per profile by the daemon.
+    """
+    import hashlib
+    import json as _json
+
+    material = _json.dumps(body, sort_keys=True, ensure_ascii=False, default=str)
+    return "cli:" + hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
 def cmd_remember(args: Namespace) -> None:
     """Store a memory through the owned daemon."""
 
@@ -1772,6 +1788,7 @@ def cmd_remember(args: Namespace) -> None:
         if replaces is not None:
             body["replaces"] = replaces
             extra["preserve_unprocessable"] = True
+        body["idempotency_key"] = _cli_remember_idempotency_key(body)
         try:
             result = daemon_request("POST", path, body, timeout_seconds=30, **extra)
         except DaemonUnprocessable as exc:
