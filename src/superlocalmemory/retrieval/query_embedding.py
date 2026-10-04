@@ -65,11 +65,10 @@ class QueryEmbedder:
         self._cache_max_size = cache_max_size
         self._lock = threading.Lock()
         self._inflight: dict[str, concurrent.futures.Future] = {}
-        # Two workers: one may be parked behind a cold model load while a
-        # second, different query still gets its turn the moment it is up.
-        self._executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=2, thread_name_prefix="slm-query-embed",
-        )
+        # Created on first use: an engine with no embedder (Mode A without
+        # vectors) or one only ever used from background work owns no threads.
+        self._executor: concurrent.futures.ThreadPoolExecutor | None = None
+        self._closed = False
 
     @property
     def cache(self) -> dict[str, list[float]]:
@@ -93,6 +92,14 @@ class QueryEmbedder:
             fut = self._inflight.get(query)
             if fut is not None:
                 return fut
+            if self._executor is None:
+                if self._closed:
+                    raise RuntimeError("query embedder is closed")
+                # Two workers: one may be parked behind a cold model load
+                # while a second question still gets its turn once it is up.
+                self._executor = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=2, thread_name_prefix="slm-query-embed",
+                )
             fut = self._executor.submit(self._compute, query)
             self._inflight[query] = fut
 
@@ -142,4 +149,8 @@ class QueryEmbedder:
             return None, status
 
     def close(self) -> None:
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        with self._lock:
+            self._closed = True
+            executor, self._executor = self._executor, None
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
