@@ -33,6 +33,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,10 @@ TOMBSTONE_TTL_MS = 86_400_000
 CONNECT_TIMEOUT_S = 5.0
 BUSY_TIMEOUT_MS = 5000
 _LOG_EVERY_S = 60.0
+
+#: A check this much older than its profile's row counts as the previous
+#: profile's: room for a clock that was nudged back, never for a person.
+RECREATED_MARGIN_MS = 5_000
 
 DEFAULT_RETENTION_DAYS = 30
 DEFAULT_MAX_ROWS = 10_000
@@ -73,7 +78,8 @@ _flush_lock = threading.Lock()
 _thread: threading.Thread | None = None
 _stop = threading.Event()
 _conn: sqlite3.Connection | None = None
-_state: dict[str, Any] = {"learning_db": None, "retention_days": DEFAULT_RETENTION_DAYS,
+_state: dict[str, Any] = {"learning_db": None, "memory_db": None,
+                          "retention_days": DEFAULT_RETENTION_DAYS,
                           "max_rows": DEFAULT_MAX_ROWS, "last_saved_ms": None,
                           "tombstones_seen_ms": 0, "last_sweep": 0.0, "last_log": 0.0}
 
@@ -249,6 +255,11 @@ def _tick() -> None:
 
 
 def _loop() -> None:
+    try:
+        reconcile_with_profiles(_state["learning_db"], _state["memory_db"])
+    except Exception as exc:  # noqa: BLE001 — retried at the next start
+        _log_once("Answer Check history: could not check for erasures made by an "
+                  "older version (%s); will look again at the next start", exc)
     wake = history.wake_event()
     while not _stop.is_set():
         wake.wait(FLUSH_INTERVAL_S)
@@ -271,12 +282,18 @@ def clamp_settings(retention_days: Any, max_rows: Any) -> tuple[int, int]:
 
 
 def start_writer(learning_db: Path, *, retention_days: Any = DEFAULT_RETENTION_DAYS,
-                 max_rows: Any = DEFAULT_MAX_ROWS) -> None:
-    """Start the single writer for this process (idempotent) and enable recording."""
+                 max_rows: Any = DEFAULT_MAX_ROWS, memory_db: Path | None = None) -> None:
+    """Start the single writer for this process (idempotent) and enable recording.
+
+    Its first act is ``reconcile_with_profiles``: an erasure made while an older
+    version ran is applied before anything else is saved. ``memory_db``
+    defaults to the ``memory.db`` beside ``learning_db``.
+    """
     global _thread
     days, rows = clamp_settings(retention_days, max_rows)
-    _state.update(learning_db=Path(learning_db), retention_days=days, max_rows=rows,
-                  last_sweep=0.0)
+    learning = Path(learning_db)
+    _state.update(learning_db=learning, retention_days=days, max_rows=rows, last_sweep=0.0,
+                  memory_db=Path(memory_db) if memory_db else learning.with_name("memory.db"))
     if _thread is not None and _thread.is_alive():
         return
     _stop.clear()
@@ -344,6 +361,106 @@ def erase_profile_everywhere(learning_db: Path, profile_id: str) -> int:
 clear_profile = erase_profile_everywhere
 
 
+# -- erasures made while an older version ran (4.1.18 / 4.1.19) --------------------
+
+def _created_ms(created_at: Any) -> int | None:
+    """``profiles.created_at`` (SQLite ``datetime('now')``, UTC) in ms; None if unreadable."""
+    if not isinstance(created_at, str) or not created_at.strip():
+        return None
+    try:
+        moment = datetime.fromisoformat(created_at.strip().replace(" ", "T", 1))
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    return int(moment.timestamp() * 1000)
+
+
+def _profiles(memory_db: Path) -> dict[str, int | None] | None:
+    """Every profile in ``memory_db`` with its creation time, or None when that
+    cannot be read with certainty (then nothing is erased on its word)."""
+    if not Path(memory_db).exists():
+        return None
+    try:
+        conn = connect(Path(memory_db), readonly=True)
+        try:
+            rows = conn.execute("SELECT profile_id, created_at FROM profiles").fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+    if not rows:
+        return None  # no profile at all is not a store anyone erased everything from
+    return {pid: _created_ms(created) for pid, created in rows if isinstance(pid, str)}
+
+
+def reconcile_with_profiles(learning_db: Path | None, memory_db: Path | None, *,
+                            now_ms: int | None = None) -> dict[str, int]:
+    """Erase the history of profiles erased or deleted while an older version ran.
+
+    4.1.18 and 4.1.19 do not know this history exists: a privacy erasure or a
+    profile deletion run on them (after "prepare to go back") removes the
+    profile and leaves its checks behind. Both end by deleting the profile's
+    row in memory.db, and memory.db is the source of truth for profiles. So,
+    each time this version's writer starts:
+
+    * a profile with history but no row any more is erased here, exactly as an
+      erasure in this version would have done (rows and tombstone);
+    * a profile whose row is newer than some of its history was removed and
+      created again under the same name; the history from before its row was
+      created belonged to the one that was removed, and is deleted.
+
+    Nothing is erased when the profiles cannot be read. Returns
+    ``{"profiles": n, "rows": n}`` for what was removed.
+    """
+    done = {"profiles": 0, "rows": 0}
+    if learning_db is None or memory_db is None or not Path(learning_db).exists():
+        return done
+    profiles = _profiles(Path(memory_db))
+    if profiles is None:
+        return done
+    stamp = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    with _flush_lock:
+        conn = connect(Path(learning_db), readonly=False)
+        try:
+            if not _has_tables(conn):
+                return done
+            seen = conn.execute("SELECT profile_id, MIN(occurred_ms) FROM answer_check_events "
+                                "GROUP BY profile_id").fetchall()
+            for profile_id, oldest in seen:
+                removed = _reconcile_one(conn, profile_id, oldest, profiles, stamp)
+                if removed:
+                    done["profiles"] += 1
+                    done["rows"] += removed
+        finally:
+            conn.close()
+    if done["rows"]:
+        logger.info("Answer Check history: removed %d checks of %d profiles erased or "
+                    "deleted while an older version was running", done["rows"],
+                    done["profiles"])
+    return done
+
+
+def _reconcile_one(conn: sqlite3.Connection, profile_id: str, oldest: int,
+                   profiles: dict[str, int | None], now_ms: int) -> int:
+    if profile_id not in profiles:
+        history.forget_profile(profile_id, erased_at_ms=now_ms)
+        return erase_profile_rows(conn, profile_id, now_ms=now_ms)
+    created = profiles[profile_id]
+    if created is None or oldest is None:
+        return 0
+    before = created - RECREATED_MARGIN_MS
+    if int(oldest) >= before:
+        return 0
+    removed = 0
+    while True:
+        n = _delete_chunk(conn, "profile_id = ? AND occurred_ms < ?", (profile_id, before),
+                          PRUNE_CHUNK)
+        removed += n
+        if n < PRUNE_CHUNK:
+            return removed
+
+
 # -- readers (dashboard routes; never the recall path) ------------------------------
 
 def _read(learning_db: Path, sql: str, params: tuple) -> list[dict[str, Any]]:
@@ -399,7 +516,7 @@ def event_as_row(ev: history.VerdictEvent) -> Mapping[str, Any]:
 
 def _reset_for_testing() -> None:
     stop_writer(timeout_s=1.0)
-    _state.update(learning_db=None, retention_days=DEFAULT_RETENTION_DAYS,
+    _state.update(learning_db=None, memory_db=None, retention_days=DEFAULT_RETENTION_DAYS,
                   max_rows=DEFAULT_MAX_ROWS, last_saved_ms=None, tombstones_seen_ms=0,
                   last_sweep=0.0, last_log=0.0)
 
@@ -407,5 +524,5 @@ def _reset_for_testing() -> None:
 __all__ = ["BATCH_MAX", "COLUMNS", "FLUSH_INTERVAL_S", "MAX_ROWS_CEILING", "apply_remote_tombstones",
            "clamp_settings", "clear_profile", "connect", "erase_profile_everywhere",
            "erase_profile_rows", "event_as_row", "flush_once", "insert_batch", "prune",
-           "save_batch",
+           "reconcile_with_profiles", "save_batch",
            "read_page", "read_window", "start_writer", "stop_writer", "writer_info"]
