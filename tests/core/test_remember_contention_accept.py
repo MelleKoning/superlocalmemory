@@ -227,6 +227,7 @@ def test_a_broken_writer_is_still_refused_not_claimed_saved(runtime, monkeypatch
 def test_acknowledgement_latency_under_contention_within_ceiling(runtime, data_dir):
     from superlocalmemory.server.unified_daemon import (
         _REMEMBER_ADMISSION_DEADLINE_MS,
+        _REMEMBER_JOURNAL_DEADLINE_MS,
         _REMEMBER_TOTAL_CEILING_SECONDS,
     )
 
@@ -238,7 +239,8 @@ def test_acknowledgement_latency_under_contention_within_ceiling(runtime, data_d
             started = time.monotonic()
             receipt = runtime.remember(
                 _request(f"lat-{index}"), _actor(),
-                deadline_ms=_REMEMBER_ADMISSION_DEADLINE_MS,
+                deadline_ms=_REMEMBER_JOURNAL_DEADLINE_MS,
+                accept_after_ms=_REMEMBER_ADMISSION_DEADLINE_MS,
             )
             samples.append(time.monotonic() - started)
             assert receipt.payload["status"] == "accepted"

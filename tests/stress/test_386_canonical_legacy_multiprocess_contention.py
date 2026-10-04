@@ -26,7 +26,9 @@ _FOREGROUND_WRITES = 48
 _FOREGROUND_CONCURRENCY = 8
 _LEGACY_WRITES_PER_PROCESS = 48
 _READER_THREADS = 4
-_REMEMBER_DEADLINE_MS = 1_200  # the daemon's own admission deadline
+_REMEMBER_DEADLINE_MS = 2_000  # the daemon's journal (durability) budget
+_ACCEPT_AFTER_MS = 1_200  # the daemon's wait for the canonical commit
+_FOREGROUND_TOTAL_SECONDS = 60.0  # all 48 calls through 8 workers, queueing included
 _DRAIN_SECONDS = 30.0
 _PROCESS_DEADLINE_SECONDS = 8.0
 _ACTOR_ID = "multiprocess-contention-daemon"
@@ -231,8 +233,8 @@ def test_386_canonical_remember_survives_legacy_multiprocess_contention(
 ) -> None:
     """Canonical writes, legacy DML, and strict RO FTS snapshots all finish.
 
-    The individual 1.2 s remember deadline is the foreground service contract:
-    each remember is committed or durably accepted inside it, never refused;
+    The daemon's remember budgets are the foreground service contract: each
+    remember is committed, or durably accepted, never refused;
     legacy child processes have an 8s total cap.  Counts prove that contention
     caused neither duplicated work nor silently lost writes.
     """
@@ -278,6 +280,7 @@ def test_386_canonical_remember_survives_legacy_multiprocess_contention(
                     _remember_request(sequence),
                     _actor(),
                     deadline_ms=_REMEMBER_DEADLINE_MS,
+                    accept_after_ms=_ACCEPT_AFTER_MS,
                 )
                 # Committed in time, or durably accepted while the writer was
                 # busy. Never refused: contention is not a failure.
@@ -320,9 +323,15 @@ def test_386_canonical_remember_survives_legacy_multiprocess_contention(
                 snapshot_futures = [
                     reader_pool.submit(strict_reader) for _ in range(_READER_THREADS)
                 ]
-                for future in foreground_futures:
-                    future.result(timeout=_PROCESS_DEADLINE_SECONDS)
-                writes_complete.set()
+                try:
+                    # The per-call contract is asserted on foreground_elapsed;
+                    # this bound covers queueing 48 calls through 8 workers.
+                    for future in foreground_futures:
+                        future.result(timeout=_FOREGROUND_TOTAL_SECONDS)
+                finally:
+                    # Always release the readers, or a timeout above leaves
+                    # them spinning and the executor exit hangs forever.
+                    writes_complete.set()
                 snapshot_counts = [
                     future.result(timeout=_PROCESS_DEADLINE_SECONDS) for future in snapshot_futures
                 ]

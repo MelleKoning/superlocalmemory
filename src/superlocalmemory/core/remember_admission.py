@@ -122,6 +122,7 @@ class RememberService:
         *,
         deadline_ms: int,
         defer: Callable[[PreparedAdmission], None] | None = None,
+        accept_after_ms: int | None = None,
     ) -> RememberReceipt:
         """Journal, then commit within the deadline.
 
@@ -130,10 +131,19 @@ class RememberService:
         deadline, the entry is handed to ``defer`` (which finishes the commit)
         and an ``accepted`` receipt is returned instead of an error. Without
         ``defer`` the old behaviour holds and contention raises.
+
+        ``deadline_ms`` bounds the journal prepare, the point of durability:
+        nothing can be accepted before it, so it keeps the full budget.
+        ``accept_after_ms`` (with ``defer``) is how long to wait for the
+        canonical commit before answering ``accepted`` instead.
         """
         if deadline_ms <= 0:
             raise ValueError("deadline_ms must be greater than zero")
-        deadline = time.monotonic() + deadline_ms / 1_000
+        started = time.monotonic()
+        deadline = started + deadline_ms / 1_000
+        commit_deadline = deadline
+        if defer is not None and accept_after_ms is not None:
+            commit_deadline = min(deadline, started + accept_after_ms / 1_000)
         prepared = self._journal.prepare(
             request,
             actor,
@@ -144,7 +154,7 @@ class RememberService:
         if prepared.state == "rejected":
             raise AdmissionRejected(prepared.error_code or "COMMAND_REJECTED")
         try:
-            return self._commit_prepared(prepared, deadline)
+            return self._commit_prepared(prepared, commit_deadline)
         except _CONTENTION:
             if defer is None:
                 raise

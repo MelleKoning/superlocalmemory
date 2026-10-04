@@ -520,7 +520,12 @@ class CanonicalRememberRuntime:
             raise
 
     def remember(
-        self, request: RememberRequest, actor: Actor, *, deadline_ms: int = 2_000,
+        self,
+        request: RememberRequest,
+        actor: Actor,
+        *,
+        deadline_ms: int = 2_000,
+        accept_after_ms: int | None = None,
     ) -> RememberReceipt:
         """Journal then commit one bounded queryable admission receipt."""
         if not self._started:
@@ -533,6 +538,7 @@ class CanonicalRememberRuntime:
         try:
             return self._service.remember(
                 request, actor, deadline_ms=deadline_ms, defer=self._deferred.defer,
+                accept_after_ms=accept_after_ms,
             )
         except (
             AdmissionJournalUnavailable,

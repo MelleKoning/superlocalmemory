@@ -250,10 +250,14 @@ _FACT_ENTITY_REPAIR_MAX_RETRY_SECONDS = 30.0
 _REMEMBER_TOTAL_CEILING_SECONDS = 1.5
 _REMEMBER_ENRICHMENT_WAIT_SECONDS = 1.2
 # How long a remember waits for the canonical commit before answering
-# "accepted" instead. Inside the 1.5 s ceiling with room for the journal and
-# the response; it used to be 2.0 s and, past it, the answer was a 503 for a
-# memory the journal already held.
+# "accepted" instead: inside the 1.5 s ceiling with room for the response.
+# Past the old single 2.0 s deadline the answer was a 503 for a memory the
+# journal already held.
 _REMEMBER_ADMISSION_DEADLINE_MS = 1_200
+# The journal prepare is the point of durability; nothing can be accepted
+# before it, so it keeps its full 2.0 s budget (unchanged) rather than being
+# squeezed into the commit wait and refused sooner.
+_REMEMBER_JOURNAL_DEADLINE_MS = 2_000
 
 
 def _accepted_remember_response(payload: dict, profile: str, *, replaces=None):
@@ -5192,7 +5196,8 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 runtime.remember,
                 admission,
                 actor,
-                deadline_ms=_REMEMBER_ADMISSION_DEADLINE_MS,
+                deadline_ms=_REMEMBER_JOURNAL_DEADLINE_MS,
+                accept_after_ms=_REMEMBER_ADMISSION_DEADLINE_MS,
             )
             payload = dict(receipt.payload)
             if payload.get("status") == "accepted":
