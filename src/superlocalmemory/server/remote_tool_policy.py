@@ -227,15 +227,22 @@ def _filter_tools_list(body: bytes, scope: str) -> bytes:
 
 
 def _redact_call_answer(body: bytes) -> bytes:
-    from superlocalmemory.server.remote_redaction import redact_tool_result
+    """The tool answer with host details removed. Fails closed: an answer that
+    cannot be read as a JSON-RPC response is not forwarded as it is."""
+    from superlocalmemory.server.remote_redaction import redact_rpc_error, redact_tool_result
 
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
-        return body
-    if not isinstance(payload, dict) or not isinstance(payload.get("result"), dict):
-        return body
-    return json.dumps(dict(payload, result=redact_tool_result(payload["result"]))).encode()
+        payload = None
+    if not isinstance(payload, dict):
+        return json.dumps({"jsonrpc": "2.0", "id": None, "error": {
+            "code": -32603, "message": "The tool answer could not be checked."}}).encode()
+    if "error" in payload:
+        payload = dict(payload, error=redact_rpc_error(payload["error"]))
+    if isinstance(payload.get("result"), dict):
+        payload = dict(payload, result=redact_tool_result(payload["result"]))
+    return json.dumps(payload).encode()
 
 
 class _JsonAnswerFilter:

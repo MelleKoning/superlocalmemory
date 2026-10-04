@@ -134,3 +134,55 @@ def test_non_json_tool_text_is_redacted_too() -> None:
     result = {"content": [{"type": "text", "text": f"db at {Path.home()}/x/memory.db"}]}
     out = remote_redaction.redact_tool_result(result)["content"][0]["text"]
     assert str(Path.home()) not in out and remote_redaction.HOST_PATH in out
+
+
+# -- diagnostics never carry host paths; memory text is still returned as written -------
+
+_TB = ('Traceback (most recent call last):\n  File "/Users/someone/slm/src/x.py", line 3\n'
+       "FileNotFoundError: [Errno 2] No such file: '/Users/someone/.superlocalmemory/a.db'")
+
+
+def _diagnostic_payload() -> dict:
+    return {
+        "ok": False,
+        "note": f"internal error: {_TB}",
+        "error": {"text": _TB, "content": _TB, "code": "E1"},
+        "errors": [{"message": _TB}],
+        "store_receipt": {"content": "saved from /Users/someone/notes.md", "fact_id": "f9"},
+        "answer_check_note": _TB,
+        "results": [{"fact_id": "f1", "content": "my traceback was in /Users/someone/x.py"}],
+    }
+
+
+def test_error_note_and_receipt_fields_never_carry_host_paths_remotely() -> None:
+    answer = _call(_diagnostic_payload(), READ_KEY)["result"]
+    data = json.loads(answer["content"][0]["text"])
+    structured = answer["structuredContent"]
+    for blob in (data, structured):
+        diagnostics = {k: v for k, v in blob.items() if k != "results"}
+        assert "/Users/someone" not in json.dumps(diagnostics), diagnostics
+    # The memory's own text is the user's data and is returned exactly as stored.
+    assert data["results"][0]["content"] == "my traceback was in /Users/someone/x.py"
+    assert structured["results"][0]["content"] == "my traceback was in /Users/someone/x.py"
+
+
+def test_a_failed_tool_result_is_diagnostics_throughout() -> None:
+    result = {"isError": True,
+              "content": [{"type": "text", "text": json.dumps({"content": _TB})}],
+              "structuredContent": {"content": _TB, "text": _TB}}
+    out = remote_redaction.redact_tool_result(result)
+    assert "/Users/someone" not in json.dumps(out)
+
+
+def test_a_jsonrpc_error_answer_is_redacted_remotely() -> None:
+    payload = {"jsonrpc": "2.0", "id": 1, "error": {
+        "code": -32603, "message": f"Error executing tool: {_TB}", "data": {"text": _TB}}}
+    out = json.loads(remote_tool_policy._redact_call_answer(json.dumps(payload).encode()))
+    assert "/Users/someone" not in json.dumps(out)
+    assert out["error"]["code"] == -32603
+
+
+def test_an_unreadable_tool_answer_is_not_forwarded_as_is() -> None:
+    out = remote_tool_policy._redact_call_answer(f"not json {_TB}".encode())
+    assert b"/Users/someone" not in out
+    assert json.loads(out)["error"]["code"] == -32603

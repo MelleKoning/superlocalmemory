@@ -15,7 +15,14 @@ before the answer leaves the daemon:
   account name are replaced too.
 
 Memory text (``content`` and the like) is returned exactly as stored: it is the
-user's data, and a path the user wrote down is not a host detail.
+user's data, and a path the user wrote down is not a host detail. A remote key
+can read the full text of every memory in the one profile it is bound to
+(:mod:`server.remote_profile_binding`); that binding is what limits exposure.
+
+Diagnostics are not memory text. Inside an error, a traceback, a warning, a
+note or a receipt - and in the whole of a failed tool result or a JSON-RPC
+error - nothing is passed through as written: a host path in an exception
+message is withheld like any other host detail.
 """
 
 from __future__ import annotations
@@ -41,11 +48,22 @@ _HOST_KEYS = frozenset({
     "install_dir", "repo_path", "project_path", "config_path", "argv", "cmdline",
 })
 _HOST_SUFFIXES = ("_path", "_dir", "_root", "_file", "_paths", "_dirs")
-#: Fields that carry memory text, returned as written.
+#: Fields that carry memory text, returned as written (outside diagnostics).
 _CONTENT_KEYS = frozenset({
     "content", "text", "original_content", "fact", "memory", "summary_text", "query",
-    "answer", "snippet", "excerpt", "observation", "title", "body", "note",
+    "answer", "snippet", "excerpt", "observation", "title", "body",
 })
+#: Fields that carry diagnostics. Their whole subtree is redacted, memory-text
+#: field names included: an exception message is not the user's data.
+_DIAGNOSTIC_KEYS = frozenset({
+    "error", "errors", "exception", "exceptions", "traceback", "stack", "stack_trace",
+    "stderr", "stdout", "warning", "warnings", "detail", "details", "diagnostic",
+    "diagnostics", "hint", "reason", "failure", "failures", "note", "notes",
+    "receipt", "receipts", "message", "messages",
+})
+_DIAGNOSTIC_SUFFIXES = ("_error", "_errors", "_exception", "_traceback", "_warning",
+                        "_warnings", "_note", "_notes", "_reason", "_receipt", "_receipts",
+                        "_detail", "_details", "_message", "_hint")
 
 _POSIX_PATH = re.compile(r"(?<![\w.~:/-])/(?:[^\s/\"'`<>|:;,()\[\]{}]+/)+[^\s/\"'`<>|:;,()\[\]{}]*")
 _WINDOWS_PATH = re.compile(r"\b[A-Za-z]:\\(?:[^\s\\\"'<>|:;,]+\\)*[^\s\\\"'<>|:;,]*")
@@ -87,6 +105,11 @@ def _is_host_key(key: str) -> bool:
     return lowered in _HOST_KEYS or lowered.endswith(_HOST_SUFFIXES)
 
 
+def _is_diagnostic_key(key: str) -> bool:
+    lowered = key.lower()
+    return lowered in _DIAGNOSTIC_KEYS or lowered.endswith(_DIAGNOSTIC_SUFFIXES)
+
+
 def redact_text(text: str) -> str:
     """Host details in a non-memory string."""
     out = _WINDOWS_PATH.sub(HOST_PATH, text)
@@ -97,44 +120,61 @@ def redact_text(text: str) -> str:
     return out
 
 
-def redact_value(value: Any, key: str | None = None) -> Any:
-    """A redacted copy (inputs are never mutated)."""
-    if key is not None and key.lower() in _CONTENT_KEYS:
-        return value
-    if key is not None and _is_host_key(key):
-        return REDACTED if value not in (None, "", [], {}) else value
+def redact_value(value: Any, key: str | None = None, *, diagnostic: bool = False) -> Any:
+    """A redacted copy (inputs are never mutated).
+
+    ``diagnostic`` is set inside an error/receipt subtree, where memory-text
+    field names lose their pass-through.
+    """
+    if key is not None:
+        if _is_diagnostic_key(key):
+            diagnostic = True
+        elif key.lower() in _CONTENT_KEYS and not diagnostic:
+            return value
+        if _is_host_key(key):
+            return REDACTED if value not in (None, "", [], {}) else value
     if isinstance(value, dict):
-        return {k: redact_value(v, str(k)) for k, v in value.items()}
+        return {k: redact_value(v, str(k), diagnostic=diagnostic) for k, v in value.items()}
     if isinstance(value, list):
-        return [redact_value(v, key) for v in value]
+        return [redact_value(v, key, diagnostic=diagnostic) for v in value]
     if isinstance(value, str):
         return redact_text(value)
     return value
 
 
-def _redact_block_text(text: str) -> str:
+def _redact_block_text(text: str, diagnostic: bool) -> str:
     try:
         parsed = json.loads(text)
     except ValueError:
         return redact_text(text)
     if isinstance(parsed, (dict, list)):
-        return json.dumps(redact_value(parsed), indent=2, default=str)
+        return json.dumps(redact_value(parsed, diagnostic=diagnostic), indent=2, default=str)
     return redact_text(text)
 
 
 def redact_tool_result(result: dict[str, Any]) -> dict[str, Any]:
-    """A ``tools/call`` result with host details removed."""
+    """A ``tools/call`` result with host details removed.
+
+    A failed result (``isError``) is diagnostics throughout.
+    """
+    diagnostic = result.get("isError") is True
     out = dict(result)
     blocks: Iterable[Any] = result.get("content") or []
     out["content"] = [
-        dict(b, text=_redact_block_text(b["text"]))
+        dict(b, text=_redact_block_text(b["text"], diagnostic))
         if isinstance(b, dict) and isinstance(b.get("text"), str) else b
         for b in blocks
     ]
     if isinstance(result.get("structuredContent"), (dict, list)):
-        out["structuredContent"] = redact_value(result["structuredContent"])
+        out["structuredContent"] = redact_value(result["structuredContent"],
+                                                diagnostic=diagnostic)
     return out
 
 
-__all__ = ["HOST_PATH", "REDACTED", "clear_cache", "redact_text", "redact_tool_result",
-           "redact_value"]
+def redact_rpc_error(error: Any) -> Any:
+    """A JSON-RPC ``error`` object with host details removed (all diagnostics)."""
+    return redact_value(error, diagnostic=True)
+
+
+__all__ = ["HOST_PATH", "REDACTED", "clear_cache", "redact_rpc_error", "redact_text",
+           "redact_tool_result", "redact_value"]
