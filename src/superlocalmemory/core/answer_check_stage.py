@@ -33,12 +33,19 @@ from typing import Any
 
 from superlocalmemory.core.answer_check_scope import answer_check_skipped
 from superlocalmemory.retrieval.answer_check_status import (
+    ANSWER_CHECK_DETAILS,
     ANSWER_CHECK_STATUSES,
+    DETAIL_BUDGET,
+    DETAIL_NONE,
+    DETAIL_NO_RESULTS,
+    DETAIL_NOT_A_QUESTION,
+    DETAIL_OTHER_PROFILE,
     REQUEST_FULL,
     STATUS_JUDGED,
     STATUS_OFF,
     STATUS_SKIPPED,
     STATUS_UNAVAILABLE,
+    AnswerCheckTrace,
     JudgeOutcome,
     judge_deadline,
 )
@@ -70,18 +77,20 @@ def run_answer_check(retrieval_engine: Any, query: str, response: Any, *,
     judge = getattr(retrieval_engine, _JUDGE_ATTR, None)
     if judge is None:
         return JudgeOutcome(None, STATUS_OFF)
-    if answer_check_skipped() or is_background_work() or not response.results:
-        return JudgeOutcome(None, STATUS_SKIPPED)
+    if answer_check_skipped() or is_background_work():
+        return JudgeOutcome(None, STATUS_SKIPPED, DETAIL_NOT_A_QUESTION)
+    if not response.results:
+        return JudgeOutcome(None, STATUS_SKIPPED, DETAIL_NO_RESULTS)
     if _would_send_another_profiles_memory(judge, response, profile_id, request):
         logger.debug("Answer check skipped: the online check would read another "
                      "profile's memory")
-        return JudgeOutcome(None, STATUS_SKIPPED)
+        return JudgeOutcome(None, STATUS_SKIPPED, DETAIL_OTHER_PROFILE)
     deadline = None
     if recall_started is not None:
         deadline = judge_deadline(recall_started)
         if deadline is None:
             logger.debug("Answer check skipped: too little of the recall budget left")
-            return JudgeOutcome(None, STATUS_SKIPPED)
+            return JudgeOutcome(None, STATUS_SKIPPED, DETAIL_BUDGET)
     if request == REQUEST_FULL and reorders(judge):
         return rerank_and_judge(judge, query, response, deadline)
     return _plain_check(judge, query, response, deadline)
@@ -217,4 +226,46 @@ def apply_order(response: Any, order: tuple[int, ...]) -> bool:
     return True
 
 
-__all__ = ["apply_order", "reorders", "rerank_and_judge", "run_answer_check"]
+def build_trace(retrieval_engine: Any, outcome: JudgeOutcome, response: Any, *,
+                recall_started: float, judge_started: float, judge_ended: float,
+                ended: float) -> AnswerCheckTrace | None:
+    """How long the check took and who ran it, for the Answer Check history.
+
+    Pure: attribute reads and arithmetic, no I/O. Times are monotonic seconds
+    from the same clock as ``recall_started``. Never raises: a recall must not
+    fail because its timing could not be described (None instead).
+    """
+    try:
+        return _trace(retrieval_engine, outcome, response, recall_started,
+                      judge_started, judge_ended, ended)
+    except Exception as exc:  # noqa: BLE001 — telemetry never breaks a recall
+        logger.debug("answer-check trace skipped: %s", type(exc).__name__)
+        return None
+
+
+def _trace(retrieval_engine: Any, outcome: JudgeOutcome, response: Any,
+           recall_started: float, judge_started: float, judge_ended: float,
+           ended: float) -> AnswerCheckTrace:
+    from superlocalmemory.retrieval.jev_rerank import STATUS_LISTWISE
+
+    verdict = outcome.verdict
+    if verdict is not None:
+        backend = getattr(verdict, "backend", "")
+        threshold = getattr(verdict, "threshold", None)
+    else:
+        backend = getattr(getattr(retrieval_engine, _JUDGE_ATTR, None), "backend", "")
+        threshold = None
+    detail = outcome.detail if outcome.detail in ANSWER_CHECK_DETAILS else DETAIL_NONE
+    return AnswerCheckTrace(
+        detail=detail,
+        backend=backend if isinstance(backend, str) else "",
+        threshold=threshold if isinstance(threshold, (int, float)) else None,
+        reordered=getattr(response, "reranker_status", "") == STATUS_LISTWISE,
+        retrieval_ms=round((judge_started - recall_started) * 1000.0, 1),
+        judge_ms=round((judge_ended - judge_started) * 1000.0, 1),
+        total_ms=round((ended - recall_started) * 1000.0, 1),
+    )
+
+
+__all__ = ["apply_order", "build_trace", "reorders", "rerank_and_judge",
+           "run_answer_check"]

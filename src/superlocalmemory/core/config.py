@@ -462,6 +462,13 @@ class RetrievalConfig:
     # non-number reads as 0.15. Only the boolean False turns the pass off.
     kind_aware: bool = True
     kind_aware_boost: float = 0.15
+    # 4.1.20: the Answer Check tab's history — outcomes and timings of recent
+    # checks (never questions or memories), kept on this machine. Days clamp to
+    # 1..365, rows per profile to 1,000..10,000 (a data export carries at most
+    # 10,000 rows per table). Names must not start with ``sufficiency_``.
+    answer_check_history: bool = True
+    answer_check_history_days: int = 30
+    answer_check_history_max_rows: int = 10_000
 
     def __post_init__(self) -> None:
         from superlocalmemory.retrieval.kind_aware import validated_settings

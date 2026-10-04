@@ -1432,12 +1432,14 @@ def run_recall(
     # mutation here.  Those state transitions require a separately authenticated
     # positive/negative outcome; merely returning a result is an exposure.
 
-    from superlocalmemory.core.answer_check_stage import run_answer_check
+    from superlocalmemory.core.answer_check_stage import build_trace, run_answer_check
     from superlocalmemory.core.score_contract import finalize_score_contract
     _shown_before_judge = _top_ids(response.results)
+    _judge_t0 = _time_budget.monotonic()
     outcome = run_answer_check(retrieval_engine, query, response,
                                request=answer_check, recall_started=_recall_started,
                                profile_id=profile_id)
+    _judge_t1 = _time_budget.monotonic()
     _mark("sufficiency")
     # The opt-in hosted reordering may have changed what is shown first; the
     # play's evidence must name what the caller actually sees, and the arm the
@@ -1459,4 +1461,7 @@ def run_recall(
         _admit_to_working_memory(response.results, profile_id, _sid)
 
     _mark("TOTAL(fisher+trust+markers)")
+    response.answer_check_trace = build_trace(  # 4.1.20: Answer Check history
+        retrieval_engine, outcome, response, recall_started=_recall_started,
+        judge_started=_judge_t0, judge_ended=_judge_t1, ended=_time_budget.monotonic())
     return response
