@@ -231,14 +231,14 @@ class TestConnectMany:
     def test_profile_propagated_to_all(self, fake_home: Path) -> None:
         """Profile kwarg is passed through to every IDE."""
         ids = ["cursor", "windsurf"]
-        connect_many(ids, home=fake_home, profile="myprofile")
+        connect_many(ids, home=fake_home, profile="full")
 
         for ide_id in ids:
             desc = IDE_MATRIX[ide_id]
             config_path = fake_home / desc.mcp_path_global
             data = json.loads(config_path.read_text(encoding="utf-8"))
             block = data[desc.server_key]["superlocalmemory"]
-            assert block.get("env", {}).get("SLM_MCP_PROFILE") == "myprofile"
+            assert block.get("env", {}).get("SLM_MCP_PROFILE") == "full"
 
     def test_many_with_pre_existing_multi_server_preserves_all(
         self, fake_home: Path

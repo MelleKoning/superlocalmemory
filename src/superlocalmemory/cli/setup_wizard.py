@@ -667,7 +667,7 @@ def run_wizard(auto: bool = False) -> None:
 
     if code_graph_enabled:
         print(f"\n  ✓ CodeGraph enabled")
-        print(f"    Run `slm code-graph build` in any repo to index it")
+        print("    Ask your agent to run the build_code_graph tool in a repo to index it")
     else:
         print(f"\n  ✓ CodeGraph disabled (enable later in {cg_config_path})")
 

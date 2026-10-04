@@ -259,14 +259,14 @@ def test_idempotent(ide_id: str, fake_home: Path):
 def test_profile_env_injected(fake_home: Path):
     """--profile injects SLM_MCP_PROFILE into server_block env."""
     ide_id = "cursor"
-    connect_ide(ide_id, home=fake_home, profile="research")
+    connect_ide(ide_id, home=fake_home, profile="code")
 
     desc = IDE_MATRIX[ide_id]
     config_path = fake_home / desc.mcp_path_global
     data = json.loads(config_path.read_text())
     block = data[desc.server_key]["superlocalmemory"]
     assert "env" in block
-    assert block["env"]["SLM_MCP_PROFILE"] == "research"
+    assert block["env"]["SLM_MCP_PROFILE"] == "code"
 
 
 # ---------------------------------------------------------------------------
@@ -525,7 +525,7 @@ def test_merged_status_when_slm_block_changes(fake_home: Path):
 
 def test_continue_yaml_profile_injected(fake_home: Path):
     """Profile injection into yaml list block (continue)."""
-    result = connect_ide("continue", home=fake_home, profile="work")
+    result = connect_ide("continue", home=fake_home, profile="power")
     assert result["error"] is None
 
     desc = IDE_MATRIX["continue"]
@@ -536,7 +536,7 @@ def test_continue_yaml_profile_injected(fake_home: Path):
         p for p in providers if p.get("params", {}).get("serverName") == "superlocalmemory"
     )
     assert "env" in slm.get("params", {})
-    assert slm["params"]["env"]["SLM_MCP_PROFILE"] == "work"
+    assert slm["params"]["env"]["SLM_MCP_PROFILE"] == "power"
 
 
 def test_continue_yaml_merge_update(fake_home: Path):

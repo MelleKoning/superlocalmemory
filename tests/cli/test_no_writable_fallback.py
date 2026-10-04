@@ -78,4 +78,4 @@ def test_cli_mutation_fails_closed_when_daemon_unavailable(
     # next command to run, not just restate the error code.
     assert error["reason"] == "no_daemon"
     assert "no daemon is registered for this data root" in error["message"]
-    assert "slm start" in error["hint"]
+    assert "slm serve start" in error["hint"]

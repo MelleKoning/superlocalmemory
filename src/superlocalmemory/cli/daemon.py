@@ -870,13 +870,13 @@ _LIVENESS_DIAGNOSIS = {
     "process_exited": (
         "daemon_process_exited",
         "the recorded daemon process (pid {pid}) is no longer running",
-        "Start it again with `slm start`.",
+        "Start it again with `slm serve start`.",
     ),
     "process_zombie": (
         "daemon_process_exited",
         "the recorded daemon process (pid {pid}) has exited and is awaiting "
         "reaping by its parent",
-        "Start it again with `slm start`.",
+        "Start it again with `slm serve start`.",
     ),
     "process_unreadable": (
         "daemon_process_unreadable",
@@ -941,7 +941,7 @@ def _describe_daemon_unavailability() -> dict[str, str]:
         return {
             "reason": "no_daemon",
             "message": f"no daemon is registered for this data root ({path} is absent).",
-            "hint": "Run `slm start`.",
+            "hint": "Run `slm serve start`.",
         }
 
     alive, evidence = _resolve_descriptor_liveness(descriptor)
@@ -972,8 +972,8 @@ def _describe_daemon_unavailability() -> dict[str, str]:
                 f"2s."
             ),
             "hint": (
-                "Check `slm logs` for a stalled request, or `slm restart` if "
-                "it stays unresponsive."
+                f"Check {state_path('logs', 'daemon.log')} for a stalled "
+                "request, or run `slm restart` if it stays unresponsive."
             ),
         }
     if not descriptor_matches_health(descriptor, health):
@@ -994,7 +994,7 @@ def _describe_daemon_unavailability() -> dict[str, str]:
             f"the owned daemon (pid {descriptor.pid}) is healthy but rejected "
             f"or dropped this request."
         ),
-        "hint": "Check `slm logs` for the failing request.",
+        "hint": f"Check {state_path('logs', 'daemon.log')} for the failing request.",
     }
 
 

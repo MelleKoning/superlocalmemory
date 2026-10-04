@@ -55,7 +55,7 @@ def test_mcp_remember_fails_closed_without_worker_or_writable_sqlite(
     assert rejected["retryable"] is True
     # Issue #104: the message must name the specific cause, not just the code.
     assert rejected["error"].startswith("DAEMON_UNAVAILABLE (no_daemon):")
-    assert "slm start" in rejected["error"]
+    assert "slm serve start" in rejected["error"]
 
     result = asyncio.run(_remember_tool()("the owned daemon is down"))
 

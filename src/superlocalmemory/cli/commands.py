@@ -1937,10 +1937,8 @@ def cmd_recall(args: Namespace) -> None:
                 # NoneType.__format__". ``or 0`` covers both. Same for score,
                 # which the keyword-fallback path returns as None.
                 elapsed_ms = result.get('retrieval_time_ms') or 0
-                print(
-                    "SpreadingActivation.search completed via daemon "
-                    f"({elapsed_ms:.0f}ms)"
-                )
+                # Timing is diagnostics; stdout carries only the results.
+                logger.debug("recall completed via daemon (%.0fms)", elapsed_ms)
                 for i, r in enumerate(result["results"], 1):
                     score = r.get('score') or 0
                     print(f"  {i}. [{score:.2f}] {r['content']}")
@@ -3284,8 +3282,8 @@ def cmd_doctor(args: Namespace) -> None:
                     "Projection queue", "FAIL",
                     f"{len(stalled)}+ memories refused by the graph or vector "
                     f"store (e.g. {', '.join(f[:12] for f in stalled)})",
-                    "Check `slm logs` for the projection error, then restart "
-                    "the daemon to retry",
+                    "Check logs/daemon.log in the SLM data folder for the "
+                    "projection error, then run `slm restart` to retry",
                 )
             elif depth:
                 _check(
@@ -3750,6 +3748,8 @@ def cmd_trace(args: Namespace) -> None:
 
 def cmd_mcp(_args: Namespace) -> None:
     """Start the V3 MCP server (stdio transport for IDE integration)."""
+    from superlocalmemory.mcp.profile_names import exit_on_unknown_profile
+    exit_on_unknown_profile()  # before anything else runs; stderr only
     # SINGLETON GUARD (v3.5.8): Reap fresh orphans before binding stdio.
     # Root cause: every IDE session spawns a new `slm mcp`; dead sessions'
     # processes survive indefinitely (~400 MB each) because the reaper's

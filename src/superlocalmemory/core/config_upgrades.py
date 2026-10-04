@@ -11,6 +11,8 @@ Stdlib only.
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 
 logger = logging.getLogger("superlocalmemory.core.config")
 
@@ -28,32 +30,60 @@ PRE_4_1_18_MATH_DUMP_KEYS = frozenset({
 
 _sheaf_switch_off_reported = False
 
+#: Created beside config.json the first time the switch-off is reported, so the
+#: notice is given once per install rather than once per ``slm`` process.
+SHEAF_NOTICE_MARKER = ".sheaf-default-notice-shown"
+
 
 def is_saved_math_dump(section: dict) -> bool:
     return PRE_4_1_18_MATH_DUMP_KEYS <= set(section)
 
 
-def sheaf_reviewed(raw_section: dict, fields: dict) -> dict:
+def sheaf_reviewed(
+    raw_section: dict, fields: dict, config_dir: Path | None = None,
+) -> dict:
     """``fields`` (the math section being loaded) with the 4.1.18 default applied:
-    an old full dump without the review marker reads as off, once, said aloud;
-    anything a person wrote is kept as written. Returns a new dict."""
+    an old full dump without the review marker reads as off, said aloud once per
+    install; anything a person wrote is kept as written. Returns a new dict."""
     if "sheaf_default_reviewed" in raw_section or not is_saved_math_dump(raw_section):
         return dict(fields)
     if fields.get("sheaf_at_encoding") is True:
-        report_sheaf_switch_off()
+        report_sheaf_switch_off(config_dir)
     return {**fields, "sheaf_at_encoding": False}
 
 
-def report_sheaf_switch_off() -> None:
-    """Say once per process that the old stored default was switched off.
+def _claim_notice(config_dir: Path | None) -> bool:
+    """True if this caller is the first to report for *config_dir*.
 
-    Once: until something saves the config (which records the review), every
-    load reads the same old file, and a warning per `slm` command is noise.
+    O_EXCL makes the claim atomic across concurrent ``slm`` processes. A folder
+    that cannot be written falls back to once per process.
+    """
+    if config_dir is None:
+        return True
+    try:
+        fd = os.open(config_dir / SHEAF_NOTICE_MARKER,
+                     os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return False
+    except OSError:
+        return True
+    os.close(fd)
+    return True
+
+
+def report_sheaf_switch_off(config_dir: Path | None = None) -> None:
+    """Say once that the old stored default was switched off.
+
+    Every load reads the same old file until something saves the config (which
+    records the review), and each ``slm`` command is a new process, so the
+    notice is recorded beside config.json and given once per install.
     """
     global _sheaf_switch_off_reported
     if _sheaf_switch_off_reported:
         return
     _sheaf_switch_off_reported = True
+    if not _claim_notice(config_dir):
+        return
     logger.warning(
         "The store-time consistency check (math.sheaf_at_encoding) is now off by "
         "default; this config held the old default (true), so it is off. To keep "
@@ -61,5 +91,5 @@ def report_sheaf_switch_off() -> None:
         "to true in config.json.")
 
 
-__all__ = ["PRE_4_1_18_MATH_DUMP_KEYS", "is_saved_math_dump", "report_sheaf_switch_off",
-           "sheaf_reviewed"]
+__all__ = ["PRE_4_1_18_MATH_DUMP_KEYS", "SHEAF_NOTICE_MARKER", "is_saved_math_dump",
+           "report_sheaf_switch_off", "sheaf_reviewed"]
