@@ -405,8 +405,12 @@
   }
 
   /* ── Online with Jev ─────────────────────────────────────────── */
-  var NOTICE = 'I understand: when Jev is on, each recall sends my question and its top 3 memories to {provider}. I won’t use it for client, confidential or personal material.';
-  var REORDER = 'Also let Jev put the best answer first — this sends the top {k} memories to {provider} instead of 3. Works only while Jev is chosen.';
+  // Approved wording — do not edit (tests/test_server/test_answer_check_rerank_api.py).
+  var CONSENT_TEXT = 'When on, each recall sends your question and its top ' +
+    '3 memories to {provider}. Don’t use this for client, confidential ' +
+    'or personal material.';
+  var RERANK_CONSENT_TEXT =
+    "When on, each recall sends your question and its top {k} memories to {provider} to choose the best order. Don't use this for client, confidential or personal material.";
 
   function buildJev() {
     var jev = status.jev || {};
@@ -448,19 +452,21 @@
     }
     box.appendChild(testResult(jev.provider === draft.provider ? status.tests && status.tests.jev : null, 'ac-jev-test'));
 
-    box.appendChild(checkbox('jev-consent', NOTICE.replace('{provider}', providerLabel(draft.provider)),
+    box.appendChild(checkbox('jev-consent', CONSENT_TEXT.replace('{provider}', providerLabel(draft.provider)),
       draft.consent, function (on) {
         draft.consent = on;
         if (!on) draft.rerank = false;
         savedNote = ''; render();
       }));
     var k = (jev.rerank && jev.rerank.k) || 20;
-    var reorder = checkbox('jev-rerank', REORDER.replace('{k}', String(k)).replace('{provider}', providerLabel(draft.provider)),
+    var reorder = checkbox('jev-rerank', 'Also use Jev to reorder results. ' +
+      RERANK_CONSENT_TEXT.replace('{k}', String(k)).replace('{provider}', providerLabel(draft.provider)),
       draft.rerank, function (on) {
         if (on && !draft.consent) { draft.rerank = false; render(); toast('Tick the notice above first.'); return; }
         draft.rerank = on; savedNote = ''; render();
       });
     box.appendChild(reorder);
+    box.appendChild(note('Ticking a box above accepts its notice. Reordering works only while Jev is chosen.', 'dim'));
     if (!draft.consent) box.appendChild(note('Reordering needs the notice above ticked first.', 'dim'));
     else if (draft.rerank && draft.mode !== 'jev') {
       box.appendChild(note('Reordering with Jev is off while ' + NAMES[draft.mode] + ' is chosen. Your choice is kept for when you choose Jev again.', 'dim', 'ac-rerank-paused'));

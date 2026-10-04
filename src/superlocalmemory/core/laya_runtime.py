@@ -552,7 +552,6 @@ def _install_body(run_dir: Path, report: ProgressFn,
                   before_verify: Callable[[], None] | None = None) -> LayaRuntimeStatus:
     """Everything install() does once it holds the lock: disk check, the
     three resumable steps, then verify-and-record."""
-    laya_process.CANCEL.clear()  # a Cancel pressed for an earlier setup is spent
     report(0.0, "Checking free disk space")
     if not _check_disk_space(run_dir):
         return LayaRuntimeStatus(
@@ -608,6 +607,10 @@ def install(*, progress: ProgressFn | None = None,
         return LayaRuntimeStatus(
             state=STATE_FAILED, error=f"Couldn't set up the install folder: {exc}")
 
+    if not LayaInstallJob.instance().running:
+        # Called directly, not from the dashboard's job (which clears it when
+        # it starts, so a Cancel pressed right after Set up is never lost).
+        laya_process.CANCEL.clear()
     lock_fh = _acquire_install_lock(run_dir / "install.lock")
     if fcntl is not None and lock_fh is None:
         return LayaRuntimeStatus(

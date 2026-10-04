@@ -131,6 +131,13 @@ class LayaInstallJob(_LayaJob):
         def _work(progress):
             return _runtime().install(progress=progress, **extra)
 
+        from superlocalmemory.core import laya_process
+
+        if self.running:
+            return False
+        # Cleared here, before the thread starts — not inside it — so a Cancel
+        # pressed a moment after Set up is never wiped out by the start.
+        laya_process.CANCEL.clear()
         return self._launch("Starting…", _work, on_done)
 
     def cancel(self) -> bool:

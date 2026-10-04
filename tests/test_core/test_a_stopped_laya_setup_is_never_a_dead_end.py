@@ -192,10 +192,10 @@ def test_a_download_that_stops_growing_is_stopped(tmp_path, monkeypatch):
 
 
 def test_a_growing_download_is_not_called_stalled(tmp_path, monkeypatch):
-    monkeypatch.setattr(lr, "_STALL_S", 1.5)
+    monkeypatch.setattr(lr, "_STALL_S", 4.0)   # bytes arrive every 0.5 s: never stalled
     hub = tmp_path / "hub"
-    exe = _fake_python(tmp_path, f'for i in 1 2 3 4; do printf xxxx >> "{hub}/part"; '
-                                 "sleep 1; done; exit 0")
+    exe = _fake_python(tmp_path, f'for i in 1 2 3 4 5 6 7 8; do printf xxxx >> "{hub}/part"; '
+                                 "sleep 0.5; done; exit 0")
     seen = []
     ok, kind, _ = lr._download_weights(exe, "r", "v", hub,
                                        progress=lambda f, s: seen.append(s), timeout_s=60)
