@@ -58,7 +58,7 @@ def test_no_descriptor_reports_no_daemon() -> None:
 
     diagnosis = _daemon.describe_daemon_unavailability()
     assert diagnosis["reason"] == "no_daemon"
-    assert "slm start" in diagnosis["hint"]
+    assert "slm serve start" in diagnosis["hint"]
 
 
 def test_unreadable_descriptor_is_named_as_such() -> None:
@@ -173,7 +173,7 @@ def test_cli_stderr_names_the_reason(capsys) -> None:
 
     stderr = capsys.readouterr().err
     assert "DAEMON_UNAVAILABLE (no_daemon):" in stderr
-    assert "slm start" in stderr
+    assert "slm serve start" in stderr
     # The old wording carried no diagnosis at all.
     assert "owned daemon is unavailable; retry later." not in stderr
 

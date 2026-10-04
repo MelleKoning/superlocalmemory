@@ -3284,8 +3284,8 @@ def cmd_doctor(args: Namespace) -> None:
                     "Projection queue", "FAIL",
                     f"{len(stalled)}+ memories refused by the graph or vector "
                     f"store (e.g. {', '.join(f[:12] for f in stalled)})",
-                    "Check `slm logs` for the projection error, then restart "
-                    "the daemon to retry",
+                    "Check logs/daemon.log in the SLM data folder for the "
+                    "projection error, then run `slm restart` to retry",
                 )
             elif depth:
                 _check(
