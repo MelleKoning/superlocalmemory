@@ -384,70 +384,17 @@ def _shutdown_enrichment_pool_if_created() -> None:
         _enrichment_pool = None
     if pool is not None:
         pool.shutdown(wait=False, cancel_futures=True)
-_SENSITIVE_READ_PREFIXES = (
-    "/api/memories", "/api/facts", "/api/clusters", "/api/graph",
-    "/api/v3/associations", "/api/v3/core-memory",
-    "/api/v3/soft-prompts", "/api/v3/dashboard", "/api/v3/mode",
-    "/api/v3/embedding/config", "/api/v3/scope/config",
-    "/api/v3/storage/config", "/api/v3/daemon/config",
-    "/api/v3/mesh/config", "/api/v3/trust/config",
-    "/api/v3/forgetting/config", "/api/v3/mcp/profiles",
-    "/api/learning", "/api/behavioral",
-    # Event stream, agent activity, trust signals, and v3 profiling data
-    # expose cross-agent coordination signals and behavioral profiles.
-    "/events", "/api/events", "/api/agents", "/api/trust/",
-    "/api/v3/abstraction", "/api/v3/insights",
+# Moved to server/read_gates.py in 4.1.20; the old private names stay importable.
+from superlocalmemory.server.read_gates import (  # noqa: E402
+    _SENSITIVE_READ_EXACT_PATHS,  # noqa: F401
+    _SENSITIVE_READ_PREFIXES,  # noqa: F401
 )
-_SENSITIVE_READ_EXACT_PATHS = (
-    "/api/search", "/api/v3/recall/trace", "/api/patterns",
-    "/api/feedback/stats", "/api/stats", "/api/timeline",
-    # L3-01: project/agent names and per-bucket memory counts — the same
-    # cross-tenant metadata the prefixes above already gate.
-    "/api/v3/facets",
+from superlocalmemory.server.read_gates import (  # noqa: E402
+    is_sensitive_dashboard_read as _is_sensitive_dashboard_read,
 )
-
-
-def _is_sensitive_dashboard_read(method: str, path: str) -> bool:
-    return (
-        method == "GET"
-        and (
-            path.startswith(_SENSITIVE_READ_PREFIXES)
-            or path in _SENSITIVE_READ_EXACT_PATHS
-            or path.startswith("/api/v3/recall")
-        )
-    )
-
-
-def _rbac_read_gate(request, app_state):
-    """RBAC gate for sensitive content reads. Returns a JSONResponse to reject,
-    or None to allow. No-op unless RBAC is active (>=1 user)."""
-    from fastapi.responses import JSONResponse
-    rbac = getattr(app_state, "rbac", None)
-    if rbac is None:
-        return None
-    try:
-        active = rbac.user_count() > 0
-    except Exception:
-        # Fail CLOSED: if we cannot determine RBAC state we must not silently
-        # allow reads (a DB error would otherwise open the whole read surface).
-        return JSONResponse(status_code=503,
-                            content={"error": "authorization temporarily unavailable"})
-    if not active:
-        return None  # single-operator install — reads are open
-    token = (request.headers.get("x-slm-user-session", "")
-             or (request.cookies.get("slm_session", "") if request.cookies else ""))
-    user = rbac.resolve_session(token) if token else None
-    if user is None:
-        if rbac.require_login():
-            return JSONResponse(status_code=401,
-                                content={"error": "Login required to read memory."})
-        return None  # owner/operator, personal mode
-    from superlocalmemory.access.rbac import Permission
-    from superlocalmemory.server.routes.helpers import get_active_profile
-    if rbac.has_permission(user["user_id"], get_active_profile(), Permission.READ):
-        return None
-    return JSONResponse(status_code=403,
-                        content={"error": "Your role cannot read this workspace."})
+from superlocalmemory.server.read_gates import (  # noqa: E402
+    rbac_read_gate as _rbac_read_gate,
+)
 
 
 # Adapter process-control routes that change running state (start/stop) or
