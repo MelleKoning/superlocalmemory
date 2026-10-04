@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -180,38 +181,83 @@ def test_a_new_environment_gets_its_package_again(monkeypatch):
 
 # -- the download wait: stall, cancel, a chatty process ---------------------------
 
-def test_a_download_that_stops_growing_is_stopped(tmp_path, monkeypatch):
-    monkeypatch.setattr(lr, "_STALL_S", 1.5)
-    exe = _fake_python(tmp_path, "sleep 60")
-    started = time.monotonic()
-    ok, kind, _ = lr._download_weights(exe, "r", "v", tmp_path / "hub",
-                                       progress=None, timeout_s=60)
-    assert (ok, kind) == (False, laya_process.KIND_STALLED)
-    assert time.monotonic() - started < 10
-    assert lr._failure_message(kind, doing="d", do="x") == lr._STALLED_MESSAGE
+class _FakeDownload:
+    """A download process and its clock, with no real waiting: each wait()
+    advances the clock by its timeout, and the process exits after
+    ``exits_after`` waits (never, when None)."""
+
+    def __init__(self, exits_after=None):
+        self.now = 0.0
+        self.waits = 0
+        self.exits_after = exits_after
+        self.killed = False
+        self.returncode = None
+
+    def clock(self):
+        return self.now
+
+    def wait(self, timeout=None):
+        if self.killed or (self.exits_after is not None and self.waits >= self.exits_after):
+            self.returncode = 0
+            return 0
+        self.waits += 1
+        self.now += timeout
+        raise subprocess.TimeoutExpired("download", timeout)
+
+    def kill(self):
+        self.killed = True
+
+    def communicate(self, timeout=None):
+        return "", ""
 
 
-def test_a_growing_download_is_not_called_stalled(tmp_path, monkeypatch):
-    monkeypatch.setattr(lr, "_STALL_S", 4.0)   # bytes arrive every 0.5 s: never stalled
-    hub = tmp_path / "hub"
-    exe = _fake_python(tmp_path, f'for i in 1 2 3 4 5 6 7 8; do printf xxxx >> "{hub}/part"; '
-                                 "sleep 0.5; done; exit 0")
+def test_a_download_that_stops_growing_is_stopped():
+    proc = _FakeDownload()
+    outcome = laya_process.watch_download(proc, lambda: 4096, timeout_s=1800, stall_s=120,
+                                          clock=proc.clock)
+    assert outcome is not None and outcome[1] == laya_process.KIND_STALLED
+    assert proc.killed
+    assert 120 <= proc.now <= 122            # stopped at the stall limit, not the 30-min budget
+    assert lr._failure_message(outcome[1], doing="d", do="x") == lr._STALLED_MESSAGE
+
+
+def test_a_growing_download_is_not_called_stalled():
+    """Slow but steady (1 byte per tick, far longer than the stall limit in
+    total) is a download, not a stall."""
+    proc = _FakeDownload(exits_after=600)
+    sizes = iter(range(10_000))
     seen = []
-    ok, kind, _ = lr._download_weights(exe, "r", "v", hub,
+    outcome = laya_process.watch_download(proc, lambda: next(sizes), timeout_s=1800,
+                                          stall_s=120, on_size=seen.append, clock=proc.clock)
+    assert outcome is None                   # it finished by itself
+    assert not proc.killed
+    assert proc.now == 600 and len(seen) == 600
+
+
+def test_progress_names_the_megabytes(tmp_path, monkeypatch):
+    exe = _fake_python(tmp_path, "exit 0")
+    seen = []
+
+    def watch(proc, measure, *, timeout_s, stall_s, on_size=None, clock=None):
+        proc.wait()
+        on_size(73 * 1024 * 1024)
+        return None
+
+    monkeypatch.setattr(laya_process, "watch_download", watch)
+    ok, kind, _ = lr._download_weights(exe, "r", "v", tmp_path / "hub",
                                        progress=lambda f, s: seen.append(s), timeout_s=60)
     assert ok is True, kind
-    assert any("of 807 MB" in s for s in seen)
+    assert seen == ["Downloading the model weights (73 of 807 MB)"]
 
 
-def test_cancel_stops_a_download_at_once(tmp_path):
+def test_cancel_stops_a_download(tmp_path):
+    """Cancel already pressed: stopped on the first tick. Were Cancel ignored,
+    this would end by the 60 s budget as a timeout, not as cancelled."""
     exe = _fake_python(tmp_path, "sleep 60")
-    timer = threading.Timer(0.5, laya_process.CANCEL.set)
-    timer.start()
-    started = time.monotonic()
+    laya_process.CANCEL.set()
     ok, kind, _ = lr._download_weights(exe, "r", "v", tmp_path / "hub",
                                        progress=None, timeout_s=60)
     assert (ok, kind) == (False, laya_process.KIND_CANCELLED)
-    assert time.monotonic() - started < 5
 
 
 def test_a_download_that_writes_a_lot_to_stderr_does_not_freeze(tmp_path):
@@ -224,8 +270,7 @@ def test_a_download_that_writes_a_lot_to_stderr_does_not_freeze(tmp_path):
 
 def test_cancel_stops_a_package_install(tmp_path):
     exe = _fake_python(tmp_path, "sleep 60")
-    timer = threading.Timer(0.5, laya_process.CANCEL.set)
-    timer.start()
+    laya_process.CANCEL.set()
     ok, kind, _ = lr._run_subprocess([str(exe)], timeout_s=60)
     assert (ok, kind) == (False, laya_process.KIND_CANCELLED)
 

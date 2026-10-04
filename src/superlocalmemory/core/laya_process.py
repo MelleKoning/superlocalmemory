@@ -83,15 +83,17 @@ def run(cmd: list[str], *, timeout_s: float, env: dict[str, str] | None,
 
 def watch_download(proc: subprocess.Popen, measure: Callable[[], int], *,
                    timeout_s: float, stall_s: float,
-                   on_size: Callable[[int], None] | None = None) -> Outcome | None:
+                   on_size: Callable[[int], None] | None = None,
+                   clock: Callable[[], float] = time.monotonic) -> Outcome | None:
     """Wait for a download process. None when it exited by itself (the caller
     reads its result); otherwise why it was stopped.
 
     ``measure`` returns the bytes on disk so far. A download whose size has not
     changed for ``stall_s`` is stopped: the server is unreachable or blocked,
     and waiting longer only keeps the person staring at a frozen bar.
+    ``clock`` is injectable so the rule can be tested without real waiting.
     """
-    start = time.monotonic()
+    start = clock()
     last_size, last_change = measure(), start
     while True:
         try:
@@ -99,7 +101,7 @@ def watch_download(proc: subprocess.Popen, measure: Callable[[], int], *,
             return None
         except subprocess.TimeoutExpired:
             pass
-        now = time.monotonic()
+        now = clock()
         if CANCEL.is_set():
             stop(proc)
             return False, KIND_CANCELLED, "stopped by the person"

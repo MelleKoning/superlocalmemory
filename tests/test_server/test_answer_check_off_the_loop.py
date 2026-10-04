@@ -37,7 +37,6 @@ from tests.test_server.test_answer_check_api import (  # noqa: F401 — fixtures
 
 SLOW_S = 1.5
 #: /ping must answer well inside the slow call; generous for a loaded laptop.
-PING_BUDGET_S = 0.6
 
 
 @pytest.fixture(autouse=True)
@@ -71,24 +70,46 @@ def pinged(client):  # noqa: F811
         yield shared_loop
 
 
-def _ping_latency_while(client, method, path, body=None) -> float:  # noqa: F811
-    done = threading.Event()
+class _Hold:
+    """Stands in for a slow step: says when it is entered, then holds until
+    released — so a test knows, without guessing with sleeps, that a request
+    is inside its handler for as long as the test needs."""
 
-    def _slow():
-        try:
-            client.request(method, path, json=body)
-        finally:
-            done.set()
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
 
-    worker = threading.Thread(target=_slow, daemon=True)
+    def __call__(self, result=None):
+        self.entered.set()
+        self.release.wait()
+        return result
+
+
+#: Only ever reached when the code under test is broken (the step is never
+#: entered, or /ping is stuck behind it): then the test fails instead of
+#: hanging. A passing run never waits on it.
+_HANG_GUARD_S = 60.0
+
+
+def _ping_answers_while_held(client, hold, method, path, body=None) -> bool:  # noqa: F811
+    """Whether /ping answered while the slow request was still held inside
+    its handler. Deterministic: no latency threshold, no sleeps."""
+    worker = threading.Thread(target=lambda: client.request(method, path, json=body),
+                              daemon=True)
     worker.start()
-    time.sleep(0.25)          # the slow request is now inside its handler
-    start = time.monotonic()
-    assert client.get("/ping").status_code == 200
-    latency = time.monotonic() - start
-    done.wait(timeout=SLOW_S * 4)
-    worker.join(timeout=1)
-    return latency
+    try:
+        assert hold.entered.wait(_HANG_GUARD_S), "the slow step was never reached"
+        guard = threading.Timer(_HANG_GUARD_S, hold.release.set)
+        guard.daemon = True
+        guard.start()
+        try:
+            assert client.get("/ping").status_code == 200
+            return not hold.release.is_set()
+        finally:
+            guard.cancel()
+    finally:
+        hold.release.set()
+        worker.join(_HANG_GUARD_S)
 
 
 def _ready(**fields):
@@ -128,40 +149,41 @@ def _wait_for_job(job_cls, timeout=SLOW_S * 4) -> None:
 
 
 class TestOtherRequestsAreNotHeldUp:
+    """/ping must answer while each slow step is provably still running."""
+
     def test_while_an_existing_install_is_being_checked(self, pinged, monkeypatch, real_jobs):
-        monkeypatch.setattr(laya_runtime, "adopt",
-                            lambda *a, **k: time.sleep(SLOW_S) or _ready())
-        latency = _ping_latency_while(pinged, "POST", "/api/v3/answer-check/laya/adopt",
-                                      {"python": "/opt/laya/venv/bin/python"})
-        assert latency < PING_BUDGET_S, f"/ping waited {latency:.2f}s"
+        hold = _Hold()
+        monkeypatch.setattr(laya_runtime, "adopt", lambda *a, **k: hold(_ready()))
+        assert _ping_answers_while_held(pinged, hold, "POST", "/api/v3/answer-check/laya/adopt",
+                                        {"python": "/opt/laya/venv/bin/python"})
 
     def test_while_a_key_is_being_tested(self, pinged, monkeypatch):
         _FakeKeyStore._by_test["typesafe"] = FAKE_KEY
+        hold = _Hold()
         monkeypatch.setattr(jev_judge, "check_connection",
-                            lambda provider, key, timeout_s=10.0: time.sleep(SLOW_S) or (True, "ok"))
-        latency = _ping_latency_while(pinged, "POST", "/api/v3/answer-check/jev/test",
-                                      {"provider": "typesafe"})
-        assert latency < PING_BUDGET_S, f"/ping waited {latency:.2f}s"
+                            lambda provider, key, timeout_s=10.0: hold((True, "ok")))
+        assert _ping_answers_while_held(pinged, hold, "POST", "/api/v3/answer-check/jev/test",
+                                        {"provider": "typesafe"})
 
     def test_while_the_install_is_being_deleted(self, pinged, monkeypatch):
         removed = laya_runtime.LayaRuntimeStatus(state=laya_runtime.STATE_NOT_INSTALLED)
-        monkeypatch.setattr(laya_runtime, "remove", lambda: time.sleep(SLOW_S) or removed)
-        latency = _ping_latency_while(pinged, "POST", "/api/v3/answer-check/laya/remove")
-        assert latency < PING_BUDGET_S, f"/ping waited {latency:.2f}s"
+        hold = _Hold()
+        monkeypatch.setattr(laya_runtime, "remove", lambda: hold(removed))
+        assert _ping_answers_while_held(pinged, hold, "POST", "/api/v3/answer-check/laya/remove")
 
     def test_while_the_running_check_is_being_switched(self, pinged, monkeypatch):
+        hold = _Hold()
         monkeypatch.setattr(engine_wiring, "attach_sufficiency_judge",
-                            lambda engine, cfg: time.sleep(SLOW_S) or "off", raising=False)
-        latency = _ping_latency_while(pinged, "POST", "/api/v3/answer-check/mode",
-                                      {"mode": "off"})
-        assert latency < PING_BUDGET_S, f"/ping waited {latency:.2f}s"
+                            lambda engine, cfg: hold("off"), raising=False)
+        assert _ping_answers_while_held(pinged, hold, "POST", "/api/v3/answer-check/mode",
+                                        {"mode": "off"})
 
     def test_while_the_status_is_being_worked_out(self, pinged, monkeypatch):
+        hold = _Hold()
         monkeypatch.setattr(engine_wiring, "resolve_judge_mode",
-                            lambda cfg: time.sleep(SLOW_S) or "off", raising=False)
+                            lambda cfg: hold("off"), raising=False)
         pinged.app.state.engine = None
-        latency = _ping_latency_while(pinged, "GET", "/api/v3/answer-check")
-        assert latency < PING_BUDGET_S, f"/ping waited {latency:.2f}s"
+        assert _ping_answers_while_held(pinged, hold, "GET", "/api/v3/answer-check")
 
 
 # ---------------------------------------------------------------------------
