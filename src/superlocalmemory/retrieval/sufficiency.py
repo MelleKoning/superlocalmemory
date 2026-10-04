@@ -441,8 +441,7 @@ class LayaSufficiencyJudge:
         """A verdict on the top documents, or None when the judge cannot answer now."""
         return self.assess(query, documents, deadline=deadline).verdict
 
-    #: ``assess`` accepts ``reuse`` (``core.answer_check_stage`` reads this).
-    reuses_after_lock = True
+    reuses_after_lock = True  #: ``assess`` accepts ``reuse`` (answer_check_stage)
 
     def assess(self, query: str, documents: Sequence[JudgeDocument | str], *,
                deadline: float | None = None,
@@ -455,10 +454,8 @@ class LayaSufficiencyJudge:
         only inside ``deadline`` (monotonic; the recall's), which also bounds
         the judgement itself together with this judge's own timeout.
 
-        ``reuse`` is asked once the worker is this recall's and before anything
-        is sent: a verdict for this exact input that became known while the
-        recall waited (a check finished later) is returned as ``DETAIL_REUSED``
-        instead of being asked for again.
+        ``reuse`` is asked once the worker is this recall's, before anything is
+        sent: a verdict that became known meanwhile is returned (``DETAIL_REUSED``).
         """
         docs = coerce_documents(documents[: self.top_k])
         if not isinstance(query, str) or not query or not docs:
@@ -479,8 +476,7 @@ class LayaSufficiencyJudge:
         Asks only a warm worker that is free right now (``busy`` otherwise,
         without waiting), bounded by this judge's own timeout. Never starts a
         warm-up: a check finished after its recall returned is not a reason to
-        load a model. ``core.answer_check_deferred`` asks it one memory at a
-        time, so a recall arriving meanwhile waits for one memory at most.
+        load a model. Asked one memory at a time (``core.answer_check_deferred``).
         """
         docs = coerce_documents(documents[: self.top_k])
         if not isinstance(query, str) or not query or not docs:
@@ -500,8 +496,8 @@ class LayaSufficiencyJudge:
             return JudgeOutcome(None, STATUS_BUSY)
         proc = self._proc  # read once: shutdown() swaps it without the lock
         try:
-            known = _reused(reuse)
-            if known is not None:
+            known = reuse() if reuse is not None else None
+            if isinstance(known, SufficiencyVerdict):  # became known while it waited
                 return JudgeOutcome(known, STATUS_JUDGED, DETAIL_REUSED)
             return self._ask_locked(proc, query, rendered, deadline)
         except (BrokenPipeError, EOFError, OSError, ValueError) as exc:
@@ -771,18 +767,6 @@ class LayaSufficiencyJudge:
 
 class _SpawnFailed(RuntimeError):
     """The configured interpreter could not be started at all."""
-
-
-def _reused(reuse: Callable[[], SufficiencyVerdict | None] | None) -> SufficiencyVerdict | None:
-    """What ``reuse`` knows, if it is a real verdict. Never raises."""
-    if reuse is None:
-        return None
-    try:
-        known = reuse()
-    except Exception as exc:  # noqa: BLE001 — a failed lookup means "ask the model"
-        logger.debug("answer check reuse lookup failed (%s)", type(exc).__name__)
-        return None
-    return known if isinstance(known, SufficiencyVerdict) else None
 
 
 def _stop_process(proc: subprocess.Popen | None, *, graceful: bool,
