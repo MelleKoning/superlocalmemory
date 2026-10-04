@@ -91,6 +91,24 @@ class _DB:
         # No cross-profile facts in these unit tests.
         return []
 
+    def get_external_visible_embeddings(
+        self, profile_id: str, include_global: bool = False, include_shared: bool = False
+    ) -> list[tuple[str, np.ndarray]]:
+        return []
+
+    def get_fact_embeddings_by_ids(
+        self,
+        fact_ids: list[str],
+        profile_id: str,
+        include_global: bool = False,
+        include_shared: bool = False,
+    ) -> list[tuple[str, np.ndarray]]:
+        return [
+            (f.fact_id, np.array(f.embedding, dtype=np.float32))
+            for f in self.get_facts_by_ids(fact_ids, profile_id)
+            if f.embedding is not None
+        ]
+
 
 class _VS:
     """Fake VectorStore with a configurable result list."""
@@ -237,9 +255,9 @@ class TestPoolSizeActuallyBoundsVSRequest:
     With prefilter=200 the same fact is inside the window and is therefore
     presented to the DB retrieval stage.
 
-    We verify by intercepting db.get_facts_by_ids() — the gate between the
+    We verify by intercepting db.get_fact_embeddings_by_ids() — the gate between the
     VS pre-filter and the Hopfield computation.  If a fact ID never appears
-    as an argument to get_facts_by_ids() it cannot affect any result,
+    as an argument to get_fact_embeddings_by_ids() it cannot affect any result,
     regardless of its embedding.
 
     This approach is independent of Hopfield's numerical output, which with
@@ -302,7 +320,7 @@ class TestPoolSizeActuallyBoundsVSRequest:
         ]
 
         def _run(prefilter: int) -> set[str]:
-            """Return every fact ID ever passed to db.get_facts_by_ids()."""
+            """Return every fact ID ever passed to db.get_fact_embeddings_by_ids()."""
             queried_ids: set[str] = set()
             orig_db = _DB(corpus, reported_count=5000)
 
@@ -313,23 +331,23 @@ class TestPoolSizeActuallyBoundsVSRequest:
                 def get_all_facts(self, *a: Any, **kw: Any) -> list[_Fact]:
                     return orig_db.get_all_facts(*a, **kw)
 
-                def get_facts_by_ids(
+                def get_fact_embeddings_by_ids(
                     self,
                     fact_ids: list[str],
                     profile_id: str,
                     include_global: bool = False,
                     include_shared: bool = False,
-                ) -> list[_Fact]:
+                ) -> list[tuple[str, np.ndarray]]:
                     queried_ids.update(fact_ids)
-                    return orig_db.get_facts_by_ids(
+                    return orig_db.get_fact_embeddings_by_ids(
                         fact_ids, profile_id,
                         include_global=include_global,
                         include_shared=include_shared,
                     )
 
-                def get_external_visible_facts(
+                def get_external_visible_embeddings(
                     self, *a: Any, **kw: Any
-                ) -> list[_Fact]:
+                ) -> list[tuple[str, np.ndarray]]:
                     return []
 
             cfg = HopfieldConfig(prefilter_candidates=prefilter, dimension=DIM_SMALL)

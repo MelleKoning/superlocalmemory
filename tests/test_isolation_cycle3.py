@@ -272,7 +272,7 @@ class TestM01KNNScoreNormalization:
         mock_vs.search.return_value = mock_vs_scores
 
         mock_db = MagicMock()
-        mock_db.get_external_visible_facts.return_value = []
+        mock_db.get_external_visible_embeddings.return_value = []
         # Return a matching fact for each score entry so the channel doesn't bail early.
         facts = [self._make_minimal_fact(fid) for fid, _ in mock_vs_scores]
         mock_db.get_facts_by_ids.return_value = facts
@@ -352,9 +352,10 @@ class TestM01KNNScoreNormalization:
         q_vec = np.ones(4, dtype=np.float32) * 0.5
 
         # Make the DB report the same fact as external too.
-        external_fact = self._make_minimal_fact("fact-001")
-        external_fact.embedding = [0.5, 0.5, 0.5, 0.5]  # same direction as q_vec
-        channel._db.get_external_visible_facts.return_value = [external_fact]
+        external_vec = np.array([0.5, 0.5, 0.5, 0.5], dtype=np.float32)  # same direction as q_vec
+        channel._db.get_external_visible_embeddings.return_value = [
+            ("fact-001", external_vec),
+        ]
 
         result = channel._search_via_vector_store(
             query_embedding=[0.5, 0.5, 0.5, 0.5],

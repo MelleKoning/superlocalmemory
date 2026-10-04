@@ -353,21 +353,19 @@ class SemanticChannel:
         # or authorized shared fact owned by another profile cannot enter the
         # local KNN candidate set, so merge the bounded cross-profile visible
         # supplement using the same canonical DB scope predicate as fallback.
-        external_facts = self._db.get_external_visible_facts(
+        # #147: id + embedding only — this loop reads nothing else.
+        external_embeddings = self._db.get_external_visible_embeddings(
             profile_id,
             include_global=include_global,
             include_shared=include_shared,
         )
         external_scores: list[tuple[str, float]] = []
-        for fact in external_facts:
-            if fact.embedding is None:
-                continue
-            fact_vec = np.array(fact.embedding, dtype=np.float32)
+        for ext_id, fact_vec in external_embeddings:
             if fact_vec.shape != q_vec.shape:
                 continue
             score = (_cosine_similarity(q_vec, fact_vec) + 1.0) / 2.0
             if score > 0.05:
-                external_scores.append((fact.fact_id, score))
+                external_scores.append((ext_id, score))
 
         if external_scores:
             combined = {fid: score for fid, score in knn_results}

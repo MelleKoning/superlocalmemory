@@ -151,7 +151,8 @@ class TestHopfieldTieStability:
         db = MagicMock()
         db.get_all_facts.return_value = []
         db.get_facts_by_ids.return_value = []
-        db.get_external_visible_facts.return_value = []
+        db.get_external_visible_embeddings.return_value = []
+        db.get_fact_embeddings_by_ids.return_value = []
         vs = MagicMock()
         vs.available = False
         vs.count.return_value = 0
