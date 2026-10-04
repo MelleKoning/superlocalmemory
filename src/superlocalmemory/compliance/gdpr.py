@@ -379,8 +379,16 @@ class GDPRCompliance:
 
         # C2 — include code_graph.db in Art.15 export (repo paths, file names,
         # and symbol names are identifying data in a work context).
-        if self._data_root is not None:
-            code_graph_data = self._export_code_graph(self._data_root)
+        # Without an explicit root the files next to the memory database are
+        # this installation's — the same rule erasure uses. Reading is safe;
+        # leaving them out made the dashboard export silently incomplete.
+        export_root = self._data_root
+        if export_root is None:
+            db_path = getattr(self._db, "db_path", None)
+            if db_path is not None:
+                export_root = Path(db_path).resolve().parent
+        if export_root is not None:
+            code_graph_data = self._export_code_graph(export_root)
             if code_graph_data is not None:
                 data["code_graph"] = code_graph_data
 
@@ -390,7 +398,7 @@ class GDPRCompliance:
             # be asked for -- which makes an export that claims to be everything
             # untrue. It lives in a second file, so the table sweep above never
             # reached it.
-            behaviour = self._export_learning_signals(self._data_root, profile_id)
+            behaviour = self._export_learning_signals(export_root, profile_id)
             if behaviour is not None:
                 data["learning_signals"] = behaviour
 
@@ -1238,10 +1246,12 @@ class GDPRCompliance:
                     )):
                         continue
                     try:
-                        rows = conn.execute(
-                            f"SELECT * FROM {tbl} LIMIT 10000"  # noqa: S608
-                        ).fetchall()
-                        export[tbl] = [dict(r) for r in rows]
+                        # Every row, read a page at a time: a fixed LIMIT here
+                        # once cut a large repository's graph at 10,000 rows
+                        # and the export said nothing.
+                        export[tbl] = _every_row(
+                            conn.execute(f"SELECT * FROM {tbl}")  # noqa: S608
+                        )
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("GDPR export: code_graph table %s failed: %s", tbl, exc)
             finally:
