@@ -290,6 +290,17 @@ def connect_ide(
         )
         return result
 
+    # Step 0b — refuse an unknown profile before writing it into a config
+    if profile:
+        from superlocalmemory.mcp.profile_names import (
+            UnknownProfileError, canonical_profile, unknown_profile_message,
+        )
+        try:
+            canonical_profile(profile)
+        except UnknownProfileError:
+            result["error"] = unknown_profile_message(profile, source="--profile")
+            return result
+
     # Step 1 — resolve
     desc = resolve_descriptor(ide_id)
     if desc is None:

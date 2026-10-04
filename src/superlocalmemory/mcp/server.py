@@ -211,10 +211,10 @@ def _resolve_profile_allowed(
         return None
     if canonical in definitions:
         return definitions[canonical]
-    valid = ", ".join((*sorted(definitions), "whole"))
-    raise ValueError(
-        f"SLM_MCP_PROFILE={profile!r} is not recognised; valid profiles: {valid}"
+    from superlocalmemory.mcp.profile_names import (
+        UnknownProfileError, unknown_profile_message,
     )
+    raise UnknownProfileError(unknown_profile_message(profile))
 
 
 class _FilteredServer:

@@ -122,8 +122,8 @@ def test_transport_http_mcp_remote_writes_bridge_block(fake_home: Path) -> None:
 
 
 def test_transport_http_with_profile_appends_query_param(fake_home: Path) -> None:
-    """transport='http' + profile='work' → URL contains ?profile=work."""
-    result = connect_ide("cursor", home=fake_home, transport="http", profile="work")
+    """transport='http' + profile='power' → URL contains ?profile=power."""
+    result = connect_ide("cursor", home=fake_home, transport="http", profile="power")
 
     assert result["error"] is None
     desc = IDE_MATRIX["cursor"]
@@ -132,7 +132,7 @@ def test_transport_http_with_profile_appends_query_param(fake_home: Path) -> Non
     block = data[desc.server_key]["superlocalmemory"]
 
     assert block["type"] == "http"
-    assert "?profile=work" in block["url"], f"Profile missing from URL: {block['url']}"
+    assert "?profile=power" in block["url"], f"Profile missing from URL: {block['url']}"
 
 
 # ---------------------------------------------------------------------------
@@ -337,9 +337,9 @@ def test_transport_mcp_remote_custom_port(fake_home: Path) -> None:
 
 
 def test_transport_mcp_remote_with_profile(fake_home: Path) -> None:
-    """http-mcp-remote + profile='research' → URL in args has ?profile=research."""
+    """http-mcp-remote + profile='code' → URL in args has ?profile=code."""
     result = connect_ide(
-        "cursor", home=fake_home, transport="http-mcp-remote", profile="research"
+        "cursor", home=fake_home, transport="http-mcp-remote", profile="code"
     )
 
     assert result["error"] is None
@@ -348,6 +348,6 @@ def test_transport_mcp_remote_with_profile(fake_home: Path) -> None:
     data = json.loads(config_path.read_text())
     block = data[desc.server_key]["superlocalmemory"]
 
-    assert "?profile=research" in block["args"][0], (
+    assert "?profile=code" in block["args"][0], (
         f"Profile missing from mcp-remote URL: {block['args'][0]}"
     )

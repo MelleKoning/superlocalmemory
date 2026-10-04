@@ -3748,6 +3748,8 @@ def cmd_trace(args: Namespace) -> None:
 
 def cmd_mcp(_args: Namespace) -> None:
     """Start the V3 MCP server (stdio transport for IDE integration)."""
+    from superlocalmemory.mcp.profile_names import exit_on_unknown_profile
+    exit_on_unknown_profile()  # before anything else runs; stderr only
     # SINGLETON GUARD (v3.5.8): Reap fresh orphans before binding stdio.
     # Root cause: every IDE session spawns a new `slm mcp`; dead sessions'
     # processes survive indefinitely (~400 MB each) because the reaper's
