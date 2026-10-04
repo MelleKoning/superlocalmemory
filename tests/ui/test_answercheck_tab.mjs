@@ -126,6 +126,14 @@ describe('Answer Check tab — sections and data', function () {
     assert.match(text(p, '#ac-feed'), /3 checks were not saved \(the history was busy\)\. Your recalls were not affected\./);
   });
 
+  it('says how many checks an erasure removed before they were saved', async function () {
+    const s = summary();
+    s.recording.since_start.erased_unsaved = 2;
+    const p = await render({ '/api/v3/answer-check/history/summary': { status: 200, body: s } });
+    assert.match(text(p, '#ac-feed'), /2 checks were not saved because their history was erased first\./);
+    assert.ok(!/history was busy/.test(text(p, '#ac-feed')), 'an erasure is not a busy history');
+  });
+
   it('item renderer ignores fields it does not know', async function () {
     const leaky = item('z1', { query: 'SECRET-Q', content: 'SECRET-M', fact_id: 'FACT-9' });
     const p = await render({ '/api/v3/answer-check/history': { status: 200,

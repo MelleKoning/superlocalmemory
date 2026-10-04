@@ -237,6 +237,11 @@ permission when team accounts are on). A data export includes it; erasing a
 profile, or deleting it, erases it too, including from a running daemon.
 "Reset learning data" does not touch it.
 
+Versions before 4.1.20 do not know this history exists. If you go back to one
+and erase or delete a profile there, the profile's checks are erased the next
+time 4.1.20 or later starts, before anything new is saved. The same happens to
+checks made before a profile was deleted and created again under the same name.
+
 To turn the history off, or keep it shorter, set the keys below and restart
 the daemon.
 
@@ -325,7 +330,7 @@ The Answer Check tab's history has its own keys, in `config.json` under
 |---|---|---|
 | `answer_check_history` | `true` (default) \| `false` | Keep the Answer Check tab's history (outcomes and timings only) |
 | `answer_check_history_days` | `1`–`365`, default `30` | Days the history is kept |
-| `answer_check_history_max_rows` | `1,000`–`10,000`, default `10,000` | Most checks kept per profile. Capped at 10,000 so a data export always carries all of them |
+| `answer_check_history_max_rows` | `1,000`–`10,000`, default `10,000` | Most checks kept per profile. A data export always carries every one of them |
 
 The provider key itself is never written to any of these files; it lives in
 its own owner-only store, separate from the rest of your configuration.

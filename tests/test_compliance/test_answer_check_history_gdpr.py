@@ -78,8 +78,22 @@ def test_gdpr_export_includes_all_rows_at_cap(root) -> None:
     exported = _gdpr(root).export_profile_data("alice")
     rows = exported["learning_signals"]["answer_check_events"]
     assert len(rows) == store.MAX_ROWS_CEILING
-    assert store.clamp_settings(30, 10**9)[1] <= len(rows), \
-        "retention may never keep more rows than an export carries"
+
+
+def test_gdpr_export_is_never_capped(root) -> None:
+    """Between sweeps a profile holds more than the retention ceiling (an agent
+    recalling every 2 s adds 300 rows in 10 minutes). The export carries all of
+    them, and so for every learning table, not just this one."""
+    _seed(root, "alice", store.MAX_ROWS_CEILING + 300)
+    with sqlite3.connect(root / "learning.db") as conn:
+        conn.execute("CREATE TABLE zz_signals (profile_id TEXT, n INTEGER)")
+        conn.executemany("INSERT INTO zz_signals VALUES ('alice', ?)",
+                         [(i,) for i in range(25_001)])
+    signals = _gdpr(root).export_profile_data("alice")["learning_signals"]
+    rows = signals["answer_check_events"]
+    assert len(rows) == store.MAX_ROWS_CEILING + 300 == _rows(root, "alice")
+    assert len({r["event_id"] for r in rows}) == len(rows)
+    assert len(signals["zz_signals"]) == 25_001
 
 
 def test_profile_delete_removes_history(root, monkeypatch) -> None:
@@ -109,3 +123,95 @@ def test_erase_failure_aborts_before_memory_rows(root, monkeypatch) -> None:
     mgr = DatabaseManager(root / "memory.db")
     assert mgr.execute("SELECT 1 FROM profiles WHERE profile_id='alice'")
     assert mgr.execute("SELECT 1 FROM atomic_facts WHERE profile_id='alice'")
+
+
+# -- an erasure made on an older version is applied at the next start (A-F5) ----------
+
+def _seed_now(root: Path, profile: str, n: int) -> None:
+    """Checks made after the profile was created (``_seed`` dates them 60 s back)."""
+    now = int(time.time() * 1000) + 1_000
+    events = [h.event_from_response(make_response(), profile, now_ms=now + i, origin_name="")
+              for i in range(n)]
+    conn = store.connect(root / "learning.db", readonly=False)
+    store.insert_batch(conn, events)
+    conn.close()
+
+
+def _erase_like_4_1_19(root: Path, profile: str) -> None:
+    """What 4.1.18/4.1.19's erasure does: learning reset, then the profile's
+    rows and the profile itself. It has never heard of the history tables."""
+    from superlocalmemory.learning.database import LearningDatabase
+
+    LearningDatabase(root / "learning.db").reset(profile)
+    with sqlite3.connect(root / "memory.db") as conn:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        for table in ("atomic_facts", "memories"):
+            conn.execute(f"DELETE FROM {table} WHERE profile_id=?", (profile,))  # noqa: S608
+        conn.execute("DELETE FROM profiles WHERE profile_id=?", (profile,))
+
+
+def _tombstoned(root: Path, profile: str) -> bool:
+    with sqlite3.connect(root / "learning.db") as conn:
+        return conn.execute("SELECT 1 FROM answer_check_erasures WHERE profile_id=?",
+                            (profile,)).fetchone() is not None
+
+
+def test_an_erasure_on_an_older_version_is_applied_when_the_writer_starts(root) -> None:
+    _seed_now(root, "alice", 20)
+    _seed_now(root, "default", 5)
+    _erase_like_4_1_19(root, "alice")
+    assert _rows(root, "alice") == 20            # what the older version leaves behind
+    store.start_writer(root / "learning.db", memory_db=root / "memory.db")
+    try:
+        deadline = time.monotonic() + 10
+        while _rows(root, "alice") and time.monotonic() < deadline:
+            time.sleep(0.02)
+    finally:
+        store.stop_writer()
+    assert _rows(root, "alice") == 0 and _tombstoned(root, "alice")
+    assert _rows(root, "default") == 5
+
+
+def test_history_from_before_a_profile_was_created_again_is_erased(root) -> None:
+    now = int(time.time() * 1000)
+    _seed(root, "alice", 7)                       # the first alice, 60 s ago
+    _erase_like_4_1_19(root, "alice")
+    with sqlite3.connect(root / "memory.db") as conn:  # the same name, created again
+        conn.execute("INSERT INTO profiles (profile_id, name, created_at) "
+                     "VALUES ('alice', 'Alice', datetime('now'))")
+    later = [h.event_from_response(make_response(), "alice", now_ms=now + 5_000 + i,
+                                   origin_name="") for i in range(3)]
+    conn = store.connect(root / "learning.db", readonly=False)
+    store.insert_batch(conn, later)               # the new alice's own checks
+    conn.close()
+    assert store.reconcile_with_profiles(root / "learning.db", root / "memory.db") == {
+        "profiles": 1, "rows": 7}
+    assert _rows(root, "alice") == 3
+
+
+def test_reconcile_erases_nothing_it_cannot_be_sure_of(root, tmp_path) -> None:
+    _seed(root, "alice", 4)
+    nowhere = tmp_path / "missing" / "memory.db"
+    assert store.reconcile_with_profiles(root / "learning.db", nowhere)["rows"] == 0
+    with sqlite3.connect(root / "memory.db") as conn:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("DELETE FROM profiles")
+    assert store.reconcile_with_profiles(root / "learning.db", root / "memory.db")["rows"] == 0
+    assert _rows(root, "alice") == 4
+
+
+def test_reconcile_keeps_every_live_profiles_history(root) -> None:
+    _seed_now(root, "alice", 9)
+    _seed_now(root, "default", 2)
+    # A check 4 s older than its profile's row: a clock nudged back, not a person.
+    with sqlite3.connect(root / "memory.db") as conn:
+        created = conn.execute("SELECT created_at FROM profiles WHERE profile_id='alice'"
+                               ).fetchone()[0]
+    nudged = store._created_ms(created) - 4_000
+    conn = store.connect(root / "learning.db", readonly=False)
+    store.insert_batch(conn, [h.event_from_response(make_response(), "alice", now_ms=nudged,
+                                                    origin_name="")])
+    conn.close()
+    assert store.reconcile_with_profiles(root / "learning.db", root / "memory.db") == {
+        "profiles": 0, "rows": 0}
+    assert _rows(root, "alice") == 10 and _rows(root, "default") == 2

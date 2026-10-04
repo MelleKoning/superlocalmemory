@@ -229,6 +229,41 @@ def _downgrade_hold_active(data_root: Path) -> bool:
         return False
 
 
+_ALL_DATABASES = frozenset({"learning", "memory"})
+
+
+def _pending_targets(migrations, learning_db: Path, memory_db: Path) -> frozenset[str]:
+    """The databases (``"learning"``, ``"memory"``) a pending migration will change.
+
+    A migration counts as pending until it is recorded ``complete`` in its own
+    target database. Used to decide which databases a snapshot must hold: an
+    update that changes learning.db alone used to copy memory.db as well --
+    about 8 s per GB of a store it does not touch, on the first start of the
+    new version. Errs toward both databases on any doubt — the safe direction.
+    """
+    targets: set[str] = set()
+    try:
+        for migration in migrations:
+            target = migration.db_target
+            if target in targets:
+                continue
+            db_path = _db_for(target, learning_db, memory_db)
+            if not db_path.exists():
+                targets.add(target)
+                continue
+            conn = _connect(db_path)
+            try:
+                if not _deferred_already_applied(conn, migration.name):
+                    targets.add(target)
+            finally:
+                conn.close()
+    except Exception:  # noqa: BLE001 — any doubt means copy everything
+        return _ALL_DATABASES
+    if targets - _ALL_DATABASES:  # a target this runner cannot name: copy everything
+        return _ALL_DATABASES
+    return frozenset(targets)
+
+
 def _nothing_left_to_apply(learning_db: Path, memory_db: Path) -> bool:
     """True when every migration is already recorded in its target database.
 
@@ -240,20 +275,7 @@ def _nothing_left_to_apply(learning_db: Path, memory_db: Path) -> bool:
 
     Errs toward False, which means "take the snapshot" — the safe direction.
     """
-    try:
-        for migration in MIGRATIONS:
-            db_path = _db_for(migration.db_target, learning_db, memory_db)
-            if not db_path.exists():
-                return False
-            conn = _connect(db_path)
-            try:
-                if not _deferred_already_applied(conn, migration.name):
-                    return False
-            finally:
-                conn.close()
-    except Exception:  # noqa: BLE001 — any doubt means take the snapshot
-        return False
-    return True
+    return not _pending_targets(MIGRATIONS, learning_db, memory_db)
 
 
 def apply_all(
@@ -291,7 +313,13 @@ def apply_all(
     # runs on every engine construction, not just upgrades, so snapshotting
     # unconditionally meant an ordinary start copied the already-migrated store
     # and pruned a generation — two extra starts and the original was gone.
-    _pending = not _nothing_left_to_apply(learning_db, memory_db)
+    # Only the databases this start will change are copied: those of a pending
+    # migration here, and of a pending deferred one, so that the deferred pass
+    # of this same start can stand on this one copy (_boot_snapshot).
+    _eager_targets = _pending_targets(MIGRATIONS, learning_db, memory_db)
+    _pending = bool(_eager_targets)
+    _targets = (_eager_targets | _pending_targets(DEFERRED_MIGRATIONS, learning_db, memory_db)
+                if _pending else frozenset())
     if not dry_run and not _pending:
         details["_backup"] = "skipped: every migration already applied"
 
@@ -321,7 +349,7 @@ def apply_all(
         _snapshots_root = memory_db.parent / "pre-migration-snapshots"
         _names_before = _boot_copy.copy_names(_snapshots_root)
         backup_dir = _pre_migration_backup(
-            learning_db, memory_db, backups_root=_snapshots_root,
+            learning_db, memory_db, backups_root=_snapshots_root, databases=_targets,
         )
         # _pre_migration_backup returns the snapshots root itself, so this is
         # the directory to prune. Passing .parent pointed the collector at the
@@ -335,7 +363,8 @@ def apply_all(
         # The deferred pass of this same start may stand on this copy rather
         # than take a second one -- unless another daemon can write meanwhile.
         if _other is None and not _boot_copy.another_writer_holds(memory_db):
-            _boot_copy.remember(learning_db, memory_db, backup_dir, _names_before)
+            _boot_copy.remember(learning_db, memory_db, backup_dir, _names_before,
+                                databases=_targets)
 
     schema_error = _bootstrap_learning_schema(learning_db, dry_run=dry_run)
     if schema_error is not None:
@@ -517,12 +546,16 @@ def apply_deferred(
     # The copy the eager pass of this start took, claimed once whether used or
     # not; _boot_snapshot documents why it is a faithful "before" for this pass.
     _start_copy = None if dry_run else _boot_copy.claim(learning_db, memory_db)
+    # Only the databases a pending deferred migration changes are copied.
+    _targets = (frozenset() if dry_run
+                else _pending_targets(DEFERRED_MIGRATIONS, learning_db, memory_db))
 
     def _ensure_snapshot() -> None:
         if _snapshot_state["taken"]:
             return
         _snapshot_state["taken"] = True
         if (_start_copy is not None and _boot_copy.still_on_disk(_start_copy)
+                and _targets <= _start_copy.databases
                 and _foreign_live_daemon(memory_db) is None
                 and not _boot_copy.another_writer_holds(memory_db)):
             logger.info(
@@ -534,7 +567,8 @@ def apply_deferred(
             return
         _root = memory_db.parent / "pre-migration-snapshots"
         _before = _boot_copy.copy_names(_root)
-        backup_dir = _pre_migration_backup(learning_db, memory_db, backups_root=_root)
+        backup_dir = _pre_migration_backup(learning_db, memory_db, backups_root=_root,
+                                           databases=_targets or _ALL_DATABASES)
         _gc_old_backups(
             backup_dir, protect=_boot_copy.copy_names(_root) - _before,
         )

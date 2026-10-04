@@ -104,8 +104,13 @@ def run_answer_check(retrieval_engine: Any, query: str, response: Any, *,
         # next run of this question is judged instead of skipped again.
         answer_check_memo.finish_later(judge, query, documents)
         return JudgeOutcome(None, STATUS_SKIPPED, DETAIL_BUDGET)
-    outcome = _plain_check(judge, query, documents, deadline)
-    if outcome.status == STATUS_JUDGED:
+    # A live recall comes first: a check being finished later yields the worker
+    # to it, and if that check was this very question, its verdict is reused
+    # the moment this recall gets the worker instead of being asked again.
+    with answer_check_memo.live_check(judge):
+        outcome = _plain_check(judge, query, documents, deadline,
+                               reuse=lambda: answer_check_memo.lookup(judge, query, documents))
+    if outcome.status == STATUS_JUDGED and outcome.detail != DETAIL_REUSED:
         answer_check_memo.store(judge, query, documents, outcome.verdict)
     return outcome
 
@@ -190,14 +195,22 @@ def _settled(verdict: Any, status: Any) -> JudgeOutcome:
 
 
 def _plain_check(judge: Any, query: str, documents: list[Any],
-                 deadline: float | None) -> JudgeOutcome:
+                 deadline: float | None, *, reuse: Any = None) -> JudgeOutcome:
+    """``reuse`` reaches only a judge that declares ``reuses_after_lock``: it is
+    asked again once the judge has its worker, before anything is sent."""
     try:
         assess = getattr(judge, "assess", None)
         if callable(assess):
-            outcome = assess(query, documents, deadline=deadline)
+            if reuse is not None and getattr(judge, "reuses_after_lock", False) is True:
+                outcome = assess(query, documents, deadline=deadline, reuse=reuse)
+            else:
+                outcome = assess(query, documents, deadline=deadline)
             if not isinstance(outcome, JudgeOutcome):
                 return JudgeOutcome(None, STATUS_UNAVAILABLE)
-            return _settled(outcome.verdict, outcome.status)
+            settled = _settled(outcome.verdict, outcome.status)
+            if settled.verdict is not None and outcome.detail == DETAIL_REUSED:
+                return JudgeOutcome(settled.verdict, STATUS_JUDGED, DETAIL_REUSED)
+            return settled
         return _settled(judge.judge(query, documents), STATUS_UNAVAILABLE)
     except Exception as exc:  # noqa: BLE001 — a judge never breaks a recall
         # The type only: a message could quote the memory text it was judging.

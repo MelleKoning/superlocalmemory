@@ -262,3 +262,86 @@ def test_concurrent_record_and_flush_lose_nothing(learning_db) -> None:
         t.join()
     store.stop_writer()
     assert _count(learning_db) == 1600 and h.counters()["dropped_before_save"] == 0
+
+
+# -- every recorded check is accounted for, and a clock step erases nothing new (A-F3) --
+
+def _accounted(c: dict) -> int:
+    return c["saved"] + c["erased_unsaved"] + c["dropped_before_save"] + c["unsaved"]
+
+
+def _writer(learning_db: Path) -> None:
+    h.enable(True)
+    store._state["learning_db"] = learning_db
+
+
+def test_a_row_an_erasure_refuses_is_counted(learning_db, monkeypatch) -> None:
+    """The daemon has a batch in flight when another process erases the profile."""
+    _writer(learning_db)
+    for _ in range(3):
+        h.record_recall_verdict(make_response(), profile_id="alice")
+    taken = h.snapshot_unsaved
+
+    def erase_meanwhile(n):
+        batch = taken(n)
+        time.sleep(0.002)
+        other = store.connect(learning_db, readonly=False)  # `slm gdpr`, elsewhere
+        store.erase_profile_rows(other, "alice", now_ms=int(time.time() * 1000))
+        other.close()
+        return batch
+    monkeypatch.setattr(h, "snapshot_unsaved", erase_meanwhile)
+    assert store.flush_once() == 3
+    c = h.counters()
+    assert _count(learning_db, "alice") == 0
+    assert c["recorded"] == 3 and c["saved"] == 0 and c["erased_unsaved"] == 3
+    assert _accounted(c) == c["recorded"]
+
+
+def _record_with_clock_behind(profile: str, seconds: float) -> None:
+    real = h.time.time
+    h.time.time = lambda: real() - seconds
+    try:
+        h.record_recall_verdict(make_response(), profile_id=profile)
+    finally:
+        h.time.time = real
+
+
+def test_a_recall_after_an_erasure_is_saved_when_the_clock_stepped_back(learning_db) -> None:
+    _writer(learning_db)
+    store.erase_profile_everywhere(learning_db, "bob")
+    _record_with_clock_behind("bob", 1.0)          # NTP pulled the clock back
+    conn = store.connect(learning_db, readonly=False)
+    store.apply_remote_tombstones(conn)            # the next tick sees our own tombstone
+    conn.close()
+    assert store.flush_once() == 1
+    assert _count(learning_db, "bob") == 1
+    c = h.counters()
+    assert c["saved"] == 1 and c["erased_unsaved"] == 0 and _accounted(c) == c["recorded"]
+
+
+def test_a_remote_erasure_once_applied_spares_later_recalls(learning_db) -> None:
+    _writer(learning_db)
+    other = store.connect(learning_db, readonly=False)
+    store.erase_profile_rows(other, "carol", now_ms=int(time.time() * 1000))
+    other.close()
+    conn = store.connect(learning_db, readonly=False)
+    store.apply_remote_tombstones(conn)            # this process now knows of it
+    _record_with_clock_behind("carol", 1.0)
+    store._state["tombstones_seen_ms"] = 0
+    store.apply_remote_tombstones(conn)            # seen again: still not its to erase
+    conn.close()
+    assert store.flush_once() == 1
+    assert _count(learning_db, "carol") == 1
+
+
+def test_a_recall_older_than_an_unseen_erasure_is_still_refused(learning_db) -> None:
+    """The guarantee the tombstone exists for is unchanged."""
+    _writer(learning_db)
+    h.record_recall_verdict(make_response(), profile_id="dave")
+    time.sleep(0.002)
+    other = store.connect(learning_db, readonly=False)
+    store.erase_profile_rows(other, "dave", now_ms=int(time.time() * 1000))
+    other.close()
+    assert store.flush_once() == 1
+    assert _count(learning_db, "dave") == 0
+    assert h.counters()["erased_unsaved"] == 1

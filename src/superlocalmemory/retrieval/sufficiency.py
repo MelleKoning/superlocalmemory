@@ -36,7 +36,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -45,6 +45,7 @@ from superlocalmemory.core import recall_gate
 from superlocalmemory.encoding.memory_kind_recipe import KindAnswer, KindRecipe
 from superlocalmemory.retrieval import laya_kinds
 from superlocalmemory.retrieval.answer_check_status import (
+    DETAIL_REUSED,
     JUDGE_FLOOR_S,
     STATUS_BUSY,
     STATUS_JUDGED,
@@ -440,8 +441,11 @@ class LayaSufficiencyJudge:
         """A verdict on the top documents, or None when the judge cannot answer now."""
         return self.assess(query, documents, deadline=deadline).verdict
 
+    reuses_after_lock = True  #: ``assess`` accepts ``reuse`` (answer_check_stage)
+
     def assess(self, query: str, documents: Sequence[JudgeDocument | str], *,
-               deadline: float | None = None) -> JudgeOutcome:
+               deadline: float | None = None,
+               reuse: Callable[[], SufficiencyVerdict | None] | None = None) -> JudgeOutcome:
         """A verdict on the top documents, and what became of the check.
 
         Never waits for a cold worker: if the model is not loaded this starts
@@ -449,6 +453,9 @@ class LayaSufficiencyJudge:
         any recall budget. Waits for a worker busy with another recall, but
         only inside ``deadline`` (monotonic; the recall's), which also bounds
         the judgement itself together with this judge's own timeout.
+
+        ``reuse`` is asked once the worker is this recall's, before anything is
+        sent: a verdict that became known meanwhile is returned (``DETAIL_REUSED``).
         """
         docs = coerce_documents(documents[: self.top_k])
         if not isinstance(query, str) or not query or not docs:
@@ -459,7 +466,8 @@ class LayaSufficiencyJudge:
             self.start_warmup()
             return JudgeOutcome(None, STATUS_WARMING if self._loading else STATUS_UNAVAILABLE)
         rendered = [self._recipe.render(d) for d in docs]
-        return self._ask(query, rendered, effective_deadline(deadline, self._timeout_s))
+        return self._ask(query, rendered, effective_deadline(deadline, self._timeout_s),
+                         reuse=reuse)
 
     def assess_if_idle(self, query: str,
                        documents: Sequence[JudgeDocument | str]) -> JudgeOutcome:
@@ -468,7 +476,7 @@ class LayaSufficiencyJudge:
         Asks only a warm worker that is free right now (``busy`` otherwise,
         without waiting), bounded by this judge's own timeout. Never starts a
         warm-up: a check finished after its recall returned is not a reason to
-        load a model.
+        load a model. Asked one memory at a time (``core.answer_check_deferred``).
         """
         docs = coerce_documents(documents[: self.top_k])
         if not isinstance(query, str) or not query or not docs:
@@ -480,13 +488,17 @@ class LayaSufficiencyJudge:
                          wait=False)
 
     def _ask(self, query: str, rendered: list[str], deadline: float, *,
-             wait: bool = True) -> JudgeOutcome:
+             wait: bool = True,
+             reuse: Callable[[], SufficiencyVerdict | None] | None = None) -> JudgeOutcome:
         acquired = (self._lock.acquire(timeout=max(0.0, seconds_left(deadline) - self._min_ask_s))
                     if wait else self._lock.acquire(blocking=False))
         if not acquired:
             return JudgeOutcome(None, STATUS_BUSY)
         proc = self._proc  # read once: shutdown() swaps it without the lock
         try:
+            known = reuse() if reuse is not None else None
+            if isinstance(known, SufficiencyVerdict):  # became known while it waited
+                return JudgeOutcome(known, STATUS_JUDGED, DETAIL_REUSED)
             return self._ask_locked(proc, query, rendered, deadline)
         except (BrokenPipeError, EOFError, OSError, ValueError) as exc:
             logger.warning("Laya sufficiency judge transport failed: %s", type(exc).__name__)

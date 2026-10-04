@@ -72,6 +72,14 @@ from superlocalmemory.infra.data_root import canonical_data_root
 
 logger = logging.getLogger(__name__)
 
+#: The databases a safety copy can hold, by the stem their copies are named with.
+SNAPSHOT_DATABASES = frozenset({"memory", "learning"})
+#: Copy speed used for the "about N seconds" estimate, verification included.
+#: Measured on a warm store (2026-10, Apple Silicon SSD): ~8.4 s per GB.
+_COPY_BYTES_PER_S = 110 * 1024 * 1024
+#: An estimate at or above this is announced as a warning, so it is seen.
+_ANNOUNCE_WARN_S = 5.0
+
 # ---------------------------------------------------------------------------
 # Filename parsing helpers for snapshot ordering and generation grouping
 # ---------------------------------------------------------------------------
@@ -483,8 +491,9 @@ def _pre_migration_backup(
     *,
     backups_root: Path | None = None,
     reason: str = "migration",
+    databases: frozenset[str] = SNAPSHOT_DATABASES,
 ) -> Path:
-    """Snapshot both databases as flat files before migration.
+    """Snapshot the databases about to change as flat files before migration.
 
     Creates ``{db_stem}-{YYYYMMDD-HHmmss}-pre-migration.db`` files directly
     in ``backups_root`` (no subdirectory). Files are named with a
@@ -492,9 +501,12 @@ def _pre_migration_backup(
     identifies them unambiguously without matching any file produced by
     ``BackupManager``.
 
-    Only databases that exist on disk are copied; a missing database is
-    silently skipped (first-install scenario where learning.db may not
-    exist yet).
+    Only the databases named in ``databases`` (``"memory"``, ``"learning"``)
+    are copied: an update that changes learning.db alone has no reason to copy
+    a memory store of several GB first. Only databases that exist on disk are
+    copied; a missing database is silently skipped (first-install scenario
+    where learning.db may not exist yet). Before anything is copied, one line
+    says what is being copied, how large it is and about how long it takes.
 
     The ``backups_root`` directory defaults to
     ``canonical_data_root() / "pre-migration-snapshots"`` — a directory
@@ -533,8 +545,14 @@ def _pre_migration_backup(
     # and the snapshot materialises all of it. Sizing against the main file
     # alone under-counts the requirement and lets a migration start with too
     # little room, which is the situation the check exists to prevent.
+    unknown = set(databases) - SNAPSHOT_DATABASES
+    if unknown:
+        raise ValueError(f"unknown databases to copy: {sorted(unknown)}")
+    chosen = [(stem, db_path) for stem, db_path in (("memory", memory_db),
+                                                     ("learning", learning_db))
+              if stem in databases]
     total_bytes = 0
-    for db_path in (memory_db, learning_db):
+    for _stem, db_path in chosen:
         for companion in (db_path, Path(f"{db_path}-wal"), Path(f"{db_path}-shm")):
             if companion.exists():
                 total_bytes += companion.stat().st_size
@@ -577,7 +595,8 @@ def _pre_migration_backup(
     _make_private_dir(backups_root)
     # A copy a crash interrupted keeps its staging name, the size of the store.
     _cleanup_stale_partials(backups_root)
-    facts_before = _live_fact_count(memory_db)
+    facts_before = _live_fact_count(memory_db) if "memory" in databases else None
+    _announce_copy([db for _stem, db in chosen if db.exists()], total_bytes, reason)
 
     # Perform the backup.  Each db gets a flat file with a -pre-migration suffix
     # so the GC glob *-pre-migration.db identifies our files precisely.
@@ -598,7 +617,7 @@ def _pre_migration_backup(
     # (it sorts first) against memory.db as the target — a command that would
     # restore the wrong database over the user's memories.
     pairs: list[tuple[Path, Path]] = []
-    for stem, db_path in (("memory", memory_db), ("learning", learning_db)):
+    for stem, db_path in chosen:
         if db_path.exists():
             dest = _free_name(stem)
             _backup_via_sqlite_api(db_path, dest)
@@ -632,6 +651,23 @@ def _pre_migration_backup(
     )
 
     return backups_root
+
+
+def _announce_copy(dbs: list[Path], total_bytes: int, reason: str) -> None:
+    """Say, before it starts, what is copied, how large it is and about how long."""
+    if not dbs:
+        return
+    seconds = total_bytes / _COPY_BYTES_PER_S
+    size = (f"{total_bytes / 1024 ** 3:.1f} GB" if total_bytes >= 1024 ** 3
+            else f"{max(total_bytes, 1) / 1024 ** 2:.0f} MB")
+    about = "under a second" if seconds < 1 else f"about {seconds:.0f} seconds"
+    why = "before going back to an older version" if reason == "pre-downgrade" \
+        else "before updating it"
+    logger.log(
+        logging.WARNING if seconds >= _ANNOUNCE_WARN_S else logging.INFO,
+        "[SLM] Taking a safety copy of %s %s (%s, %s). SuperLocalMemory carries "
+        "on as soon as it is done; please do not stop it meanwhile.",
+        " and ".join(db.name for db in dbs), why, size, about)
 
 
 def _gc_old_backups(

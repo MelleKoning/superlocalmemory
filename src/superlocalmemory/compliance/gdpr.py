@@ -74,6 +74,20 @@ def _retention_days_from_config() -> int:
         pass
     return 90  # owner-set default
 
+#: Rows fetched per page when an export reads a table in full.
+_EXPORT_PAGE_ROWS = 1000
+
+
+def _every_row(cursor: sqlite3.Cursor) -> list[dict]:
+    """All rows of ``cursor`` as dicts, fetched a page at a time."""
+    out: list[dict] = []
+    while True:
+        page = cursor.fetchmany(_EXPORT_PAGE_ROWS)
+        if not page:
+            return out
+        out.extend(dict(row) for row in page)
+
+
 # Friendly export keys → canonical table names (stable Art.20 export contract).
 _EXPORT_ALIASES = {
     "facts": "atomic_facts",
@@ -1250,6 +1264,11 @@ class GDPRCompliance:
         it does not -- a table with no workspace column holds nothing that can
         be attributed to one workspace, and returning it would export another
         workspace's rows into this person's file.
+
+        Every row, never a sample: a fixed ``LIMIT`` here once returned the
+        oldest 10,000 Answer Check history rows of a profile holding more and
+        said nothing. Rows are read in pages so the database is not asked to
+        materialise the whole table at once.
         """
         learning_path = data_root / "learning.db"
         if not learning_path.exists():
@@ -1280,13 +1299,12 @@ class GDPRCompliance:
                         }
                         if "profile_id" not in columns:
                             continue
-                        rows = conn.execute(
-                            f"SELECT * FROM {table} WHERE profile_id = ? "  # noqa: S608
-                            f"LIMIT 10000",
+                        rows = _every_row(conn.execute(
+                            f"SELECT * FROM {table} WHERE profile_id = ?",  # noqa: S608
                             (profile_id,),
-                        ).fetchall()
+                        ))
                         if rows:
-                            export[table] = [dict(row) for row in rows]
+                            export[table] = rows
                     except Exception as exc:  # noqa: BLE001
                         logger.warning(
                             "export: learning table %s skipped: %s", table, exc,

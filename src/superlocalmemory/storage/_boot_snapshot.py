@@ -33,7 +33,9 @@ The copy is NOT reused when:
     The daemon's own deferred pass in step 4 runs after the writer lease and the
     journal replay, so it always copies for itself if it has anything to apply;
   * the process that took it is not this one (a fork inherits module state);
-  * any of its files is no longer on disk.
+  * any of its files is no longer on disk;
+  * it does not hold every database the deferred pass is about to change (the
+    eager pass copies only the databases its own migrations change).
 
 Writers in OTHER processes that are not daemons (a direct-engine CLI write, the
 Python API) are not fenced by any of this -- nor by the second copy it replaces,
@@ -63,6 +65,8 @@ class BootCopy:
     directory: Path
     files: tuple[Path, ...]
     pid: int
+    #: Which databases it holds: ``"memory"``, ``"learning"``.
+    databases: frozenset[str] = frozenset({"memory", "learning"})
 
 
 _lock = threading.Lock()
@@ -90,15 +94,23 @@ def copy_names(directory: Path) -> frozenset[str]:
 
 def remember(
     learning_db: Path, memory_db: Path, directory: Path, before: frozenset[str],
+    *, databases: frozenset[str] = frozenset({"memory", "learning"}),
 ) -> None:
-    """Record the generation the eager pass just wrote (the names new since ``before``)."""
+    """Record the generation the eager pass just wrote (the names new since ``before``).
+
+    ``databases`` is what it was asked to copy; a database it did not copy
+    (absent on disk) is not counted as held.
+    """
     written = copy_names(directory) - before
+    held = frozenset(stem for stem in databases
+                     if any(name.startswith(f"{stem}-") for name in written))
     record = BootCopy(
         learning_db=_key(learning_db),
         memory_db=_key(memory_db),
         directory=Path(directory),
         files=tuple(Path(directory) / name for name in sorted(written)),
         pid=os.getpid(),
+        databases=held,
     ) if written else None
     global _held
     with _lock:

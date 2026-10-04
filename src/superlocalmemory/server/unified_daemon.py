@@ -2459,7 +2459,8 @@ async def lifespan(application: FastAPI):
                 from superlocalmemory.core.answer_check_history_store import start_writer
                 start_writer(_learning_db_for_config(engine._config),
                              retention_days=_rc.answer_check_history_days,
-                             max_rows=_rc.answer_check_history_max_rows)
+                             max_rows=_rc.answer_check_history_max_rows,
+                             memory_db=_memory_db_for_config(engine._config))
         except Exception as _acexc:  # pragma: no cover — defensive
             logger.debug("answer-check history start failed (non-fatal): %s", _acexc)
 

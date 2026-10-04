@@ -25,6 +25,13 @@ A full ring drops its oldest entry (``deque(maxlen)``). If that entry had not
 been saved yet, ``dropped_before_save`` counts it and the tab says so. Recall
 is never slowed down to keep a history entry.
 
+An erasure removes a profile's entries that are older than it. "Older" is
+decided by what this process knew, not by the wall clock alone: an entry
+recorded after this process learned of an erasure is never removed by that
+erasure, even if the clock stepped back in between (``note`` in
+``forget_profile``; the saved side applies the same rule in SQL). Every entry
+an erasure removes before it was saved is counted in ``erased_unsaved``.
+
 Recording is off unless a writer runs in this process (``enable``): the CLI's
 offline fallback and worker subprocesses keep ``record_recall_verdict`` a no-op,
 so learning.db never gets a second writer.
@@ -104,6 +111,11 @@ _wake = threading.Event()
 _COUNTER_NAMES = ("recorded", "not_a_question", "dropped_before_save", "saved",
                   "save_failures", "erased_unsaved")
 _counters = dict.fromkeys(_COUNTER_NAMES, 0)
+#: Erasures this process has applied, per profile: (erased_at_ms, last seq
+#: handed out when it was applied). Entries recorded later are not its to erase.
+_erasures_seen: dict[str, tuple[tuple[int, int], ...]] = {}
+_ERASURES_KEPT_PER_PROFILE = 4
+_ERASURE_PROFILES_MAX = 4096
 
 
 # -- who asked ------------------------------------------------------------------
@@ -263,12 +275,15 @@ def snapshot_unsaved(max_items: int) -> list[tuple[int, VerdictEvent]]:
     return batch
 
 
-def mark_saved(through_seq: int, saved: int) -> None:
+def mark_saved(through_seq: int, saved: int, *, erased: int = 0) -> None:
+    """Entries through ``through_seq`` are done: ``saved`` were written, and
+    ``erased`` were refused because their profile was erased after them."""
     global _saved_seq, _inflight_seq
     with _lock:
         _saved_seq = max(_saved_seq, int(through_seq))
         _inflight_seq = _saved_seq
         _counters["saved"] += int(saved)
+        _counters["erased_unsaved"] += max(0, int(erased))
 
 
 def mark_failed(batch: list[tuple[int, VerdictEvent]]) -> None:
@@ -299,23 +314,60 @@ def unsaved_for(profile_id: str) -> list[VerdictEvent]:
         return [ev for _, ev in _unsaved_suffix() if ev.profile_id == profile_id]
 
 
-def forget_profile(profile_id: str, *, occurred_before_ms: int | None = None) -> int:
+def _known_locked(profile_id: str, seq: int) -> int:
+    """The latest erasure of ``profile_id`` applied before ``seq`` was handed
+    out (0 if none). Caller holds ``_lock``."""
+    return max((ms for ms, at in _erasures_seen.get(profile_id, ()) if at < seq), default=0)
+
+
+def erasure_known_at(profile_id: str, seq: int) -> int:
+    """The latest erasure this process had applied when entry ``seq`` was recorded.
+
+    An erasure at or before this instant does not apply to that entry: the
+    entry was recorded after it, whatever its wall-clock time says.
+    """
+    with _lock:
+        return _known_locked(profile_id, seq)
+
+
+def _note_locked(profile_id: str, erased_at_ms: int) -> None:
+    notes = _erasures_seen.pop(profile_id, ())
+    _erasures_seen[profile_id] = (notes + ((int(erased_at_ms), _seq),))[
+        -_ERASURES_KEPT_PER_PROFILE:]
+    while len(_erasures_seen) > _ERASURE_PROFILES_MAX:
+        _erasures_seen.pop(next(iter(_erasures_seen)))
+
+
+def forget_profile(profile_id: str, *, occurred_before_ms: int | None = None,
+                   erased_at_ms: int | None = None) -> int:
     """Drop a profile's entries from the ring (all, or those at/before a cutoff).
 
+    With a cutoff, an entry recorded after this process had already applied an
+    erasure at or after that cutoff is spared (a clock that stepped back must
+    not make a newer recall look erased). ``erased_at_ms`` notes the erasure,
+    in the same step, so entries recorded from now on are never its to erase.
     Returns how many were removed; unsaved ones are counted as ``erased_unsaved``.
     """
-    def doomed(ev: VerdictEvent) -> bool:
-        return ev.profile_id == profile_id and (
-            occurred_before_ms is None or ev.occurred_ms <= occurred_before_ms)
+    def doomed(entry: tuple[int, VerdictEvent]) -> bool:
+        seq, ev = entry
+        if ev.profile_id != profile_id:
+            return False
+        if occurred_before_ms is None:
+            return True
+        return (ev.occurred_ms <= occurred_before_ms
+                and _known_locked(profile_id, seq) < occurred_before_ms)
 
     with _lock:
-        kept = [entry for entry in _ring if not doomed(entry[1])]
-        removed = len(_ring) - len(kept)
-        unsaved = sum(1 for seq, ev in _ring if doomed(ev) and seq > _saved_seq)
+        verdicts = [(entry, doomed(entry)) for entry in _ring]
+        kept = [entry for entry, gone in verdicts if not gone]
+        removed = len(verdicts) - len(kept)
+        unsaved = sum(1 for (seq, _ev), gone in verdicts if gone and seq > _saved_seq)
         if removed:
             _ring.clear()
             _ring.extend(kept)
         _counters["erased_unsaved"] += unsaved
+        if erased_at_ms is not None:
+            _note_locked(profile_id, erased_at_ms)
     return removed
 
 
@@ -336,12 +388,14 @@ def _reset_for_testing() -> None:
         _boot_id = uuid.uuid4().hex
         for name in _COUNTER_NAMES:
             _counters[name] = 0
+        _erasures_seen.clear()
     _wake.clear()
 
 
 __all__ = [
     "ORIGIN_DASHBOARD", "RING_CAPACITY", "VerdictEvent", "WAKE_AT_UNSAVED", "boot_id",
-    "call_as_dashboard", "counters", "enable", "event_from_response", "forget_profile",
+    "call_as_dashboard", "counters", "enable", "erasure_known_at", "event_from_response",
+    "forget_profile",
     "is_enabled", "mark_failed", "mark_saved", "origin", "recent", "record_recall_verdict",
     "snapshot_unsaved", "unsaved_for", "wake_event",
 ]

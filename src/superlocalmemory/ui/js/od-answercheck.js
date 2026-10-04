@@ -326,6 +326,10 @@
         ? el('p', { class: 'ac-not-saved', style: 'font-size:12.5px;color:var(--warn);margin:4px 0 0',
             text: (lost || since.save_failures) + ' checks were not saved (the history was busy). Your recalls were not affected.' })
         : null,
+      (since.erased_unsaved > 0)
+        ? el('p', { class: 'ac-erased', style: 'font-size:12.5px;color:var(--fg-2);margin:4px 0 0',
+            text: since.erased_unsaved + ' checks were not saved because their history was erased first.' })
+        : null,
     ]);
   }
 

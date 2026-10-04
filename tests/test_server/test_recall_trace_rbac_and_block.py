@@ -93,3 +93,24 @@ def test_trace_tags_origin_dashboard(app) -> None:
     TestClient(app).post(TRACE, json={"query": "q"})
     assert app.state.engine.origins == ["dashboard"]
     assert h._ORIGIN.get() == ""  # nothing leaks into this thread
+
+
+def test_trace_says_why_a_recall_was_not_checked(app, monkeypatch) -> None:
+    """The Try-it panel shows ``answer_check_note`` under its verdict."""
+    engine = app.state.engine
+    real = engine.recall
+
+    def skipped(query, **kw):
+        resp = real(query, **kw)
+        resp.answer_check_status, resp.answer_check_detail = "skipped", "budget"
+        resp.abstained, resp.abstention_reason, resp.answer_confidence = False, None, None
+        resp.answer_check_trace = AnswerCheckTrace(
+            detail="budget", backend="laya", threshold=None, reordered=False,
+            retrieval_ms=2950.0, judge_ms=0.0, total_ms=2951.0)
+        return resp
+    monkeypatch.setattr(engine, "recall", skipped)
+    body = TestClient(app).post(TRACE, json={"query": "q"}).json()
+    assert body["answer_check"]["detail"] == "budget"
+    assert body["answer_check_reason"] == "budget" and body["answer_check_ran"] is False
+    assert body["answer_check_note"].startswith("Answer check did not run")
+    assert "only the verdict is missing" in body["answer_check_note"]
