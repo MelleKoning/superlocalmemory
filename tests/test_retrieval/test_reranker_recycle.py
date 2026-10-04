@@ -140,7 +140,10 @@ class TestRecycleIsBlueGreen:
         rr._request_count = mod._WORKER_RECYCLE_AFTER
 
         statuses = []
-        t_end = time.monotonic() + 3.0
+        # Spawning the replacement plus its 1 s load took over 3 s on a loaded
+        # machine; the loop ends at the swap, so a longer ceiling costs nothing
+        # when healthy and observes more recalls when not.
+        t_end = time.monotonic() + 20.0
         while time.monotonic() < t_end:
             _, applied, status = rr.rerank_with_status("q", _candidates())
             statuses.append(status)
@@ -155,6 +158,40 @@ class TestRecycleIsBlueGreen:
         results, applied, _ = rr.rerank_with_status("q", _candidates())
         assert applied is True
         assert [f.fact_id for f, _ in results] == ["b", "c", "a"]
+
+    def test_a_recall_arriving_during_the_swap_is_still_ranked(
+        self, fake_worker, monkeypatch,
+    ) -> None:
+        """The swap holds the worker lock; a recall must wait it out, not skip.
+
+        Recall uses a non-blocking acquire so concurrent recalls never queue
+        behind each other's inference. The swap itself (pointer exchange, PID
+        file, idle timer) took 3-80 ms under load, and a recall that landed in
+        it fell back to unranked order -- the test above failed about half the
+        time on 4.1.19 and 4.1.20 for exactly this. Widen the window
+        deterministically and require the recall to be ranked.
+        """
+        rr = fake_worker(load_delay=0.2)
+        _warm(rr)
+        old_pid = rr._worker_proc.pid
+        in_swap, release = threading.Event(), threading.Event()
+        real_record = mod.CrossEncoderReranker._record_worker_pid
+
+        def slow_record(pid: int) -> None:  # runs under the lock, in the swap
+            if pid != old_pid:
+                in_swap.set()
+                release.wait(timeout=5)
+            real_record(pid)
+
+        monkeypatch.setattr(rr, "_record_worker_pid", slow_record)
+        rr._request_count = mod._WORKER_RECYCLE_AFTER
+        rr.rerank_with_status("q", _candidates())  # starts the replacement
+        assert in_swap.wait(timeout=10), "the swap never started"
+        threading.Timer(0.15, release.set).start()
+        results, applied, status = rr.rerank_with_status("q", _candidates())
+        assert status == "applied" and applied is True
+        assert [f.fact_id for f, _ in results] == ["b", "c", "a"]
+        assert rr._worker_proc.pid != old_pid
 
     def test_the_old_worker_is_retired_after_the_swap(self, fake_worker) -> None:
         rr = fake_worker(load_delay=0.2)
