@@ -1274,6 +1274,18 @@ class RetrievalEngine:
         self._channel_executor.shutdown(wait=wait, cancel_futures=True)
         self._query_embedder.close()
 
+    def worker_threads(self) -> list:
+        """The pool threads this engine owns, for a bounded join on close.
+
+        Read BEFORE ``close``: closing detaches the query-embed pool.
+        """
+        from superlocalmemory.core.thread_join import executor_threads
+
+        return (
+            executor_threads(getattr(self, "_channel_executor", None))
+            + self._query_embedder.worker_threads()
+        )
+
     # -- Fact loading -------------------------------------------------------
 
     def _load_facts(

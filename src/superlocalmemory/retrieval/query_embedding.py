@@ -153,6 +153,13 @@ class QueryEmbedder:
             )
             return None, chstat.WARMING
 
+    def worker_threads(self) -> list[threading.Thread]:
+        """This embedder's pool threads (none until a cold embed created it)."""
+        from superlocalmemory.core.thread_join import executor_threads
+
+        with self._lock:
+            return executor_threads(self._executor)
+
     def close(self) -> None:
         with self._lock:
             self._closed = True

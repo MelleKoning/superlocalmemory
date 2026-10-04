@@ -1333,7 +1333,16 @@ class MemoryEngine:
         service manager SIGKILL the daemon and leave its children behind.
         References are cleared before invoking each cleanup hook, so a second
         close is safe even when one optional cleanup hook fails.
+
+        The pools are shut down without waiting, the embedder is shut down
+        (which wakes an embed in flight), and only then are the pool threads
+        joined -- within ``thread_join.CLOSE_JOIN_SECONDS`` in total, never
+        unbounded -- before the database closes under them. ``close()`` used
+        to return with those threads still running.
         """
+        from superlocalmemory.core.thread_join import executor_threads, join_threads
+
+        owned_threads: list = []
         scheduler = getattr(self, "_maintenance_scheduler", None)
         self._maintenance_scheduler = None
         if scheduler is not None:
@@ -1355,6 +1364,7 @@ class MemoryEngine:
             self._store_fast_embed_pool_closed = True
             self._store_fast_embed_pool = None
         if embed_pool is not None:
+            owned_threads.extend(executor_threads(embed_pool))
             try:
                 embed_pool.shutdown(wait=False, cancel_futures=True)
             except Exception:
@@ -1366,6 +1376,12 @@ class MemoryEngine:
         retrieval = getattr(self, "_retrieval_engine", None)
         self._retrieval_engine = None
         if retrieval is not None:
+            worker_threads = getattr(retrieval, "worker_threads", None)
+            if callable(worker_threads):
+                try:
+                    owned_threads.extend(worker_threads())
+                except Exception:
+                    logger.debug("engine cleanup: retrieval threads unreadable", exc_info=True)
             reranker = getattr(retrieval, "_reranker", None)
             try:
                 if reranker is not None:
@@ -1421,6 +1437,10 @@ class MemoryEngine:
                         unload()
             except Exception:
                 logger.warning("engine cleanup: embedder unload failed", exc_info=True)
+
+        # Bounded: the embedder shutdown above has already woken any worker
+        # waiting on the model, so a healthy pool drains in milliseconds.
+        join_threads(owned_threads, owner="engine")
 
         db = getattr(self, "_db", None)
         self._db = None
