@@ -52,6 +52,12 @@ def test_real_slm_root_is_denied_even_through_direct_path() -> None:
     probe = Path(real_root_value) / "__slm_pytest_guard_probe__"
     with pytest.raises(PermissionError, match="live SLM state"):
         probe.open("w")
+    # The refusal is also on record, so a caller that swallows it still fails
+    # the test; consume this deliberate one.
+    from tests import conftest
+
+    refused = conftest._LIVE_ROOT_GUARD.drain()
+    assert len(refused) == 1 and "__slm_pytest_guard_probe__" in refused[0]
 
 
 @pytest.mark.parametrize("port", [8765, 8767])

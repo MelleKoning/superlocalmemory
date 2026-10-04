@@ -25,6 +25,10 @@ from pathlib import Path
 
 import pytest
 
+# Writes Laya runtime state: pin the data root to tmp_path even without the
+# root conftest (--noconftest), see tests/isolation_guard.py.
+from ..isolation_guard import explicit_slm_root  # noqa: F401
+
 hub = pytest.importorskip("huggingface_hub")
 from huggingface_hub.file_download import repo_folder_name  # noqa: E402
 

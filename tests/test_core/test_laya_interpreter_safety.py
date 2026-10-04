@@ -26,6 +26,10 @@ from pathlib import Path
 
 import pytest
 
+# Writes Laya runtime state: pin the data root to tmp_path even without the
+# root conftest (--noconftest), see tests/isolation_guard.py.
+from ..isolation_guard import explicit_slm_root  # noqa: F401
+
 from superlocalmemory.core import laya_interpreter
 from superlocalmemory.core import laya_runtime as lr
 
