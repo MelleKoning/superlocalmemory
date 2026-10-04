@@ -1,0 +1,214 @@
+# Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar
+# Licensed under AGPL-3.0-or-later - see LICENSE file
+# Part of SuperLocalMemory V4 | https://qualixar.com | https://varunpratap.com
+
+"""Keep every remote tool call inside the one profile its key is bound to.
+
+A remote key is bound to one profile (:mod:`server.remote_keys`). Three rules
+hold for every ``tools/call`` it makes, read key or write key alike:
+
+1. **The bound profile must be the one this computer is using.** Most tools
+   work on the active profile and take no profile argument (``search``,
+   ``fetch``, ``list_recent``, ``update_memory`` ...). The call holds a profile
+   lease for its whole run, so the active profile cannot change between the
+   check and the work; a profile switch waits for it (and, if it cannot drain in
+   time, fails with "try again" rather than moving under a remote call). When a
+   different profile is active the call is refused - the refusal does not name
+   that profile.
+2. **A profile named in the arguments must be the bound one.** ``profile_id``
+   anywhere in the arguments, including inside structured values such as
+   ``payload``, is compared with the key's profile. A different profile is
+   refused, never rewritten.
+3. **A remote save stays in the bound profile.** ``scope`` other than
+   ``personal`` and a non-empty ``shared_with`` are refused, and a save that
+   names no scope is made ``personal`` explicitly, so a host whose default
+   scope is ``shared`` or ``global`` cannot turn a remote save into a memory
+   other profiles recall. ``include_shared`` / ``include_global`` on a recall
+   are allowed: the recall runs as the bound profile, so they reach only what
+   other profiles chose to share with it or with every profile.
+
+Every argument a remote-callable tool takes is classified below.
+``tests/test_security/test_remote_profile_binding.py`` reads the live tool
+registry and fails when a tool gains an argument that is not classified here,
+and an unclassified argument is refused at run time (default deny).
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import asynccontextmanager
+from typing import Any
+
+#: Arguments that name a profile.
+PROFILE_ARGUMENTS: frozenset[str] = frozenset({"profile_id"})
+
+#: Arguments that widen a recall to memories other profiles shared with the
+#: bound profile or made global. Bounded by the profile the call runs as.
+READ_SCOPE_ARGUMENTS: frozenset[str] = frozenset({"include_shared", "include_global"})
+
+#: Arguments that would make a saved memory visible to other profiles.
+WRITE_SCOPE_ARGUMENTS: frozenset[str] = frozenset({"scope", "shared_with"})
+
+#: The remote-callable tools that take ``scope``; each remote save through them
+#: is pinned to ``personal``. The registry test keeps this list complete.
+SCOPED_WRITE_TOOLS: frozenset[str] = frozenset({"remember"})
+
+#: Every other argument of a remote-callable tool. None selects a profile.
+NEUTRAL_ARGUMENTS: frozenset[str] = frozenset({
+    "about", "action", "agent_id", "as_of", "assertion_id", "case_id", "category",
+    "ccr_id", "content", "context", "correction", "duration_ms", "event_type",
+    "event_valid_until", "expected_version", "fact_id", "fact_ids", "fast", "feedback",
+    "finalize", "idempotency_key", "importance", "include_history", "include_unknown",
+    "input_summary", "items", "key", "kind", "known_as_of", "limit", "max_age_days",
+    "max_results", "memory_ids", "metadata", "min_confidence", "mode", "name", "outcome",
+    "output_summary", "pattern_id", "pattern_type", "payload", "project", "project_path",
+    "query", "recall_query_id", "receipt_id", "replaces", "reversible", "run_id",
+    "saved_by", "session_date", "session_id", "skill_name", "tags", "target", "tool_name",
+    "ttl_seconds", "valid_at", "value", "window",
+})
+
+CLASSIFIED_ARGUMENTS: frozenset[str] = (
+    PROFILE_ARGUMENTS | READ_SCOPE_ARGUMENTS | WRITE_SCOPE_ARGUMENTS | NEUTRAL_ARGUMENTS
+)
+
+PROFILE_DENIAL = "remote_profile_not_allowed"
+INACTIVE_DENIAL = "remote_profile_not_active"
+SCOPE_DENIAL = "remote_scope_not_allowed"
+ARGUMENT_DENIAL = "remote_argument_not_allowed"
+
+#: Nested values are searched this deep for a ``profile_id``; deeper is refused.
+_MAX_DEPTH = 16
+
+
+class BindingRefusal(ValueError):
+    """The call would leave the key's profile. ``code`` is stable."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(f"{message} [{code}]")
+        self.code = code
+
+
+def _names_bound_profile(value: object, bound: str) -> bool:
+    """Absent, empty and the bound profile are fine; anything else is not."""
+    if value is None:
+        return True
+    if not isinstance(value, str):
+        return False
+    named = value.strip()
+    return not named or named == bound
+
+
+def _nested_profiles(value: object, depth: int = 0) -> Iterator[object]:
+    """Every ``profile_id`` value inside a structured argument."""
+    if depth > _MAX_DEPTH:
+        raise BindingRefusal(ARGUMENT_DENIAL, "An argument is nested too deeply.")
+    if isinstance(value, Mapping):
+        for name, item in value.items():
+            if name in PROFILE_ARGUMENTS:
+                yield item
+            yield from _nested_profiles(item, depth + 1)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _nested_profiles(item, depth + 1)
+
+
+def _profile_refusal(key_name: str, bound: str) -> BindingRefusal:
+    return BindingRefusal(
+        PROFILE_DENIAL,
+        f"Remote key '{key_name}' is bound to profile '{bound}' and cannot reach "
+        "another profile.")
+
+
+def bind_arguments(tool: str, arguments: object, *, key_name: str,
+                   bound: str) -> dict[str, Any]:
+    """The arguments to run ``tool`` with as profile ``bound``.
+
+    Raises :class:`BindingRefusal` when the call would leave that profile.
+    """
+    if arguments is None:
+        arguments = {}
+    if not isinstance(arguments, Mapping):
+        raise BindingRefusal(ARGUMENT_DENIAL, "Tool arguments must be a JSON object.")
+    for name, value in arguments.items():
+        if name not in CLASSIFIED_ARGUMENTS:
+            raise BindingRefusal(
+                ARGUMENT_DENIAL, f"Argument '{name}' is not accepted over remote access.")
+        if name in PROFILE_ARGUMENTS and not _names_bound_profile(value, bound):
+            raise _profile_refusal(key_name, bound)
+        if name == "scope" and value not in (None, "", "personal"):
+            raise BindingRefusal(
+                SCOPE_DENIAL,
+                f"Remote key '{key_name}' saves only to its own profile '{bound}'; "
+                "scope must be 'personal'. Share a memory from the SLM computer.")
+        if name == "shared_with" and value not in (None, "", [], ()):
+            raise BindingRefusal(
+                SCOPE_DENIAL,
+                f"Remote key '{key_name}' saves only to its own profile '{bound}'; "
+                "it cannot share a memory with other profiles.")
+        if any(not _names_bound_profile(v, bound) for v in _nested_profiles(value)):
+            raise _profile_refusal(key_name, bound)
+    bound_arguments = dict(arguments)
+    if tool in SCOPED_WRITE_TOOLS and not bound_arguments.get("scope"):
+        bound_arguments["scope"] = "personal"
+    return bound_arguments
+
+
+def inactive_refusal(key_name: str, bound: str) -> BindingRefusal:
+    return BindingRefusal(
+        INACTIVE_DENIAL,
+        f"Remote key '{key_name}' is bound to profile '{bound}', and the SLM computer "
+        f"is using a different profile right now. Switch back to '{bound}' on the SLM "
+        "computer, or make a key for the profile in use there.")
+
+
+def runtime_from_scope(scope: Mapping[str, Any]) -> Any | None:
+    """The daemon's profile runtime, or ``None`` when this is not the daemon."""
+    state = getattr(scope.get("app"), "state", None)
+    if state is None:
+        return None
+    from superlocalmemory.server.profile_runtime import get_profile_runtime
+
+    return get_profile_runtime(state)
+
+
+@asynccontextmanager
+async def profile_lease(runtime: Any):
+    """Hold a profile operation lease; yields the active profile id.
+
+    The blocking acquire runs in a worker thread (it waits only while a switch
+    is in progress), shielded so a cancelled request cannot strand a lease.
+    """
+    acquire = asyncio.ensure_future(asyncio.to_thread(runtime.acquire_operation))
+    try:
+        snapshot = await asyncio.shield(acquire)
+    except asyncio.CancelledError:
+        await acquire
+        runtime.release_operation()
+        raise
+    try:
+        yield snapshot.profile_id
+    finally:
+        runtime.release_operation()
+
+
+RuntimeLookup = Callable[[Mapping[str, Any]], Any]
+
+__all__ = [
+    "ARGUMENT_DENIAL",
+    "BindingRefusal",
+    "CLASSIFIED_ARGUMENTS",
+    "INACTIVE_DENIAL",
+    "NEUTRAL_ARGUMENTS",
+    "PROFILE_ARGUMENTS",
+    "PROFILE_DENIAL",
+    "READ_SCOPE_ARGUMENTS",
+    "RuntimeLookup",
+    "SCOPED_WRITE_TOOLS",
+    "SCOPE_DENIAL",
+    "WRITE_SCOPE_ARGUMENTS",
+    "bind_arguments",
+    "inactive_refusal",
+    "profile_lease",
+    "runtime_from_scope",
+]

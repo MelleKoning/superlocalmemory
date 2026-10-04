@@ -18,8 +18,8 @@ from superlocalmemory.server import remote_tool_policy as policy
 from superlocalmemory.server.remote_access import PRINCIPAL_SCOPE_KEY, RemotePrincipal
 
 REPO = Path(__file__).resolve().parents[2]
-READ_KEY = RemotePrincipal("remote-key", "rk_00000001", "viewer", "read")
-WRITE_KEY = RemotePrincipal("remote-key", "rk_00000002", "hermes", "write")
+READ_KEY = RemotePrincipal("remote-key", "rk_00000001", "viewer", "read", "default")
+WRITE_KEY = RemotePrincipal("remote-key", "rk_00000002", "hermes", "write", "default")
 
 
 def _registered_tools() -> dict[str, dict]:
@@ -100,8 +100,11 @@ class _StubMcp:
 
 def _run(body: bytes, principal=WRITE_KEY, stub: _StubMcp | None = None, chunks: int = 1,
          method: str = "POST", sent_out: list | None = None):
+    from superlocalmemory.server.profile_runtime import ProfileRuntime
+
     stub = stub or _StubMcp()
-    app = policy.RemoteToolScopeASGI(stub)
+    runtime = ProfileRuntime("default")
+    app = policy.RemoteToolScopeASGI(stub, runtime_for=lambda _scope: runtime)
     scope = {"type": "http", "method": method, "path": "/mcp/hermes", "root_path": "/mcp",
              "headers": [], "client": ("remote-listener-peer", 1),
              "slm_remote_listener": True}

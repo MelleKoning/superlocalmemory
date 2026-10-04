@@ -165,3 +165,48 @@ def test_check_flags_a_world_readable_key_store(tmp_path) -> None:
     assert result.returncode == 1
     assert any(r["check"] == "key store" and r["status"] == "FAIL"
                for r in json.loads(result.stdout)["results"])
+
+
+# -- keys are bound to one profile (audit 4.1.20 L2 F2) ----------------------------------
+
+
+def test_keys_add_binds_the_active_profile_and_warns_about_memory_text(tmp_path) -> None:
+    added = _slm(tmp_path, "remote", "keys", "add", "hermes")
+    assert added.returncode == 0, added.stderr[-2000:]
+    assert "profile 'default' only" in added.stdout
+    assert "full text of every memory" in added.stdout
+    row = json.loads(_slm(tmp_path, "remote", "keys", "list", "--json").stdout)["keys"][0]
+    assert row["profile"] == "default" and row["profile_source"] == "active-at-creation"
+    listed = _slm(tmp_path, "remote", "keys", "list")
+    assert "profile default" in listed.stdout
+
+
+def test_keys_add_refuses_a_profile_that_does_not_exist(tmp_path) -> None:
+    bad = _slm(tmp_path, "remote", "keys", "add", "ghost", "--profile", "no-such-profile")
+    assert bad.returncode == 2 and "does not exist" in bad.stderr
+    assert "slmr_" not in bad.stdout
+    assert not (tmp_path / "remote_keys.json").exists()
+
+
+def test_keys_add_profile_flag_is_documented(tmp_path) -> None:
+    helped = _slm(tmp_path, "remote", "keys", "add", "--help")
+    assert "--profile" in helped.stdout and "full text of every" in helped.stdout
+
+
+def test_keys_list_binds_a_pre_4_1_20_key_and_tells_the_user(tmp_path) -> None:
+    from superlocalmemory.server.remote_keys import KEY_PREFIX, digest_secret
+
+    (tmp_path / "config.json").write_text(json.dumps({"active_profile": "work"}))
+    store = tmp_path / "remote_keys.json"
+    store.write_text(json.dumps({"version": 1, "keys": [{
+        "key_id": "rk_0000abcd", "name": "old-hermes", "scope": "write",
+        "digest": digest_secret(KEY_PREFIX + "A" * 43),
+        "created_at": "2026-09-01T00:00:00+00:00", "revoked_at": None}]}))
+    os.chmod(store, 0o600)
+    listed = _slm(tmp_path, "remote", "keys", "list")
+    assert listed.returncode == 0, listed.stderr[-2000:]
+    assert "old-hermes" in listed.stderr and "bound to profile 'work'" in listed.stderr
+    assert "work (bound on upgrade)" in listed.stdout
+    again = _slm(tmp_path, "remote", "keys", "list")
+    assert "bound to profile" not in again.stderr  # told once, recorded for good
+    assert json.loads(store.read_text())["keys"][0]["profile"] == "work"

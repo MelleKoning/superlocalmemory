@@ -82,8 +82,8 @@ second listener that:
 slm remote tls init --name slm.lan --ip 192.168.50.144   # CA + server certificate
 slm remote enable --listen 192.168.50.144:8443
 slm restart
-slm remote keys add hermes-laptop             # write key, shown once
-slm remote keys add dashboards --read-only    # recall-only key
+slm remote keys add hermes-laptop             # write key for the active profile, shown once
+slm remote keys add dashboards --read-only --profile clientx   # recall-only, profile clientx
 slm remote check                              # exit 1 on any problem
 ```
 
@@ -95,8 +95,8 @@ certificate with the same CA; the server certificate lasts at most 397 days
 and `slm remote check` warns 30 days before it expires.
 
 **Keys.** Each client gets its own named key, sent as `Authorization: Bearer
-slmr_...`. SLM stores only a hash. `slm remote keys list` shows names, scopes
-and dates, never secrets. `slm remote keys revoke <name>` takes effect on the
+slmr_...`. SLM stores only a hash. `slm remote keys list` shows names, scopes,
+profiles and dates, never secrets. `slm remote keys revoke <name>` takes effect on the
 next request, without a restart. The key file must be readable only by the SLM
 user; otherwise every remote key is refused. The SLM API key also
 works as a write key; send it as `Authorization: Bearer <api key>`, not as
@@ -104,18 +104,58 @@ works as a write key; send it as `Authorization: Bearer <api key>`, not as
 another site but forward custom headers. SLM never answers `/mcp` with a
 redirect.
 
+**One profile per key.** Every key is bound to exactly one profile: the one
+you name with `--profile`, or the profile active when you create it. A key
+never reaches another profile:
+
+- a `profile_id` other than the key's profile, in any tool's arguments
+  (including inside structured ones such as `payload`), is refused with
+  `remote_profile_not_allowed` — never quietly redirected;
+- while this computer is using a different profile, every call with that key is
+  refused with `remote_profile_not_active` (the answer does not name the
+  profile in use). Switch back, or make a key for the profile in use. A remote
+  call holds the profile steady while it runs; a profile switch started during
+  one waits for it to finish;
+- a remote save always stays in the key's profile: `scope` must be `personal`
+  (a save that names no scope is made `personal`, whatever this computer's
+  default), and `shared_with` is refused. Share a memory from this computer.
+  A recall may still pass `include_shared` / `include_global`: it then sees only
+  what other profiles shared with the key's profile, or made global.
+
+Keys made before 4.1.20 had no profile. Each is bound once to the profile
+active when 4.1.20 first runs (the daemon at start, or any `slm remote keys`
+command); `slm remote keys list` says so and marks it `(bound on upgrade)`.
+Until then the key is refused (`remote_key_unbound`). The key file is now
+format 2; an older SLM refuses it (every remote key off) rather than ignore the
+binding. The SLM API key, used as a key, has no stored profile: it reaches only
+the profile active at the time of each call.
+
+**What a key holder can read.** A key's holder can read the full text of every
+memory in its profile, exactly as written — including any file paths, names or
+pasted error output inside those memories. Bind each key to a profile that
+holds only what that tool should see. Everything else in a tool answer that
+describes this computer (data folder, home folder, account name, process ids,
+environment, paths in errors, tracebacks, notes and receipts) is withheld from
+remote callers.
+
+**Separate caches.** `slm_cache_*` and reversible `slm_compress` entries made
+over remote access belong to the key that made them (and the `/mcp/<agent>`
+segment). A remote key never reads or overwrites a local agent's cache, even
+if it sends the same agent name, and two keys never share entries.
+
 **What a remote key can do.** A `read` key can recall, search, fetch, list and
 read status. A `write` key can also save, update and delete individual
 memories and record session activity. Tools that manage the SLM computer —
 switching its active profile, indexing local folders for the code graph,
 maintenance, retention, mesh, loops, `forget` by pattern, `set_mode` — are
 refused to every remote caller, and are not listed in `tools/list`. Only
-`initialize`, `ping`, `tools/list` and `tools/call` are accepted; batched
-requests and bodies over 1 MiB are refused. One audit line per remote tool
-call records the key name, tool and decision (never arguments or content).
+`initialize`, `ping`, `tools/list` and `tools/call` are accepted, and only as
+`POST`: any other HTTP method gets `405` at once (there is no event stream to
+open). Batched requests and bodies over 1 MiB are refused. One audit line per
+remote tool call records the key name, its profile, the tool and the decision
+(never arguments or content).
 
-**Limits.** A remote key reaches every profile on this SLM; use separate SLM
-data folders or hosts to separate them. Company mode (team accounts with
+**Limits.** Company mode (team accounts with
 required sign-in) refuses remote keys in this release. Remote calls share the
 rate limiter with other network callers (`SLM_RATE_LIMIT_WRITE`, default 30
 per minute per computer); raise it for a busy agent.

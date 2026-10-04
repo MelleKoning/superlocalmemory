@@ -279,16 +279,25 @@ def _audit(principal: Any, scope: dict[str, Any], tool: str, decision: str) -> N
     path = scope.get("path", "") or ""
     agent = path[len(root):].lstrip("/").split("/")[0] if path.startswith(root) else ""
     audit_logger.info(
-        "remote tools/call key_id=%s key_name=%s scope=%s agent=%s tool=%s decision=%s",
-        principal.key_id, principal.name, principal.scope,
+        "remote tools/call key_id=%s key_name=%s scope=%s profile=%s agent=%s tool=%s "
+        "decision=%s",
+        principal.key_id, principal.name, principal.scope, principal.profile or "(active)",
         sanitize_agent_id(agent) or "-", sanitize_agent_id(tool), decision,
     )
 
 
-def _tool_error(message: dict[str, Any], text: str) -> dict[str, Any]:
+def _tool_error(message: dict[str, Any], text: str,
+                code: str = DENIAL_CODE) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": message.get("id"),
             "result": {"content": [{"type": "text", "text": text}], "isError": True,
-                       "structuredContent": {"error": DENIAL_CODE, "message": text}}}
+                       "structuredContent": {"error": code, "message": text}}}
+
+
+def _with_body(scope: dict[str, Any], body: bytes) -> dict[str, Any]:
+    """``scope`` with its Content-Length matching a rewritten ``body``."""
+    headers = [(k, v) for k, v in scope.get("headers", []) if k.lower() != b"content-length"]
+    headers.append((b"content-length", str(len(body)).encode()))
+    return dict(scope, headers=headers)
 
 
 def _method_error(message: dict[str, Any], method: str) -> dict[str, Any]:
@@ -298,10 +307,21 @@ def _method_error(message: dict[str, Any], method: str) -> dict[str, Any]:
 
 
 class RemoteToolScopeASGI:
-    """Wraps the MCP app. Local callers pass straight through."""
+    """Wraps the MCP app. Local callers pass straight through.
 
-    def __init__(self, app: Any) -> None:
+    ``runtime_for`` finds the daemon's profile runtime for a request (default:
+    the one on ``scope["app"].state``). Without one a remote tool call is
+    refused - there would be no way to hold it to its key's profile.
+    """
+
+    def __init__(self, app: Any, runtime_for: Callable[[dict[str, Any]], Any] | None = None
+                 ) -> None:
         self.app = app
+        if runtime_for is None:
+            from superlocalmemory.server.remote_profile_binding import runtime_from_scope
+
+            runtime_for = runtime_from_scope
+        self._runtime_for = runtime_for
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if scope.get("type") != "http":
@@ -361,7 +381,42 @@ class RemoteToolScopeASGI:
         # Per-agent stores (cache, reversible compression) are keyed by this
         # key as well as by the caller-chosen /mcp/<agent> segment.
         with remote_caller(principal.key_id):
-            await self.app(scope, _replay(body, receive), downstream_send)
+            if tool is None:
+                await self.app(scope, _replay(body, receive), downstream_send)
+            else:
+                await self._call_in_bound_profile(principal, scope, receive, send,
+                                                  downstream_send, message, tool)
+
+    async def _call_in_bound_profile(self, principal: Any, scope: dict[str, Any],
+                                     receive: Any, send: Any, downstream_send: Any,
+                                     message: dict[str, Any], tool: str) -> None:
+        """Run one tool call as the key's profile (server/remote_profile_binding)."""
+        from superlocalmemory.server.remote_profile_binding import (
+            BindingRefusal,
+            bind_arguments,
+            inactive_refusal,
+            profile_lease,
+        )
+
+        runtime = self._runtime_for(scope)
+        if runtime is None:
+            await _send_json(send, 503, {"error": "remote_profile_unavailable",
+                                         "message": "The SLM profile state is not ready."})
+            return
+        async with profile_lease(runtime) as active_profile:
+            bound = principal.profile or active_profile
+            params = message.get("params") or {}
+            try:
+                if principal.profile is not None and active_profile != principal.profile:
+                    raise inactive_refusal(principal.name, principal.profile)
+                arguments = bind_arguments(tool, params.get("arguments"),
+                                           key_name=principal.name, bound=bound)
+            except BindingRefusal as refusal:
+                _audit(principal, scope, tool, f"deny:{refusal.code}")
+                await _send_json(send, 200, _tool_error(message, str(refusal), refusal.code))
+                return
+            body = json.dumps(dict(message, params=dict(params, arguments=arguments))).encode()
+            await self.app(_with_body(scope, body), _replay(body, receive), downstream_send)
 
 
 __all__ = [

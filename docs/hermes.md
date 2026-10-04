@@ -51,7 +51,7 @@ directly. You do not need SuperLocalMemory installed on the Hermes computer.
 slm remote tls init --name slm.lan --ip 192.168.50.144
 slm remote enable --listen 192.168.50.144:8443
 slm restart
-slm remote keys add hermes-laptop      # prints the key once - copy it now
+slm remote keys add hermes-laptop --profile work   # prints the key once - copy it now
 slm remote check
 ```
 
@@ -59,6 +59,16 @@ Copy `remote/tls/ca.pem` from the SLM data folder (by default
 `~/.superlocalmemory/remote/tls/ca.pem`) to the Hermes computer. It is a public
 certificate, not a secret. Add `--read-only` to `keys add` for a Hermes that
 should only recall.
+
+The key reaches one profile only: `--profile`, or the profile active when you
+create the key. Hermes recalls from and saves into that profile and cannot
+name another one; saves stay private to it. Whoever holds the key can read the
+full text of every memory in that profile, including any paths or pasted output
+written into them, so give Hermes a profile that holds only what it should see.
+While the SLM server is using a different profile, Hermes's calls are refused
+(`remote_profile_not_active`) until the server switches back. A key made before
+4.1.20 is bound to the profile active when the server is upgraded; `slm remote
+keys list` shows which.
 
 **On the Hermes computer**, put the key in your Hermes secrets as
 `SLM_REMOTE_KEY`, then in `~/.hermes/config.yaml`:

@@ -5,9 +5,17 @@
 """Named, scoped, revocable keys for AI tools on other computers.
 
 Each tool that reaches this SuperLocalMemory from another computer gets its own
-key (``slm remote keys add <name>``). A key is ``read`` (recall only) or
-``write`` (recall and save). Revoking one key cuts off one tool on its next
-request, with no restart and without touching any other tool.
+key (``slm remote keys add <name> [--profile p]``). A key is ``read`` (recall
+only) or ``write`` (recall and save), and it is bound to exactly one profile:
+the one named with ``--profile``, else the profile that was active when the key
+was made. A key never reaches another profile (see
+:mod:`server.remote_profile_binding`). Revoking one key cuts off one tool on its
+next request, with no restart and without touching any other tool.
+
+Keys made before 4.1.20 had no profile. They are bound, once, to the profile
+active when this release first runs (the daemon at start, or any
+``slm remote keys`` command), and ``slm remote keys list`` says so. Until then a
+key without a profile is refused.
 
 Only a domain-separated SHA-256 digest of each key is stored, in
 ``<data root>/remote_keys.json`` (mode 0600). The secret is shown once, when it
@@ -21,6 +29,7 @@ revoked name is never silently reused.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
@@ -43,8 +52,18 @@ _SECRET_BODY_LEN = 43
 _KEY_LEN = len(KEY_PREFIX) + _SECRET_BODY_LEN
 _DOMAIN = b"superlocalmemory-remote-key-v1\0"
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,47}$")
-_STORE_VERSION = 1
+#: Version 2 added the profile binding. Version 1 stores are still read (their
+#: keys have no profile until bound); every write is version 2, which an older
+#: release refuses entirely rather than serving without the binding.
+_STORE_VERSION = 2
+_READABLE_VERSIONS = (1, 2)
 STORE_FILE = "remote_keys.json"
+#: Profile ids as ``slm profile create`` accepts them.
+_PROFILE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+#: How a key got its profile: named with --profile, the active profile when the
+#: key was made, or the active profile when a pre-4.1.20 key was upgraded.
+PROFILE_SOURCES: tuple[str, ...] = ("chosen", "active-at-creation", "bound-on-upgrade")
 
 Scope = Literal["read", "write"]
 SCOPES: tuple[str, ...] = ("read", "write")
@@ -66,6 +85,10 @@ class RemoteKey:
     digest: str
     created_at: str
     revoked_at: str | None = None
+    #: The one profile this key reaches. ``None`` only for a key made before
+    #: 4.1.20 that has not been bound yet; such a key is refused.
+    profile: str | None = None
+    profile_source: str | None = None
 
     @property
     def active(self) -> bool:
@@ -74,7 +97,12 @@ class RemoteKey:
     def public(self) -> dict[str, str | None]:
         """Everything except the digest - safe to print."""
         return {"name": self.name, "key_id": self.key_id, "scope": self.scope,
+                "profile": self.profile, "profile_source": self.profile_source,
                 "created_at": self.created_at, "revoked_at": self.revoked_at}
+
+
+def valid_profile_id(profile: object) -> bool:
+    return isinstance(profile, str) and bool(_PROFILE_RE.match(profile))
 
 
 def digest_secret(secret: str) -> str:
@@ -118,10 +146,16 @@ def _record_from(raw: object) -> RemoteKey | None:
             key_id=str(raw["key_id"]), name=str(raw["name"]), scope=raw["scope"],
             digest=str(raw["digest"]), created_at=str(raw["created_at"]),
             revoked_at=(None if raw.get("revoked_at") is None else str(raw["revoked_at"])),
+            profile=raw.get("profile"), profile_source=raw.get("profile_source"),
         )
     except (KeyError, TypeError):
         return None
     if record.scope not in SCOPES or len(record.digest) != 64:
+        return None
+    if record.profile is not None and (not valid_profile_id(record.profile)
+                                       or record.profile_source not in PROFILE_SOURCES):
+        # A malformed binding must never widen what the key reaches: drop the
+        # record (the key is refused) rather than treat it as unbound.
         return None
     return record
 
@@ -132,6 +166,7 @@ class RemoteKeyStore:
     def __init__(self, path: Path | None = None) -> None:
         self._path = Path(path) if path is not None else None
         self._lock = threading.Lock()
+        self._cache_lock = threading.Lock()
         self._cache: tuple[tuple[str, int, int, int], tuple[RemoteKey, ...]] | None = None
         self._warned: str | None = None
 
@@ -157,7 +192,7 @@ class RemoteKeyStore:
         except OSError:
             return ()
         signature = (str(path), info.st_mtime_ns, info.st_size, info.st_ino)
-        with self._lock:
+        with self._cache_lock:
             if self._cache is not None and self._cache[0] == signature:
                 return self._cache[1]
         try:
@@ -166,11 +201,11 @@ class RemoteKeyStore:
             logger.critical("Remote keys are disabled: %s is unreadable (%s).", path.name,
                             type(exc).__name__)
             return ()
-        if not isinstance(data, dict) or data.get("version") != _STORE_VERSION:
+        if not isinstance(data, dict) or data.get("version") not in _READABLE_VERSIONS:
             logger.critical("Remote keys are disabled: %s has an unknown format.", path.name)
             return ()
         records = tuple(r for r in (_record_from(x) for x in data.get("keys") or ()) if r)
-        with self._lock:
+        with self._cache_lock:
             self._cache = (signature, records)
         return records
 
@@ -196,6 +231,28 @@ class RemoteKeyStore:
         return match
 
     # -- writing ---------------------------------------------------------------
+
+    @contextlib.contextmanager
+    def _exclusive(self):
+        """One writer at a time, across processes (the CLI and the daemon).
+
+        Every change is read-modify-write; without this a revoke racing the
+        daemon's one-time upgrade could be overwritten and the key revived.
+        """
+        path = self.path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            try:
+                import fcntl
+            except ImportError:  # pragma: no cover - Windows: in-process lock only
+                yield
+                return
+            fd = os.open(path.with_name(f".{path.name}.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                yield
+            finally:
+                os.close(fd)
 
     def _write(self, records: tuple[RemoteKey, ...]) -> None:
         path = self.path
@@ -234,8 +291,16 @@ class RemoteKeyStore:
                                  f"Refusing to change remote keys: {problem}.")
         return self._load()
 
-    def add(self, name: str, scope: Scope) -> tuple[RemoteKey, str]:
-        """Create a key. Returns the record and the secret (shown once)."""
+    def add(self, name: str, scope: Scope, *, profile: str,
+            profile_source: str = "chosen") -> tuple[RemoteKey, str]:
+        """Create a key bound to ``profile``. Returns the record and the secret
+        (shown once). The caller checks that the profile exists."""
+        if not valid_profile_id(profile):
+            raise RemoteKeyError("invalid_profile",
+                                 "A remote key needs the profile it may reach "
+                                 "(letters, digits, '_' or '-').")
+        if profile_source not in PROFILE_SOURCES[:2]:
+            raise RemoteKeyError("invalid_profile", "Unknown profile source.")
         if not isinstance(name, str) or not _NAME_RE.match(name):
             raise RemoteKeyError(
                 "invalid_name",
@@ -243,32 +308,56 @@ class RemoteKeyStore:
                 "or '-', starting with a letter or digit.")
         if scope not in SCOPES:
             raise RemoteKeyError("invalid_scope", "A key scope is 'read' or 'write'.")
-        records = self._records_for_write()
-        if any(r.name == name and r.active for r in records):
-            raise RemoteKeyError(
-                "duplicate_name",
-                f"An active key named '{name}' already exists. Revoke it first, or "
-                "choose another name.")
-        secret = KEY_PREFIX + secrets.token_urlsafe(32)
-        known_ids = {r.key_id for r in records}
-        key_id = "rk_" + secrets.token_hex(4)
-        while key_id in known_ids:
+        with self._exclusive():
+            records = self._records_for_write()
+            if any(r.name == name and r.active for r in records):
+                raise RemoteKeyError(
+                    "duplicate_name",
+                    f"An active key named '{name}' already exists. Revoke it first, or "
+                    "choose another name.")
+            secret = KEY_PREFIX + secrets.token_urlsafe(32)
+            known_ids = {r.key_id for r in records}
             key_id = "rk_" + secrets.token_hex(4)
-        record = RemoteKey(key_id=key_id, name=name, scope=scope,
-                           digest=digest_secret(secret), created_at=_now())
-        self._write(records + (record,))
+            while key_id in known_ids:
+                key_id = "rk_" + secrets.token_hex(4)
+            record = RemoteKey(key_id=key_id, name=name, scope=scope,
+                               digest=digest_secret(secret), created_at=_now(),
+                               profile=profile, profile_source=profile_source)
+            self._write(records + (record,))
         return record, secret
 
     def revoke(self, name_or_id: str) -> RemoteKey:
-        records = self._records_for_write()
-        target = next((r for r in records
-                       if r.active and name_or_id in (r.name, r.key_id)), None)
-        if target is None:
-            raise RemoteKeyError("not_found",
-                                 f"No active remote key is named '{name_or_id}'.")
-        revoked = replace(target, revoked_at=_now())
-        self._write(tuple(revoked if r is target else r for r in records))
+        with self._exclusive():
+            records = self._records_for_write()
+            target = next((r for r in records
+                           if r.active and name_or_id in (r.name, r.key_id)), None)
+            if target is None:
+                raise RemoteKeyError("not_found",
+                                     f"No active remote key is named '{name_or_id}'.")
+            revoked = replace(target, revoked_at=_now())
+            self._write(tuple(revoked if r is target else r for r in records))
         return revoked
+
+    def bind_unbound(self, profile: str) -> tuple[RemoteKey, ...]:
+        """Bind every active key that has no profile (made before 4.1.20) to
+        ``profile`` - the profile active now, which is the one those keys have
+        been reaching. Returns the keys it bound; a no-op when there are none.
+        """
+        if not valid_profile_id(profile):
+            raise RemoteKeyError("invalid_profile", f"Not a profile id: {profile!r}.")
+        if not any(r.active and r.profile is None for r in self._load()):
+            return ()
+        with self._exclusive():
+            records = self._records_for_write()
+            bound = tuple(replace(r, profile=profile, profile_source="bound-on-upgrade")
+                          for r in records if r.active and r.profile is None)
+            if not bound:
+                return ()
+            by_id = {r.key_id: r for r in bound}
+            self._write(tuple(by_id.get(r.key_id, r) if r.active else r for r in records))
+        logger.warning("Bound %d remote key(s) made before 4.1.20 to profile '%s': %s",
+                       len(bound), profile, ", ".join(r.name for r in bound))
+        return bound
 
 
 _DEFAULT_STORE: RemoteKeyStore | None = None
@@ -286,6 +375,7 @@ def default_store() -> RemoteKeyStore:
 
 __all__ = [
     "KEY_PREFIX",
+    "PROFILE_SOURCES",
     "RemoteKey",
     "RemoteKeyError",
     "RemoteKeyStore",
@@ -294,4 +384,5 @@ __all__ = [
     "default_store",
     "digest_secret",
     "store_problem",
+    "valid_profile_id",
 ]

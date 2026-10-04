@@ -83,8 +83,18 @@ on every request. Keys are `read` or `write`. Server-management tools (profile
 switching, code-graph indexing of local paths, maintenance, mesh, retention,
 loops, pattern deletes) are refused to every remote caller and hidden from its
 tool list; tool names are matched exactly, and batched requests, repeated JSON
-keys and MCP methods other than tool calls are refused. A remote key reaches
-every profile on the server. Company mode (`require_login = true`) refuses
+keys and MCP methods other than tool calls are refused; any HTTP method but
+`POST` gets `405` at once. Every key is bound to one profile (`slm remote keys
+add <name> --profile <p>`, default the active profile): a different `profile_id`
+anywhere in a call is refused, never rewritten; calls are refused while another
+profile is active, and a profile switch waits for a running remote call; remote
+saves stay `personal` to the key's profile. Keys made before 4.1.20 are bound to
+the profile active at upgrade and are refused until then. A key holder can read
+the full text of every memory in its profile, including paths written into
+those memories; other host details (data folder, home, account, environment,
+paths in errors, tracebacks and receipts) are withheld from remote answers.
+A remote key's `slm_cache_*` and reversible-compression entries are its own: it
+cannot read or overwrite a local agent's. Company mode (`require_login = true`) refuses
 remote keys. The install token, hook token and daemon capability are accepted
 only from this computer and are never valid on the remote listener; SLM's own
 hooks only talk to the daemon on this computer. MCP requests from other

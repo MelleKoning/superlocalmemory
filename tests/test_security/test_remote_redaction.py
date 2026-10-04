@@ -15,7 +15,7 @@ import pytest
 from superlocalmemory.server import remote_redaction, remote_tool_policy
 from superlocalmemory.server.remote_access import PRINCIPAL_SCOPE_KEY, RemotePrincipal
 
-READ_KEY = RemotePrincipal("remote-key", "rk_00000001", "viewer", "read")
+READ_KEY = RemotePrincipal("remote-key", "rk_00000001", "viewer", "read", "default")
 
 
 @pytest.fixture(autouse=True)
@@ -58,7 +58,10 @@ class _Stub:
 
 
 def _call(payload: dict, principal) -> dict:
-    app = remote_tool_policy.RemoteToolScopeASGI(_Stub(payload))
+    from superlocalmemory.server.profile_runtime import ProfileRuntime
+
+    runtime = ProfileRuntime("default")
+    app = remote_tool_policy.RemoteToolScopeASGI(_Stub(payload), runtime_for=lambda _s: runtime)
     scope = {"type": "http", "method": "POST", "path": "/mcp/x", "root_path": "/mcp",
              "headers": [], "client": ("127.0.0.1", 1)}
     if principal is not None:
