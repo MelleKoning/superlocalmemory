@@ -111,11 +111,19 @@ never reaches another profile:
 - a `profile_id` other than the key's profile, in any tool's arguments
   (including inside structured ones such as `payload`), is refused with
   `remote_profile_not_allowed` — never quietly redirected;
-- while this computer is using a different profile, every call with that key is
-  refused with `remote_profile_not_active` (the answer does not name the
-  profile in use). Switch back, or make a key for the profile in use. A remote
-  call holds the profile steady while it runs; a profile switch started during
-  one waits for it to finish;
+- `recall`, `remember`, `list_corrections` and `review_correction` are served
+  for the key's profile whatever profile this computer is using; the host's
+  active profile is never moved. Tools that only exist for the cache, the
+  compression store and the version (`slm_cache_*`, `slm_compress`,
+  `slm_retrieve`, `slm_optimize_stats`, `get_version`) always work;
+- **limitation in this release:** every other tool (`search`, `fetch`,
+  `list_recent`, `update_memory`, `delete_memory`, `session_init`, `observe`,
+  status, kinds, assertions and the rest) works only on the profile this
+  computer is using. While it is using a different one, those calls are refused
+  with `remote_profile_not_active`: "the host is using another workspace right
+  now; try again later or ask the host owner" (the answer does not name that
+  workspace). While one of them runs, a profile switch on this computer waits
+  for it to finish;
 - a remote save always stays in the key's profile: `scope` must be `personal`
   (a save that names no scope is made `personal`, whatever this computer's
   default), and `shared_with` is refused. Share a memory from this computer.

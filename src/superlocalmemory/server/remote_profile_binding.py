@@ -4,17 +4,26 @@
 
 """Keep every remote tool call inside the one profile its key is bound to.
 
-A remote key is bound to one profile (:mod:`server.remote_keys`). Three rules
-hold for every ``tools/call`` it makes, read key or write key alike:
+A remote key is bound to one profile (:mod:`server.remote_keys`). Every
+remote-callable tool is in exactly one of three groups:
 
-1. **The bound profile must be the one this computer is using.** Most tools
-   work on the active profile and take no profile argument (``search``,
-   ``fetch``, ``list_recent``, ``update_memory`` ...). The call holds a profile
-   lease for its whole run, so the active profile cannot change between the
-   check and the work; a profile switch waits for it (and, if it cannot drain in
-   time, fails with "try again" rather than moving under a remote call). When a
-   different profile is active the call is refused - the refusal does not name
-   that profile.
+* :data:`ROUTED_TOOLS` (``recall``, ``remember``, ``list_corrections``,
+  ``review_correction``) are served for the key's profile through the
+  per-request profile path, whatever profile this computer is using. The
+  wrapper sets ``profile_id`` to the key's profile; the host's active profile
+  is neither read for the work nor moved.
+* :data:`PROFILE_FREE_TOOLS` touch no profile's memory (the key's own cache and
+  compression store, version). They always run.
+* Every other tool works on the active profile and cannot be routed in this
+  release. It runs only while the key's profile is the active one, under a
+  profile lease held for the whole call (a switch waits for it). Otherwise it
+  is refused with ``remote_profile_not_active``: the host is using another
+  workspace right now; try again later or ask the host owner. The refusal does
+  not name that workspace.
+
+Three rules hold for every call, read key or write key alike:
+
+1. **The work happens in the bound profile** (routed, or active-only as above).
 2. **A profile named in the arguments must be the bound one.** ``profile_id``
    anywhere in the arguments, including inside structured values such as
    ``payload``, is compared with the key's profile. A different profile is
@@ -53,6 +62,25 @@ WRITE_SCOPE_ARGUMENTS: frozenset[str] = frozenset({"scope", "shared_with"})
 #: The remote-callable tools that take ``scope``; each remote save through them
 #: is pinned to ``personal``. The registry test keeps this list complete.
 SCOPED_WRITE_TOOLS: frozenset[str] = frozenset({"remember"})
+
+#: Served for the key's profile by the per-request profile path (4.1.19), with
+#: the host's active profile untouched.
+ROUTED_TOOLS: frozenset[str] = frozenset({
+    "recall", "remember", "list_corrections", "review_correction",
+})
+
+#: Remote-callable tools that take ``profile_id``. Each gets the key's profile
+#: written in explicitly. ``prestage_context`` takes one but is not routed: it
+#: defaults to the profile named "default" and serves through the shared
+#: engine, so it is active-only and always told the key's profile.
+PROFILE_ARGUMENT_TOOLS: frozenset[str] = ROUTED_TOOLS | frozenset({"prestage_context"})
+
+#: Read or write no profile's memory: a key's own cache and compression store
+#: (keyed by the key, see mcp/remote_caller), aggregate counters, the version.
+PROFILE_FREE_TOOLS: frozenset[str] = frozenset({
+    "get_version", "slm_cache_get", "slm_cache_set", "slm_compress", "slm_retrieve",
+    "slm_optimize_stats",
+})
 
 #: Every other argument of a remote-callable tool. None selects a profile.
 NEUTRAL_ARGUMENTS: frozenset[str] = frozenset({
@@ -149,17 +177,20 @@ def bind_arguments(tool: str, arguments: object, *, key_name: str,
         if any(not _names_bound_profile(v, bound) for v in _nested_profiles(value)):
             raise _profile_refusal(key_name, bound)
     bound_arguments = dict(arguments)
+    if tool in PROFILE_ARGUMENT_TOOLS:
+        bound_arguments["profile_id"] = bound
     if tool in SCOPED_WRITE_TOOLS and not bound_arguments.get("scope"):
         bound_arguments["scope"] = "personal"
     return bound_arguments
 
 
-def inactive_refusal(key_name: str, bound: str) -> BindingRefusal:
+def inactive_refusal(tool: str, key_name: str, bound: str) -> BindingRefusal:
     return BindingRefusal(
         INACTIVE_DENIAL,
-        f"Remote key '{key_name}' is bound to profile '{bound}', and the SLM computer "
-        f"is using a different profile right now. Switch back to '{bound}' on the SLM "
-        "computer, or make a key for the profile in use there.")
+        f"The SLM computer is using another workspace right now, so '{tool}' cannot "
+        f"run for remote key '{key_name}' (profile '{bound}'). Try again later or ask "
+        f"the host owner. Meanwhile {', '.join(sorted(ROUTED_TOOLS))} keep working "
+        f"for profile '{bound}'.")
 
 
 def runtime_from_scope(scope: Mapping[str, Any]) -> Any | None:
@@ -201,7 +232,10 @@ __all__ = [
     "INACTIVE_DENIAL",
     "NEUTRAL_ARGUMENTS",
     "PROFILE_ARGUMENTS",
+    "PROFILE_ARGUMENT_TOOLS",
     "PROFILE_DENIAL",
+    "PROFILE_FREE_TOOLS",
+    "ROUTED_TOOLS",
     "READ_SCOPE_ARGUMENTS",
     "RuntimeLookup",
     "SCOPED_WRITE_TOOLS",

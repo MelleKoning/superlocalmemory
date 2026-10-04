@@ -407,17 +407,61 @@ def test_a_remote_key_reaches_only_the_profile_it_is_bound_to(pair) -> None:
         assert not mcp_call(remote, pair["read_key"], ctx, "recall", args).is_error
 
 
-def test_a_key_bound_to_another_profile_works_only_while_that_profile_is_active(pair) -> None:
+def _facts_in(daemon, profile: str, needle: str) -> int:
+    import sqlite3
+
+    conn = sqlite3.connect(daemon.root / "data" / "memory.db", timeout=30)
+    try:
+        return int(conn.execute(
+            "SELECT COUNT(*) FROM atomic_facts WHERE profile_id = ? AND content LIKE ?",
+            (profile, f"%{needle}%")).fetchone()[0])
+    finally:
+        conn.close()
+
+
+def _wait_for_fact(daemon, profile: str, needle: str, timeout: float = 60.0) -> int:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        count = _facts_in(daemon, profile, needle)
+        if count:
+            return count
+        time.sleep(0.5)
+    return 0
+
+
+def test_a_key_bound_to_work_is_served_for_work_while_the_host_uses_personal(pair) -> None:
+    """Remote recall and remember are routed to the key's profile; the host's is untouched."""
     ctx = ssl.create_default_context(cafile=pair["ca"])
-    env = pair["s"].env
-    key = _secret(_slm(env, "remote", "keys", "add", "cx-viewer", "--read-only",
-                       "--profile", "clientx").stdout)
-    refused = mcp_call(_remote_url(pair, "hermes"), key, ctx, "recall", {"query": "merger"})
-    assert refused.is_error and "'clientx'" in _text(refused), _text(refused)
+    s, env = pair["s"], pair["s"].env
+    for name in ("personal", "work"):
+        _slm(env, "profile", "create", name)
+    key = _secret(_slm(env, "remote", "keys", "add", "work-hermes", "--profile", "work").stdout)
     rows = {r["name"]: r for r in json.loads(_slm(env, "remote", "keys", "list",
                                                   "--json").stdout)["keys"]}
-    assert rows["cx-viewer"]["profile"] == "clientx"
+    assert rows["work-hermes"]["profile"] == "work"
     assert rows["hermes"]["profile"] == "default" and rows["viewer"]["profile"] == "default"
+    _slm(env, "profile", "switch", "personal")
+    try:
+        url = _remote_url(pair, "hermes")
+        token = f"work-only-{os.getpid()}"
+        saved = mcp_call(url, key, ctx, "remember",
+                         {"content": f"{token} the quarterly plan is due monday"})
+        assert not saved.is_error and _answer(saved)["success"] is True, _text(saved)
+        assert _wait_for_fact(s, "work", token) == 1
+        assert _facts_in(s, "personal", token) == 0
+        found = mcp_call(url, key, ctx, "recall", {"query": f"{token} quarterly plan"})
+        assert not found.is_error and token in _text(found)
+        # The host is still on 'personal', and its own recall does not see it.
+        local = _answer(mcp_call(_local_url(pair), None, True, "get_status"))
+        assert local["profile"] == "personal"
+        mine = mcp_call(_local_url(pair), None, True, "recall", {"query": f"{token} plan"})
+        assert token not in _text(mine)
+        # A tool that can only work on the active profile says what to do.
+        refused = mcp_call(url, key, ctx, "search", {"query": token})
+        assert refused.is_error and "ask the host owner" in _text(refused)
+        assert "personal" not in _text(refused)
+    finally:
+        _slm(env, "profile", "switch", "default")
     bad = subprocess.run([sys.executable, "-m", "superlocalmemory.cli.main", "remote", "keys",
                           "add", "ghost", "--profile", "no-such-profile"], env=env,
                          capture_output=True, text=True, timeout=120)

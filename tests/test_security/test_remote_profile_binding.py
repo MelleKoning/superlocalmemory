@@ -74,21 +74,36 @@ def test_every_remote_tool_that_takes_scope_is_pinned_to_personal(registry) -> N
     assert takes_scope == binding.SCOPED_WRITE_TOOLS
 
 
-def test_every_remote_tool_that_names_a_profile_is_covered(registry) -> None:
+def test_every_remote_tool_that_names_a_profile_is_told_the_keys_profile(registry) -> None:
     named = {t for t, args in registry.items()
              if t in policy.WRITE_TOOLS and set(args) & binding.PROFILE_ARGUMENTS}
-    # recall, remember, review_correction, list_corrections, prestage_context ...
-    assert {"recall", "remember", "list_corrections", "review_correction"} <= named
+    assert named == binding.PROFILE_ARGUMENT_TOOLS
+    assert binding.ROUTED_TOOLS <= binding.PROFILE_ARGUMENT_TOOLS
+
+
+def test_profile_free_tools_are_remote_tools_that_name_no_profile(registry) -> None:
+    assert binding.PROFILE_FREE_TOOLS <= policy.WRITE_TOOLS
+    assert not binding.PROFILE_FREE_TOOLS & binding.PROFILE_ARGUMENT_TOOLS
+    for tool in binding.PROFILE_FREE_TOOLS:
+        assert not set(registry[tool]) & binding.PROFILE_ARGUMENTS, tool
 
 
 # -- bind_arguments -----------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("value", [None, "", "  ", "work", " work "])
-def test_the_bound_profile_or_no_profile_is_accepted(value) -> None:
-    out = binding.bind_arguments("recall", {"query": "q", "profile_id": value},
+@pytest.mark.parametrize("tool", sorted(binding.PROFILE_ARGUMENT_TOOLS))
+def test_the_bound_profile_or_no_profile_is_accepted_and_made_explicit(tool, value) -> None:
+    out = binding.bind_arguments(tool, {"query": "q", "profile_id": value},
                                  key_name="k", bound="work")
-    assert out["profile_id"] == value  # never rewritten
+    assert out["profile_id"] == "work"
+
+
+def test_prestage_context_without_a_profile_is_told_the_keys_profile() -> None:
+    """Its own default is the profile named "default", not the key's."""
+    out = binding.bind_arguments("prestage_context", {"query": "q"}, key_name="k",
+                                 bound="work")
+    assert out["profile_id"] == "work"
 
 
 @pytest.mark.parametrize("value", ["clientx", "Work", "work2", 5, ["work"], {"id": "work"}])
@@ -227,22 +242,42 @@ def test_review_correction_cannot_reach_another_profile() -> None:
     assert answer["result"]["isError"] is True and stub.reached == []
 
 
-def test_the_bound_profile_runs_and_a_save_is_pinned_personal() -> None:
-    _, answer, stub, runtime = _run("remember", {"content": "c"}, WRITE_KEY)
+@pytest.mark.parametrize("active", ["work", "personal"])
+def test_remember_and_recall_are_routed_to_the_keys_profile_whatever_is_active(active) -> None:
+    """Host on 'personal', key bound to 'work': the call is served for 'work'."""
+    _, answer, stub, runtime = _run("remember", {"content": "c"}, WRITE_KEY, active=active)
     assert answer["result"]["isError"] is False
-    assert stub.reached[0]["params"]["arguments"] == {"content": "c", "scope": "personal"}
-    # The profile lease is held for the whole call, then released.
+    assert stub.reached[0]["params"]["arguments"] == {
+        "content": "c", "scope": "personal", "profile_id": "work"}
+    _, answer, stub, runtime = _run("recall", {"query": "q"}, READ_KEY, active=active)
+    assert answer["result"]["isError"] is False
+    assert stub.reached[0]["params"]["arguments"]["profile_id"] == "work"
+    # Routed: no lease, and the host's active profile is left as it was.
+    assert stub.leases_during_call == [0] and runtime.snapshot.profile_id == active
+
+
+@pytest.mark.parametrize("tool", sorted(binding.PROFILE_FREE_TOOLS))
+def test_profile_free_tools_run_whatever_is_active(tool) -> None:
+    _, answer, stub, _ = _run(tool, {}, WRITE_KEY, active="personal")
+    assert answer["result"]["isError"] is False and stub.reached
+
+
+def test_an_active_only_tool_holds_the_lease_for_the_whole_call() -> None:
+    _, answer, stub, runtime = _run("search", {"query": "q"}, READ_KEY, active="work")
+    assert answer["result"]["isError"] is False
     assert stub.leases_during_call == [1] and runtime._active_operations == 0
 
 
-def test_a_key_is_refused_while_another_profile_is_active_without_naming_it() -> None:
+def test_an_active_only_tool_is_refused_while_another_profile_is_active() -> None:
     for tool, args in (("search", {"query": "q"}), ("fetch", {"fact_ids": "f1"}),
-                       ("recall", {"query": "q"}), ("list_recent", {})):
+                       ("list_recent", {}), ("health", {}), ("get_status", {}),
+                       ("prestage_context", {"query": "q"})):
         _, answer, stub, runtime = _run(tool, args, READ_KEY, active="secret-client")
         text = answer["result"]["content"][0]["text"]
-        assert answer["result"]["isError"] is True and stub.reached == []
+        assert answer["result"]["isError"] is True and stub.reached == [], tool
         assert answer["result"]["structuredContent"]["error"] == binding.INACTIVE_DENIAL
-        assert "'work'" in text and "secret-client" not in text
+        assert "another workspace right now" in text and "ask the host owner" in text
+        assert "'work'" in text and "recall" in text and "secret-client" not in text
         assert runtime._active_operations == 0
 
 

@@ -86,9 +86,11 @@ tool list; tool names are matched exactly, and batched requests, repeated JSON
 keys and MCP methods other than tool calls are refused; any HTTP method but
 `POST` gets `405` at once. Every key is bound to one profile (`slm remote keys
 add <name> --profile <p>`, default the active profile): a different `profile_id`
-anywhere in a call is refused, never rewritten; calls are refused while another
-profile is active, and a profile switch waits for a running remote call; remote
-saves stay `personal` to the key's profile. Keys made before 4.1.20 are bound to
+anywhere in a call is refused, never rewritten; recall, remember and correction
+review are served for the key's profile without moving the host's active one;
+tools that only work on the active profile are refused while another profile is
+active (a profile switch waits for one that is running); remote saves stay
+`personal` to the key's profile. Keys made before 4.1.20 are bound to
 the profile active at upgrade and are refused until then. A key holder can read
 the full text of every memory in its profile, including paths written into
 those memories; other host details (data folder, home, account, environment,

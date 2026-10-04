@@ -397,10 +397,10 @@ class RemoteToolScopeASGI:
     async def _call_in_bound_profile(self, principal: Any, scope: dict[str, Any],
                                      receive: Any, send: Any, downstream_send: Any,
                                      message: dict[str, Any], tool: str) -> None:
-        """Run one tool call as the key's profile (server/remote_profile_binding)."""
+        """Run one tool call for the key's profile (server/remote_profile_binding)."""
         from superlocalmemory.server.remote_profile_binding import (
-            BindingRefusal,
-            bind_arguments,
+            PROFILE_FREE_TOOLS,
+            ROUTED_TOOLS,
             inactive_refusal,
             profile_lease,
         )
@@ -410,21 +410,40 @@ class RemoteToolScopeASGI:
             await _send_json(send, 503, {"error": "remote_profile_unavailable",
                                          "message": "The SLM profile state is not ready."})
             return
+        if tool in ROUTED_TOOLS or tool in PROFILE_FREE_TOOLS:
+            # Routed per request (or touches no profile): the host's active
+            # profile is not involved, so no lease and no active check.
+            bound = principal.profile or runtime.snapshot.profile_id
+            await self._run_bound(principal, scope, receive, send, downstream_send,
+                                  message, tool, bound)
+            return
         async with profile_lease(runtime) as active_profile:
-            bound = principal.profile or active_profile
-            params = message.get("params") or {}
-            try:
-                if principal.profile is not None and active_profile != principal.profile:
-                    raise inactive_refusal(principal.name, principal.profile)
-                arguments = bind_arguments(tool, params.get("arguments"),
-                                           key_name=principal.name, bound=bound)
-            except BindingRefusal as refusal:
+            if principal.profile is not None and active_profile != principal.profile:
+                refusal = inactive_refusal(tool, principal.name, principal.profile)
                 _audit(principal, scope, tool, f"deny:{refusal.code}")
                 await _send_json(send, 200, _tool_error(message, str(refusal), refusal.code))
                 return
-            body = json.dumps(dict(message, params=dict(params, arguments=arguments))).encode()
-            await self.app(_with_body(scope, body), _replay(body, receive), downstream_send)
+            await self._run_bound(principal, scope, receive, send, downstream_send,
+                                  message, tool, principal.profile or active_profile)
 
+    async def _run_bound(self, principal: Any, scope: dict[str, Any], receive: Any,
+                         send: Any, downstream_send: Any, message: dict[str, Any],
+                         tool: str, bound: str) -> None:
+        from superlocalmemory.server.remote_profile_binding import (
+            BindingRefusal,
+            bind_arguments,
+        )
+
+        params = message.get("params") or {}
+        try:
+            arguments = bind_arguments(tool, params.get("arguments"),
+                                       key_name=principal.name, bound=bound)
+        except BindingRefusal as refusal:
+            _audit(principal, scope, tool, f"deny:{refusal.code}")
+            await _send_json(send, 200, _tool_error(message, str(refusal), refusal.code))
+            return
+        body = json.dumps(dict(message, params=dict(params, arguments=arguments))).encode()
+        await self.app(_with_body(scope, body), _replay(body, receive), downstream_send)
 
 __all__ = [
     "ALLOWED_METHODS",
