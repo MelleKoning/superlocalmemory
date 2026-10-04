@@ -292,14 +292,7 @@ def test_concurrent_receipt_writes_complete_without_deadlock(store: AgentExperie
     assert time.monotonic() - started < 2.0
 
 
-def test_receipt_load_does_not_block_memory_remember_or_recall(tmp_path: Path) -> None:
-    """Separate DB domains keep foreground memory operations inside 2 seconds.
-
-    This is intentionally a mixed workload, not a microbenchmark of one
-    SQLite statement: concurrent receipt writes hit ``learning.db`` while
-    foreground remembers and recalls use ``memory.db``.  A deadlock or an
-    accidental cross-database write would surface as a timeout or outlier.
-    """
+def _receipt_and_memory_stores(tmp_path: Path):
     learning_db = tmp_path / "learning.db"
     memory_db = tmp_path / "memory.db"
     with sqlite3.connect(learning_db) as conn:
@@ -309,37 +302,80 @@ def test_receipt_load_does_not_block_memory_remember_or_recall(tmp_path: Path) -
     )
     memory = DatabaseManager(memory_db)
     memory.initialize(schema)
-    durations: list[float] = []
+    return learning_db, receipt_store, memory
+
+
+def _remember_and_recall(memory: DatabaseManager, number: int) -> int:
+    record = MemoryRecord(profile_id="default", content=f"foreground {number}")
+    memory.store_memory(record)
+    memory.store_fact(
+        AtomicFact(
+            profile_id="default", memory_id=record.memory_id,
+            content=f"foreground fact {number}", fact_type=FactType.SEMANTIC,
+        )
+    )
+    return len(memory.get_all_facts("default"))
+
+
+def test_receipt_load_does_not_block_memory_remember_or_recall(tmp_path: Path) -> None:
+    """Concurrent receipt writes and foreground memory operations all complete.
+
+    A mixed workload: receipt writes hit ``learning.db`` while foreground
+    remembers and recalls use ``memory.db``. The isolation claim itself is
+    proven deterministically by the held-lock test below; this one guards
+    against a deadlock or lost write under real concurrency. (Until 4.1.20 it
+    also asserted a wall-clock p95 < 2 s, which measured 0.2-0.5 s alone and
+    3.6 s inside the full suite on a loaded machine: it measured the machine.)
+    """
+    _, receipt_store, memory = _receipt_and_memory_stores(tmp_path)
 
     def receipt(number: int) -> bool:
         payload = _experience("default")
         payload["experience_id"] = f"load-{number}"
         return receipt_store.record_experience(payload)
 
-    def foreground(number: int) -> int:
-        started = time.monotonic()
-        record = MemoryRecord(profile_id="default", content=f"foreground {number}")
-        memory.store_memory(record)
-        memory.store_fact(
-            AtomicFact(
-                profile_id="default", memory_id=record.memory_id,
-                content=f"foreground fact {number}", fact_type=FactType.SEMANTIC,
-            )
-        )
-        count = len(memory.get_all_facts("default"))
-        durations.append(time.monotonic() - started)
-        return count
-
     with ThreadPoolExecutor(max_workers=12) as executor:
         receipt_futures = [executor.submit(receipt, number) for number in range(48)]
-        foreground_futures = [executor.submit(foreground, number) for number in range(20)]
-        assert [future.result(timeout=5) for future in receipt_futures] == [True] * 48
-        counts = [future.result(timeout=5) for future in foreground_futures]
+        foreground_futures = [
+            executor.submit(_remember_and_recall, memory, number) for number in range(20)
+        ]
+        assert [future.result(timeout=30) for future in receipt_futures] == [True] * 48
+        counts = [future.result(timeout=30) for future in foreground_futures]
 
     assert all(count >= 1 for count in counts)
-    # Nearest-rank p95: users care about the slow tail, not just average speed.
-    p95 = sorted(durations)[int(len(durations) * 0.95) - 1]
-    assert p95 < 2.0, f"foreground remember+recall p95 {p95:.3f}s exceeded 2s"
+    assert len(memory.get_all_facts("default")) == 20
+
+
+def test_a_held_receipt_write_lock_never_blocks_memory_remember_or_recall(
+    tmp_path: Path,
+) -> None:
+    """Receipts and memory live in separate databases, so a receipt writer
+    holding ``learning.db``'s write lock cannot stall remember or recall.
+
+    Deterministic: the lock is held for the whole foreground phase, so any
+    foreground path that touched ``learning.db`` would wait on it and miss the
+    deadline instead of passing by luck of timing.
+    """
+    learning_db, _, memory = _receipt_and_memory_stores(tmp_path)
+    holder = sqlite3.connect(learning_db, timeout=0, isolation_level=None)
+    holder.execute("BEGIN EXCLUSIVE")
+    executor = ThreadPoolExecutor(max_workers=4)
+    try:
+        # Control: the lock is really held -- another writer is refused.
+        probe = sqlite3.connect(learning_db, timeout=0, isolation_level=None)
+        try:
+            with pytest.raises(sqlite3.OperationalError, match="locked"):
+                probe.execute("BEGIN IMMEDIATE")
+        finally:
+            probe.close()
+        futures = [executor.submit(_remember_and_recall, memory, n) for n in range(8)]
+        counts = [future.result(timeout=10) for future in futures]
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+        executor.shutdown(wait=True)
+    assert all(count >= 1 for count in counts)
+    assert len(memory.get_all_facts("default")) == 8
 
 
 def test_m040_refuses_malformed_populated_tables_but_repairs_an_index_atomically(
