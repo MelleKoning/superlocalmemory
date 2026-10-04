@@ -35,7 +35,7 @@ from tests.test_server.test_answer_check_api import (  # noqa: F401 — fixtures
     client,
 )
 
-SLOW_S = 1.5
+
 #: /ping must answer well inside the slow call; generous for a loaded laptop.
 
 
@@ -133,14 +133,13 @@ def _singleton(cls):
     return cls._instance
 
 
-def _wait_for_job(job_cls, timeout=SLOW_S * 4) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        job = job_cls._instance
-        if job is not None and job._thread is not None and not job._thread.is_alive():
-            return
-        time.sleep(0.02)
-    raise AssertionError("the background job never finished")
+def _wait_for_job(job_cls, timeout=60.0) -> None:
+    """Join the job's thread; ``timeout`` is a hang guard, never a threshold."""
+    job = job_cls._instance
+    thread = getattr(job, "_thread", None) if job is not None else None
+    assert thread is not None, "the background job never started"
+    thread.join(timeout)
+    assert not thread.is_alive(), "the background job never finished"
 
 
 # ---------------------------------------------------------------------------
@@ -194,11 +193,15 @@ class TestOtherRequestsAreNotHeldUp:
 class TestCheckingAnExistingInstall:
     def test_it_answers_at_once_and_reports_progress(self, client, monkeypatch, real_jobs):  # noqa: F811
         gate = threading.Event()
-        monkeypatch.setattr(laya_runtime, "adopt", lambda *a, **k: gate.wait(5) and _ready())
-        start = time.monotonic()
-        response = client.post("/api/v3/answer-check/laya/adopt",
-                               json={"python": "/opt/laya/venv/bin/python"})
-        assert time.monotonic() - start < SLOW_S
+        monkeypatch.setattr(laya_runtime, "adopt", lambda *a, **k: gate.wait() and _ready())
+        try:
+            response = client.post("/api/v3/answer-check/laya/adopt",
+                                   json={"python": "/opt/laya/venv/bin/python"})
+        except BaseException:
+            gate.set()
+            raise
+        # It answered while the check was still held — no clock involved.
+        assert not gate.is_set()
         assert response.status_code == 202, response.text
         assert response.json()["running"] is True
         assert client.get("/api/v3/answer-check").json()["adopt"]["running"] is True
@@ -249,11 +252,13 @@ class TestCheckingAnExistingInstall:
 
     def test_only_one_slow_laya_job_at_a_time(self, client, monkeypatch, real_jobs):  # noqa: F811
         gate = threading.Event()
-        monkeypatch.setattr(laya_runtime, "adopt", lambda *a, **k: gate.wait(5) and _ready())
-        assert client.post("/api/v3/answer-check/laya/adopt",
-                           json={"python": "/opt/laya/venv/bin/python"}).status_code == 202
-        assert client.post("/api/v3/answer-check/laya/setup").status_code == 409
-        gate.set()
+        monkeypatch.setattr(laya_runtime, "adopt", lambda *a, **k: gate.wait() and _ready())
+        try:
+            assert client.post("/api/v3/answer-check/laya/adopt",
+                               json={"python": "/opt/laya/venv/bin/python"}).status_code == 202
+            assert client.post("/api/v3/answer-check/laya/setup").status_code == 409
+        finally:
+            gate.set()
 
 
 # ---------------------------------------------------------------------------

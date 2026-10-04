@@ -78,14 +78,14 @@ def _varuns_machine(tmp_path: Path) -> tuple[str, str]:
 
 
 def _wait(client, key="adopt"):
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        body = client.get(API).json()
-        busy = body["adopt"]["running"] or body["setup_running"] or body["laya_test_running"]
-        if not busy:
-            return body
-        time.sleep(0.05)
-    raise AssertionError("job never finished")
+    """Join every background job's thread, then read the status: no polling,
+    no deadline a loaded machine could miss. (60 s is a hang guard only.)"""
+    for job_cls in (lr.LayaInstallJob, lr.LayaAdoptJob, lr.LayaTestJob):
+        thread = getattr(job_cls._instance, "_thread", None)
+        if thread is not None:
+            thread.join(60)
+            assert not thread.is_alive(), "job never finished"
+    return client.get(API).json()
 
 
 def test_varuns_state_is_offered_a_check_not_a_download(client, tmp_path):

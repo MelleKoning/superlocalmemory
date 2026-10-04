@@ -115,9 +115,7 @@ def test_the_reason_a_setup_failed_is_shown_after_it_failed(monkeypatch):
                         lambda *a, **k: (False, laya_process.KIND_STALLED, "stalled"))
     job = lr.LayaInstallJob.instance()
     assert job.start()
-    deadline = time.monotonic() + 10
-    while job.running and time.monotonic() < deadline:
-        time.sleep(0.05)
+    job._thread.join(60)  # hang guard only
     status = lr.detect()
     assert status.state == lr.STATE_FAILED
     assert status.action == lr.ACTION_SETUP
@@ -285,11 +283,8 @@ def test_the_install_job_cancels(tmp_path, monkeypatch):
                         lambda python, *a, **k: real(exe, *a, **k))
     job = lr.LayaInstallJob.instance()
     assert job.start()
-    time.sleep(1.0)
-    assert job.cancel() is True
-    deadline = time.monotonic() + 10
-    while job.running and time.monotonic() < deadline:
-        time.sleep(0.05)
+    assert job.cancel() is True   # at once: a Cancel right after Set up must land
+    job._thread.join(60)  # hang guard only
     assert not job.running
     assert job.status().error == lr._CANCELLED_MESSAGE
     assert lr.detect().action == lr.ACTION_SETUP
