@@ -40,12 +40,33 @@ def _no_live_judge(monkeypatch):
     monkeypatch.setattr(judge_selection, "_live", None)
 
 
-@pytest.fixture
-def tight_budget(monkeypatch):
-    """A 0.6 s ceiling so "retrieval used the budget" takes 0.4 s, not 2.8 s.
-    The arithmetic is the production arithmetic; only the ceiling is scaled."""
-    monkeypatch.setattr(acs, "RECALL_CEILING_S", 0.6)
-    return 0.6
+#: Simulated retrieval times against the production 3.0 s ceiling. A check is
+#: skipped once retrieval has used more than 2.7 s, so SLOW is well past that
+#: and FAST leaves 2.7 s of headroom for real overhead on a loaded machine.
+SLOW_S = 2.8
+FAST_S = 0.0
+
+
+class _RetrievalClock:
+    """The clock the answer-check budget reads, ahead of real time by however
+    long the fake retrieval "took". No real sleep, so no load can move a run
+    across the skip line. (Real sleeps against a 0.6 s ceiling left 0.25 s of
+    headroom; under load a "fast" run crossed it and was skipped.)"""
+
+    def __init__(self) -> None:
+        self.offset = 0.0
+        self._real = time.monotonic
+
+    def monotonic(self) -> float:
+        return self._real() + self.offset
+
+
+@pytest.fixture(autouse=True)
+def retrieval_clock(monkeypatch):
+    clock = _RetrievalClock()
+    monkeypatch.setattr(acs, "time", SimpleNamespace(monotonic=clock.monotonic,
+                                                      clock=clock))
+    return clock
 
 
 # -- fakes -------------------------------------------------------------------------
@@ -88,19 +109,23 @@ def _response(contents) -> RecallResponse:
         for i, c in enumerate(contents)])
 
 
-def _run(judge, config, monkeypatch, *, delay: float = 0.0,
+def _run(judge, config, monkeypatch, *, delay: float = FAST_S,
          contents=("memory 0", "memory 1", "memory 2", "memory 3")):
+    clock = acs.time.clock  # the autouse retrieval_clock
+
     def recall(*_a, **_kw):
-        if delay:
-            time.sleep(delay)
+        clock.offset = delay  # retrieval "took" delay seconds
         return _response(contents)
 
     engine = SimpleNamespace(_sufficiency_judge=judge, recall=recall)
     monkeypatch.setattr(recall_pipeline, "apply_ranking", lambda resp, *a, **k: resp)
-    return recall_pipeline.run_recall(
-        "what is the recall ceiling?", "default", fast=True, config=config,
-        retrieval_engine=engine, trust_scorer=None, embedder=None,
-        db=SimpleNamespace(db_path=None), llm=None, hooks=None)
+    try:
+        return recall_pipeline.run_recall(
+            "what is the recall ceiling?", "default", fast=True, config=config,
+            retrieval_engine=engine, trust_scorer=None, embedder=None,
+            db=SimpleNamespace(db_path=None), llm=None, hooks=None)
+    finally:
+        clock.offset = 0.0
 
 
 def _join_finishers(timeout: float = 5.0) -> None:
@@ -126,11 +151,10 @@ class TestTheBudgetIsThreeSeconds:
 # -- a skip never looks like an answer ---------------------------------------------
 
 class TestASkipSaysSoAndWhy:
-    def test_budget_skip_is_on_the_envelope(self, mode_a_config, monkeypatch,
-                                            tight_budget) -> None:
+    def test_budget_skip_is_on_the_envelope(self, mode_a_config, monkeypatch) -> None:
         judge = _JitteryLaya()
         judge.ready = False  # nothing finished later: this test is about the skip
-        out = _run(judge, mode_a_config, monkeypatch, delay=0.4)
+        out = _run(judge, mode_a_config, monkeypatch, delay=SLOW_S)
         meta = recall_response_metadata(out)
         assert meta["answer_check_status"] == "skipped"
         assert meta["answer_check_ran"] is False
@@ -187,10 +211,10 @@ def _statuses(judge, config, monkeypatch, delays):
 
 class TestTheSameQuestionGetsTheSameVerdict:
     #: Retrieval jitter straddling the budget, as on a loaded machine.
-    DELAYS = [0.40, 0.05, 0.42, 0.0, 0.45, 0.02, 0.41, 0.03, 0.44, 0.01]
+    DELAYS = [2.80, 0.05, 2.82, 0.0, 2.85, 0.02, 2.81, 0.03, 2.84, 0.01]
 
     def test_after_the_first_run_every_run_is_judged_alike(
-            self, mode_a_config, monkeypatch, tight_budget) -> None:
+            self, mode_a_config, monkeypatch) -> None:
         judge = _JitteryLaya()
         seen = _statuses(judge, mode_a_config, monkeypatch, self.DELAYS)
         assert seen[0] == ("skipped", None)          # honest: no time on run 1
@@ -198,7 +222,7 @@ class TestTheSameQuestionGetsTheSameVerdict:
         assert judge.asks + judge.idle_asks == 1     # one question, asked once
 
     def test_vacuity_without_the_memo_runs_disagree(
-            self, mode_a_config, monkeypatch, tight_budget) -> None:
+            self, mode_a_config, monkeypatch) -> None:
         monkeypatch.setattr(memo, "lookup", lambda *a, **k: None)
         monkeypatch.setattr(memo, "finish_later", lambda *a, **k: None)
         seen = _statuses(_JitteryLaya(), mode_a_config, monkeypatch, self.DELAYS)
@@ -277,15 +301,14 @@ def _forbid(monkeypatch, cls, names, touched):
 
 
 class TestOnlyTheSelectedProviderIsEverTouched:
-    def test_jev_selected_never_touches_laya(self, mode_a_config, monkeypatch, jev,
-                                             tight_budget) -> None:
+    def test_jev_selected_never_touches_laya(self, mode_a_config, monkeypatch, jev) -> None:
         judge, provider = jev
         touched: list[str] = []
         _forbid(monkeypatch, LayaSufficiencyJudge,
                 ["__init__", "assess", "assess_if_idle", "judge", "start_warmup"], touched)
         ok = _run(judge, mode_a_config, monkeypatch)                # judged
         again = _run(judge, mode_a_config, monkeypatch)             # not memoised
-        skipped = _run(judge, mode_a_config, monkeypatch, delay=0.4)  # budget skip
+        skipped = _run(judge, mode_a_config, monkeypatch, delay=SLOW_S)  # budget skip
         _join_finishers()
         assert ok.answer_check_status == again.answer_check_status == "judged"
         assert again.answer_check_detail == ""  # the hosted check is asked each time
@@ -307,13 +330,12 @@ class TestOnlyTheSelectedProviderIsEverTouched:
         assert out.answer_check_status == "unavailable" and touched == []
         assert "did not run" in recall_response_metadata(out)["answer_check_note"]
 
-    def test_laya_selected_never_touches_jev(self, mode_a_config, monkeypatch,
-                                             tight_budget) -> None:
+    def test_laya_selected_never_touches_jev(self, mode_a_config, monkeypatch) -> None:
         touched: list[str] = []
         _forbid(monkeypatch, JevSufficiencyJudge,
                 ["__init__", "assess", "judge", "rerank_and_judge"], touched)
         judge = _JitteryLaya()
-        _run(judge, mode_a_config, monkeypatch, delay=0.4)   # skip + finish later
+        _run(judge, mode_a_config, monkeypatch, delay=SLOW_S)   # skip + finish later
         _join_finishers()
         _run(judge, mode_a_config, monkeypatch)               # reused
         judge2 = _JitteryLaya()
@@ -384,14 +406,13 @@ def _judge_requests(log: Path) -> int:
 
 
 class TestTheOnDeviceCheckFinishesLater:
-    def test_skip_then_judged_with_one_ask(self, laya, mode_a_config, monkeypatch,
-                                           tight_budget) -> None:
+    def test_skip_then_judged_with_one_ask(self, laya, mode_a_config, monkeypatch) -> None:
         judge, log = laya
         judge.start_warmup()
         assert _wait(lambda: judge.ready)
-        first = _run(judge, mode_a_config, monkeypatch, delay=0.4)
+        first = _run(judge, mode_a_config, monkeypatch, delay=SLOW_S)
         _join_finishers()
-        second = _run(judge, mode_a_config, monkeypatch, delay=0.4)
+        second = _run(judge, mode_a_config, monkeypatch, delay=SLOW_S)
         assert first.answer_check_status == "skipped"
         assert second.answer_check_status == "judged"
         assert second.answer_check_detail == "reused"
@@ -401,10 +422,16 @@ class TestTheOnDeviceCheckFinishesLater:
         judge, _log = laya
         judge.start_warmup()
         assert _wait(lambda: judge.ready)
-        with judge._lock:  # a recall holds the worker
-            started = time.monotonic()
-            out = judge.assess_if_idle("q", ["doc"])
-            assert time.monotonic() - started < 0.1
+        result: list = []
+        with judge._lock:  # a recall holds the worker for this whole block
+            asker = threading.Thread(
+                target=lambda: result.append(judge.assess_if_idle("q", ["doc"])))
+            asker.start()
+            asker.join(timeout=10)
+            # It returned while the lock was still held, so it never waited for
+            # the worker. (A stopwatch bound here failed on a loaded machine.)
+            assert not asker.is_alive(), "finishing later waited for a busy worker"
+        out = result[0]
         assert out.status == acs.STATUS_BUSY
         assert judge.assess_if_idle("q", ["doc"]).status == acs.STATUS_JUDGED
 
