@@ -32,6 +32,10 @@ from superlocalmemory.hooks.portable_kit import IDE_MATRIX, connect_ide
 ROOT = Path(__file__).resolve().parents[2]
 PORTABLE_HOSTS = ("cursor", "antigravity", "gemini-cli", "continue")
 GENERIC_STDIO_CLIENTS = ("grok", "muse", "hermes")
+# A real, non-default profile: since 2d7a6a17 ``slm connect`` refuses an
+# unknown profile name before writing any host config, so the certified write
+# must use one SLM defines. "code" also proves the value is carried verbatim.
+CERT_PROFILE = "code"
 REQUIRED_LIFECYCLE_TOOLS = {
     "session_init",
     "recall",
@@ -111,8 +115,8 @@ def test_portable_host_connect_is_additive_and_idempotent(host: str, tmp_path: P
         config_path, descriptor.fmt, descriptor.server_key
     )
 
-    first = connect_ide(host, home=tmp_path, profile="cert-profile")
-    second = connect_ide(host, home=tmp_path, profile="cert-profile")
+    first = connect_ide(host, home=tmp_path, profile=CERT_PROFILE)
+    second = connect_ide(host, home=tmp_path, profile=CERT_PROFILE)
 
     assert first["error"] is None
     assert second["error"] is None
@@ -127,7 +131,7 @@ def test_portable_host_connect_is_additive_and_idempotent(host: str, tmp_path: P
         slm = rendered[descriptor.server_key]["superlocalmemory"]
         assert slm["command"] == "slm"
         assert slm["args"] == ["mcp"]
-        assert slm["env"]["SLM_MCP_PROFILE"] == "cert-profile"
+        assert slm["env"]["SLM_MCP_PROFILE"] == CERT_PROFILE
     else:
         providers = rendered[descriptor.server_key]
         assert providers[0] == preserved
@@ -140,7 +144,7 @@ def test_portable_host_connect_is_additive_and_idempotent(host: str, tmp_path: P
         slm = matches[0]["params"]
         assert slm["command"] == "slm"
         assert slm["args"] == ["mcp"]
-        assert slm["env"]["SLM_MCP_PROFILE"] == "cert-profile"
+        assert slm["env"]["SLM_MCP_PROFILE"] == CERT_PROFILE
 
 
 @pytest.mark.asyncio

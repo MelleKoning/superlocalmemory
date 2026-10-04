@@ -32,6 +32,19 @@ if (files.length === 0) {
     throw new Error('No UI tests found under tests/ui');
 }
 
+// The build-script tests (scripts/__tests__/*.test.mjs) ran nowhere, so four of
+// them sat red through three intended plugin changes (4.1.20 WP11). Run them
+// with the UI suite so `npm test` covers every Node test in the repo.
+const scriptTestDir = join(root, 'scripts', '__tests__');
+const scriptTests = readdirSync(scriptTestDir)
+    .filter(name => /\.test\.mjs$/.test(name))
+    .sort()
+    .map(name => relative(root, join(scriptTestDir, name)));
+if (scriptTests.length === 0) {
+    throw new Error('No build-script tests found under scripts/__tests__');
+}
+files.push(...scriptTests);
+
 const result = spawnSync(process.execPath, ['--test', ...files], {
     cwd: root,
     stdio: 'inherit',

@@ -25,6 +25,10 @@ from types import SimpleNamespace
 
 import pytest
 
+# Writes Laya runtime state: pin the data root to tmp_path even without the
+# root conftest (--noconftest), see tests/isolation_guard.py.
+from ..isolation_guard import explicit_slm_root  # noqa: F401
+
 from superlocalmemory.core import engine_wiring, judge_keys, judge_selection, laya_runtime
 from superlocalmemory.retrieval import judge_recipe
 from superlocalmemory.server.routes import answer_check

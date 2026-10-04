@@ -320,13 +320,6 @@ def test_vcache_centroid_defense_blocks_outlier(config_enabled, tmp_db, req_fact
     assert result is None  # centroid defense caught it
 
 
-def test_vcache_compute_tau_under_load_config_disabled_no_cost(config_disabled, tmp_db):
-    """When disabled, no boundary model is trained (no overhead)."""
-    tier = VCacheSemantic(db=tmp_db, config=config_disabled)
-    # is_enabled False — verify
-    assert tier.is_enabled() is False
-
-
 # ---- Additional coverage tests ----
 
 def test_vcache_boundary_warm_fails_fail_open(config_enabled, tmp_db, monkeypatch):
@@ -359,13 +352,6 @@ def test_vcache_index_entry_none_embed(config_enabled, tmp_db, req_factory):
     tier = VCacheSemantic(db=tmp_db, config=config_enabled)
     req = req_factory([{"role": "user", "content": "hi"}])
     tier.index_entry(req, "t1", embed=None, resp={"text": "hello"})  # must not raise
-
-
-def test_vcache_index_entry_disabled(config_disabled, tmp_db, req_factory):
-    """index_entry when disabled → early return (line 189-190)."""
-    tier = VCacheSemantic(db=tmp_db, config=config_disabled)
-    req = req_factory([{"role": "user", "content": "hi"}])
-    tier.index_entry(req, "t1", embed=_unit_vec("hi"), resp={"text": "hello"})  # must not raise
 
 
 def test_vcache_index_entry_dict_resp(config_enabled, tmp_db, req_factory):

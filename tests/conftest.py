@@ -23,21 +23,25 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 # Capture and deny the real user namespace before replacing environment paths.
+# tests/isolation_guard.py imports only the standard library and pytest, so
+# importing it here cannot resolve any product path early.
+from tests.isolation_guard import LiveRootGuard, live_data_roots  # noqa: E402
+
 _REAL_HOME = Path.home().resolve()
+_LIVE_DATA_ROOTS = live_data_roots()
+# The env-selected (or default) root, kept for SLM_TEST_REAL_DATA_ROOT below.
 _REAL_DATA_ROOT = Path(
     os.environ.get("SLM_DATA_DIR")
     or os.environ.get("SL_MEMORY_PATH")
     or os.environ.get("SLM_HOME")
     or (_REAL_HOME / ".superlocalmemory")
 ).expanduser().resolve(strict=False)
+_LIVE_ROOT_GUARD = LiveRootGuard(_LIVE_DATA_ROOTS)
 
 
 def _pytest_isolation_audit(event: str, args: tuple) -> None:
-    """Deny direct live-state opens and public-daemon socket connections."""
-    if event == "open" and args and isinstance(args[0], (str, bytes, os.PathLike)):
-        candidate = Path(args[0]).expanduser().resolve(strict=False)
-        if candidate == _REAL_DATA_ROOT or candidate.is_relative_to(_REAL_DATA_ROOT):
-            raise PermissionError(f"pytest denied live SLM state path: {candidate}")
+    """Deny live-state access and public-daemon socket connections."""
+    _LIVE_ROOT_GUARD.audit(event, args)
     if event == "socket.connect" and len(args) >= 2:
         address = args[1]
         if (
@@ -94,12 +98,25 @@ import pytest  # noqa: E402  (isolation must be installed before imports)
 
 @pytest.fixture(autouse=True, scope="function")
 def _block_live_slm_home_writes(tmp_path, monkeypatch):
-    """Give each test an isolated data root with no live-home escape hatch."""
+    """Give each test an isolated data root with no live-home escape hatch.
+
+    Afterwards, fail the test if anything tried to touch a live root -- even
+    when the code under test caught the PermissionError and carried on.
+    """
+    _LIVE_ROOT_GUARD.drain()
     data_dir = tmp_path
     data_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("SLM_DATA_DIR", str(data_dir))
     monkeypatch.setenv("SL_MEMORY_PATH", str(tmp_path / "wrong-legacy-alias"))
     monkeypatch.setenv("SLM_HOME", str(tmp_path / "wrong-hook-alias"))
+    yield
+    refused = _LIVE_ROOT_GUARD.drain()
+    if refused:
+        pytest.fail(
+            "test reached the live SLM data root (refused, but it must use a "
+            "tmp root):\n  " + "\n  ".join(refused[:10]),
+            pytrace=False,
+        )
 
 
 # V3.3.14: Windows CI fix — KeyboardInterrupt during daemon thread teardown.

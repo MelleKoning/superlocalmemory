@@ -90,6 +90,8 @@ def test_secret_required_for_nonloopback() -> None:
 
 
 def test_secret_accepts_correct_header() -> None:
+    # X-Mesh-Secret must keep working — backwards compat for callers that
+    # discovered this undocumented header in v3.6.12.
     app, _ = _app_with_broker(secret="topsecret")
     c = TestClient(app)
     r = c.post("/mesh/register", json={"session_id": "s"},
@@ -154,19 +156,6 @@ def test_bearer_token_wrong_secret_rejected() -> None:
         headers={"Authorization": "Bearer wrongsecret"},
     )
     assert r.status_code == 401
-
-
-def test_xmesh_secret_still_works_backwards_compat() -> None:
-    # X-Mesh-Secret must still work — backwards compat for callers that
-    # discovered this undocumented header in v3.6.12.
-    app, _ = _app_with_broker(secret="topsecret")
-    c = TestClient(app)
-    r = c.post(
-        "/mesh/register",
-        json={"session_id": "s"},
-        headers={"X-Mesh-Secret": "topsecret"},
-    )
-    assert r.status_code == 200
 
 
 def test_status_endpoint_bearer_auth() -> None:

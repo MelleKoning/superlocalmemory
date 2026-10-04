@@ -71,6 +71,10 @@ _SUBPROCESS_RESPONSE_TIMEOUT = 15  # v3.4.52: 15s (was 180s). Long timeout block
 # cold start; if the worker can't respond, we fall back to fusion
 # scores without reranking.
 _WORKER_RECYCLE_AFTER = 500  # Recycle after N requests
+# A recall that finds the worker lock held by a recycle's swap waits up to this
+# long instead of falling back to unranked order. The swap is a pointer
+# exchange plus a PID-file write and an idle-timer reset: milliseconds.
+_SWAP_WAIT_SECONDS = 1.0
 
 # One-time model load is far heavier than a live rerank request: the child
 # process imports torch / sentence-transformers and runs a warmup inference,
@@ -144,6 +148,9 @@ class CrossEncoderReranker:
         self._generation = 0
         self._recycle_thread: threading.Thread | None = None
         self._replacement_proc: subprocess.Popen | None = None
+        # Set while _replace_worker holds (or is about to take) the lock for
+        # the swap, so recall waits for it rather than going unranked.
+        self._swap_pending = threading.Event()
 
         # Register for atexit cleanup (prevent orphaned workers)
         ref = weakref.ref(self, _live_rerankers.discard)
@@ -421,6 +428,10 @@ class CrossEncoderReranker:
         effective_timeout = timeout or _SUBPROCESS_RESPONSE_TIMEOUT
 
         acquired = self._lock.acquire(blocking=block)
+        if not acquired and self._swap_in_progress():
+            # Not another recall's inference but a recycle swapping workers:
+            # bounded wait, so the swap never leaves a recall unranked.
+            acquired = self._lock.acquire(timeout=_SWAP_WAIT_SECONDS)
         if not acquired:
             return None  # another request is using the subprocess
         try:
@@ -530,19 +541,23 @@ class CrossEncoderReranker:
                 with self._lock:
                     self._request_count = 0
                 return
-            with self._lock:
-                if (self._shutdown_event.is_set() or self._worker_proc is None
-                        or self._generation != generation):
-                    return  # the worker it was meant to replace is gone
-                old, self._worker_proc = self._worker_proc, new
-                new = None
-                self._replacement_proc = None
-                self._generation += 1
-                self._request_count = 0
-                self._model_loaded = True
-                self._worker_ready = True
-                self._record_worker_pid(self._worker_proc.pid)
-                self._reset_idle_timer()
+            self._swap_pending.set()
+            try:
+                with self._lock:
+                    if (self._shutdown_event.is_set() or self._worker_proc is None
+                            or self._generation != generation):
+                        return  # the worker it was meant to replace is gone
+                    old, self._worker_proc = self._worker_proc, new
+                    new = None
+                    self._replacement_proc = None
+                    self._generation += 1
+                    self._request_count = 0
+                    self._model_loaded = True
+                    self._worker_ready = True
+                    self._record_worker_pid(self._worker_proc.pid)
+                    self._reset_idle_timer()
+            finally:
+                self._swap_pending.clear()
             logger.info(
                 "Reranker worker recycled (PID %d -> %d) with no unranked window",
                 old.pid, self._worker_proc.pid if self._worker_proc else -1,
@@ -555,6 +570,10 @@ class CrossEncoderReranker:
             if new is not None:
                 self._stop_process(new, timeout=1.0)
             self._replacing = False
+
+    def _swap_in_progress(self) -> bool:
+        pending = getattr(self, "_swap_pending", None)
+        return pending is not None and pending.is_set()
 
     def _load_into(self, proc: Any) -> bool:
         """Load the model into a worker nobody else is using yet."""
