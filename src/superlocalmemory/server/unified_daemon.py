@@ -3923,11 +3923,13 @@ def create_app() -> FastAPI:
     except Exception as _mcp_exc:  # pragma: no cover — defensive
         logger.warning("MCP HTTP mount failed (non-fatal, stdio still works): %s", _mcp_exc)
 
-    # Outermost three, innermost first: a proxied request loses loopback trust
-    # (forwarded_guard), then a request not addressed to this machine (DNS
-    # rebinding from a web page) is refused before anything runs.
+    # Outermost three, innermost first: another computer needs credentials
+    # (access_gate); a proxied request loses loopback trust (forwarded_guard);
+    # a request not addressed to this machine (DNS rebinding) is refused first.
+    from superlocalmemory.server.access_gate import NonLocalAccessGate
     from superlocalmemory.server.forwarded_guard import ForwardedLoopbackDemotion
     from superlocalmemory.server.host_guard import HostGuardMiddleware
+    application.add_middleware(NonLocalAccessGate)
     application.add_middleware(ForwardedLoopbackDemotion)
     application.add_middleware(HostGuardMiddleware)
 

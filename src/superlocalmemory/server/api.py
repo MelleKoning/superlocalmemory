@@ -287,8 +287,11 @@ def create_app() -> FastAPI:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-    # Outermost: a proxied request never counts as local (forwarded_guard).
+    # Outermost: another computer needs credentials (access_gate), and a
+    # proxied request never counts as local (forwarded_guard).
+    from superlocalmemory.server.access_gate import NonLocalAccessGate
     from superlocalmemory.server.forwarded_guard import ForwardedLoopbackDemotion
+    application.add_middleware(NonLocalAccessGate)
     application.add_middleware(ForwardedLoopbackDemotion)
     return application
 

@@ -309,8 +309,10 @@ def create_app() -> FastAPI:
 
     # A proxied request never counts as local (forwarded_guard); outermost,
     # refuse a request not addressed to this machine (DNS rebinding).
+    from superlocalmemory.server.access_gate import NonLocalAccessGate
     from superlocalmemory.server.forwarded_guard import ForwardedLoopbackDemotion
     from superlocalmemory.server.host_guard import HostGuardMiddleware
+    application.add_middleware(NonLocalAccessGate)
     application.add_middleware(ForwardedLoopbackDemotion)
     application.add_middleware(HostGuardMiddleware)
 

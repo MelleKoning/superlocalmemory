@@ -37,6 +37,30 @@ Environment=SLM_DAEMON_HOST=0.0.0.0
 > front of any non-loopback listener. Do not expose the daemon directly to the
 > public internet.
 
+### Other computers must sign in (4.1.20+)
+
+A request from another computer — including a browser on the LAN opening the
+dashboard by IP — gets `401 remote_auth_required` for anything that carries
+memory, reads included, unless it presents one of:
+
+- the SLM API key in `X-SLM-API-Key` (the key is the `api_key` file in the
+  SLM data folder; see [auth-write-gate.md](auth-write-gate.md));
+- a team-account session token in `X-SLM-User-Session` (see [rbac-teams.md](rbac-teams.md));
+- the mesh shared secret, on `/mesh/*` routes only;
+- or it comes from an address you allowlisted for LAN use:
+
+```bash
+export SLM_REMOTE=1
+export SLM_MCP_ALLOWED_HOSTS=192.168.50.0/24   # the computers you trust
+```
+
+The dashboard page, its static files and `/health` load without credentials;
+`/mcp` keeps its own API-key check. Up to 4.1.19 reads from the LAN needed no
+credentials, so a LAN dashboard that worked by IP now needs one of the above —
+usually the `SLM_REMOTE=1` allowlist. A Docker port mapping makes your own
+computer's requests arrive from the bridge address (for example `172.17.0.1`),
+not loopback: allowlist that address or send the API key.
+
 ---
 
 ## Host names SLM answers to (4.1.18+)

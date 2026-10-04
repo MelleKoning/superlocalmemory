@@ -38,7 +38,10 @@ _REFUSED = 403  # require_http_mutation_actor's answer for an untrusted writer
 
 
 def _is_identity_refusal(status: int, body: bytes) -> bool:
-    return status == _REFUSED and b"Mutation rejected" in body
+    """Refused as a caller from another computer: by the access gate (no
+    credentials, 401) or, behind it, by the write-identity check (403)."""
+    return ((status == 401 and b"remote_auth_required" in body)
+            or (status == _REFUSED and b"Mutation rejected" in body))
 
 
 # -- in-process: every forwarding header demotes ---------------------------------

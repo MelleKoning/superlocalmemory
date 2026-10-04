@@ -54,6 +54,17 @@ controls in addition to the session: `Origin` must match the daemon,
 
 #### Network access (4.1.20+)
 
+**Another computer must sign in to read.** When the daemon is bound to a
+network address, a request from another computer is refused (`401
+remote_auth_required`) before any route runs unless it presents the SLM API
+key (`X-SLM-API-Key`), a team-account session, the daemon capability, the mesh
+shared secret (mesh routes only), or comes from an address you allowlisted for
+LAN use (`SLM_REMOTE=1` with `SLM_MCP_ALLOWED_HOSTS`). This covers reads as
+well as writes, and the dashboard WebSocket. Up to 4.1.19 reads from the LAN
+needed no credentials. Only the dashboard page itself, its static files and
+`/health` are served without them; `/mcp` keeps its own API-key check. The
+install token is not accepted from another computer.
+
 **A proxied request is never local.** SuperLocalMemory trusts a caller on
 `127.0.0.1` as the local user. It decides that from the socket peer only:
 forwarding headers (`X-Forwarded-For`, `Forwarded`, `X-Real-IP` and the like)
