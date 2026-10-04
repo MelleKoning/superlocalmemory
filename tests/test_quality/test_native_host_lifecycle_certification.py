@@ -216,8 +216,10 @@ def test_shipped_codex_and_claude_assets_declare_the_same_native_lifecycle() -> 
 
     assert codex_server["args"] == ["mcp"]
     assert "slm" in str(codex_server["command"])
-    assert claude_server["args"] == []
-    assert "slm-launch" in str(claude_server["command"])
+    # #139: POSIX runs the launcher (it ignores args); Windows runs cmd.exe
+    # with the installed slm. Both expansions: test_mcp_command_per_platform.py.
+    assert claude_server["command"] == "${ComSpec:-${CLAUDE_PLUGIN_ROOT}/scripts/slm-launch}"
+    assert claude_server["args"][-1].endswith("& slm mcp")
     # 4.1.3: neither host pins a profile. Forcing one from a plugin removed
     # tools the user had enabled; unset resolves to the raw server, so saying
     # nothing exposes more than "code" ever did.

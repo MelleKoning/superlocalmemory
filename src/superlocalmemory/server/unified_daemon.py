@@ -3600,14 +3600,10 @@ def create_app() -> FastAPI:
     # -- Register all dashboard routes (from existing api.py) --
     _register_dashboard_routes(application)
 
-    # -- Mesh routes (Phase C) --
-    try:
-        from superlocalmemory.server.routes.mesh import router as mesh_router
-        application.include_router(mesh_router)
-    except ImportError:
-        pass
-
     # -- Mesh 3c protocol routes: state-delta (LWW) + lock-delta (fencing) --
+    # Mounted BEFORE the general mesh router: Starlette serves the first match,
+    # and that router's GET /mesh/state/{key} matches "delta" as a key. With it
+    # first, fleet state sync got 404 "key not found" and never received a row.
     try:
         from superlocalmemory.server.routes.mesh_state import router as mesh_state_router
         application.include_router(mesh_state_router)
@@ -3616,6 +3612,13 @@ def create_app() -> FastAPI:
     try:
         from superlocalmemory.server.routes.mesh_lock import router as mesh_lock_router
         application.include_router(mesh_lock_router)
+    except ImportError:
+        pass
+
+    # -- Mesh routes (Phase C) --
+    try:
+        from superlocalmemory.server.routes.mesh import router as mesh_router
+        application.include_router(mesh_router)
     except ImportError:
         pass
 

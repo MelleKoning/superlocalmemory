@@ -184,14 +184,17 @@ for (const [srcDir, outDir] of [[SRC_AGENTS, 'agents'], [SRC_COMMANDS, 'commands
     version: VERSION,
   }, null, 2) + '\n');
 
-  // The launcher, not a bare `slm`, so the same resolution applies here: use the
-  // slm that is already installed, fall back to an owned venv only if there is
-  // none. Sets the agent id and NOTHING else -- not the profile, not the store.
+  // Derived from plugin-src/.mcp.json, so both trees start the server the same
+  // way on every platform: the launcher on macOS/Linux, the installed slm on
+  // Windows (#139, see plugin-src/MCP_JSON_NOTES.md). Only the agent id differs.
+  // Sets the agent id and NOTHING else -- not the profile, not the store.
+  const src = JSON.parse(readFileSync(join(ROOT, 'plugin-src', '.mcp.json'), 'utf8'));
+  const server = src.mcpServers.superlocalmemory;
   files.set('.mcp.json', JSON.stringify({
     mcpServers: {
       superlocalmemory: {
-        command: '${CLAUDE_PLUGIN_ROOT}/scripts/slm-launch',
-        args: [],
+        command: server.command,
+        args: server.args,
         env: { SLM_AGENT_ID: AGENT_ID },
       },
     },

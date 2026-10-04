@@ -248,3 +248,30 @@ def test_circuit_breaker_success_resets_failure_count(monkeypatch) -> None:
         assert not mesh_tools._SEND_CIRCUIT.is_open()
 
     asyncio.run(run())
+
+
+def test_a_state_key_named_delta_is_still_readable(monkeypatch) -> None:
+    """GET /mesh/state/delta is the fleet sync endpoint, so the single-key route
+    cannot serve a key called "delta"; the tool reads it from the full state."""
+    import superlocalmemory.mcp.tools_mesh as mesh_tools
+
+    collector = _ToolCollector()
+    mesh_tools.register_mesh_tools(collector, lambda: None)
+    paths: list[str] = []
+
+    def request(method: str, path: str, body: dict | None = None) -> dict:
+        paths.append(path)
+        if path == "/state/delta":
+            return {"entries": [], "node_id": "n1"}
+        if path == "/state":
+            return {"state": {"delta": {"value": "v2", "set_by": "a", "updated_at": "t"}}}
+        return {"ok": True}
+
+    monkeypatch.setattr(mesh_tools, "_mesh_request", request)
+    monkeypatch.setattr(mesh_tools, "_ensure_registered", lambda: None)
+
+    got = asyncio.run(collector.tools["mesh_state"]("delta"))
+    assert got == {"key": "delta", "value": "v2", "set_by": "a", "updated_at": "t"}
+    assert "/state/delta" not in paths
+    missing = asyncio.run(collector.tools["mesh_state"]("nope-delta"))
+    assert missing == {"ok": True}
