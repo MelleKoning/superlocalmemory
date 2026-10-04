@@ -356,7 +356,12 @@ class RemoteToolScopeASGI:
             downstream_send = _JsonAnswerFilter(send, _redact_call_answer)
         else:
             downstream_send = send
-        await self.app(scope, _replay(body, receive), downstream_send)
+        from superlocalmemory.mcp.remote_caller import remote_caller
+
+        # Per-agent stores (cache, reversible compression) are keyed by this
+        # key as well as by the caller-chosen /mcp/<agent> segment.
+        with remote_caller(principal.key_id):
+            await self.app(scope, _replay(body, receive), downstream_send)
 
 
 __all__ = [

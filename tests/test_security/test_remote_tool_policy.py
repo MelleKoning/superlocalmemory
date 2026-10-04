@@ -249,3 +249,21 @@ def test_non_post_from_a_remote_caller_is_405_without_reaching_mcp(method) -> No
     assert stub.reached == []
     start = next(m for m in sent if m["type"] == "http.response.start")
     assert (b"allow", b"POST") in start["headers"]
+
+
+def test_the_mcp_app_sees_which_remote_key_is_calling() -> None:
+    """Per-agent stores key on this, not on the caller-chosen /mcp/<agent> segment."""
+    from superlocalmemory.mcp.remote_caller import current_remote_key_id
+
+    seen: list[str | None] = []
+
+    class _Recording(_StubMcp):
+        async def __call__(self, scope, receive, send) -> None:
+            seen.append(current_remote_key_id())
+            await super().__call__(scope, receive, send)
+
+    _run(_call("slm_cache_get", arguments={"key": "k"}), READ_KEY, stub=_Recording())
+    _run(_call("slm_cache_set", arguments={"key": "k", "value": "v"}), WRITE_KEY,
+         stub=_Recording())
+    assert seen == [READ_KEY.key_id, WRITE_KEY.key_id]
+    assert current_remote_key_id() is None
