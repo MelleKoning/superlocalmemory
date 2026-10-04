@@ -1,0 +1,25 @@
+{
+  "_comment": "Synthetic, fictional memories for the Answer Check demo. No real people, projects or data.",
+  "memories": [
+    "Project Kestrel is the internal codename for the new field-service scheduling app.",
+    "Project Kestrel launches on 14 March 2027.",
+    "Priya Raman leads design for Project Kestrel.",
+    "Project Kestrel's backend runs on PostgreSQL 17 with a Rust API layer.",
+    "We decided to ship Project Kestrel on iOS first and Android one quarter later.",
+    "Project Kestrel's beta has 40 pilot technicians in Pune.",
+    "The Kestrel team meets every Tuesday at 10:00 for a design review.",
+    "Kestrel's offline mode syncs job notes when a technician reconnects.",
+    "The Kestrel pilot found that route suggestions saved about 25 minutes per technician per day.",
+    "Project Kestrel uses feature flags so pilots can try new screens early.",
+    "Kestrel support tickets go to the field-tools queue.",
+    "Project Kestrel's app icon is a small falcon on a teal background."
+  ],
+  "questions": {
+    "answered": {"q": "When does Project Kestrel launch?",
+                 "expect": {"status": "judged", "abstained": false}},
+    "abstained": {"q": "What is Project Kestrel's marketing budget?",
+                  "expect": {"status": "judged", "abstained": true}}
+  },
+  "repeat": 3,
+  "ceiling_ms": 3000
+}
