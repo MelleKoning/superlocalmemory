@@ -142,11 +142,32 @@ export SLM_MESH_SHARED_SECRET=<random 32-char string>
 slm serve start
 ```
 
-On Hub / OpenClaw containers, point to the SLM host:
-```bash
-# In mcp client config or env:
-SLM_DAEMON_URL=http://192.168.50.144:8765
+On Hub / OpenClaw containers, point the MCP client config at the SLM host.
+There is no environment variable for this: the address goes in the client's
+MCP server entry.
+
+If the client speaks HTTP MCP:
+```json
+{
+  "type": "http",
+  "url": "http://192.168.50.144:8765/mcp/"
+}
 ```
+
+If the client is stdio-only, run it through the `mcp-remote` bridge (see
+[IDE setup](ide-setup.md) for the global-install and `npx` routes). The bridge
+refuses plain HTTP to anything other than localhost unless you pass
+`--allow-http`, so only do this on a private network you trust:
+```json
+{
+  "type": "stdio",
+  "command": "npx",
+  "args": ["-y", "mcp-remote", "http://192.168.50.144:8765/mcp/", "--allow-http"]
+}
+```
+
+Only MCP traffic goes to the remote daemon. The `slm` command line on a client
+container always works against its own local store.
 
 ---
 
@@ -294,7 +315,6 @@ have the `mesh_*` MCP tools and the dashboard **Mesh Peers** tab.
 | `SLM_BANDIT_ALPHA_CAP` | Maximum bandit learning rate | `0.3` |
 | `SLM_BANDIT_REWARD_WINDOW_SEC` | Window (s) for reward aggregation | `3600` |
 | `SLM_BANDIT_PLAYS_RETENTION_DAYS` | Keep bandit play history for N days | `30` |
-| `SLM_DNA_SEED` | Random seed for reproducible bandit initialisation | — |
 
 ### Evolution
 
@@ -310,7 +330,6 @@ have the `mesh_*` MCP tools and the dashboard **Mesh Peers** tab.
 |----------|---------|---------|
 | `SLM_RATE_LIMIT_READ` | Max read requests per window | `120` |
 | `SLM_RATE_LIMIT_WRITE` | Max write requests per window | `30` |
-| `SLM_RATE_LIMIT_PER_AGENT` | Per-agent request cap per window | — |
 | `SLM_RATE_LIMIT_WINDOW` | Rate-limit window in seconds | `60` |
 
 ### Adapters / sync
@@ -337,7 +356,6 @@ have the `mesh_*` MCP tools and the dashboard **Mesh Peers** tab.
 | `SLM_HOOK_DAEMON_URL` | Override daemon URL for hook integrations | — |
 | `SLM_HOOK_DAEMON_TIMEOUT` | Timeout (s) for hook→daemon requests | `5` |
 | `SLM_DISABLE_WARMUP_SIDE_EFFECTS` | Set `1` to suppress daemon auto-start in tests | — |
-| `SLM_DISABLE_HF_DOWNLOAD` | Set `1` to block HuggingFace model downloads | — |
 | `SLM_SKIP_DEP_CHECK` | Set `1` to skip dependency version checks | — |
 | `SLM_NON_INTERACTIVE` | Set `1` to suppress interactive prompts | — |
 | `SLM_DISABLE` | Set `1` to disable SLM entirely (no-op MCP tools) | — |
