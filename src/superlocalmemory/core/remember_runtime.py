@@ -554,11 +554,9 @@ class CanonicalRememberRuntime:
             max_verbatim_chars=max_verbatim_chars,
             max_ingest_bytes=max_ingest_bytes,
         )
+        # Everything that can fail (building the handler) is done above, so
+        # the swap below is all-or-nothing and needs no rollback.
         with self._binding_lock:
-            previous = (
-                self._db, self._profile_id, self._writer,
-                self._max_verbatim_chars, self._max_ingest_bytes,
-            )
             self._db = db
             self._profile_id = profile_id
             self._writer = writer
@@ -568,21 +566,10 @@ class CanonicalRememberRuntime:
             # the next routed request rebuilds against the new one.
             self._routed_writers.clear()
             self._generation += 1
-        try:
-            self.replay_pending()
-        except BaseException:
-            with self._binding_lock:
-                # Roll back the WHOLE binding, not just the writer triple: a
-                # stale limits pair or a routed-handler cache built against
-                # the failed binding would outlive the rebind that never
-                # happened.
-                (
-                    self._db, self._profile_id, self._writer,
-                    self._max_verbatim_chars, self._max_ingest_bytes,
-                ) = previous
-                self._routed_writers.clear()
-                self._generation -= 1
-            raise
+        # Pending saves (for this profile or any other) are handed to the
+        # background committer rather than replayed here: a switch must not
+        # wait on, or fail because of, a writer that is busy right now.
+        self._hand_pending_to_committer()
 
     def remember(
         self,

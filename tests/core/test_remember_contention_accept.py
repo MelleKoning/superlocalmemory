@@ -282,3 +282,33 @@ def test_accepted_save_for_a_deleted_profile_ends_with_a_recorded_failure(
     assert entry.state == "rejected"
     assert entry.error_code == "UNKNOWN_PROFILE"
     assert _count(db_path, "SELECT COUNT(*) FROM write_commits") == 0
+
+
+def test_profile_switch_with_a_pending_save_hands_it_off_cleanly(runtime, data_dir):
+    """Switching to a profile whose accepted save is still pending never fails.
+
+    The switch completes at once; the save is committed in the background
+    once the writer is free, exactly once.
+    """
+    from types import SimpleNamespace
+
+    db_path = data_dir / "memory.db"
+    lock = _HeldWriteLock(db_path)
+    try:
+        receipt = runtime.remember(
+            _request("rebind-pending-1", profile="other"), _actor("other"),
+            deadline_ms=_SHORT_DEADLINE_MS,
+        )
+        assert receipt.payload["status"] == "accepted"
+        started = time.monotonic()
+        runtime.rebind_engine(
+            SimpleNamespace(_db=runtime._db, _profile_id="other", _config=None)
+        )
+        switch_seconds = time.monotonic() - started
+        assert runtime._profile_id == "other"
+    finally:
+        lock.release()
+    assert switch_seconds < 0.5, f"switch waited {switch_seconds:.2f}s on the save"
+    assert runtime.wait_for_deferred(timeout=15.0)
+    assert runtime.journal.get(receipt.payload["admission_id"]).state == "committed"
+    assert _count(db_path, "SELECT COUNT(*) FROM write_commits") == 1

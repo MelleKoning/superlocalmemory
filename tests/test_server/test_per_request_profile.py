@@ -313,15 +313,18 @@ class TestRouting:
         assert legacy_recall.status_code == 200, legacy_recall.text
         assert legacy_recall.json()["profile"] == active
 
-    def test_failed_rebind_rolls_back_routed_writers_and_limits(
+    def test_failed_rebind_leaves_the_whole_binding_untouched(
         self, daemon, monkeypatch,
     ) -> None:
-        """A failed rebind restores the whole binding, not just the writer.
+        """A rebind that fails changes nothing: writer, limits, routed cache.
 
-        The routed-handler cache and the writer limits swapped in before
-        replay_pending() must not outlive a rebind that never completed.
+        Everything that can fail happens before the binding is swapped, so a
+        failure can never leave half a binding behind. Pending saves are
+        handed to the background committer and cannot fail a rebind.
         """
         from types import SimpleNamespace
+
+        import superlocalmemory.core.engine_ingestion as engine_ingestion
 
         client, app = daemon
         engine = app.state.engine
@@ -343,15 +346,19 @@ class TestRouting:
             "a routed write must have cached a handler for profile b"
         )
         bound_profile = runtime._profile_id
+        bound_writer = runtime._writer
         bound_limits = (
             runtime._max_verbatim_chars, runtime._max_ingest_bytes,
         )
         bound_generation = runtime._generation
+        bound_routed = dict(runtime._routed_writers)
 
-        def _fail_replay():
-            raise RuntimeError("replay failed after rebind")
+        def _fail_build(*_args, **_kwargs):
+            raise RuntimeError("handler build failed during rebind")
 
-        monkeypatch.setattr(runtime, "replay_pending", _fail_replay)
+        monkeypatch.setattr(
+            engine_ingestion, "build_immediate_admission_handler", _fail_build,
+        )
         rebinding = SimpleNamespace(
             _db=engine._db,
             _profile_id="a",
@@ -362,14 +369,15 @@ class TestRouting:
             ),
         )
 
-        with pytest.raises(RuntimeError, match="replay failed"):
+        with pytest.raises(RuntimeError, match="handler build failed"):
             runtime.rebind_engine(rebinding)
 
         assert runtime._profile_id == bound_profile
+        assert runtime._writer is bound_writer
         assert (
             runtime._max_verbatim_chars, runtime._max_ingest_bytes,
         ) == bound_limits
-        assert runtime._routed_writers == {}
+        assert runtime._routed_writers == bound_routed
         assert runtime._generation == bound_generation
 
 
