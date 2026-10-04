@@ -13,16 +13,18 @@ embedding at all. The daemon's last-resort budget then fired and answered with
 a degraded fallback, and a memory saved seconds earlier with a "queryable"
 receipt came back as "No confident match".
 
-ONLY while the embedder is not ready yet (its ``is_warm`` is ``False``: model
-not loaded, or the worker has not answered once), the embedding runs on its own
-worker and the recall waits for it no longer than the per-channel hang guard
+ONLY while the embedder has never been ready (its ``is_warm`` is ``False`` and
+it has not answered a single request since it was created), the embedding runs
+on its own worker and the recall waits for it no longer than the per-channel hang guard
 (``CHANNEL_HANG_GUARD_SECONDS``). If the vector is not back by then, the
 channels that need it are reported as ``warming`` and the recall is marked
 incomplete, while the channels that need no vector run and can find the memory.
 
-ONCE THE EMBEDDER IS READY — or when it does not say (no ``is_warm``) — the
-recall embeds inline and waits exactly as 4.1.19 did, with no bound. A slow
-embed on a warm model is waited for; this is not a speed cap.
+ONCE THE EMBEDDER HAS BEEN READY — or when it does not say (no ``is_warm``) —
+the recall embeds inline and waits exactly as 4.1.19 did, with no bound. That
+includes the reload after a 30-minute idle unload or a memory-pressure kill
+(``has_loaded_once``): a slow embed on a model that loaded before is waited
+for; this is not a speed cap.
 
 WHAT IT COSTS IN QUALITY
 ------------------------
@@ -116,8 +118,18 @@ class QueryEmbedder:
         return fut
 
     def _not_ready(self) -> bool:
-        """True only when the embedder SAYS it is not ready. Unknown is ready."""
-        return getattr(self._provider(), "is_warm", None) is False
+        """True only for a model that has NEVER loaded and says it is not ready.
+
+        Unknown is ready. An embedder that has answered before
+        (``has_loaded_once``) is ready too, even while ``is_warm`` is False
+        because the idle timer or memory pressure unloaded its worker: a
+        model that loaded once is reloading, and that recall waits for it
+        exactly as 4.1.19 did instead of losing its semantic channels.
+        """
+        embedder = self._provider()
+        if getattr(embedder, "has_loaded_once", None) is True:
+            return False
+        return getattr(embedder, "is_warm", None) is False
 
     def embed(self, query: str, wait_seconds: float) -> tuple[list[float] | None, str | None]:
         """Embed ``query``; ``wait_seconds`` bounds the wait only while the
@@ -152,6 +164,13 @@ class QueryEmbedder:
                 wait_seconds,
             )
             return None, chstat.WARMING
+
+    def worker_threads(self) -> list[threading.Thread]:
+        """This embedder's pool threads (none until a cold embed created it)."""
+        from superlocalmemory.core.thread_join import executor_threads
+
+        with self._lock:
+            return executor_threads(self._executor)
 
     def close(self) -> None:
         with self._lock:

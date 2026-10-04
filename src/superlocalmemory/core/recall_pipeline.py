@@ -509,6 +509,7 @@ def apply_adaptive_ranking(
         retrieval_time_ms=response.retrieval_time_ms,
         # v3.6.6: preserve evidence-floor signal across reranking rebuilds.
         no_confident_match=(len(new_results) == 0) and response.no_confident_match,
+        **_completeness_of(response),
     )
 
 
@@ -613,6 +614,7 @@ def apply_v2_adaptive_ranking(
             retrieval_time_ms=response.retrieval_time_ms,
             # v3.6.6: preserve evidence-floor signal across reranking rebuilds.
             no_confident_match=(len(new_results) == 0) and response.no_confident_match,
+            **_completeness_of(response),
         )
     except Exception as exc:  # pragma: no cover — defensive
         logger.debug("apply_v2_adaptive_ranking skipped: %s", exc)
@@ -1130,10 +1132,26 @@ def apply_v2_bandit_ensemble(
             retrieval_time_ms=response.retrieval_time_ms,
             # v3.6.6: preserve evidence-floor signal across ensemble rebuilds.
             no_confident_match=(len(final_results) == 0) and response.no_confident_match,
+            # A reorder does not make an incomplete or warming answer whole.
+            **_completeness_of(response),
         )
     except Exception as exc:  # pragma: no cover — defensive top-level
         logger.debug("apply_v2_bandit_ensemble skipped: %s", exc)
         return response
+
+
+def _completeness_of(response: RecallResponse) -> dict:
+    """What a rebuilt response must carry over to stay honest.
+
+    The ensemble and agentic steps build a new ``RecallResponse`` around a new
+    result list. Without these fields an answer whose channels were warming
+    or abandoned came out reading as complete, and its stage timings vanished.
+    """
+    return {
+        "incomplete_channels": tuple(getattr(response, "incomplete_channels", ()) or ()),
+        "channel_status": dict(getattr(response, "channel_status", {}) or {}),
+        "stage_ms": dict(getattr(response, "stage_ms", {}) or {}),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1368,6 +1386,7 @@ def run_recall(
                         # v3.6.6: agentic round-2 may add facts; recompute flag.
                         no_confident_match=(len(enhanced_results[:limit]) == 0)
                         and response.no_confident_match,
+                        **_completeness_of(response),
                     )
             except Exception as exc:
                 logger.debug("Agentic sufficiency skipped: %s", exc)

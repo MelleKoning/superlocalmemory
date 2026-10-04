@@ -129,18 +129,29 @@ def test_missing_libraries_are_reported_not_raised(monkeypatch) -> None:
 
 
 def test_the_library_check_is_a_real_import(monkeypatch) -> None:
-    """find_spec would call a broken native extension usable."""
-    import importlib
+    """find_spec would call a broken native extension usable.
 
-    real = importlib.import_module
+    No real native library is imported here: ``import lancedb`` starts a
+    background event loop that lives for the rest of the process, and in the
+    normal lane that loop outlived this test and was still running when an
+    unrelated numpy test later crashed. Each library is answered by a stub or
+    a failure; what is under test is that the check really imports.
+    """
+    import importlib
+    import types
+
+    asked: list[str] = []
 
     def broken(name, *args, **kwargs):
+        asked.append(name)
         if name == "pycozo":
             raise ImportError("dlopen failed: incompatible architecture")
-        return real(name, *args, **kwargs)
+        return types.ModuleType(name)
 
     monkeypatch.setattr(importlib, "import_module", broken)
-    assert "pycozo" in auto._missing_libraries()
+    missing = auto._missing_libraries()
+    assert missing == ["pycozo"]
+    assert sorted(asked) == sorted(auto.REQUIRED_LIBRARIES)
 
 
 def test_a_switch_that_says_no_is_obeyed(manager) -> None:

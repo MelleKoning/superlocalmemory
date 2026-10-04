@@ -198,6 +198,9 @@ _SUBPROCESS_RESPONSE_TIMEOUT = int(os.environ.get("SLM_EMBED_RESPONSE_TIMEOUT", 
 # a single conversation produces ~50-80 store calls. 10 conversations = 500-800.
 # Recycling at 1000 caused mid-ingestion worker death → timeout cascade.
 _WORKER_RECYCLE_AFTER = int(os.environ.get("SLM_EMBED_RECYCLE_AFTER", 5000))
+# How often a request waiting on the worker checks whether the service is
+# shutting down. Bounds shutdown latency; a ready response is never delayed.
+_CANCEL_POLL_SECONDS = 0.05
 
 
 class EmbeddingService:
@@ -222,6 +225,13 @@ class EmbeddingService:
         self._request_count: int = 0
         self._http_client: object | None = None
         self._remote_ready = False
+        # Set once shutdown() starts and never cleared: a closed service never
+        # spawns a worker again and its in-flight waits stop at once.
+        self._closed = False
+        # Whether this service has EVER answered a request. Unlike ``is_warm``
+        # it survives an idle unload or a memory-pressure kill, so a recall
+        # can tell "never loaded" (bounded wait) from "reloading" (4.1.19).
+        self._loaded_once = False
 
         # Register for atexit cleanup (prevent orphaned workers)
         ref = weakref.ref(self, _live_embedding_services.discard)
@@ -274,6 +284,22 @@ class EmbeddingService:
             return False
 
     @property
+    def has_loaded_once(self) -> bool:
+        """True once this service has answered at least one request.
+
+        ``is_warm`` turns False again when the idle timer or memory pressure
+        unloads the worker; this does not. A model that loaded before is
+        expected to load again, so a recall waits for it exactly as 4.1.19
+        did instead of being cut short as if the install were brand new.
+        """
+        return bool(getattr(self, "_loaded_once", False))
+
+    @property
+    def is_closed(self) -> bool:
+        """True once :meth:`shutdown` has started; never reset."""
+        return bool(getattr(self, "_closed", False))
+
+    @property
     def dimension(self) -> int:
         return self._config.dimension
 
@@ -302,7 +328,15 @@ class EmbeddingService:
         the engine is closing, no new request may use this service, so it is
         safe to detach and terminate a wedged child without waiting behind the
         request lock.
+
+        The service stays shut: the closed flag is set before anything else,
+        so a request already waiting on the worker stops within one poll
+        interval instead of its full response timeout, and no request --
+        in flight or new -- can spawn a replacement worker afterwards.
+        Without this an embed in flight at shutdown respawned the worker and
+        held interpreter exit for the whole response timeout (~184 s).
         """
+        self._closed = True
         acquired = self._lock.acquire(timeout=max(0.0, timeout))
         try:
             self._kill_worker(timeout=min(max(0.0, timeout), 1.0))
@@ -350,6 +384,8 @@ class EmbeddingService:
         """Embed a single text string. Returns list of floats or None."""
         if not text or not text.strip():
             raise ValueError("Cannot embed empty text")
+        if self.is_closed:
+            return None
         from superlocalmemory.core.recall_gate import wait_for_foreground_idle
         wait_for_foreground_idle()
         if self._config.is_openai_compatible:
@@ -358,6 +394,7 @@ class EmbeddingService:
                 vec = vecs[0]
                 self._validate_dimension(np.asarray(vec))
                 self._remote_ready = True
+                self._loaded_once = True
                 return vec
             except Exception:
                 self._remote_ready = False
@@ -367,6 +404,7 @@ class EmbeddingService:
                 vec = self._cloud_embed_single(text)
                 self._validate_dimension(np.asarray(vec))
                 self._remote_ready = True
+                self._loaded_once = True
                 return vec
             except Exception:
                 self._remote_ready = False
@@ -382,6 +420,8 @@ class EmbeddingService:
         """Embed a batch of texts."""
         if not texts:
             raise ValueError("Cannot embed empty batch")
+        if self.is_closed:
+            return [None] * len(texts)
         from superlocalmemory.core.recall_gate import is_background_work
         if is_background_work():
             # A single large background batch can own the only local inference
@@ -395,6 +435,7 @@ class EmbeddingService:
                     if vec is not None:
                         self._validate_dimension(np.asarray(vec))
                 self._remote_ready = any(vec is not None for vec in results)
+                self._loaded_once = self.has_loaded_once or self._remote_ready
                 return results
             except Exception:
                 self._remote_ready = False
@@ -406,6 +447,7 @@ class EmbeddingService:
                     if vec is not None:
                         self._validate_dimension(np.asarray(vec))
                 self._remote_ready = any(vec is not None for vec in results)
+                self._loaded_once = self.has_loaded_once or self._remote_ready
                 return results
             except Exception:
                 self._remote_ready = False
@@ -453,7 +495,7 @@ class EmbeddingService:
             # respawn the worker, matching OllamaEmbedder's tri-state
             # convention. Using ``not self._available`` here bricked the local
             # worker on the first heal tick, because ``None`` is falsy.
-            if self._available is False:
+            if self._available is False or self.is_closed:
                 return None
             # Worker recycling: restart after N requests to prevent
             # C++ allocator fragmentation over long-running sessions.
@@ -479,7 +521,12 @@ class EmbeddingService:
                 resp_line = self._readline_with_timeout(
                     self._worker_proc.stdout,
                     _SUBPROCESS_RESPONSE_TIMEOUT,
+                    cancelled=lambda: self.is_closed,
                 )
+                if self.is_closed:
+                    # Shut down while waiting: not a slow model, no advice to
+                    # print, and nothing may be respawned.
+                    return None
                 if not resp_line:
                     logger.warning(
                         "Embedding worker timed out after %ds. "
@@ -511,10 +558,14 @@ class EmbeddingService:
                 # back to a definite ``True``. Without this the flag lingers at
                 # ``None`` and the next ``not``-style check elsewhere re-blocks.
                 self._available = True
+                self._loaded_once = True
                 self._reset_idle_timer()
                 self._request_count += 1
                 return resp["vectors"]
             except (BrokenPipeError, OSError, json.JSONDecodeError) as exc:
+                if self.is_closed:
+                    # The pipe broke because shutdown closed it.
+                    return None
                 logger.warning(
                     "Embedding worker communication failed: %s — respawning.",
                     exc,
@@ -530,10 +581,12 @@ class EmbeddingService:
                         resp_line = self._readline_with_timeout(
                             self._worker_proc.stdout,
                             _SUBPROCESS_RESPONSE_TIMEOUT,
+                            cancelled=lambda: self.is_closed,
                         )
-                        if resp_line:
+                        if resp_line and not self.is_closed:
                             resp = json.loads(resp_line)
                             if resp.get("ok"):
+                                self._loaded_once = True
                                 self._reset_idle_timer()
                                 self._request_count = 1
                                 return resp["vectors"]
@@ -542,8 +595,17 @@ class EmbeddingService:
                 return None
 
     @staticmethod
-    def _readline_with_timeout(stream, timeout_seconds: float) -> str:
+    def _readline_with_timeout(
+        stream, timeout_seconds: float, *, cancelled=None,
+    ) -> str:
         """Read a line from stream with a timeout. Returns '' on timeout.
+
+        ``cancelled`` (a no-argument callable) is polled every
+        ``_CANCEL_POLL_SECONDS`` while waiting; once it returns True the wait
+        ends with ''. Shutdown uses it so an embed in flight stops at once
+        instead of sitting out the full response timeout. A response that is
+        ready is still returned immediately: the poll only slices the idle
+        wait, it never delays a read.
 
         Prefer a deadline-driven selector poll of the stream's file descriptor
         (POSIX pipes). That path never spawns a helper thread, so a hung
@@ -565,9 +627,22 @@ class EmbeddingService:
         # Windows select()/selectors only accept sockets, not subprocess pipes.
         if fd is not None and sys.platform != "win32":
             try:
+                deadline = time.monotonic() + timeout_seconds
+                events = []
                 with selectors.DefaultSelector() as sel:
                     sel.register(fd, selectors.EVENT_READ)
-                    events = sel.select(timeout=timeout_seconds)
+                    while True:
+                        if cancelled is not None and cancelled():
+                            return ""
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        wait = remaining if cancelled is None else min(
+                            remaining, _CANCEL_POLL_SECONDS,
+                        )
+                        events = sel.select(timeout=wait)
+                        if events:
+                            break
                 if not events:
                     logger.warning(
                         "Embedding worker did not respond within %ds",
@@ -598,7 +673,17 @@ class EmbeddingService:
             target=_read, daemon=True, name="slm_embed_readline_read",
         )
         reader.start()
-        reader.join(timeout=timeout_seconds)
+        deadline = time.monotonic() + timeout_seconds
+        while reader.is_alive():
+            if cancelled is not None and cancelled():
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            reader.join(timeout=(
+                remaining if cancelled is None
+                else min(remaining, _CANCEL_POLL_SECONDS)
+            ))
 
         if reader.is_alive():
             logger.warning(
@@ -699,7 +784,10 @@ class EmbeddingService:
 
         v3.4.13: Machine-wide singleton — checks PID file before spawning.
         Only ONE embedding_worker can exist at a time on the machine.
+        A shut-down service never spawns one.
         """
+        if self.is_closed:
+            return
         if self._worker_proc is not None:
             if self._worker_proc.poll() is None:
                 return
@@ -728,6 +816,10 @@ class EmbeddingService:
             release_embedding_lock()
             logger.warning("Skipping embedding worker spawn due to memory pressure")
             self._available = False
+            return
+        if self.is_closed:
+            # Shut down while the checks above ran.
+            release_embedding_lock()
             return
 
         worker_module = "superlocalmemory.core.embedding_worker"
@@ -763,6 +855,13 @@ class EmbeddingService:
             self._owns_worker_lock = True
             logger.info("Embedding worker spawned (PID %d)", self._worker_proc.pid)
             self._worker_ready = True
+            if self.is_closed:
+                # shutdown() began while this spawn was being prepared (the
+                # memory check alone can take seconds). It sets the flag
+                # before it kills, and this checks after the child exists, so
+                # one of the two always sees the other: never an orphan.
+                self._kill_worker(timeout=0.5)
+                return
         except Exception as exc:
             failed_proc = self._worker_proc
             if failed_proc is not None:
@@ -851,6 +950,9 @@ class EmbeddingService:
         """
         if self._idle_timer is not None:
             self._idle_timer.cancel()
+            self._idle_timer = None
+        if self.is_closed:
+            return
         if not self._check_memory_pressure():
             # Pressure detected — kill worker immediately; do not schedule a
             # new idle timer so no further embedding work is attempted until
@@ -1065,3 +1167,38 @@ def _cleanup_all_embedding_services() -> None:
 
 
 atexit.register(_cleanup_all_embedding_services)
+
+
+def _shutdown_all_embedding_services_before_thread_join() -> None:
+    """Shut every live service down before the interpreter joins its threads.
+
+    Interpreter exit joins non-daemon threads -- every ThreadPoolExecutor
+    worker among them -- BEFORE ``atexit`` handlers run. A thread blocked in
+    an embed would therefore hold exit for the whole response timeout while
+    the ``atexit`` cleanup above waited behind it. Threading-exit hooks run
+    first, in reverse registration order, so this one is registered after the
+    executor module's own join hook and wakes those waits before that join.
+    """
+    for ref in list(_live_embedding_services):
+        svc = ref()
+        if svc is not None:
+            try:
+                svc.shutdown(timeout=0.5)
+            except Exception:
+                pass
+
+
+def _register_exit_shutdown() -> None:
+    import concurrent.futures.thread  # noqa: F401 -- its join hook first
+
+    register = getattr(threading, "_register_atexit", None)
+    if register is None:  # pragma: no cover - CPython has had it since 3.9
+        return
+    try:
+        register(_shutdown_all_embedding_services_before_thread_join)
+    except RuntimeError:
+        # Imported while the interpreter is already shutting down.
+        pass
+
+
+_register_exit_shutdown()

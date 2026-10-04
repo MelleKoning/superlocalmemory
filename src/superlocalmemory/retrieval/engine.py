@@ -102,6 +102,21 @@ logger = logging.getLogger(__name__)
 # measure what it costs in answer quality first and record the number.
 CHANNEL_HANG_GUARD_SECONDS = 8.0
 
+# How long a recall waits for a query vector from a model that has NEVER loaded
+# in this process (a fresh daemon). Only that case: a model that loaded before
+# is waited for unbounded, exactly as in 4.1.19 (retrieval/query_embedding.py).
+#
+# The recall ceiling is 3.0 s total (RECALL_CEILING_S, answer check included).
+# Waiting the full hang guard here made the first recalls after a start take
+# 8.06 s while the model loaded. One second gives a nearly loaded model its
+# chance and leaves the rest of the ceiling for the channels that need no
+# vector and for the answer check, which budgets itself against the recall's
+# start and is skipped rather than overrun. What it costs: on a cold daemon the
+# vector channels report ``warming`` and the recall is marked incomplete -- the
+# same answer the 8 s wait gave whenever the load took longer than 8 s, and the
+# embed is not cancelled, so the next recall of the question gets its vector.
+COLD_QUERY_EMBED_WAIT_SECONDS = 1.0
+
 
 class CrossEncoderProtocol(Protocol):
     """Duck-typed cross-encoder interface."""
@@ -313,6 +328,10 @@ class RetrievalEngine:
         # Owned by this call, so concurrent recalls cannot report each other's
         # losses.  Non-empty means this answer is incomplete, not just slow.
         dropped_channels: set[str] = set()
+        # Where this recall's time went, so a slow answer names its stage
+        # (``RecallResponse.stage_ms``). Owned by this call, like the two above.
+        stage_ms: dict[str, float] = {}
+        _t_channels = time.monotonic()
         ch_results = self._run_channels(
             query, profile_id, strat,
             extra_disabled_channels=extra_disabled_channels,
@@ -321,7 +340,9 @@ class RetrievalEngine:
             include_unknown=include_unknown,
             dropped_channels=dropped_channels,
             channel_status=channel_status,
+            stage_ms=stage_ms,
         )
+        stage_ms["channels"] = round((time.monotonic() - _t_channels) * 1000.0, 1)
         _em("run_channels")
         # One request may need admission before fusion and again after optional
         # bridge/scene expansion.  Cache only the IDs checked during this one
@@ -610,6 +631,7 @@ class RetrievalEngine:
             "fallback_not_ready" if self._reranker is not None
             else "not_configured"
         )
+        _t_rerank = time.monotonic()
         if reranker_ready and facts:
             ce_alpha = 0.5 if strat.query_type in ("multi_hop", "temporal") else 0.75
             top, reranker_applied, reranker_status = self._apply_reranker(
@@ -617,6 +639,7 @@ class RetrievalEngine:
             )
         elif reranker_ready:
             reranker_status = "no_candidates"
+        stage_ms["rerank"] = round((time.monotonic() - _t_rerank) * 1000.0, 1)
         _em(f"rerank(ready={reranker_ready})")
 
         # V3.4.11: Channel diversity — guarantee entity_graph results appear in
@@ -644,6 +667,7 @@ class RetrievalEngine:
         # 6. Build response
         results = self._build_results(final_top, facts, strat)
         ms = (time.monotonic() - t0) * 1000.0
+        stage_ms["retrieval_total"] = round(ms, 1)
         no_match = floor_enabled and len(results) == 0
         return RecallResponse(
             query=query, mode=mode, results=results,
@@ -657,6 +681,7 @@ class RetrievalEngine:
             community_context=self._community_context(results, profile_id),
             incomplete_channels=tuple(sorted(dropped_channels)),
             channel_status=dict(channel_status),
+            stage_ms=dict(stage_ms),
         )
 
     # -- Community context (Wave Q2b) --------------------------------------
@@ -953,11 +978,12 @@ class RetrievalEngine:
     # -- Channel execution --------------------------------------------------
 
     def _embed_query(self, query: str) -> tuple[list[float] | None, str | None]:
-        """(vector, status). Bounded by the hang guard ONLY while the embedder
-        is not ready (status WARMING: vector channels not run); a ready one is
-        waited for exactly as in 4.1.19. See retrieval/query_embedding.py.
+        """(vector, status). Bounded by ``COLD_QUERY_EMBED_WAIT_SECONDS`` ONLY
+        while the embedder has never been ready (status WARMING: vector
+        channels not run); one that has loaded before is waited for exactly
+        as in 4.1.19. See retrieval/query_embedding.py.
         """
-        return self._query_embedder.embed(query, CHANNEL_HANG_GUARD_SECONDS)
+        return self._query_embedder.embed(query, COLD_QUERY_EMBED_WAIT_SECONDS)
 
     def _semantic_rank_for_unenriched(
         self, ch_results: dict[str, list[tuple[str, float]]],
@@ -1062,6 +1088,7 @@ class RetrievalEngine:
         include_unknown: bool = False,
         dropped_channels: set[str] | None = None,
         channel_status: dict[str, str] | None = None,
+        stage_ms: dict[str, float] | None = None,
     ) -> dict[str, list[tuple[str, float]]]:
         """Run active retrieval channels.
 
@@ -1105,6 +1132,7 @@ class RetrievalEngine:
             or (self._spreading_activation is not None and "spreading_activation" not in disabled)
         )
         if needs_embedding:
+            _t_embed = _time_e.monotonic()
             try:
                 q_emb, emb_wait = self._embed_query(query)
                 if q_emb is None and emb_wait is None:
@@ -1114,6 +1142,9 @@ class RetrievalEngine:
                     )
             except Exception as exc:
                 logger.warning("Query embedding failed: %s", exc)
+            if stage_ms is not None:
+                stage_ms["query_embedding"] = round(
+                    (_time_e.monotonic() - _t_embed) * 1000.0, 1)
 
         # Why a channel will not run, recorded BEFORE dispatch. An embedding
         # failure silently takes three of the five channels down together, and
@@ -1278,6 +1309,18 @@ class RetrievalEngine:
             self._closed = True
         self._channel_executor.shutdown(wait=wait, cancel_futures=True)
         self._query_embedder.close()
+
+    def worker_threads(self) -> list:
+        """The pool threads this engine owns, for a bounded join on close.
+
+        Read BEFORE ``close``: closing detaches the query-embed pool.
+        """
+        from superlocalmemory.core.thread_join import executor_threads
+
+        return (
+            executor_threads(getattr(self, "_channel_executor", None))
+            + self._query_embedder.worker_threads()
+        )
 
     # -- Fact loading -------------------------------------------------------
 
