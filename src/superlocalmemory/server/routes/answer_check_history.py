@@ -216,7 +216,7 @@ def _recording() -> dict[str, Any]:
             "retention_days": info["retention_days"], "max_rows": info["max_rows"],
             "unsaved": c["unsaved"],
             "since_start": {k: c[k] for k in ("recorded", "saved", "dropped_before_save",
-                                               "save_failures")}}
+                                               "save_failures", "erased_unsaved")}}
 
 
 @router.get("/history/summary")
