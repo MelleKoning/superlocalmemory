@@ -208,7 +208,9 @@ describe('renderPluginJson', () => {
     // REGRESSION: author.url must NOT be silently dropped
     assert.equal(parsed.author.url, 'https://github.com/qualixar/superlocalmemory');
     // pointers relative to plugin root
-    assert.ok(parsed.hooks && parsed.hooks.includes('hooks.json'), 'hooks pointer present');
+    // No hooks pointer (6698da5a): Claude Code loads plugin/hooks/hooks.json by
+    // convention, and declaring it too made it load twice and reject the plugin.
+    assert.equal(parsed.hooks, undefined, 'hooks pointer must be absent');
     assert.ok(parsed.mcpServers && parsed.mcpServers.includes('.mcp.json'), 'mcpServers pointer present');
     // keys must be sorted at top level
     const keys = Object.keys(parsed);
@@ -223,10 +225,10 @@ describe('renderPluginJson', () => {
 });
 
 // ---------------------------------------------------------------------------
-// TEST 3 — renderMarketplaceJson: source="./plugin", no version in plugin entry
+// TEST 3 — renderMarketplaceJson: Claude Code and Codex entries, both versioned
 // ---------------------------------------------------------------------------
 describe('renderMarketplaceJson', () => {
-  test('source="./plugin", no version in plugin entry, owner.name=Qualixar', async () => {
+  test('source="./plugin" + Codex entry, versioned entries, owner.name=Qualixar', async () => {
     const { renderMarketplaceJson } = await getModule();
     const manifest = makeManifest();
     const json = renderMarketplaceJson(manifest);
@@ -234,12 +236,18 @@ describe('renderMarketplaceJson', () => {
     assert.equal(parsed.name, 'qualixar');
     assert.equal(parsed.owner.name, 'Qualixar');
     assert.ok(Array.isArray(parsed.plugins));
-    assert.equal(parsed.plugins.length, 1);
+    // Two entries since 361ff1ec: the Codex build is offered under its own name
+    // so Codex no longer installs the Claude Code tree.
+    assert.equal(parsed.plugins.length, 2);
     assert.equal(parsed.plugins[0].name, 'superlocalmemory');
     // DOC-CORRECT: source must be "./plugin" not "./"
     assert.equal(parsed.plugins[0].source, './plugin', 'source must be ./plugin');
-    // AC-3: NO version key in plugin entry
-    assert.equal(parsed.plugins[0].version, undefined, 'plugin entry must have no version key');
+    assert.equal(parsed.plugins[1].name, 'superlocalmemory-codex');
+    assert.equal(parsed.plugins[1].source, './codex-plugin');
+    // Versioned since a8187098: without a version a client never sees an update.
+    for (const entry of parsed.plugins) {
+      assert.equal(entry.version, manifest.version, `${entry.name} must carry the version`);
+    }
   });
 });
 
@@ -598,15 +606,24 @@ describe('Integration: real repo build', () => {
     assert.ok(fs.existsSync(p), '.claude-plugin/marketplace.json must exist');
     const parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
     assert.equal(parsed.plugins[0].source, './plugin');
-    assert.equal(parsed.plugins[0].version, undefined, 'no version in marketplace plugin entry');
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(REPO_ROOT, 'plugin-src', 'manifest.json'), 'utf8'));
+    for (const entry of parsed.plugins) {
+      assert.equal(entry.version, manifest.version, `${entry.name} must carry the version`);
+    }
   });
 
-  test('plugin/.mcp.json has SLM_MCP_PROFILE=code', () => {
+  test('plugin/.mcp.json leaves the profile and data dir to the user', () => {
+    // 175b013f: forcing SLM_MCP_PROFILE dropped tools the user had chosen and
+    // SLM_DATA_DIR pointed the editor at an empty private store. Only the
+    // agent id (attribution, not configuration) is set.
     const p = path.join(REPO_ROOT, 'plugin', '.mcp.json');
     assert.ok(fs.existsSync(p), 'plugin/.mcp.json must exist');
     const parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
     const server = Object.values(parsed.mcpServers)[0];
-    assert.equal(server.env.SLM_MCP_PROFILE, 'code', 'SLM_MCP_PROFILE must be code');
+    assert.equal(server.env.SLM_MCP_PROFILE, undefined, 'must not force a tool profile');
+    assert.equal(server.env.SLM_DATA_DIR, undefined, 'must not re-point the data dir');
+    assert.equal(server.env.SLM_AGENT_ID, 'claude_code');
   });
 
   test('all 7 skills exist in plugin/skills/', () => {
