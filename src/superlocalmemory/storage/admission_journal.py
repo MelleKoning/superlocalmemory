@@ -280,22 +280,11 @@ class AdmissionJournal:
         now = _now_ms()
         journal_id = uuid.uuid4().hex
 
-        # Keep existing retries read-only and out of the writer's queue. A
-        # miss is rechecked inside the writer's transaction below.
-        with self._read_connection(deadline=deadline) as conn:
-            existing = conn.execute(
-                "SELECT * FROM admission_journal "
-                "WHERE profile_id=? AND idempotency_key=?",
-                (request.profile_id, request.idempotency_key),
-            ).fetchone()
-        if existing is not None:
-            entry = self._entry_from_row(existing)
-            if entry.request_hash != request_hash:
-                raise IdempotencyConflict(
-                    "idempotency key belongs to a different immutable request"
-                )
-            return entry
-
+        # No separate read first: the key is checked inside the writer's own
+        # transaction. A reader on this path starts read transactions while
+        # the writer commits every few milliseconds, and SQLite then makes
+        # it retry for its WAL snapshot with growing sleeps - seconds, under
+        # a burst. A retry costs one read-only operation in the next batch.
         def insert(conn: sqlite3.Connection) -> AdmissionEntry:
             existing = conn.execute(
                 "SELECT * FROM admission_journal "
@@ -431,9 +420,8 @@ class AdmissionJournal:
             raise ValueError("receipt operation_id must be a string")
         if commit_sequence is not None and not isinstance(commit_sequence, int):
             raise ValueError("receipt commit_sequence must be an integer")
-        existing = self._get_entry(journal_id, deadline=deadline)
-        if existing.state == "committed":
-            return existing
+        # Already committed is answered inside the writer's transaction
+        # (see prepare for why there is no separate read on this path).
         return self._transition(
             journal_id,
             target="committed",

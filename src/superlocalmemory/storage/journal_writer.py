@@ -43,7 +43,7 @@ logger = logging.getLogger("superlocalmemory.storage.journal_writer")
 MAX_BATCH = 64
 LINGER_SECONDS = 0.002
 QUEUE_CAP = 1024
-READ_POOL_SIZE = 8
+READ_POOL_SIZE = 4
 #: SQLite wait for an operation that has no caller deadline (replay, tests).
 _UNBOUNDED_BUSY_SECONDS = 5.0
 #: An idle writer thread exits and closes its connection; the next operation

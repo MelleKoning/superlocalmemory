@@ -74,21 +74,16 @@ def test_same_idempotency_key_returns_original_receipt(tmp_path, actor, admissio
     assert journal.count() == 1
 
 
-def test_idempotent_retries_do_not_open_redundant_write_transactions(
-    tmp_path, actor, admission_request, monkeypatch
+def test_idempotent_retries_change_nothing_and_return_the_original(
+    tmp_path, actor, admission_request
 ) -> None:
     journal = AdmissionJournal(tmp_path / "admission_journal.db", codec=_TestCodec())
     prepared = journal.prepare(admission_request, actor)
     dispatched = journal.mark_dispatched(prepared.journal_id)
 
-    def fail_write(*_args, **_kwargs):
-        raise AssertionError("idempotent retry queued a journal write")
-
-    monkeypatch.setattr(journal._writer, "submit", fail_write)
     assert journal.prepare(admission_request, actor) == dispatched
     assert journal.mark_dispatched(prepared.journal_id) == dispatched
 
-    monkeypatch.undo()
     receipt = {
         "operation_id": "operation-1",
         "fact_ids": ["fact-1"],
@@ -96,11 +91,35 @@ def test_idempotent_retries_do_not_open_redundant_write_transactions(
         "commit_sequence": 3,
     }
     committed = journal.mark_committed(prepared.journal_id, receipt)
-    monkeypatch.setattr(journal._writer, "submit", fail_write)
 
     assert journal.prepare(admission_request, actor) == committed
     assert journal.mark_dispatched(prepared.journal_id) == committed
     assert journal.mark_committed(prepared.journal_id, receipt) == committed
+    assert journal.count() == 1
+
+
+def test_the_save_path_never_borrows_a_journal_reader(
+    tmp_path, actor, admission_request, monkeypatch
+) -> None:
+    """prepare and mark_committed use only the writer.
+
+    A reader starting read transactions while the writer commits every few
+    milliseconds is made to retry for its WAL snapshot with growing sleeps;
+    under a burst that stalled saves for seconds.
+    """
+    journal = AdmissionJournal(tmp_path / "admission_journal.db", codec=_TestCodec())
+
+    def no_reader(*_args, **_kwargs):
+        raise AssertionError("the save path borrowed a journal reader")
+
+    monkeypatch.setattr(journal, "_read_connection", no_reader)
+    prepared = journal.prepare(admission_request, actor)
+    assert journal.prepare(admission_request, actor) == prepared
+    receipt = {"operation_id": "op", "fact_ids": ["f"], "commit_sequence": 1}
+    committed = journal.mark_committed(prepared.journal_id, receipt)
+    assert committed.state == "committed"
+    assert journal.mark_committed(prepared.journal_id, receipt) == committed
+    journal.close()
 
 
 def test_known_prepared_dispatch_skips_redundant_read(

@@ -250,23 +250,6 @@ def test_claimed_commit_reports_the_truth_past_the_deadline(tmp_path) -> None:
         writer.close()
 
 
-def test_idempotent_retry_is_answered_while_the_writer_is_blocked(tmp_path) -> None:
-    path = tmp_path / "admission_journal.db"
-    journal = AdmissionJournal(path, codec=_TestCodec())
-    original = journal.prepare(_request("retry"), _ACTOR)
-    blocker = sqlite3.connect(path)
-    blocker.execute("BEGIN IMMEDIATE")
-    try:
-        duplicate = journal.prepare(
-            _request("retry"), _ACTOR, deadline=time.monotonic() + 0.05,
-        )
-    finally:
-        blocker.rollback()
-        blocker.close()
-        journal.close()
-    assert duplicate.journal_id == original.journal_id
-
-
 def test_read_busy_is_a_typed_unavailable(tmp_path, monkeypatch) -> None:
     """A journal read cannot leak a raw SQLite lock error."""
     journal = _journal(tmp_path)
