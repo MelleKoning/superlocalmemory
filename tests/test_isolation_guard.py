@@ -137,3 +137,71 @@ def test_runtime_writers_stay_in_tmp_without_the_root_conftest(tmp_path) -> None
     )
     kept = _run_without_root_conftest(tmp_path, pinned=True)
     assert not kept.exists(), textwrap.shorten(str(list(kept.rglob("*"))), 500)
+
+
+_LOCK_WRITER = """
+{prelude}
+import os
+from pathlib import Path
+
+
+def test_writes_the_config_lock():
+    root = Path(os.environ.get("SLM_DATA_DIR") or Path.home() / ".superlocalmemory")
+    root.mkdir(parents=True, exist_ok=True)
+    (root / ".config.json.lock").write_text("held")
+
+
+def test_writes_the_live_root_directly():
+    (Path(os.environ["FAKE_LIVE_ROOT"]) / "direct.lock").write_text("held")
+"""
+
+
+def _run_noconftest(tmp_path: Path, name: str, *, prelude: str, extra: list[str]):
+    """``pytest --noconftest`` in a subprocess whose live root is a stand-in.
+
+    The stand-in is both HOME's store and the SLM_DATA_DIR the invoking shell
+    set; the real ~/.superlocalmemory is never involved.
+    """
+    case = tmp_path / name
+    home, live = case / "home", case / "live-data"
+    home.mkdir(parents=True)
+    live.mkdir()
+    test_file = case / f"test_{name}.py"
+    test_file.write_text(_LOCK_WRITER.format(prelude=prelude))
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("SLM_", "SL_MEMORY"))}
+    env.update(HOME=str(home), SLM_DATA_DIR=str(live), FAKE_LIVE_ROOT=str(live),
+               SLM_DAEMON_PORT="48733",
+               PYTHONPATH=os.pathsep.join([str(REPO_ROOT / "src"), str(REPO_ROOT)]))
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--noconftest",
+         *extra, str(test_file)],
+        cwd=case, env=env, capture_output=True, text=True, timeout=300,
+    )
+    leaked = sorted(p.name for p in live.iterdir()) + sorted(
+        p.name for p in (home / ".superlocalmemory").glob("*"))
+    return proc, leaked
+
+
+def test_noconftest_runs_with_the_repo_settings_stay_out_of_the_live_root(tmp_path) -> None:
+    """``pytest --noconftest`` from the repo loads the isolation plugin via addopts."""
+    proc, leaked = _run_noconftest(
+        tmp_path, "addopts", prelude="",
+        extra=["-c", str(REPO_ROOT / "pyproject.toml"), "--rootdir", str(REPO_ROOT)])
+    assert "1 passed" in proc.stdout, proc.stdout[-2000:] + proc.stderr[-2000:]
+    assert "pytest denied live SLM state" in proc.stdout  # the direct write, refused
+    assert leaked == []
+
+
+def test_test_modules_stay_out_of_the_live_root_without_conftest_or_addopts(tmp_path) -> None:
+    """Every module under tests/ imports the ``tests`` package first, which
+    installs the isolation even with ``--noconftest -o addopts=``. The control,
+    a module that does not, shows the check can see a leak."""
+    proc, leaked = _run_noconftest(tmp_path, "package", prelude="import tests",
+                                   extra=["-o", "addopts="])
+    assert "1 passed" in proc.stdout, proc.stdout[-2000:] + proc.stderr[-2000:]
+    assert "pytest denied live SLM state" in proc.stdout  # the direct write, refused
+    assert leaked == []
+    control, control_leaked = _run_noconftest(tmp_path, "control", prelude="",
+                                              extra=["-o", "addopts="])
+    assert control.returncode == 0, control.stdout[-2000:]
+    assert control_leaked == [".config.json.lock", "direct.lock"]
