@@ -530,3 +530,10 @@ class RecallResponse:
     # key is a reporting gap and ``empty`` is an answer. Additive — backward
     # compatible.
     channel_status: dict[str, str] = field(default_factory=dict)
+    # 4.1.20: milliseconds spent in each retrieval stage of this recall --
+    # "query_embedding", "channels" (which includes it), "rerank" and
+    # "retrieval_total". A recall that is slow, or that came back with
+    # ``warming`` channels, says which stage used its time. Empty when the
+    # response did not come from the retrieval engine. In-process, like
+    # ``answer_check_trace``: the MCP/HTTP recall envelope is unchanged.
+    stage_ms: dict[str, float] = field(default_factory=dict)
