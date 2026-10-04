@@ -172,6 +172,9 @@ def load_remote_listener_config(
     if not listen:
         return None
     host, port = parse_listen(listen)
+    problem = uvicorn_problem()
+    if problem:
+        raise RemoteListenerError("uvicorn_untested", problem + ".")
     if main_port is not None and port == int(main_port):
         raise RemoteListenerError("port_conflict",
                                   f"port {port} is the main daemon port; choose another.")
@@ -284,6 +287,27 @@ def bind_socket(host: str, port: int) -> socket.socket:
     return sock
 
 
+#: uvicorn releases whose Server internals this pairing was tested against:
+#: ``serve(sockets)``, ``shutdown(sockets)``, ``capture_signals()``,
+#: ``should_exit`` and ``started``. ``tests/server/test_uvicorn_contract.py``
+#: fails clearly if any of them changes. Outside this range remote access is
+#: refused rather than run on untested internals.
+UVICORN_TESTED = ((0, 46), (0, 47))
+
+
+def uvicorn_problem() -> str | None:
+    try:
+        import uvicorn
+    except ImportError:
+        return "uvicorn is not installed"
+    parts = tuple(int(p) for p in uvicorn.__version__.split(".")[:2] if p.isdigit())
+    low, high = UVICORN_TESTED
+    if not low <= parts < high:
+        return (f"uvicorn {uvicorn.__version__} is not a tested version for remote access "
+                f"(tested: {low[0]}.{low[1]}.x); install the version SLM pins")
+    return None
+
+
 def make_servers(app: Any, main_config: Any, remote: RemoteListenerConfig):
     """The two uvicorn servers. Imported lazily: uvicorn is a daemon dependency."""
     import uvicorn
@@ -291,18 +315,12 @@ def make_servers(app: Any, main_config: Any, remote: RemoteListenerConfig):
     from superlocalmemory.server.forwarded_guard import uvicorn_proxy_options
 
     class QuietServer(uvicorn.Server):
-        """The remote server: no signal handlers, no lifespan, shares main's state."""
-
-        main: Any = None
+        """The remote server: no signal handlers (the main server owns them) and
+        no lifespan (``lifespan="off"``; the app's lifespan yields no state)."""
 
         @contextlib.contextmanager
         def capture_signals(self):  # noqa: D401 — the main server owns signals
             yield
-
-        async def startup(self, sockets=None):
-            if self.main is not None and getattr(self.main, "lifespan", None) is not None:
-                self.lifespan.state = self.main.lifespan.state
-            await super().startup(sockets=sockets)
 
     remote_cfg = uvicorn.Config(
         RemoteListenerASGI(app, remote.server_names), host=remote.host, port=remote.port,
@@ -327,7 +345,6 @@ def make_servers(app: Any, main_config: Any, remote: RemoteListenerConfig):
             await super().shutdown(sockets=sockets)
 
     main_srv = PrimaryServer(main_config)
-    remote_srv.main = main_srv
     return main_srv, remote_srv
 
 

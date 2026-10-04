@@ -111,7 +111,8 @@ def test_gated_exit_never_forwards_the_api_key_through_a_redirect(collector, sta
     try:
         request = urllib.request.Request(
             f"http://127.0.0.1:{squatter.server_address[1]}/mcp/hermes",
-            data=b"{}" if method == "POST" else None, method=method, headers={"X-SLM-API-Key": _KEY, "Content-Type": "application/json"})
+            data=b"{}" if method == "POST" else None, method=method,
+            headers={"X-SLM-API-Key": _KEY, "Content-Type": "application/json"})
         with pytest.raises(urllib.error.HTTPError) as err:
             outbound_http.urlopen(request, timeout=5)
         assert err.value.code == status
