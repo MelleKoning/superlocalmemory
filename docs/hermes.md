@@ -28,8 +28,9 @@ to this plugin when Hermes asks; no wildcard MCP grant is needed.
 
 By default the plugin recalls bounded, untrusted evidence and records scrubbed
 tool telemetry. Full user/assistant turn capture is off by default; enable it
-only by setting `plugins.entries.superlocalmemory.capture_turns: true` in your
-Hermes configuration.
+only by setting `plugins.entries.superlocalmemory.settings.capture_turns: true`
+in your Hermes configuration (Hermes reads plugin settings from the `settings`
+block of the plugin's entry).
 
 The pack installs the two additive native plugins independently. The bridge
 remains inactive unless both products are installed and their individual MCP
@@ -38,3 +39,62 @@ grants are approved.
 `bounded-loops.dev/slm-bridge/v1` remains observation-only. Bridge v2 learns
 only validated execution-reliability signals from eligible terminal receipts;
 it never turns a passing gate into a semantic memory or a user preference.
+
+## Use an SLM that runs on another computer {#remote}
+
+If your memory lives on a dedicated SLM server, the Hermes plugin can use it
+directly. You do not need SuperLocalMemory installed on the Hermes computer.
+
+**On the SLM server** (once):
+
+```bash
+slm remote tls init --name slm.lan --ip 192.168.50.144
+slm remote enable --listen 192.168.50.144:8443
+slm restart
+slm remote keys add hermes-laptop      # prints the key once - copy it now
+slm remote check
+```
+
+Copy `remote/tls/ca.pem` from the SLM data folder (by default
+`~/.superlocalmemory/remote/tls/ca.pem`) to the Hermes computer. It is a public
+certificate, not a secret. Add `--read-only` to `keys add` for a Hermes that
+should only recall.
+
+**On the Hermes computer**, put the key in your Hermes secrets as
+`SLM_REMOTE_KEY`, then in `~/.hermes/config.yaml`:
+
+```yaml
+mcp_servers:
+  superlocalmemory:
+    url: "https://192.168.50.144:8443/mcp/hermes"
+    headers:
+      Authorization: "Bearer ${SLM_REMOTE_KEY}"
+    ssl_verify: "/path/to/slm-ca.pem"
+plugins:
+  entries:
+    superlocalmemory:
+      mcp_allowlist: ["superlocalmemory"]
+      settings:
+        connection: remote
+```
+
+Recall, lifecycle capture, skills and the memory advisor now use the SLM
+server. `/slm status`, `recall` (and `search`), `remember`, `list`, `delete`,
+`update`, `summary`, `trace`, `kinds`, `health` and `help` work remotely.
+Commands that manage the server (`serve`, `backup`, `profile`, `remote`, ...)
+and the governance and loop advisors run on the server itself. The plugin
+opens no network connection of its own: every call goes through the MCP server
+you configured above, so the address, TLS check and key live only in Hermes's
+configuration.
+
+If the server cannot be reached, `/slm remember` says **NOT SAVED** and nothing
+is stored. Automatic capture pauses for 30 seconds at a time, and `/slm status`
+shows how many captures were skipped and the last error. Nothing is kept on the
+Hermes computer to replay later; re-save anything that matters.
+
+With a read-only key, recall works and automatic capture is switched off after
+the first refused write (`/slm status` counts what was not sent).
+
+Never set `ssl_verify: false`, and never put the key in the URL. To rotate a
+key, add a new one, update `SLM_REMOTE_KEY`, then `slm remote keys revoke
+hermes-laptop` on the server; revocation takes effect on the next request.

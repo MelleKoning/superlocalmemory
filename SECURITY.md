@@ -69,8 +69,31 @@ shared secret (mesh routes only), or comes from an address you allowlisted for
 LAN use (`SLM_REMOTE=1` with `SLM_MCP_ALLOWED_HOSTS`). This covers reads as
 well as writes, and the dashboard WebSocket. Up to 4.1.19 reads from the LAN
 needed no credentials. Only the dashboard page itself, its static files and
-`/health` are served without them; `/mcp` keeps its own API-key check. The
+`/health` are served without them; `/mcp` has its own check (below). The
 install token is not accepted from another computer.
+
+**Remote access (4.1.20+).** Off by default. When enabled with `slm remote
+enable`, SLM opens a second listener that only speaks TLS and only serves
+`/mcp` and `/health`. The dashboard, the HTTP API and the internal hook
+endpoints are never reachable through it, and every caller on it is treated as
+remote, even from `127.0.0.1`. Callers present a named key (`Authorization:
+Bearer slmr_...`). SLM stores only a hash of each key, refuses every remote key
+if the key file is writable or readable by other users, and checks revocation
+on every request. Keys are `read` or `write`. Server-management tools (profile
+switching, code-graph indexing of local paths, maintenance, mesh, retention,
+loops, pattern deletes) are refused to every remote caller and hidden from its
+tool list; tool names are matched exactly, and batched requests, repeated JSON
+keys and MCP methods other than tool calls are refused. A remote key reaches
+every profile on the server. Company mode (`require_login = true`) refuses
+remote keys. The install token, hook token and daemon capability are accepted
+only from this computer and are never valid on the remote listener; SLM's own
+hooks only talk to the daemon on this computer. MCP requests from other
+computers over plain HTTP are refused (`403 remote_requires_tls`) unless
+`SLM_REMOTE_ALLOW_PLAINTEXT=1`; if a key was sent over plain HTTP, revoke it.
+Memory sent to your own SLM server is stored as written, the same as a local
+save. Credential redaction still applies to everything the SLM server sends to
+third parties. The Hermes plugin's remote mode opens no network connection of
+its own; it uses the MCP server configured in Hermes.
 
 **A proxied request is never local.** SuperLocalMemory trusts a caller on
 `127.0.0.1` as the local user. It decides that from the socket peer only:

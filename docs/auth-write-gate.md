@@ -18,12 +18,14 @@ The write gate accepts one of four credentials in priority order:
 | **Daemon capability** | Internal daemon process (process/filesystem state) | MCP `remember` / `recall` calls routed through the resident daemon itself |
 | **Install token** | Same-origin dashboard browser | Dashboard writes and config tests at `http://127.0.0.1:8765` |
 | **API key** (`X-SLM-API-Key` header) | Remote callers with a configured key | Non-loopback HTTP MCP and direct API writes when API key auth is enabled |
+| **Remote key** (`Authorization: Bearer slmr_...`) | AI tools on other computers (`slm remote keys add`) | MCP only, over HTTPS, scoped `read` or `write`; host-management tools are refused (see [distributed-deployment.md](distributed-deployment.md#remote-access-over-tls-4120)) |
 | **Uncredentialed loopback** | Any caller on `127.0.0.1` | Local CLI, local MCP clients, and local IDE connections (the default local-first posture) |
 
 A caller on loopback with no credentials is trusted as the local OS-user
 boundary. This is the default and covers all standard single-machine use.
 
-Read endpoints are always open regardless of auth configuration.
+Read endpoints are open to this computer. Other computers need a key or the
+`SLM_REMOTE` LAN allowlist (4.1.20+).
 
 ---
 
