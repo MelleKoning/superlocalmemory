@@ -111,6 +111,15 @@ def _snapshot(response) -> str:
     data = dataclasses.asdict(response)
     data.pop("retrieval_time_ms", None)
     data.pop("query_id", None)
+    # 4.1.20 (652ceabf) attaches answer_check_trace with wall-clock timings.
+    # Like retrieval_time_ms they differ run to run; its provenance fields
+    # (detail, backend, threshold, reordered) stay in the comparison.
+    trace = data.get("answer_check_trace")
+    if isinstance(trace, dict):
+        data["answer_check_trace"] = {
+            k: v for k, v in trace.items()
+            if k not in ("retrieval_ms", "judge_ms", "total_ms")
+        }
     return json.dumps(data, sort_keys=True, default=str)
 
 
