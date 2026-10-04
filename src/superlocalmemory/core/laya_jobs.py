@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -70,6 +71,14 @@ class _LayaJob:
     def status(self):
         with self._lock:
             return self._status
+
+    def forget(self) -> None:
+        """Drop the last finished result (after Remove), so it is not
+        reported against an install that no longer exists."""
+        lr = _runtime()
+        with self._lock:
+            if not self._running:
+                self._status = lr.LayaRuntimeStatus(state=lr.STATE_NOT_INSTALLED)
 
     def _launch(self, first_step: str, work: Callable[[Callable[[float, str], None]], Any],
                 on_done: DoneFn | None) -> bool:
@@ -124,6 +133,16 @@ class LayaInstallJob(_LayaJob):
 
         return self._launch("Starting…", _work, on_done)
 
+    def cancel(self) -> bool:
+        """Stop the running setup at its next check (within about a second).
+        False when nothing is running. What was downloaded is kept."""
+        from superlocalmemory.core import laya_process
+
+        if not self.running:
+            return False
+        laya_process.CANCEL.set()
+        return True
+
 
 class LayaAdoptJob(_LayaJob):
     """Checks an install someone already has ("Use an existing install")."""
@@ -146,4 +165,36 @@ class LayaAdoptJob(_LayaJob):
         return self._launch("Checking that install works", _work, on_done)
 
 
-__all__ = ["LayaAdoptJob", "LayaInstallJob"]
+class LayaTestJob(_LayaJob):
+    """"Test" for an install that is set up: load it and ask the check question.
+
+    The same check the install passed when it was set up, run again now, so a
+    person can see it still works — and how long it took.
+    """
+
+    _instance: "LayaTestJob | None" = None
+    _instance_lock = threading.Lock()
+    _thread_name = "laya-test"
+
+    def start(self, python: str, hf_home: str, model_path: str, *,
+              on_done: DoneFn | None = None,
+              before_verify: HookFn | None = None) -> bool:
+        """False when a test is already running."""
+
+        def _work(progress):
+            lr = _runtime()
+            progress(0.5, "Testing the on-device check")
+            if before_verify is not None:
+                before_verify()
+            started = time.monotonic()
+            ok, reason = lr.verify(python, hf_home, model_path)
+            seconds = round(time.monotonic() - started, 1)
+            return lr.LayaRuntimeStatus(
+                state=lr.STATE_READY if ok else lr.STATE_FAILED, python=python,
+                hf_home=hf_home, model_path=model_path, progress=1.0,
+                step=f"{seconds}", error="" if ok else reason)
+
+        return self._launch("Testing the on-device check", _work, on_done)
+
+
+__all__ = ["LayaAdoptJob", "LayaInstallJob", "LayaTestJob"]

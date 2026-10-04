@@ -193,7 +193,8 @@ class TestDetectOrder:
         })
         status = lr.detect()
         assert status.state == lr.STATE_FAILED
-        assert status.step == "Needs a check — choose Set up again."
+        assert status.step == "Needs repair — choose Repair."
+        assert status.action == lr.ACTION_SETUP
 
     def test_failed_when_managed_files_are_missing_despite_verified_true(self):
         run_dir = lr.runtime_dir()
@@ -285,7 +286,9 @@ class TestDetectOrder:
         )
         status = lr.detect(cfg)
         assert status.state == lr.STATE_FAILED
-        assert status.step == "Needs a check — choose Set up again."
+        # An install made elsewhere is checked, never "set up again" (a download).
+        assert status.step == "Needs a check — choose Check this install."
+        assert status.action == lr.ACTION_CHECK
 
     def test_cfg_with_default_repo_id_is_not_treated_as_explicit(self, tmp_path):
         """sufficiency_model defaults to the bare repo id ('aac6fef/laya-mlx'),
@@ -443,7 +446,7 @@ class TestInstall:
 
         result = lr.install()
         assert result.state == lr.STATE_FAILED
-        assert result.step == "Needs a check — choose Set up again."
+        assert result.step == "Needs repair — choose Repair."
         marker = json.loads((lr.runtime_dir() / ".slm-managed").read_text())
         assert marker["verified"] is False
 
@@ -579,7 +582,7 @@ class TestAdopt:
 
         result = lr.adopt(str(python), "", str(model))
         assert result.state == lr.STATE_FAILED
-        assert result.step == "Needs a check — choose Set up again."
+        assert result.step == "Needs a check — choose Check this install."
         adopted = json.loads((lr.runtime_dir() / "adopted.json").read_text())
         assert adopted["verified"] is False
 

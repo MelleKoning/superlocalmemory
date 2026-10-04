@@ -14,6 +14,7 @@ them and explains, in its own docstring, exactly when each counts as READY.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
@@ -30,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from superlocalmemory.core import laya_interpreter
+from superlocalmemory.core import laya_interpreter, laya_process
 from superlocalmemory.infra.data_root import canonical_data_root
 
 try:
@@ -51,10 +52,27 @@ STATE_INSTALLING = "installing"
 STATE_READY = "ready"                  # installed AND the canary check passed
 STATE_FAILED = "failed"
 
-_NEEDS_CHECK_STEP = "Needs a check — choose Set up again."
+#: What fixes a FAILED install — the dashboard offers exactly this action.
+#: Advice that points at the wrong fix strands people: an install SLM did not
+#: make was once told to "choose Set up again", which started an 800 MB
+#: download on a network that blocks it, instead of simply checking it.
+ACTION_SETUP = "setup"   # SLM's own install: Repair (set up again; it resumes)
+ACTION_CHECK = "check"   # an install made elsewhere: check it; downloads nothing
+
+_REPAIR_STEP = "Needs repair — choose Repair."
+_CHECK_STEP = "Needs a check — choose Check this install."
+UNCHECKED = "SLM found this install but hasn't checked it yet. Checking downloads nothing."
+UNFINISHED = ("The last setup stopped before it finished. Choose Repair to finish it "
+              "(what was downloaded is kept), or Remove to delete it.")
+_MANAGED_MISSING = "Parts of the install are missing. Choose Repair, or Remove."
+_MANAGED_UNCHECKED = "The install didn't pass its check. Choose Repair, or Remove."
+_MOVED = ("The install can't be found — it may have moved. Enter where it is now "
+          "under Advanced, or choose Forget.")
 
 #: ~807 MB — see LAYA_MODEL_REVISION. Used only to estimate install progress.
 _EXPECTED_DOWNLOAD_BYTES = 807 * 1024 * 1024
+_EXPECTED_MB = _EXPECTED_DOWNLOAD_BYTES // (1024 * 1024)
+_STALL_S = laya_process.DEFAULT_STALL_S
 _MIN_FREE_BYTES = int(1.5 * 1024 ** 3)
 
 _VENV_TIMEOUT_S = 120.0
@@ -65,6 +83,12 @@ _NETWORK_MESSAGE = (
     "Couldn't reach the download server. If your network blocks downloads, "
     "use 'Use an existing install'."
 )
+_STALLED_MESSAGE = (
+    "The download stopped making progress, so it was stopped. Your network may block "
+    "the download server — use 'Use an existing install', or choose Repair to try again."
+)
+_CANCELLED_MESSAGE = ("Setup was cancelled. Choose Repair to continue — what was "
+                      "already downloaded is kept.")
 _NETWORK_HINTS = (
     "timeout", "timed out", "connection", "network", "resolve", "unreachable",
     "ssl", "certificate", "name or service not known",
@@ -84,6 +108,7 @@ class LayaRuntimeStatus:
     progress: float = 0.0      # 0..1 while installing
     step: str = ""             # plain-language current step, for the dashboard
     error: str = ""            # plain-language reason; never contains secrets
+    action: str = ""           # FAILED only: ACTION_SETUP or ACTION_CHECK — the fix
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -167,20 +192,84 @@ def _status_from_record(record: dict[str, Any], *, managed: bool,
             model_path=model_path, model_revision=revision, progress=1.0, step="Ready",
         )
     if refused:
-        return LayaRuntimeStatus(
-            state=STATE_FAILED, managed=managed, python=python, hf_home=hf_home,
-            model_path=model_path, model_revision=revision, step=_NEEDS_CHECK_STEP,
-            error=refused,
-        )
+        error = refused
+    elif not files_ok:
+        error = _MANAGED_MISSING if managed else _MOVED
+    else:  # present, never passed its check: say why it last failed, when known
+        error = str(record.get("reason") or "") or (_MANAGED_UNCHECKED if managed else UNCHECKED)
+    return _needs_fix(managed=managed, python=python, hf_home=hf_home,
+                      model_path=model_path, model_revision=revision, error=error)
+
+
+def _needs_fix(*, managed: bool, error: str, **paths: str) -> LayaRuntimeStatus:
+    """FAILED, with the one action that fixes it: SLM's own install is
+    repaired; an install made elsewhere is checked (nothing is downloaded)."""
     return LayaRuntimeStatus(
-        state=STATE_FAILED, managed=managed, python=python, hf_home=hf_home,
-        model_path=model_path, model_revision=revision, step=_NEEDS_CHECK_STEP,
-        error="" if files_ok else "The install can't be found.",
-    )
+        state=STATE_FAILED, managed=managed, error=error,
+        step=_REPAIR_STEP if managed else _CHECK_STEP,
+        action=ACTION_SETUP if managed else ACTION_CHECK, **paths)
+
+
+def _inside(path: str, root: Path) -> bool:
+    roots = {str(root), str(root.resolve())}
+    return any(path == r or path.startswith(r + os.sep) for r in roots)
+
+
+def _on_disk(retrieval_config: Any, run_dir: Path) -> LayaRuntimeStatus:
+    managed_record = _read_json(run_dir / ".slm-managed")
+    adopted_record = _read_json(run_dir / "adopted.json")
+
+    cfg_python = str(getattr(retrieval_config, "sufficiency_python", "") or "").strip()
+    cfg_model = str(getattr(retrieval_config, "sufficiency_model", "") or "").strip()
+    cfg_hf_home = str(getattr(retrieval_config, "sufficiency_hf_home", "") or "").strip()
+
+    if cfg_python and cfg_model and Path(cfg_model).is_absolute():
+        for record, managed in ((adopted_record, False), (managed_record, True)):
+            if _record_matches(record, cfg_python, cfg_model):
+                return _status_from_record(
+                    record, managed=managed, hf_home_override=cfg_hf_home)
+        managed = _inside(cfg_python, run_dir)
+        return _needs_fix(managed=managed, python=cfg_python, hf_home=cfg_hf_home,
+                          model_path=cfg_model, error=UNFINISHED if managed else UNCHECKED)
+
+    if adopted_record is not None:
+        return _status_from_record(adopted_record, managed=False)
+
+    if managed_record is not None:
+        return _status_from_record(managed_record, managed=True)
+
+    if _progress_stamp_path(run_dir).exists():
+        # A setup that never reached its check: the process stopped mid-way
+        # (a crash, a restart, a closed lid). Resumable, so never "not installed".
+        return _needs_fix(managed=True, error=UNFINISHED)
+
+    return LayaRuntimeStatus(state=STATE_NOT_INSTALLED)
+
+
+def _with_last_failure(status: LayaRuntimeStatus) -> LayaRuntimeStatus:
+    """Why the last setup in this process failed, when the disk alone can't say.
+
+    Without this, a download that failed on a blocked network came back as
+    "not checked yet" — true of the files, silent about what happened.
+    """
+    if status.state not in (STATE_FAILED, STATE_NOT_INSTALLED):
+        return status
+    if status.state == STATE_FAILED and not status.managed:
+        return status  # an install made elsewhere: its own record says why
+    last = LayaInstallJob.instance().status()
+    if last.state != STATE_FAILED or not last.error:
+        return status
+    return dataclasses.replace(status, state=STATE_FAILED, managed=True, error=last.error,
+                               step=_REPAIR_STEP, action=ACTION_SETUP)
 
 
 def detect(retrieval_config: Any = None) -> LayaRuntimeStatus:
-    """Where Laya is, if anywhere. No network, never raises, under a second."""
+    """Where Laya is, if anywhere. No network, never raises, under a second.
+
+    INSTALLING only while a job in this process is actually running — never
+    from files a stopped setup left behind; those read as FAILED with
+    ``action`` naming the fix.
+    """
     try:
         if not _apple_silicon():
             return LayaRuntimeStatus(state=STATE_UNSUPPORTED)
@@ -190,31 +279,7 @@ def detect(retrieval_config: Any = None) -> LayaRuntimeStatus:
             if job_status.state == STATE_INSTALLING:
                 return job_status
 
-        run_dir = runtime_dir()
-        managed_record = _read_json(run_dir / ".slm-managed")
-        adopted_record = _read_json(run_dir / "adopted.json")
-
-        cfg_python = str(getattr(retrieval_config, "sufficiency_python", "") or "").strip()
-        cfg_model = str(getattr(retrieval_config, "sufficiency_model", "") or "").strip()
-        cfg_hf_home = str(getattr(retrieval_config, "sufficiency_hf_home", "") or "").strip()
-
-        if cfg_python and cfg_model and Path(cfg_model).is_absolute():
-            for record, managed in ((adopted_record, False), (managed_record, True)):
-                if _record_matches(record, cfg_python, cfg_model):
-                    return _status_from_record(
-                        record, managed=managed, hf_home_override=cfg_hf_home)
-            return LayaRuntimeStatus(
-                state=STATE_FAILED, python=cfg_python, hf_home=cfg_hf_home, model_path=cfg_model,
-                step=_NEEDS_CHECK_STEP, error="This install hasn't been checked yet.",
-            )
-
-        if adopted_record is not None:
-            return _status_from_record(adopted_record, managed=False)
-
-        if managed_record is not None:
-            return _status_from_record(managed_record, managed=True)
-
-        return LayaRuntimeStatus(state=STATE_NOT_INSTALLED)
+        return _with_last_failure(_on_disk(retrieval_config, runtime_dir()))
     except Exception as exc:  # noqa: BLE001 — detect() must never raise.
         logger.warning("Laya detect() failed unexpectedly: %s", exc)
         return LayaRuntimeStatus(state=STATE_NOT_INSTALLED, error="Couldn't check the install.")
@@ -267,16 +332,7 @@ def _move_misplaced_weights(hf_cache: Path) -> None:
 
 
 def _folder_size(path: Path) -> int:
-    if not path.exists():
-        return 0
-    total = 0
-    for entry in path.rglob("*"):
-        try:
-            if entry.is_file():
-                total += entry.stat().st_size
-        except OSError:
-            continue
-    return total
+    return laya_process.folder_size(path)
 
 
 def _check_disk_space(path: Path) -> bool:
@@ -296,17 +352,9 @@ def _classify_subprocess_error(text: str) -> str:
 
 def _run_subprocess(cmd: list[str], *, timeout_s: float,
                      env: dict[str, str] | None = None) -> tuple[bool, str, str]:
-    """(ok, error_kind, raw_detail-for-logs-only). Never raises."""
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, env=env)
-    except subprocess.TimeoutExpired as exc:
-        return False, "timeout", str(exc)
-    except OSError as exc:
-        return False, "other", str(exc)
-    if result.returncode == 0:
-        return True, "", ""
-    detail = (result.stderr or result.stdout or "")[-2000:]
-    return False, _classify_subprocess_error(detail), detail
+    """(ok, error_kind, raw_detail-for-logs-only). Never raises; Cancel stops it."""
+    return laya_process.run(cmd, timeout_s=timeout_s, env=env,
+                            classify=_classify_subprocess_error)
 
 
 def _create_venv(venv_dir: Path, *, timeout_s: float) -> tuple[bool, str, str]:
@@ -333,32 +381,30 @@ def _download_weights(python: Path, repo: str, revision: str, cache_dir: Path, *
     env = {k: v for k, v in os.environ.items()
            if k not in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")}
     env["TOKENIZERS_PARALLELISM"] = "false"
-    try:
-        proc = subprocess.Popen(
-            [str(python), "-c", script, repo, revision, str(cache_dir)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=env,
-        )
-    except OSError as exc:
-        return False, "other", str(exc)
-
-    deadline = time.monotonic() + timeout_s
-    while True:
+    # stderr goes to a file, never a pipe: the library draws progress bars on
+    # stderr, and a pipe nobody reads fills up and freezes the download.
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as err:
         try:
-            proc.wait(timeout=1.0)
-            break
-        except subprocess.TimeoutExpired:
-            if time.monotonic() >= deadline:
-                proc.kill()
-                proc.wait(timeout=5)
-                return False, "timeout", "download exceeded its time budget"
+            proc = subprocess.Popen(
+                [str(python), "-c", script, repo, revision, str(cache_dir)],
+                stdout=subprocess.DEVNULL, stderr=err, text=True, env=env,
+            )
+        except OSError as exc:
+            return False, "other", str(exc)
+
+        def _report(size: int) -> None:
             if progress is not None:
-                done_fraction = min(_folder_size(cache_dir) / _EXPECTED_DOWNLOAD_BYTES, 1.0)
-                fraction = 0.35 + 0.55 * done_fraction
-                try:
-                    progress(fraction, "Downloading the model weights")
-                except Exception:  # noqa: BLE001 — a bad UI callback can't abort an install
-                    pass
-    stderr = proc.stderr.read() if proc.stderr else ""
+                done = min(size / _EXPECTED_DOWNLOAD_BYTES, 1.0)
+                progress(0.35 + 0.55 * done, "Downloading the model weights "
+                         f"({size // (1024 * 1024)} of {_EXPECTED_MB} MB)")
+
+        stopped = laya_process.watch_download(
+            proc, lambda: _folder_size(cache_dir), timeout_s=timeout_s,
+            stall_s=_STALL_S, on_size=_report)
+        if stopped is not None:
+            return stopped
+        err.seek(0)
+        stderr = err.read()[-2000:]
     if proc.returncode == 0:
         return True, "", ""
     return False, _classify_subprocess_error(stderr), stderr
@@ -369,6 +415,10 @@ def _failure_message(kind: str, *, doing: str, do: str) -> str:
     gerund and an infinitive phrase for the timeout/generic cases."""
     if kind == "network":
         return _NETWORK_MESSAGE
+    if kind == laya_process.KIND_STALLED:
+        return _STALLED_MESSAGE
+    if kind == laya_process.KIND_CANCELLED:
+        return _CANCELLED_MESSAGE
     if kind == "timeout":
         return f"{doing} took too long and timed out. Please try again."
     return f"Couldn't {do}. Please try again."
@@ -430,6 +480,9 @@ def _run_resumable_steps(run_dir: Path, venv_dir: Path, venv_python: Path,
     stamp = _load_stamp(run_dir)
 
     if not (stamp.get(_STEP_VENV) and venv_python.exists()):
+        # A new environment is empty: whatever the stamp says was installed
+        # into the old one is not in this one.
+        stamp.pop(_STEP_PIP, None)
         report(0.0, "Setting up a private Python environment")
         ok, kind, detail = _create_venv(venv_dir, timeout_s=_VENV_TIMEOUT_S)
         if not ok:
@@ -448,6 +501,8 @@ def _run_resumable_steps(run_dir: Path, venv_dir: Path, venv_python: Path,
                                      do="install the answer-check package")
         _mark_stamp(run_dir, _STEP_PIP)
     report(0.35, "Package installed")
+    if laya_process.CANCEL.is_set():
+        return _CANCELLED_MESSAGE
 
     _move_misplaced_weights(hf_cache)
     # Done only when the weights are complete: the library resumes a partial
@@ -486,6 +541,7 @@ def _verify_and_record(run_dir: Path, venv_python: Path, hf_cache: Path,
         "verified_at": _now_iso() if ok else "",
         "python": str(venv_python),
         "model_path": str(model_path),
+        "reason": "" if ok else reason,
     }
     _write_json_atomic(run_dir / ".slm-managed", record)
     return ok, reason
@@ -495,6 +551,7 @@ def _install_body(run_dir: Path, report: ProgressFn,
                   before_verify: Callable[[], None] | None = None) -> LayaRuntimeStatus:
     """Everything install() does once it holds the lock: disk check, the
     three resumable steps, then verify-and-record."""
+    laya_process.CANCEL.clear()  # a Cancel pressed for an earlier setup is spent
     report(0.0, "Checking free disk space")
     if not _check_disk_space(run_dir):
         return LayaRuntimeStatus(
@@ -515,11 +572,9 @@ def _install_body(run_dir: Path, report: ProgressFn,
     ok, reason = _verify_and_record(run_dir, venv_python, hf_cache, model_path)
 
     if not ok:
-        return LayaRuntimeStatus(
-            state=STATE_FAILED, managed=True, python=str(venv_python), hf_home=str(hf_cache),
-            model_path=str(model_path), model_revision=LAYA_MODEL_REVISION,
-            step=_NEEDS_CHECK_STEP, error=reason,
-        )
+        return _needs_fix(managed=True, python=str(venv_python), hf_home=str(hf_cache),
+                          model_path=str(model_path), model_revision=LAYA_MODEL_REVISION,
+                          error=reason)
 
     report(1.0, "Ready")
     return LayaRuntimeStatus(
@@ -684,57 +739,19 @@ def adopt(python: str, hf_home: str, model_path: str = "") -> LayaRuntimeStatus:
             state=STATE_READY, managed=False, python=str(python_path),
             hf_home=hf_home, model_path=resolved_model_path,
         )
-    return LayaRuntimeStatus(
-        state=STATE_FAILED, managed=False, python=str(python_path), hf_home=hf_home,
-        model_path=resolved_model_path, step=_NEEDS_CHECK_STEP, error=reason,
-    )
+    return _needs_fix(managed=False, python=str(python_path), hf_home=hf_home,
+                      model_path=resolved_model_path, error=reason)
 
 
-# remove() — delete ONLY the managed install.
-
-def remove(slm_home: Path | None = None) -> LayaRuntimeStatus:
-    """Delete the SLM-managed install only. Never touches an adopted one."""
-    run_dir = runtime_dir(slm_home)
-    marker = run_dir / ".slm-managed"
-    if not marker.exists():
-        return LayaRuntimeStatus(state=STATE_FAILED, error="No managed install to remove.")
-
-    base = Path(slm_home) if slm_home is not None else canonical_data_root()
-    try:
-        resolved_run_dir = run_dir.resolve(strict=False)
-        resolved_base = base.resolve(strict=False)
-    except OSError as exc:
-        return LayaRuntimeStatus(
-            state=STATE_FAILED, error=f"Couldn't resolve the install path: {exc}")
-
-    try:
-        resolved_run_dir.relative_to(resolved_base)
-    except ValueError:
-        return LayaRuntimeStatus(
-            state=STATE_FAILED,
-            error="Refusing to remove: the install path is outside the data directory.")
-
-    if resolved_run_dir.parts[-2:] != ("runtimes", "laya"):
-        return LayaRuntimeStatus(
-            state=STATE_FAILED, error="Refusing to remove: unexpected install path.")
-
-    check = run_dir
-    while True:
-        if check.is_symlink():
-            return LayaRuntimeStatus(
-                state=STATE_FAILED, error="Refusing to remove: a symlink is in the way.")
-        if check == base or check.parent == check:
-            break
-        check = check.parent
-
-    try:
-        shutil.rmtree(run_dir)
-    except OSError as exc:
-        return LayaRuntimeStatus(state=STATE_FAILED, error=f"Couldn't remove the install: {exc}")
-
-    return LayaRuntimeStatus(state=STATE_NOT_INSTALLED)
+# remove() lives in core/laya_remove.py; re-exported here, where callers
+# (and tests that replace it) have always found it.
+from superlocalmemory.core.laya_remove import forget_adopted, remove  # noqa: E402
 
 
 # The background jobs the dashboard starts and polls live in core/laya_jobs.py;
 # re-exported here, where callers have always found them.
-from superlocalmemory.core.laya_jobs import LayaAdoptJob, LayaInstallJob  # noqa: E402
+from superlocalmemory.core.laya_jobs import (  # noqa: E402
+    LayaAdoptJob,
+    LayaInstallJob,
+    LayaTestJob,
+)
