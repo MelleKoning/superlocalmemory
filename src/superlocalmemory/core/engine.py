@@ -351,11 +351,12 @@ class MemoryEngine:
         """
         try:
             from superlocalmemory.core.mcp_embedder_proxy import McpEmbedderProxy
-            port = getattr(self._config, "daemon_port", 8765)
-            proxy = McpEmbedderProxy(port=port)
+            # Bound to the daemon that owns this data root, never to whatever
+            # answers on the configured port.
+            proxy = McpEmbedderProxy()
             if proxy.is_available():
                 self._embedder = proxy
-                logger.info("MCP embedder proxy attached (daemon port %d)", port)
+                logger.info("MCP embedder proxy attached (this data root's daemon)")
             else:
                 logger.debug("Daemon not reachable — MCP will run without embedder")
         except Exception as exc:
