@@ -52,6 +52,13 @@ controls in addition to the session: `Origin` must match the daemon,
 (`src/superlocalmemory/server/routes/backup.py`, `server/origin.py`,
 `server/rbac_enforce.py`). See `docs/rbac-teams.md`.
 
+From 4.1.20 every read that returns memory needs READ on the workspace when
+login is required, including the dashboard search and memory chat (sent as
+POST) and the mesh read routes (`GET /mesh/*`). This computer's own agents
+(daemon capability) and mesh nodes (shared secret) are programs, not people,
+and keep reading without a user session; a mesh node reads only the workspace
+the node serves, whatever `?profile=` it asks for.
+
 #### Network access (4.1.20+)
 
 **Another computer must sign in to read.** When the daemon is bound to a

@@ -2,21 +2,27 @@
 # Licensed under AGPL-3.0-or-later - see LICENSE file
 # Part of SuperLocalMemory V4 | https://qualixar.com | https://varunpratap.com
 
-"""Read permission for dashboard reads when team accounts are on.
+"""Read permission for dashboard and mesh reads when team accounts are on.
 
 Moved out of ``unified_daemon.py`` (which re-exports the old private names) in
-4.1.20, when this gap was closed:
+4.1.20, when two gaps were closed:
 
 * **Reads sent as POST.** The READ check ran for GET only, so the dashboard
   search (``POST /api/search``) and the memory chat
   (``POST /api/v3/chat/stream``) returned memory to a caller without READ on
   the workspace. :data:`READ_ONLY_POST_PATHS` puts them under the same check.
+* **Mesh reads.** ``GET /mesh/*`` proved machine access only; a signed-in user
+  without READ, or anyone in company mode without a session, could read peers,
+  inboxes, shared state and locks, and ``?profile=`` reached any workspace.
+  :func:`mesh_read_gate` applies READ on the workspace the request names.
 
 Every gate is a no-op until team accounts exist (single-operator installs are
 unchanged) and fails closed (503) when the account store cannot be read.
 """
 
 from __future__ import annotations
+
+import hmac
 
 _SENSITIVE_READ_PREFIXES = (
     "/api/memories", "/api/facts", "/api/clusters", "/api/graph",
@@ -110,8 +116,47 @@ def rbac_read_gate(request, app_state, *, profile: str | None = None,
     return _json(403, "Your role cannot read this workspace.")
 
 
+# -- mesh ---------------------------------------------------------------------------
+
+
+def _capability_ok(request, app_state) -> bool:
+    descriptor = getattr(app_state, "daemon_descriptor", None)
+    presented = request.headers.get("x-slm-daemon-capability", "")
+    if descriptor is None or not presented:
+        return False
+    return (hmac.compare_digest(presented, str(getattr(descriptor, "capability", "")))
+            and hmac.compare_digest(request.headers.get("x-slm-target-instance", ""),
+                                    str(getattr(descriptor, "instance_id", ""))))
+
+
+def mesh_read_gate(request, app_state):
+    """READ for ``GET /mesh/*``. ``None`` allows; else the refusal response.
+
+    The workspace is the one the request names (``?profile=``) or the active
+    one. A mesh node authenticated by the shared secret reads only the
+    workspace this node serves: the fleet secret is shared by every node, so
+    it must not open every workspace on the machine.
+    """
+    if request.method != "GET" or not request.url.path.startswith("/mesh/"):
+        return None
+    from superlocalmemory.server.access_gate import mesh_secret_ok
+    from superlocalmemory.server.routes.helpers import get_active_profile
+
+    active_profile = get_active_profile()
+    target = (request.query_params.get("profile", "") or "").strip() or active_profile
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    fleet_node = mesh_secret_ok(headers, app_state)
+    if fleet_node and not _session_token(request) and target != active_profile:
+        return _json(403, "A mesh node may read only the workspace this node serves.")
+    return rbac_read_gate(
+        request, app_state, profile=target,
+        machine_principal=fleet_node or _capability_ok(request, app_state),
+    )
+
+
 __all__ = [
     "READ_ONLY_POST_PATHS",
     "is_sensitive_dashboard_read",
+    "mesh_read_gate",
     "rbac_read_gate",
 ]

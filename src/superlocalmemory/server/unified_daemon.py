@@ -393,6 +393,9 @@ from superlocalmemory.server.read_gates import (  # noqa: E402
     is_sensitive_dashboard_read as _is_sensitive_dashboard_read,
 )
 from superlocalmemory.server.read_gates import (  # noqa: E402
+    mesh_read_gate as _mesh_read_gate,
+)
+from superlocalmemory.server.read_gates import (  # noqa: E402
     rbac_read_gate as _rbac_read_gate,
 )
 
@@ -4148,6 +4151,9 @@ def _register_dashboard_routes(application: FastAPI) -> None:
                 _resp = _rbac_read_gate(request, application.state)
                 if _resp is not None:
                     return _resp
+            _resp = _mesh_read_gate(request, application.state)
+            if _resp is not None:
+                return _resp
             # RBAC write gate: adapter process-control and similar
             # state-changing dashboard routes require WRITE permission.
             # Checked after the mutation-actor boundary above, which already
