@@ -58,7 +58,11 @@ def test_lifespan_wiring() -> None:
     assert start - gate < 200
     assert src.index("start_worker(_memory_db)") < start
     assert "stop_writer(timeout_s=2.0)" in src
-    assert '"/api/v3/answer-check/history",' in src  # GET reads gated by RBAC middleware
+    # GET reads gated by the RBAC middleware. The gate list moved to
+    # server/read_gates.py in 627e5d6a; assert the behaviour, not the source.
+    for path in ("/api/v3/answer-check/history", "/api/v3/answer-check/history/live",
+                 "/api/v3/answer-check/history/summary"):
+        assert unified_daemon._is_sensitive_dashboard_read("GET", path), path
     assert "include_router(answer_check_history_router)" in src
 
 
