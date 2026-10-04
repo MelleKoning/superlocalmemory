@@ -1450,6 +1450,7 @@ def run_recall(
     )
     finalize_score_contract(response, verdict=outcome.verdict)
     response.answer_check_status = outcome.status
+    response.answer_check_detail = outcome.detail
 
     # LLD-00 §3 — stamp HMAC markers on every result so post_tool_outcome_hook
     # can validate fact_ids observed in downstream tool output.

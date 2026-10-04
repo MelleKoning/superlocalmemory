@@ -61,11 +61,28 @@ DETAIL_NO_RESULTS = "no_results"
 DETAIL_OTHER_PROFILE = "other_profile_memory"
 #: Too little of the recall's time budget was left to ask.
 DETAIL_BUDGET = "budget"
+#: Judged: the verdict is the one the same judge gave a moment ago for the same
+#: question over the same memories (``core.answer_check_memo``), not a new ask.
+DETAIL_REUSED = "reused"
 
 ANSWER_CHECK_DETAILS = frozenset({
     DETAIL_NONE, DETAIL_NOT_A_QUESTION, DETAIL_NO_RESULTS, DETAIL_OTHER_PROFILE,
-    DETAIL_BUDGET,
+    DETAIL_BUDGET, DETAIL_REUSED,
 })
+
+#: One plain sentence per way the check can end without a verdict. A recall
+#: that was not checked must never read like one that was: ``abstained`` is
+#: False on both, so the note (and ``answer_check_ran``) is what tells them apart.
+_NOT_CHECKED = "Answer check did not run"
+_SKIP_NOTES = {
+    DETAIL_BUDGET: (f"{_NOT_CHECKED}: retrieval used the recall's time budget, so "
+                    "there was no time left to ask. The results are complete; only "
+                    "the verdict is missing."),
+    DETAIL_NOT_A_QUESTION: f"{_NOT_CHECKED}: this recall loads context, it is not a question.",
+    DETAIL_NO_RESULTS: f"{_NOT_CHECKED}: nothing was found to check.",
+    DETAIL_OTHER_PROFILE: (f"{_NOT_CHECKED}: the online check would have read a memory "
+                           "another profile owns."),
+}
 
 # -- what a caller asks for, per recall ------------------------------------------
 
@@ -127,6 +144,24 @@ class AnswerCheckTrace:
     total_ms: float          # pipeline start -> the response is returned
 
 
+def answer_check_note(status: object, detail: object = DETAIL_NONE) -> str:
+    """The sentence a person reads when the check gave no verdict; "" otherwise.
+
+    "" for ``judged`` (the verdict speaks) and ``off`` (nothing is configured,
+    so nothing is missing).
+    """
+    if status == STATUS_SKIPPED:
+        return _SKIP_NOTES.get(detail, f"{_NOT_CHECKED}.")  # type: ignore[arg-type]
+    if status == STATUS_BUSY:
+        return (f"{_NOT_CHECKED}: the on-device check was answering another recall "
+                "and did not free up in time.")
+    if status == STATUS_WARMING:
+        return f"{_NOT_CHECKED}: the on-device check is still loading its model."
+    if status == STATUS_UNAVAILABLE:
+        return f"{_NOT_CHECKED}: the check did not answer in time or could not run."
+    return ""
+
+
 def judge_deadline(recall_started: float, *, now: float | None = None) -> float | None:
     """The monotonic instant the check must answer by, or None to skip it.
 
@@ -171,6 +206,7 @@ __all__ = [
     "DETAIL_NOT_A_QUESTION",
     "DETAIL_NO_RESULTS",
     "DETAIL_OTHER_PROFILE",
+    "DETAIL_REUSED",
     "JUDGE_FLOOR_S",
     "JudgeOutcome",
     "POST_JUDGE_RESERVE_S",
@@ -183,6 +219,7 @@ __all__ = [
     "STATUS_SKIPPED",
     "STATUS_UNAVAILABLE",
     "STATUS_WARMING",
+    "answer_check_note",
     "effective_deadline",
     "judge_deadline",
     "normalize_request",

@@ -56,11 +56,26 @@ def forward_recall_metadata(raw: Any) -> dict[str, Any]:
     """
     defaults = metadata_defaults()
     if isinstance(raw, Mapping):
-        return {key: raw.get(key, default) for key, default in defaults.items()}
+        return _derive_check_fields(
+            {key: raw.get(key, default) for key, default in defaults.items()}, raw)
     carried = getattr(raw, "metadata", None)
     if isinstance(carried, Mapping) and carried:
         return {key: carried.get(key, default) for key, default in defaults.items()}
     return {key: getattr(raw, key, default) for key, default in defaults.items()}
+
+
+def _derive_check_fields(out: dict[str, Any], raw: Mapping) -> dict[str, Any]:
+    """An older daemon sends ``answer_check_status`` but not the 4.1.20 fields
+    that explain it: derive them from the status it did send, so "judged" is
+    never forwarded next to ``answer_check_ran: False``."""
+    if "answer_check_ran" in raw:
+        return out
+    from superlocalmemory.retrieval.answer_check_status import answer_check_note
+
+    status = out.get("answer_check_status")
+    out["answer_check_ran"] = status == "judged"
+    out["answer_check_note"] = answer_check_note(status, out.get("answer_check_reason", ""))
+    return out
 
 
 __all__ = ["forward_recall_metadata", "metadata_defaults"]

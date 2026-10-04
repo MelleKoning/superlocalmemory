@@ -292,6 +292,14 @@ def recall_response_metadata(response: Any) -> dict:
         getattr(getattr(r, "fact", None), "created_at", "") or ""
         for r in (getattr(response, "results", None) or [])
     ]
+    from superlocalmemory.retrieval.answer_check_status import (
+        ANSWER_CHECK_DETAILS,
+        answer_check_note,
+    )
+    _check_status = getattr(response, "answer_check_status", "skipped") or "skipped"
+    _check_detail = getattr(response, "answer_check_detail", "") or ""
+    if _check_detail not in ANSWER_CHECK_DETAILS:
+        _check_detail = ""
     return {
         "score_contract_version": getattr(response, "score_contract_version", "2"),
         "calibration_status": getattr(response, "calibration_status", "uncalibrated"),
@@ -333,6 +341,13 @@ def recall_response_metadata(response: Any) -> dict:
         # skipped / busy / warming / unavailable. A verdict that is absent
         # because the check was busy or still loading is not "nothing
         # answers", so — like the fields above — it travels with the answer.
-        "answer_check_status": getattr(response, "answer_check_status", "skipped")
-        or "skipped",
+        "answer_check_status": _check_status,
+        # 4.1.20: a recall that was not checked must never read like one that
+        # was (``abstained`` is False on both). ``answer_check_ran`` says which;
+        # ``answer_check_reason`` is the closed-set why (or "reused" when the
+        # verdict repeats an identical earlier check); ``answer_check_note`` is
+        # the sentence to show a person, "" when there is nothing to explain.
+        "answer_check_ran": _check_status == "judged",
+        "answer_check_reason": _check_detail,
+        "answer_check_note": answer_check_note(_check_status, _check_detail),
     }
