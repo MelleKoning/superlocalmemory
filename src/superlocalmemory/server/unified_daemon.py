@@ -5867,7 +5867,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
         return result
 
     @application.get("/list")
-    async def list_facts(limit: int = 50, kind: str = ""):
+    async def list_facts(request: Request, limit: int = 50, kind: str = ""):
         """Most recent memories, newest first.
 
         ``kind`` (L3-20) narrows to one of the nine memory kinds, the same
@@ -5884,9 +5884,14 @@ def _register_daemon_routes(application: FastAPI) -> None:
             from superlocalmemory.server.kind_error import invalid_kind_http
             raise invalid_kind_http(exc)
         engine = _get_engine_or_503()
+        profile_id = getattr(engine, "profile_id", None) or getattr(
+            engine, "_profile_id", "default")
+        # The same READ check GET /recall applies: in company mode a caller
+        # without a session, or without a role on this workspace, gets nothing.
+        from superlocalmemory.access.rbac import Permission
+        from superlocalmemory.server.rbac_enforce import require_permission
+        require_permission(request, Permission.READ, profile=profile_id)
         try:
-            profile_id = getattr(engine, "profile_id", None) or getattr(
-                engine, "_profile_id", "default")
             facts = list_recent_facts(engine._db, profile_id, limit, parsed_kind)
             items = [
                 {

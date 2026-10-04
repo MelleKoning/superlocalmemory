@@ -60,3 +60,39 @@ def test_summary_and_timeline_are_classed_as_reads(path) -> None:
     from superlocalmemory.server import read_gates
 
     assert read_gates.is_sensitive_dashboard_read("GET", path)
+
+
+# ``GET /list`` (the agent door behind ``slm list``) returned the newest
+# memories to the same three callers while ``GET /recall`` refused them.
+
+
+def test_list_without_a_session_in_company_mode_is_refused(company) -> None:
+    client, _rbac = company
+    resp = _get(client, "/list")
+    assert resp.status_code == 401, resp.text[:200]
+    assert _SECRET not in resp.text
+
+
+def test_list_for_a_member_of_another_workspace_is_refused(company) -> None:
+    client, rbac = company
+    other = rbac.create_user("olga", "pw-123456789", "Olga")
+    rbac.set_membership("clientx", other["user_id"], "member")
+    resp = _get(client, "/list", rbac.create_session(other["user_id"]))
+    assert resp.status_code == 403, resp.text[:200]
+    assert _SECRET not in resp.text
+
+
+def test_list_for_a_reader_of_the_workspace_still_answers(company) -> None:
+    client, rbac = company
+    viewer = rbac.create_user("vera", "pw-123456789", "Vera")
+    rbac.set_membership("default", viewer["user_id"], "viewer")
+    resp = _get(client, "/list", rbac.create_session(viewer["user_id"]))
+    assert resp.status_code == 200, resp.text[:200]
+    assert _SECRET in resp.text
+
+
+def test_list_in_personal_mode_still_answers(tmp_path) -> None:
+    client, _app, _db, _rbac = _client(tmp_path)
+    resp = _get(client, "/list")
+    assert resp.status_code == 200, resp.text[:200]
+    assert _SECRET in resp.text
