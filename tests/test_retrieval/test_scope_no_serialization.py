@@ -32,6 +32,9 @@ from superlocalmemory.core.config import RetrievalConfig
 from superlocalmemory.retrieval.engine import RetrievalEngine
 from superlocalmemory.storage.models import AtomicFact, RecallResponse
 
+# Every RetrievalEngine a test builds is closed when the test ends.
+pytestmark = pytest.mark.usefixtures("closes_retrieval_engines")
+
 
 # ---------------------------------------------------------------------------
 # Fake channel that records the flag values it saw at call time

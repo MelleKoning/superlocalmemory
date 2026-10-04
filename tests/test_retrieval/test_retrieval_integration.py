@@ -32,6 +32,9 @@ from superlocalmemory.storage import schema as real_schema
 from superlocalmemory.storage.database import DatabaseManager
 from superlocalmemory.storage.models import AtomicFact, MemoryRecord
 
+# Every RetrievalEngine a test builds is closed when the test ends.
+pytestmark = pytest.mark.usefixtures("closes_retrieval_engines")
+
 
 # ---------------------------------------------------------------------------
 # Helpers — match existing test_engine.py conventions
