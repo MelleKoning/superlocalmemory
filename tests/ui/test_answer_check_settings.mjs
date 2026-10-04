@@ -256,3 +256,37 @@ describe('Answer check settings', function () {
     });
   });
 });
+
+describe('Automatic — the never-chosen state (audit 4.1.20 L11)', function () {
+  it('shows Automatic, not a checked "Off" beside "Not chosen yet"', async function () {
+    const p = await mount(status({ mode: 'auto', active: 'off' }));
+    for (const m of ['laya', 'jev', 'off']) {
+      assert.equal(p.ac('mode-' + m).checked, false, m + ' must not look chosen');
+    }
+    assert.match(p.text('.ac-auto-state'), /^Automatic — not checking yet/);
+    assert.ok(!/Not chosen yet/.test(p.root.textContent));
+    assert.equal(p.text('.ac-save-state').includes('Unsaved'), false);
+  });
+
+  it('says when Automatic has turned the on-device check on', async function () {
+    const p = await mount(status({ mode: 'auto', active: 'laya', laya: { state: 'ready', action: '' } }));
+    assert.match(p.text('.ac-auto-state'), /Automatic — checking on this Mac/);
+    assert.equal(p.ac('mode-laya').checked, false);
+  });
+
+  it('saving without choosing keeps Automatic; choosing Off sends Off', async function () {
+    const p = await mount(status({ mode: 'auto', active: 'off' }));
+    await click(p, p.ac('ac-save'));
+    assert.equal('mode' in p.sent[p.sent.length - 1].body, false, 'Automatic stays Automatic');
+    await choose(p, 'off');
+    assert.match(p.text('.ac-save-state'), /Unsaved changes/);
+    await click(p, p.ac('ac-save'));
+    assert.equal(p.sent[p.sent.length - 1].body.mode, 'off');
+  });
+
+  it('an explicit choice is shown as that choice, with no Automatic line', async function () {
+    const p = await mount(status({ mode: 'off', active: 'off' }));
+    assert.equal(p.ac('mode-off').checked, true);
+    assert.equal(p.root.querySelector('.ac-auto-state'), null);
+  });
+});
