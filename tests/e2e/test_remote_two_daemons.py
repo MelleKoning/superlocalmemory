@@ -295,3 +295,39 @@ def test_plugin_reports_not_saved_when_the_server_is_down_then_saved(pair) -> No
         pair["s"].start()
     plugin._remote_health._open_until = 0.0
     assert plugin.slash_router("remember back again after restart").startswith("Saved")
+
+
+_READ_TOOL_ARGS = {
+    "fetch": {"fact_ids": "nonexistent"}, "recall": {"query": "pier"},
+    "search": {"query": "pier"}, "recall_trace": {"query": "pier"},
+    "prestage_context": {"query": "pier"}, "skill_lineage": {"skill_name": "x"},
+    "slm_retrieve": {"ccr_id": "00000000-0000-4000-8000-000000000000"},
+    "slm_cache_get": {"key": "x"}, "slm_loop_show": {"run_id": "x"},
+}
+
+
+def test_no_read_tool_shows_a_remote_caller_the_hosts_paths(pair) -> None:
+    import getpass
+
+    from superlocalmemory.server.remote_tool_policy import READ_TOOLS
+
+    ctx = ssl.create_default_context(cafile=pair["ca"])
+    # A memory that mentions a path: memory text comes back exactly as written.
+    note = f"runbook-{os.getpid()} lives at /srv/runbooks/deploy.md"
+    mcp_call(pair["url"], pair["key"], ctx, "remember", {"content": note})
+    host = [str(pair["s"].root), "/Users/", "/home/", getpass.getuser()]
+    leaks: dict[str, str] = {}
+    listed = {t.name for t in mcp_call(pair["url"], pair["read_key"], ctx, None).tools}
+    for tool in sorted(READ_TOOLS & listed):
+        result = mcp_call(pair["url"], pair["read_key"], ctx, tool, _READ_TOOL_ARGS.get(tool, {}))
+        blob = _text(result) + json.dumps(result.structured_content or {})
+        for value in host:
+            if value and value in blob:
+                leaks[tool] = value
+    assert leaks == {}, leaks
+    recalled = _text(mcp_call(pair["url"], pair["read_key"], ctx, "recall",
+                              {"query": f"runbook-{os.getpid()}"}))
+    assert "/srv/runbooks/deploy.md" in recalled
+    # The same tool on this computer keeps the full detail.
+    local = mcp_call(f"http://127.0.0.1:{pair['s'].port}/mcp/hermes", None, True, "get_status")
+    assert str(pair["s"].root) in _text(local)

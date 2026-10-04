@@ -98,9 +98,11 @@ and `slm remote check` warns 30 days before it expires.
 slmr_...`. SLM stores only a hash. `slm remote keys list` shows names, scopes
 and dates, never secrets. `slm remote keys revoke <name>` takes effect on the
 next request, without a restart. The key file must be readable only by the SLM
-user; otherwise every remote key is refused. The older `X-SLM-API-Key` still
-works as a write key, but it is not stripped on a redirect to another site as
-`Authorization` is, so new setups should use remote keys.
+user; otherwise every remote key is refused. The SLM API key also
+works as a write key; send it as `Authorization: Bearer <api key>`, not as
+`X-SLM-API-Key`, because MCP clients drop `Authorization` on a redirect to
+another site but forward custom headers. SLM never answers `/mcp` with a
+redirect.
 
 **What a remote key can do.** A `read` key can recall, search, fetch, list and
 read status. A `write` key can also save, update and delete individual

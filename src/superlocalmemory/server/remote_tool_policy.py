@@ -215,13 +215,26 @@ def _filter_tools_list(body: bytes, scope: str) -> bytes:
     return json.dumps(dict(payload, result=result)).encode("utf-8")
 
 
-class _ToolsListFilter:
-    """Buffers the single JSON answer to ``tools/list`` and drops tools the key
-    may not call. A streamed (non-JSON) answer is not forwarded at all."""
+def _redact_call_answer(body: bytes) -> bytes:
+    from superlocalmemory.server.remote_redaction import redact_tool_result
 
-    def __init__(self, send: Callable[..., Awaitable[None]], scope: str) -> None:
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return body
+    if not isinstance(payload, dict) or not isinstance(payload.get("result"), dict):
+        return body
+    return json.dumps(dict(payload, result=redact_tool_result(payload["result"]))).encode()
+
+
+class _JsonAnswerFilter:
+    """Buffers the single JSON answer and rewrites it with ``transform``. A
+    streamed (non-JSON) answer is not forwarded at all (fail closed)."""
+
+    def __init__(self, send: Callable[..., Awaitable[None]],
+                 transform: Callable[[bytes], bytes]) -> None:
         self._send = send
-        self._scope = scope
+        self._transform = transform
         self._start: dict[str, Any] | None = None
         self._chunks: list[bytes] = []
 
@@ -238,9 +251,9 @@ class _ToolsListFilter:
         start = self._start or {"type": "http.response.start", "status": 500, "headers": []}
         headers = dict((k.lower(), v) for k, v in start.get("headers", []))
         if b"application/json" not in headers.get(b"content-type", b""):
-            await _send_json(self._send, 502, {"error": "tools_list_unfilterable"})
+            await _send_json(self._send, 502, {"error": "remote_answer_unfilterable"})
             return
-        body = _filter_tools_list(b"".join(self._chunks), self._scope)
+        body = self._transform(b"".join(self._chunks))
         new_headers = [(k, v) for k, v in start.get("headers", [])
                        if k.lower() != b"content-length"]
         new_headers.append((b"content-length", str(len(body)).encode()))
@@ -323,8 +336,15 @@ class RemoteToolScopeASGI:
                 await _send_json(send, 200, _tool_error(
                     message, denial_message(tool, principal.name, principal.scope)))
                 return
-        downstream_send = (_ToolsListFilter(send, principal.scope)
-                           if message["method"] == "tools/list" else send)
+        if message["method"] == "tools/list":
+            downstream_send = _JsonAnswerFilter(
+                send, lambda raw: _filter_tools_list(raw, principal.scope))
+        elif tool is not None:
+            # Host details (paths, home, account, environment) never leave
+            # this computer in a tool answer (server/remote_redaction).
+            downstream_send = _JsonAnswerFilter(send, _redact_call_answer)
+        else:
+            downstream_send = send
         await self.app(scope, _replay(body, receive), downstream_send)
 
 

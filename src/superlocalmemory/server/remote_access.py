@@ -90,18 +90,25 @@ def principal_from_scope(scope: Mapping[str, Any]) -> RemotePrincipal | None:
 def authenticate_remote(headers: Mapping[str, str],
                         store: RemoteKeyStore | None = None) -> RemotePrincipal | None:
     """The principal for these headers, or ``None``. Header names are lower-case."""
+    from superlocalmemory.infra.auth_middleware import verify_api_key
+    from superlocalmemory.server.remote_keys import KEY_PREFIX
+
     auth = headers.get("authorization", "") or ""
     if auth[:7].lower() == "bearer ":
-        key = (store or default_store()).verify(auth[7:].strip())
-        if key is None:
-            return None
-        return RemotePrincipal("remote-key", key.key_id, key.name, key.scope)
-    legacy = headers.get("x-slm-api-key", "") or ""
-    if legacy:
-        from superlocalmemory.infra.auth_middleware import verify_api_key
-
-        if verify_api_key(legacy):
+        presented = auth[7:].strip()
+        if presented.startswith(KEY_PREFIX):
+            key = (store or default_store()).verify(presented)
+            if key is None:
+                return None
+            return RemotePrincipal("remote-key", key.key_id, key.name, key.scope)
+        # The SLM API key may travel as a Bearer token too: clients strip
+        # Authorization on a redirect to another site, unlike X-SLM-API-Key.
+        if verify_api_key(presented):
             return RemotePrincipal("legacy-api-key", "api_key", "api_key", "write")
+        return None
+    legacy = headers.get("x-slm-api-key", "") or ""
+    if legacy and verify_api_key(legacy):
+        return RemotePrincipal("legacy-api-key", "api_key", "api_key", "write")
     return None
 
 

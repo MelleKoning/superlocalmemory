@@ -50,6 +50,11 @@ curl -X POST http://<slm-host>:8765/api/memories \
   -d '{"content": "..."}'
 ```
 
+`curl` without `-L` never follows a redirect; do not add `-L` (or any
+"follow redirects" option) to a request that carries `X-SLM-API-Key`, because
+clients forward custom headers to wherever a redirect points. SLM itself never
+answers these routes with a redirect.
+
 Loopback callers (CLI, local IDE) are still trusted without a credential.
 To require the key even on loopback (shared-host operators), set:
 
@@ -115,8 +120,12 @@ export SLM_MCP_ALLOWED_HOSTS=192.168.1.100:*
 slm serve start
 ```
 
-Remote callers then present `X-SLM-API-Key` in their MCP config or HTTP
-headers. See [distributed-deployment.md](distributed-deployment.md) for the
+For MCP clients on other computers, use the remote listener and a named
+remote key (`slm remote keys add`), sent as `Authorization: Bearer <key>`. If
+you keep the API key for MCP, send it the same way, as `Authorization: Bearer
+<api key>`: MCP clients drop `Authorization` when a redirect points at another
+site, but they forward `X-SLM-API-Key`. `X-SLM-API-Key` remains accepted for
+HTTP API calls. See [distributed-deployment.md](distributed-deployment.md) for the
 full LAN setup guide.
 
 ---
