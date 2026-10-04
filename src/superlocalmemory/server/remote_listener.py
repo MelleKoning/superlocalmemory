@@ -322,10 +322,16 @@ def make_servers(app: Any, main_config: Any, remote: RemoteListenerConfig):
         def capture_signals(self):  # noqa: D401 — the main server owns signals
             yield
 
+    from superlocalmemory.server.remote_conn_guard import guarded_protocol_class
+
     remote_cfg = uvicorn.Config(
         RemoteListenerASGI(app, remote.server_names), host=remote.host, port=remote.port,
         ssl_certfile=str(remote.cert), ssl_keyfile=str(remote.key),
         lifespan="off",
+        # Callers must send each request's headers within a deadline, and the
+        # number of connections is capped (see remote_conn_guard). Only /mcp
+        # (plain HTTP) is served here, so WebSocket upgrades are off.
+        http=guarded_protocol_class(), ws="none",
         # Callers connect directly over TLS: forwarding headers are never read
         # here, whatever SLM_TRUSTED_PROXIES says for the main listener.
         **uvicorn_proxy_options({}),

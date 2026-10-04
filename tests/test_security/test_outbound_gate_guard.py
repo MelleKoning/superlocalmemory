@@ -61,8 +61,10 @@ REVIEWED: dict[tuple[str, str, str], tuple[int, str]] = {
         (1, "PROBE: is a local Ollama running (GET /api/tags)"),
     (_S + "core/component_registry.py", "probe_ollama", "httpx.get"):
         (1, "PROBE: Ollama model list for the component panel"),
-    (_S + "core/mcp_embedder_proxy.py", "McpEmbedderProxy.is_available", "httpx.get"):
-        (1, "PROBE: daemon embed ping on 127.0.0.1, no body"),
+    # core/mcp_embedder_proxy.py has no entry: since 4.1.20 it reaches only its
+    # own data root's daemon through cli.daemon.daemon_request, which builds
+    # http://127.0.0.1:<descriptor port> and sends via core.outbound_http.urlopen
+    # (the gate: no proxy, no redirects). Nothing there opens a connection itself.
     (_S + "core/ollama_embedder.py", "OllamaEmbedder._check_availability", "httpx.get"):
         (1, "PROBE: Ollama model list (GET /api/tags)"),
     (_S + "core/ollama_validator.py", "validate_ollama_model", "httpx.post"):
