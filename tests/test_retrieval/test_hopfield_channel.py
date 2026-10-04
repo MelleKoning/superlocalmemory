@@ -62,6 +62,20 @@ class FakeDB:
             if f.fact_id in id_set and f.profile_id == profile_id
         ]
 
+    def get_external_visible_embeddings(
+        self, profile_id: str, **kwargs,
+    ) -> list[tuple[str, np.ndarray]]:
+        return []
+
+    def get_fact_embeddings_by_ids(
+        self, fact_ids: list[str], profile_id: str, **kwargs,
+    ) -> list[tuple[str, np.ndarray]]:
+        return [
+            (f.fact_id, np.array(f.embedding, dtype=np.float32))
+            for f in self.get_facts_by_ids(fact_ids, profile_id)
+            if f.embedding is not None
+        ]
+
 
 class FakeVectorStore:
     """Mock VectorStore for testing prefilter and count paths."""
@@ -443,6 +457,9 @@ class TestHopfieldChannelCoverageGaps:
         db = MagicMock()
         db.get_all_facts.return_value = all_facts
         db.get_facts_by_ids.return_value = no_emb_facts
+        db.get_external_visible_embeddings.return_value = []
+        # Rows without an embedding are not projected at all.
+        db.get_fact_embeddings_by_ids.return_value = []
 
         # KNN returns the no-embedding fact IDs
         knn_results = [(f"no_emb_{i}", 0.9) for i in range(5)]
@@ -470,6 +487,8 @@ class TestHopfieldChannelCoverageGaps:
         db = MagicMock()
         db.get_all_facts.return_value = facts
         db.get_facts_by_ids.return_value = []
+        db.get_external_visible_embeddings.return_value = []
+        db.get_fact_embeddings_by_ids.return_value = []
 
         knn_results = [(f"nonexistent_{i}", 0.9) for i in range(5)]
         vs = FakeVectorStore(available=True, count_val=10, search_results=knn_results)

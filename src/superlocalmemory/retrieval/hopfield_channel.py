@@ -312,29 +312,30 @@ class HopfieldChannel:
         # The ANN index is owner-profile partitioned.  Supplement it with
         # opted-in cross-profile facts, then authorize the combined candidates
         # through the canonical DB predicate below.
-        external_facts = self._db.get_external_visible_facts(
+        # #147: id + embedding only, for the supplement and for Stage 2.
+        external_embeddings = self._db.get_external_visible_embeddings(
             profile_id,
             include_global=include_global,
             include_shared=include_shared,
         )
         combined = {fact_id: score for fact_id, score in knn_results}
         query_norm = float(np.linalg.norm(query))
-        for fact in external_facts:
-            embedding = getattr(fact, "embedding", None)
-            if embedding is None or len(embedding) != self._config.dimension:
+        for ext_id, vector in external_embeddings:
+            if vector.shape != (self._config.dimension,):
                 continue
-            vector = np.array(embedding, dtype=np.float32)
             denominator = query_norm * float(np.linalg.norm(vector))
             if denominator <= 1e-8:
                 continue
             score = (float(np.dot(query, vector) / denominator) + 1.0) / 2.0
-            combined[fact.fact_id] = max(combined.get(fact.fact_id, 0.0), score)
+            combined[ext_id] = max(combined.get(ext_id, 0.0), score)
         if not combined:
             return []
 
-        # Stage 2: Load candidate facts
+        # Stage 2: Load candidate embeddings. Same authorization predicate and
+        # row order as get_facts_by_ids (the sub-matrix sums in row order), but
+        # without hydrating every candidate a second time.
         candidate_ids = list(combined)
-        candidates = self._db.get_facts_by_ids(
+        candidates = self._db.get_fact_embeddings_by_ids(
             candidate_ids, profile_id,
             include_global=include_global,
             include_shared=include_shared,
@@ -345,11 +346,10 @@ class HopfieldChannel:
         # Stage 3: Build sub-matrix
         sub_embeddings: list[np.ndarray] = []
         sub_ids: list[str] = []
-        for fact in candidates:
-            emb = getattr(fact, "embedding", None)
-            if emb is not None and len(emb) == self._config.dimension:
-                sub_embeddings.append(np.array(emb, dtype=np.float32))
-                sub_ids.append(fact.fact_id)
+        for cand_id, emb in candidates:
+            if emb.shape == (self._config.dimension,):
+                sub_embeddings.append(emb)
+                sub_ids.append(cand_id)
 
         if not sub_embeddings:
             return []

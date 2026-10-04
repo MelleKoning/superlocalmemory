@@ -1436,6 +1436,42 @@ class DatabaseManager:
         )
         return [self._row_to_fact(r) for r in rows]
 
+    def get_external_visible_embeddings(
+        self,
+        profile_id: str,
+        *,
+        include_global: bool = False,
+        include_shared: bool = False,
+    ) -> list[tuple[str, Any]]:
+        """``get_external_visible_facts`` as ``(fact_id, float32 vector)`` only.
+
+        For channels that score by embedding and read nothing else (#147).
+        Implementation and contract: ``storage/embedding_projection.py``.
+        """
+        from superlocalmemory.storage.embedding_projection import (
+            fetch_external_visible_embeddings,
+        )
+        return fetch_external_visible_embeddings(
+            self, profile_id,
+            include_global=include_global, include_shared=include_shared,
+        )
+
+    def get_fact_embeddings_by_ids(
+        self,
+        fact_ids: list[str],
+        profile_id: str,
+        include_global: bool = False,
+        include_shared: bool = False,
+    ) -> list[tuple[str, Any]]:
+        """``get_facts_by_ids`` as ``(fact_id, float32 vector)`` only (#147)."""
+        from superlocalmemory.storage.embedding_projection import (
+            fetch_fact_embeddings_by_ids,
+        )
+        return fetch_fact_embeddings_by_ids(
+            self, fact_ids, profile_id,
+            include_global=include_global, include_shared=include_shared,
+        )
+
     _MAX_FACTS_PER_ENTITY_LOOKUP: int = 100
 
     def get_facts_by_entity(

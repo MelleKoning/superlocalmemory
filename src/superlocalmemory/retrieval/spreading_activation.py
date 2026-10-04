@@ -142,31 +142,33 @@ class SpreadingActivation:
             # v3.8.2 perf: external (global/shared) facts only matter for a
             # cross-scope read. For the default personal scope this query always
             # returns [] — skip it to remove a per-recall DB round-trip.
-            external_facts: list = []
+            # #147: id + embedding only; full hydration was most of the cost.
+            external_embeddings: list = []
             if include_global or include_shared:
                 try:
-                    external_facts = self._db.get_external_visible_facts(
+                    external_embeddings = self._db.get_external_visible_embeddings(
                         profile_id,
                         include_global=include_global,
                         include_shared=include_shared,
                     )
-                except Exception:
-                    external_facts = []
+                except Exception as exc:
+                    # Not silent: losing this drops every cross-scope seed.
+                    logger.warning(
+                        "SpreadingActivation: cross-scope seeds unavailable "
+                        "for profile %s: %s", profile_id, exc,
+                    )
+                    external_embeddings = []
             q_vec = np.array(query, dtype=np.float32)
             q_norm = float(np.linalg.norm(q_vec))
             combined = {fact_id: score for fact_id, score in seed_results}
-            for fact in external_facts:
-                embedding = getattr(fact, "embedding", None)
-                if embedding is None:
-                    continue
-                fact_vec = np.array(embedding, dtype=np.float32)
+            for ext_id, fact_vec in external_embeddings:
                 if fact_vec.shape != q_vec.shape:
                     continue
                 denominator = q_norm * float(np.linalg.norm(fact_vec))
                 if denominator <= 1e-8:
                     continue
                 score = (float(np.dot(q_vec, fact_vec) / denominator) + 1.0) / 2.0
-                combined[fact.fact_id] = max(combined.get(fact.fact_id, 0.0), score)
+                combined[ext_id] = max(combined.get(ext_id, 0.0), score)
             # v3.8.2 perf: seeds come from this profile's own vector index /
             # get_all_facts(profile_id), so for personal scope they are already
             # authorized. Only re-authorize when a cross-scope read merged in
