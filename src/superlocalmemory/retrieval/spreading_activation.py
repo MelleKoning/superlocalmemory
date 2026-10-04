@@ -587,13 +587,19 @@ class SpreadingActivation:
     def _get_cached_results(
         self, query_hash: str, profile_id: str,
     ) -> list[tuple[str, float]] | None:
-        """Check activation_cache for recent results."""
+        """Check activation_cache for recent results.
+
+        One row per node, whatever the table holds: two identical recalls in
+        flight at once used to store the entry twice, and a hit then returned
+        every node twice.
+        """
         try:
             rows = self._db.execute(
-                "SELECT node_id, activation_value FROM activation_cache "
+                "SELECT node_id, MAX(activation_value) AS activation_value "
+                "FROM activation_cache "
                 "WHERE profile_id = ? AND query_hash = ? "
                 "AND expires_at > datetime('now') "
-                "ORDER BY activation_value DESC",
+                "GROUP BY node_id",
                 (profile_id, query_hash),
             )
             if not rows:
@@ -613,11 +619,21 @@ class SpreadingActivation:
         profile_id: str,
         activations: dict[str, float],
     ) -> None:
-        """Store results in activation_cache with 1-hour TTL."""
+        """Store results in activation_cache with 1-hour TTL.
+
+        Replaces the entry rather than adding to it: the old rows for this key
+        are deleted in the same transaction, so two concurrent writers of one
+        entry leave exactly one copy (SQLite serialises the two transactions).
+        """
         try:
             # One transaction => ONE write-lock acquisition for the whole
             # activation cache, instead of N separately-locked writes.
             with self._db.transaction():
+                self._db.execute(
+                    "DELETE FROM activation_cache "
+                    "WHERE profile_id = ? AND query_hash = ?",
+                    (profile_id, query_hash),
+                )
                 for node_id, value in activations.items():
                     self._db.execute(
                         "INSERT OR REPLACE INTO activation_cache "
