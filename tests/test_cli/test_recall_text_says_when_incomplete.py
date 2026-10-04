@@ -60,3 +60,15 @@ def test_the_cli_prints_the_note_under_results(monkeypatch, capsys) -> None:
     out = _run_cli(monkeypatch, capsys, result)
     assert "Halcyon is 14 March" in out
     assert "Incomplete search" in out
+
+
+def test_the_remember_receipt_says_which_searches_reach_it_yet() -> None:
+    from superlocalmemory.cli.recall_text import remember_receipt_text
+
+    pending = remember_receipt_text(
+        {"materialization_state": "queryable", "count": 1, "operation_id": "op"})
+    assert pending.splitlines()[0] == "Queryable ✓ 1 facts (operation=op)."
+    assert "meaning-based search" in pending
+    done = remember_receipt_text(
+        {"materialization_state": "complete", "count": 2, "operation_id": "op"})
+    assert done == "Complete ✓ 2 facts (operation=op)."

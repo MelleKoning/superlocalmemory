@@ -12,7 +12,7 @@ by a search that did not look everywhere. These lines say what was skipped.
 
 from __future__ import annotations
 
-__all__ = ["empty_result_line", "incomplete_line"]
+__all__ = ["empty_result_line", "incomplete_line", "remember_receipt_text"]
 
 
 def incomplete_line(result: dict) -> str:
@@ -39,3 +39,21 @@ def empty_result_line(result: dict) -> str:
     if result.get("no_confident_match"):
         return "No confident match."
     return "No matching memories found."
+
+
+def remember_receipt_text(result: dict) -> str:
+    """The ``slm remember`` receipt, saying which searches can reach it yet.
+
+    "Queryable" is true from the moment of admission for search by the
+    memory's own words (the full-text index is written in the same
+    transaction). Meaning-based search needs the memory's vector, which the
+    background indexer adds a moment later — so a paraphrased question can
+    miss it until then, and the receipt says so instead of implying more.
+    """
+    state = str(result.get("materialization_state") or "queryable")
+    line = (f"{state.capitalize()} ✓ {result.get('count', 0)} facts "
+            f"(operation={result.get('operation_id', 'unknown')}).")
+    if state in ("queryable", "enriching"):
+        line += ("\nFindable now by its words; meaning-based search catches "
+                 "up when background indexing finishes (usually seconds).")
+    return line

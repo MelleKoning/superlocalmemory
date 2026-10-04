@@ -1780,12 +1780,8 @@ def cmd_remember(args: Namespace) -> None:
                 from superlocalmemory.cli.json_output import json_print
                 json_print("remember", data=result)
             else:
-                state = result.get("materialization_state", "queryable")
-                operation_id = result.get("operation_id", "unknown")
-                print(
-                    f"{state.capitalize()} \u2713 {result['count']} facts "
-                    f"(operation={operation_id})."
-                )
+                from superlocalmemory.cli.recall_text import remember_receipt_text
+                print(remember_receipt_text(result))
                 replaced = result.get("replaced")
                 if isinstance(replaced, dict) and replaced.get("ok"):
                     print(f"Replaced \u2713 {len(replaced.get('fact_ids') or [])} fact(s) "
