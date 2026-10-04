@@ -17,8 +17,8 @@ function status(over = {}) {
   const base = {
     mode: 'auto', active: 'off', apple_silicon: true, setup_running: false,
     laya_test_running: false, tests: {},
-    laya: { state: 'failed', managed: false, python: '/Users/v/.local/share/laya-venv/bin/python',
-            hf_home: '', model_path: '/Users/v/model', step: 'Needs a check — choose Check this install.',
+    laya: { state: 'failed', managed: false, python: '/Users/alice/.local/share/laya-venv/bin/python',
+            hf_home: '', model_path: '/Users/alice/model', step: 'Needs a check — choose Check this install.',
             error: "SLM found this install but hasn't checked it yet. Checking downloads nothing.",
             action: 'check', progress: 0 },
     adopt: { running: false, state: 'not_installed', error: '' },
@@ -88,8 +88,8 @@ describe('Answer check settings', function () {
     await choose(p, 'laya');
     await click(p, p.root.querySelector('.ac-guidance button'));
     assert.deepEqual(p.sent.map((s) => s.url), ['/api/v3/answer-check/laya/adopt']);
-    assert.equal(p.sent[0].body.python, '/Users/v/.local/share/laya-venv/bin/python');
-    assert.equal(p.sent[0].body.model_path, '/Users/v/model');
+    assert.equal(p.sent[0].body.python, '/Users/alice/.local/share/laya-venv/bin/python');
+    assert.equal(p.sent[0].body.model_path, '/Users/alice/model');
   });
 
   it('an open section stays open when the page refreshes itself', async function () {
@@ -97,11 +97,11 @@ describe('Answer check settings', function () {
     const existing = p.root.querySelector('.ac-existing');
     existing.open = true;
     existing.dispatchEvent(new p.w.Event('toggle'));
-    p.ac('existing-python').value = '/Users/v/env/bin/python';
+    p.ac('existing-python').value = '/Users/alice/env/bin/python';
     p.ac('existing-python').dispatchEvent(new p.w.Event('input'));
     await choose(p, 'off');                       // any re-render
     assert.equal(p.root.querySelector('.ac-existing').open, true);
-    assert.equal(p.ac('existing-python').value, '/Users/v/env/bin/python');
+    assert.equal(p.ac('existing-python').value, '/Users/alice/env/bin/python');
   });
 
   it('a running setup shows real progress and a Cancel that works', async function () {

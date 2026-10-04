@@ -2803,6 +2803,7 @@ _COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("restart", "Restart the daemon (applies restart-only settings)"),
         ("dashboard", "Open the web dashboard (localhost:8765)"),
         ("mcp", "Start the MCP server (used by IDEs)"),
+        ("remote", "Let other computers use this SLM over HTTPS with revocable keys"),
         ("warmup", "Pre-load models so the first recall is fast"),
         ("status", "Show daemon status + memory counts"),
     ]),

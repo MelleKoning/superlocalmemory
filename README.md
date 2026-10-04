@@ -16,14 +16,14 @@ Claude Code, Codex, Cursor and other MCP clients lose what they learned when a s
 [![arXiv](https://img.shields.io/badge/arXiv-2608.08253-b31b1b)](https://arxiv.org/abs/2608.08253)
 
 ```bash
-pipx install superlocalmemory     # or: npm install -g superlocalmemory   (both need Python 3.12+)
+npm install -g superlocalmemory   # primary route (Node 18+, Python 3.12+); or: pipx install superlocalmemory
 slm setup                         # pick Mode A to keep everything on this machine
 slm connect cursor                # or claude-code, codex, windsurf, zed ... 12 IDEs
 ```
 
-Runs on Apple Silicon macOS, 64-bit Linux and 64-bit Windows. No Docker, no required graph database, no API key.
+The other primary route is pip in a virtual environment you activate: `python3 -m venv .venv`, activate it, then `python -m pip install superlocalmemory`. From a clone: `./scripts/install.sh install` (macOS, Linux) or `.\scripts\install.ps1 -Action Install` (Windows); see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-pipx installs SLM into its own Python virtual environment. npm also needs Node 18+ and installs into a package-owned virtual environment. Repository clone: `./scripts/install.sh install` (macOS, Linux) or `.\scripts\install.ps1 -Action Install` (Windows); see [CONTRIBUTING.md](CONTRIBUTING.md).
+Runs on Apple Silicon macOS, 64-bit Windows and 64-bit Linux; Intel Mac and 32-bit Windows are not supported (the pinned `cryptography` has no build for them). No Docker, no required graph database, no API key.
 
 ## 30-second example
 

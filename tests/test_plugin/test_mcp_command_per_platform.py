@@ -53,7 +53,7 @@ def test_posix_still_runs_the_bash_launcher(name, mcp_json, root) -> None:
 
 @pytest.mark.parametrize("name, mcp_json, root", ENTRIES, ids=IDS)
 def test_windows_runs_cmd_with_the_installed_slm(name, mcp_json, root) -> None:
-    argv = expanded_argv(mcp_json, "C:/Users/a b/.claude/plugins/cache/x", WINDOWS_ENV)
+    argv = expanded_argv(mcp_json, "C:/Users/alice smith/.claude/plugins/cache/x", WINDOWS_ENV)
     assert argv[0] == WINDOWS_ENV["ComSpec"], (name, argv)
     assert argv[1:4] == ["/d", "/s", "/c"], (name, argv)
     assert len(argv) == 5, (name, argv)
