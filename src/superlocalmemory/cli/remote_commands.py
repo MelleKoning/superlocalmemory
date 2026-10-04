@@ -44,6 +44,15 @@ def _write_private(path: Path, data: bytes) -> None:
     if tmp.exists():
         tmp.unlink()
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        # 0600 means nothing on Windows; owner-only there too, before any byte.
+        from superlocalmemory.infra.owner_only_acl import restrict_to_owner
+
+        restrict_to_owner(tmp)
+    except BaseException:
+        os.close(fd)
+        tmp.unlink(missing_ok=True)
+        raise
     with os.fdopen(fd, "wb") as handle:
         handle.write(data)
         handle.flush()
