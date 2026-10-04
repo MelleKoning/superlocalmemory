@@ -268,7 +268,26 @@ class _CoordinatorAdapter:
             )
         except CommandRejectedError as exc:
             raise TerminalAdmissionError(exc.error_code) from exc
+        except WriteCoordinatorError as exc:
+            if _caused_by_unknown_profile(exc):
+                # Final, not contention: a deleted profile never comes back,
+                # so retrying would loop forever. Recorded as a rejection.
+                raise TerminalAdmissionError("UNKNOWN_PROFILE") from exc
+            raise
         return {"state": "committed", "receipt": dict(result.receipt)}
+
+
+def _caused_by_unknown_profile(error: BaseException) -> bool:
+    from superlocalmemory.core.ingestion_command import UnknownProfileError
+
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, UnknownProfileError):
+            return True
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
 
 
 class CanonicalRememberRuntime:
