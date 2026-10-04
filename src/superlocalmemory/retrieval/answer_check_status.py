@@ -23,7 +23,7 @@ ceiling, not a target, and nothing here makes retrieval itself faster or shorter
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 # -- what happened, on every response ------------------------------------------
@@ -49,6 +49,22 @@ STATUS_UNAVAILABLE = "unavailable"
 ANSWER_CHECK_STATUSES = frozenset({
     STATUS_JUDGED, STATUS_OFF, STATUS_SKIPPED, STATUS_BUSY, STATUS_WARMING,
     STATUS_UNAVAILABLE,
+})
+
+# -- why a recall was skipped (4.1.20) -----------------------------------------------
+#: A closed set, never a free-form string: the Answer Check history stores it.
+DETAIL_NONE = ""
+#: A recall that is not a question (``skip_answer_check()``) or background work.
+DETAIL_NOT_A_QUESTION = "not_a_question"
+DETAIL_NO_RESULTS = "no_results"
+#: The online check would have read a memory another profile owns.
+DETAIL_OTHER_PROFILE = "other_profile_memory"
+#: Too little of the recall's time budget was left to ask.
+DETAIL_BUDGET = "budget"
+
+ANSWER_CHECK_DETAILS = frozenset({
+    DETAIL_NONE, DETAIL_NOT_A_QUESTION, DETAIL_NO_RESULTS, DETAIL_OTHER_PROFILE,
+    DETAIL_BUDGET,
 })
 
 # -- what a caller asks for, per recall ------------------------------------------
@@ -88,6 +104,27 @@ class JudgeOutcome:
 
     verdict: Any = None
     status: str = STATUS_UNAVAILABLE
+    #: 4.1.20: why a skipped recall was skipped (``DETAIL_*``). ``compare=False``
+    #: so two outcomes that differ only in their explanation still compare equal.
+    detail: str = field(default=DETAIL_NONE, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class AnswerCheckTrace:
+    """Timing and provenance of one recall's answer check (4.1.20).
+
+    In-process only: it is never put on an MCP or HTTP recall envelope. All
+    times are milliseconds measured from the start of the recall pipeline —
+    the same clock ``RECALL_CEILING_S`` bounds.
+    """
+
+    detail: str              # one of ANSWER_CHECK_DETAILS
+    backend: str             # "laya" | "jev" | ""
+    threshold: float | None
+    reordered: bool          # the hosted check reordered the results
+    retrieval_ms: float      # pipeline start -> just before the check
+    judge_ms: float          # the check's own wall time (0 when not asked)
+    total_ms: float          # pipeline start -> the response is returned
 
 
 def judge_deadline(recall_started: float, *, now: float | None = None) -> float | None:
@@ -125,8 +162,15 @@ def normalize_request(value: object) -> str:
 
 
 __all__ = [
+    "ANSWER_CHECK_DETAILS",
     "ANSWER_CHECK_REQUESTS",
     "ANSWER_CHECK_STATUSES",
+    "AnswerCheckTrace",
+    "DETAIL_BUDGET",
+    "DETAIL_NONE",
+    "DETAIL_NOT_A_QUESTION",
+    "DETAIL_NO_RESULTS",
+    "DETAIL_OTHER_PROFILE",
     "JUDGE_FLOOR_S",
     "JudgeOutcome",
     "POST_JUDGE_RESERVE_S",

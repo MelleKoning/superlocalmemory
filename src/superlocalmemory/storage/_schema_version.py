@@ -49,7 +49,11 @@ from pathlib import Path
 #: it by the same convention. An older build that must run on the store goes
 #: through prepare-for-downgrade, which may lower the stamp to M052's
 #: ``DOWNGRADE_FLOOR``.
-SUPPORTED_SCHEMA_VERSION: int = 52
+#:
+#: M053 is additive (two new learning.db tables for the Answer Check history);
+#: the ceiling moves to it by the same convention. Its ``DOWNGRADE_FLOOR`` is 51,
+#: so going back to 4.1.18 stays possible exactly as M052 left it.
+SUPPORTED_SCHEMA_VERSION: int = 53
 
 
 class SchemaVersionError(RuntimeError):

@@ -62,9 +62,9 @@ def test_completion_certificate_stamps_52(tmp_path) -> None:
     assert eager["failed"] == [], eager["details"]
     deferred = mr.apply_deferred(learning_db, memory_db)
     assert deferred["failed"] == [], deferred["details"]
-    assert sv.SUPPORTED_SCHEMA_VERSION == 52
-    assert sv.read_schema_version(memory_db) == 52
-    assert sv.read_schema_version(learning_db) == 52
+    assert sv.SUPPORTED_SCHEMA_VERSION >= 52  # 53 since M053
+    assert sv.read_schema_version(memory_db) == sv.SUPPORTED_SCHEMA_VERSION
+    assert sv.read_schema_version(learning_db) == sv.SUPPORTED_SCHEMA_VERSION
     assert mr.status(learning_db, memory_db)[M052.NAME] == "complete"
 
 
@@ -213,7 +213,7 @@ def test_runner_stamps_normally_when_the_hold_module_is_absent(tmp_path, monkeyp
     mr.apply_all(learning_db, memory_db)
     result = mr.apply_deferred(learning_db, memory_db)
     assert result["failed"] == [], result["details"]
-    assert sv.read_schema_version(memory_db) == 52
+    assert sv.read_schema_version(memory_db) == sv.SUPPORTED_SCHEMA_VERSION
 
 
 def test_runner_holds_the_stamp_while_a_downgrade_is_prepared(tmp_path, monkeypatch) -> None:
@@ -223,8 +223,8 @@ def test_runner_holds_the_stamp_while_a_downgrade_is_prepared(tmp_path, monkeypa
     mr.apply_all(learning_db, memory_db)
     result = mr.apply_deferred(learning_db, memory_db)
     assert result["failed"] == [], result["details"]
-    assert sv.read_schema_version(memory_db) < 52
-    assert sv.read_schema_version(learning_db) < 52
+    assert sv.read_schema_version(memory_db) < sv.SUPPORTED_SCHEMA_VERSION
+    assert sv.read_schema_version(learning_db) < sv.SUPPORTED_SCHEMA_VERSION
     assert seen and seen[0] == memory_db.parent
     assert "held" in result["details"]["schema_version_stamp"]
 
@@ -238,4 +238,4 @@ def test_a_broken_hold_predicate_stamps_normally(tmp_path, monkeypatch) -> None:
     mr.apply_all(learning_db, memory_db)
     result = mr.apply_deferred(learning_db, memory_db)
     assert result["failed"] == [], result["details"]
-    assert sv.read_schema_version(memory_db) == 52
+    assert sv.read_schema_version(memory_db) == sv.SUPPORTED_SCHEMA_VERSION

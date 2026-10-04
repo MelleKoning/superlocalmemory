@@ -49,7 +49,7 @@ def test_message_matches_what_a_restart_does(store) -> None:
         assert sv.read_schema_version(memory_db) == 51, "the preparation is kept"
     assert ur.cancel_downgrade(root) is True
     _next_start(learning_db, memory_db)
-    assert sv.read_schema_version(memory_db) == 52, "Cancel undoes it at the next start"
+    assert sv.read_schema_version(memory_db) == sv.SUPPORTED_SCHEMA_VERSION, "Cancel undoes it at the next start"
 
 
 def test_cli_cancel_message_is_true(store, capsys) -> None:
@@ -63,4 +63,4 @@ def test_cli_cancel_message_is_true(store, capsys) -> None:
     out = capsys.readouterr().out
     assert "next start" in out
     _next_start(learning_db, memory_db)
-    assert sv.read_schema_version(memory_db) == 52
+    assert sv.read_schema_version(memory_db) == sv.SUPPORTED_SCHEMA_VERSION
