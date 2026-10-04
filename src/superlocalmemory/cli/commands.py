@@ -1630,6 +1630,18 @@ def cmd_migrate(args: Namespace) -> None:
 # -- Memory Operations (all support --json) --------------------------------
 
 
+def _kind_display(fields: dict) -> str:
+    """The memory kind as a person reads it: "Decision", "Rule (suggested)".
+
+    The same label the dashboard and ``--json`` report; the old text view
+    printed the internal fact type ("semantic") instead.
+    """
+    label = fields.get("memory_kind_label") or "Untyped"
+    if fields.get("memory_kind_state") == "suggested":
+        return f"{label} (suggested)"
+    return str(label)
+
+
 def cmd_list(args: Namespace) -> None:
     """List recent memories chronologically."""
     from superlocalmemory.core.config import CANONICAL_LIST_LIMIT, SLMConfig
@@ -1701,13 +1713,16 @@ def cmd_list(args: Namespace) -> None:
     if not facts:
         print("No memories stored yet.")
     else:
+        from superlocalmemory.storage.memory_kinds import kind_fields
+
         print(f"Recent memories ({len(facts)}):\n")
         for i, f in enumerate(facts, 1):
             date = (f.created_at or "")[:19]
-            ftype_raw = getattr(f, "fact_type", "")
-            ftype = ftype_raw.value if hasattr(ftype_raw, "value") else str(ftype_raw)
             content = f.content[:100] + ("..." if len(f.content) > 100 else "")
-            print(f"  {i:3d}. [{date}] ({ftype}) {content}")
+            print(f"  {i:3d}. [{date}] {_kind_display(kind_fields(f))}: {content}")
+            print(f"       id: {f.fact_id}")
+        print("\nChange one with: slm update <id> \"new text\"   "
+              "Remove one with: slm delete <id>")
     if kind_filter_truncated:
         print(
             "\nNote: the kind filter stopped at its search cap before "

@@ -575,7 +575,9 @@ def main() -> None:
     )
     correction_p.add_argument("--json", action="store_true", help="Output structured JSON (agent-native)")
 
-    list_p = sub.add_parser("list", help="List recent memories chronologically (shows IDs for delete/update)")
+    _list_help = ("List recent memories, newest first, with each one's kind and the "
+                  "ID that slm update and slm delete take")
+    list_p = sub.add_parser("list", help=_list_help, description=_list_help)
     list_p.add_argument(
         "--limit", "-n", type=int, default=CANONICAL_LIST_LIMIT,
         help=f"Number of entries (default {CANONICAL_LIST_LIMIT})",

@@ -69,3 +69,31 @@ def test_list_refuses_an_unknown_kind_before_any_read(fake_engine, capsys) -> No
     with pytest.raises(SystemExit) as exited:
         commands.cmd_list(Namespace(json=True, limit=10, kind="not-a-real-kind"))
     assert exited.value.code == 2
+
+
+def test_list_text_shows_id_and_kind_label(fake_engine, capsys) -> None:
+    """Audit 4.1.20 L1: the help promises IDs; the text view printed none, and
+    showed the internal fact type ("semantic") instead of the memory kind."""
+    fact_id = _save(fake_engine._db, "We decided to ship on Fridays",
+                    kind="decision", source="user")
+
+    commands.cmd_list(Namespace(json=False, limit=10, kind=""))
+    out = capsys.readouterr().out
+
+    assert f"id: {fact_id}" in out
+    assert "Decision: We decided to ship on Fridays" in out
+    assert "(semantic)" not in out
+    assert "slm delete <id>" in out
+
+
+def test_list_help_matches_what_text_mode_shows(tmp_path) -> None:
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ, HOME=str(tmp_path), SLM_DATA_DIR=str(tmp_path / "slm"))
+    out = subprocess.run(
+        [sys.executable, "-m", "superlocalmemory.cli.main", "list", "--help"],
+        capture_output=True, text=True, timeout=60, env=env,
+    ).stdout
+    assert "ID" in out and "kind" in out
