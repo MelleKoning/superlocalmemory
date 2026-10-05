@@ -33,6 +33,7 @@ from superlocalmemory.infra.daemon_identity import (
     build_descriptor,
     descriptor_matches_health,
     descriptor_path,
+    health_is_other_account,
     process_create_time_for,
     read_descriptor,
     write_descriptor,
@@ -298,6 +299,22 @@ def _fetch_health(port: int) -> dict | None:
         return None
 
 
+def _process_is_this_account(process) -> bool:
+    """The process runs as the account running this code.
+
+    On a computer shared by several accounts, another account's daemon can
+    hold a PID a stale ``daemon.pid`` here still names. Windows has no uid;
+    its per-account isolation is the descriptor and the health identity.
+    """
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:
+        return True
+    try:
+        return int(process.uids().real) == int(getuid())
+    except Exception:
+        return False
+
+
 def _is_verified_legacy_process(pid: int) -> bool:
     """One-release bridge for a same-root V3.6 unified-daemon process."""
     if not _is_pid_alive(pid):
@@ -306,6 +323,8 @@ def _is_verified_legacy_process(pid: int) -> bool:
         import psutil
 
         process = psutil.Process(pid)
+        if not _process_is_this_account(process):
+            return False
         command = " ".join(process.cmdline())
         return "superlocalmemory.server.unified_daemon" in command
     except Exception:
@@ -378,6 +397,16 @@ def _health_is_owned(health: dict, *, port: int | None = None) -> bool:
         )
     except (TypeError, ValueError):
         return False
+
+
+def owned_daemon_answers(port: int) -> bool:
+    """This account's own daemon answers on ``port`` (proven, not assumed).
+
+    Use before sending anything to a loopback port: on a shared computer the
+    port may belong to another account's SuperLocalMemory, or to anything.
+    """
+    health = _fetch_health(int(port))
+    return health is not None and _health_is_owned(health, port=int(port))
 
 
 class DaemonRefused(RuntimeError):
@@ -785,6 +814,15 @@ def ensure_daemon(*, port: int | None = None) -> bool:
         probe_port = port if port is not None else _get_port()
         if _has_tcp_listener(probe_port):
             occupant = _fetch_health(probe_port)
+            if occupant is not None and health_is_other_account(occupant):
+                logger.error(
+                    "SLM daemon will not start: port %d is used by SuperLocalMemory "
+                    "running for another account on this computer. Each account "
+                    "needs its own port: set SLM_DAEMON_PORT (for example %d) for "
+                    "this account, then run `slm restart`.",
+                    probe_port, probe_port + 1,
+                )
+                return False
             if occupant is not None and not _health_is_owned(
                 occupant, port=probe_port,
             ):

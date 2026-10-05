@@ -64,4 +64,33 @@ def restrict_to_owner(path: Path) -> None:
         raise OSError(f"could not make {path.name} readable only by you")
 
 
-__all__ = ["restrict_to_owner"]
+def is_owner_only(path: Path) -> bool:
+    """Whether only the current user can read ``path``.
+
+    POSIX: no group or other permission bits. Windows: the access list is the
+    protected owner-only one :func:`restrict_to_owner` sets.
+    """
+    path = Path(path)
+    if os.name != "nt":
+        return not (os.stat(path).st_mode & 0o077)
+    try:
+        import ntsecuritycon
+        import win32api
+        import win32con
+        import win32security
+    except ImportError as exc:  # pywin32 is a declared Windows dependency
+        raise OSError("Windows permission support (pywin32) is unavailable") from exc
+    from superlocalmemory.optimize.proxy.capture import (
+        _windows_dacl_is_owner_only, _windows_owner_dacl,
+    )
+
+    owner_sid, _dacl = _windows_owner_dacl(win32api, win32con, win32security)
+    descriptor = win32security.GetNamedSecurityInfo(
+        os.fspath(path), win32security.SE_FILE_OBJECT,
+        win32security.OWNER_SECURITY_INFORMATION
+        | win32security.DACL_SECURITY_INFORMATION)
+    return bool(_windows_dacl_is_owner_only(descriptor, owner_sid, ntsecuritycon,
+                                            win32security))
+
+
+__all__ = ["is_owner_only", "restrict_to_owner"]

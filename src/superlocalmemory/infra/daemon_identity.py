@@ -282,6 +282,37 @@ def descriptor_matches_health(
     return True
 
 
+def health_is_same_account(
+    health: Mapping[str, Any],
+    *,
+    data_root: str | Path | None = None,
+) -> bool:
+    """An SLM daemon of this account and this data folder answered.
+
+    Weaker than :func:`descriptor_matches_health` (it does not prove the exact
+    process), for callers that must recognise a sibling daemon of their own
+    namespace whose instance the descriptor no longer records. A daemon run by
+    another account on this computer never passes: its owner differs, and so
+    does its data folder.
+    """
+    root = _canonical_path(data_root) if data_root is not None else canonical_data_root()
+    expected = {
+        "service": DAEMON_SERVICE,
+        "daemon_protocol": str(DAEMON_PROTOCOL),
+        "owner_id": owner_id(),
+        "namespace_id": namespace_id_for(root),
+    }
+    return all(hmac.compare_digest(str(value), str(health.get(key, "")))
+               for key, value in expected.items())
+
+
+def health_is_other_account(health: Mapping[str, Any]) -> bool:
+    """The answer came from an SLM daemon run by another account on this computer."""
+    other = str(health.get("owner_id", "") or "")
+    return (str(health.get("service", "")) == DAEMON_SERVICE
+            and bool(other) and other != owner_id())
+
+
 def clear_descriptor(
     instance_id: str,
     *,

@@ -28,12 +28,12 @@ def _ensure_running(port: int) -> bool:
     here because that function reads config via the daemon-internal store
     (get_optimize_config/_store) which is None in a CLI subprocess context.
     """
+    # Only this account's own daemon counts: on a shared computer the port
+    # may be another account's SuperLocalMemory.
     try:
-        import urllib.request
-        url = f"http://127.0.0.1:{port}/health"
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=2) as resp:
-            return resp.status == 200
+        from superlocalmemory.cli.daemon import owned_daemon_answers
+
+        return owned_daemon_answers(port)
     except Exception:
         return False
 

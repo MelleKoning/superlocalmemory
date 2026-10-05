@@ -617,7 +617,13 @@ def _check_daemon_health(daemon_port: int, timeout: float = 2.0) -> bool:
         url = f"http://127.0.0.1:{daemon_port}/api/v3/health"
         req = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status == 200
+            if resp.status != 200:
+                return False
+        # Reachable is not enough on a computer shared by several accounts:
+        # the port must be this account's own SuperLocalMemory.
+        from superlocalmemory.cli.daemon import owned_daemon_answers
+
+        return owned_daemon_answers(daemon_port)
     except Exception:
         return False
 

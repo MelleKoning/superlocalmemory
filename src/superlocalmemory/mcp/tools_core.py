@@ -694,13 +694,17 @@ def register_core_tools(server, get_engine: Callable) -> None:
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
     @admits(OperationKind.RECALL)
-    async def search(query: str, limit: int = CANONICAL_RECALL_LIMIT, kind: str = "") -> dict:
+    async def search(query: str, limit: int = CANONICAL_RECALL_LIMIT, kind: str = "",
+                     profile_id: str = "") -> dict:
         """Full-text search across memories using FTS5 with BM25 ranking.
 
         ``kind`` (4.1.19 WP8) keeps only results whose kind — the same nine
         values ``remember``'s ``kind`` parameter takes — equals this value,
         including memories SLM only mapped from their legacy type. Refused
         (``INVALID_KIND``) before anything is retrieved if it does not parse.
+
+        ``profile_id`` reads another profile (empty = the active one); remote
+        access sets it to the key's profile, whatever this computer is using.
         """
         from superlocalmemory.core.kind_query import (
             InvalidKind,
@@ -716,7 +720,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     "error": str(exc)}
         try:
             engine = get_engine()
-            pid = await _runtime_profile(get_engine)
+            pid = await _runtime_profile(get_engine, (profile_id or "").strip())
             _truncated: list[bool] = []
             facts = search_facts(
                 engine._db, query, pid, limit, parsed_kind,
@@ -746,13 +750,16 @@ def register_core_tools(server, get_engine: Callable) -> None:
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
     @admits(OperationKind.RECALL)
-    async def fetch(fact_ids: "str | list[str]") -> dict:
+    async def fetch(fact_ids: "str | list[str]", profile_id: str = "") -> dict:
         """Fetch full details for specific fact IDs (comma-separated or a list).
 
         Reports every id it could not resolve. Before 4.1.15 an unmatched token
         returned ``success: true, count: 0`` -- indistinguishable from a
         correct answer for a fact that does not exist, on the one tool an agent
         uses to verify that a write landed. GitHub #135.
+
+        ``profile_id`` reads another profile (empty = the active one); remote
+        access sets it to the key's profile, whatever this computer is using.
         """
         try:
             engine = get_engine()
@@ -766,7 +773,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     ),
                     "results": [], "count": 0, "not_found": [],
                 }
-            pid = await _runtime_profile(get_engine)
+            pid = await _runtime_profile(get_engine, (profile_id or "").strip())
             facts = engine._db.get_facts_by_ids(ids, pid)
             found = {f.fact_id for f in facts}
             # #150: the project each memory was saved under ("" when none).
@@ -809,13 +816,17 @@ def register_core_tools(server, get_engine: Callable) -> None:
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
     @admits(OperationKind.RECALL)
-    async def list_recent(limit: int = CANONICAL_LIST_LIMIT, kind: str = "") -> dict:
+    async def list_recent(limit: int = CANONICAL_LIST_LIMIT, kind: str = "",
+                          profile_id: str = "") -> dict:
         """List most recently stored memories, newest first.
 
         ``kind`` (4.1.19 WP8) keeps only memories whose kind — the same nine
         values ``remember``'s ``kind`` parameter takes — equals this value,
         including memories SLM only mapped from their legacy type. Refused
         (``INVALID_KIND``) before anything is retrieved if it does not parse.
+
+        ``profile_id`` reads another profile (empty = the active one); remote
+        access sets it to the key's profile, whatever this computer is using.
         """
         from superlocalmemory.core.kind_query import (
             InvalidKind,
@@ -831,7 +842,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     "error": str(exc)}
         try:
             engine = get_engine()
-            pid = await _runtime_profile(get_engine)
+            pid = await _runtime_profile(get_engine, (profile_id or "").strip())
             # v3.6.12 (search-2): push the limit into the query — was loading the
             # ENTIRE facts table (deserializing every 768-float embedding) just
             # to return the top N. get_all_facts preserves created_at DESC order.

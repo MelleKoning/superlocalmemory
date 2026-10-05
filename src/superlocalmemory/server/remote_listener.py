@@ -32,7 +32,7 @@ import os
 import socket
 import stat
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -66,6 +66,8 @@ class RemoteListenerConfig:
     key: Path
     server_names: tuple[str, ...]
     not_after: datetime
+    #: The TLS settings built from ``cert`` and ``key`` while checking them.
+    tls: Any = field(default=None, compare=False, repr=False)
 
 
 def data_path(*parts: str) -> Path:
@@ -197,7 +199,22 @@ def load_remote_listener_config(
     if problem:
         raise RemoteListenerError("tls_key_exposed", problem + ".")
     names, not_after = _inspect_cert(cert)
-    return RemoteListenerConfig(host, port, cert, key, names, not_after)
+    return RemoteListenerConfig(host, port, cert, key, names, not_after,
+                                tls=_tls_context(cert, key))
+
+
+def _tls_context(cert: Path, key: Path) -> Any:
+    """The listener's TLS settings, or the reason the pair cannot be used."""
+    import ssl
+
+    from superlocalmemory.server.remote_conn_guard import server_tls_context
+
+    try:
+        return server_tls_context(cert, key)
+    except (OSError, ssl.SSLError, ValueError) as exc:
+        raise RemoteListenerError(
+            "tls_unusable", f"the TLS certificate {cert} and private key {key} cannot be "
+            "used together (renew them: slm remote tls init --force ...).") from exc
 
 
 def try_load_config(main_port: int | None = None) -> tuple[RemoteListenerConfig | None,
@@ -314,6 +331,16 @@ def make_servers(app: Any, main_config: Any, remote: RemoteListenerConfig):
 
     from superlocalmemory.server.forwarded_guard import uvicorn_proxy_options
 
+    from superlocalmemory.server.remote_conn_guard import (
+        server_tls_context,
+        tls_gate_protocol_class,
+    )
+
+    # TLS is done by the connection guard, not uvicorn, so the handshake has a
+    # deadline and a connection still in it counts toward the connection caps.
+    gate_class = tls_gate_protocol_class(
+        remote.tls if remote.tls is not None else server_tls_context(remote.cert, remote.key))
+
     class QuietServer(uvicorn.Server):
         """The remote server: no signal handlers (the main server owns them) and
         no lifespan (``lifespan="off"``; the app's lifespan yields no state)."""
@@ -322,16 +349,19 @@ def make_servers(app: Any, main_config: Any, remote: RemoteListenerConfig):
         def capture_signals(self):  # noqa: D401 — the main server owns signals
             yield
 
-    from superlocalmemory.server.remote_conn_guard import guarded_protocol_class
+        async def shutdown(self, sockets=None):
+            for gate in list(gate_class.slm_limits.handshaking):
+                gate.shutdown()
+            await super().shutdown(sockets=sockets)
 
     remote_cfg = uvicorn.Config(
         RemoteListenerASGI(app, remote.server_names), host=remote.host, port=remote.port,
-        ssl_certfile=str(remote.cert), ssl_keyfile=str(remote.key),
         lifespan="off",
-        # Callers must send each request's headers within a deadline, and the
-        # number of connections is capped (see remote_conn_guard). Only /mcp
-        # (plain HTTP) is served here, so WebSocket upgrades are off.
-        http=guarded_protocol_class(), ws="none",
+        # Callers must finish TLS and then send each request's headers within
+        # deadlines, and the number of connections is capped (see
+        # remote_conn_guard). Only /mcp (plain HTTP inside TLS) is served here,
+        # so WebSocket upgrades are off.
+        http=gate_class, ws="none",
         # Callers connect directly over TLS: forwarding headers are never read
         # here, whatever SLM_TRUSTED_PROXIES says for the main listener.
         **uvicorn_proxy_options({}),

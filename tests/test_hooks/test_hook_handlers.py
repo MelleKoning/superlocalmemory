@@ -294,6 +294,9 @@ def test_post_tool_async_sends_install_token(
         return _R()
 
     # Patch urllib inside the module.
+    # The daemon on the port proves it is this account's own (4.1.21);
+    # tests/test_cli/test_shared_computer_accounts.py covers the refusal.
+    monkeypatch.setattr(post_tool_async_hook, "_daemon_is_mine", lambda _url: True)
     setattr_urlopen(monkeypatch, fake_urlopen)
     rc, out = _run_hook(
         post_tool_async_hook.main,
@@ -470,6 +473,9 @@ def test_post_tool_async_summarize_string_input(
                 return None
         return _R()
 
+    # The daemon on the port proves it is this account's own (4.1.21);
+    # tests/test_cli/test_shared_computer_accounts.py covers the refusal.
+    monkeypatch.setattr(post_tool_async_hook, "_daemon_is_mine", lambda _url: True)
     setattr_urlopen(monkeypatch, fake_urlopen)
     rc, out = _run_hook(
         post_tool_async_hook.main,
@@ -499,6 +505,9 @@ def test_post_tool_async_truncates_large_output(
                 return None
         return _R()
 
+    # The daemon on the port proves it is this account's own (4.1.21);
+    # tests/test_cli/test_shared_computer_accounts.py covers the refusal.
+    monkeypatch.setattr(post_tool_async_hook, "_daemon_is_mine", lambda _url: True)
     setattr_urlopen(monkeypatch, fake_urlopen)
     big = "y" * 20000
     rc, out = _run_hook(

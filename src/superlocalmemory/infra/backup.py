@@ -31,6 +31,11 @@ from superlocalmemory.infra.backup_obligations import (
     erase_profile_from_snapshot,
 )
 from superlocalmemory.infra.data_root import DynamicStatePath, canonical_data_root
+from superlocalmemory.infra.private_files import (
+    create_private_file,
+    make_private_dir,
+    tighten_tree,
+)
 from superlocalmemory.storage.backup import (
     RESTORE_LOCK_WAIT_SECONDS,
     LiveStoreWriteError,
@@ -176,7 +181,9 @@ class BackupCoordinator:
         set_id = uuid.uuid4().hex[:16]
         epoch = int(time.time())
         staging_dir = self._backup_dir / f".staging_{set_id}"
-        staging_dir.mkdir(parents=True, exist_ok=True)
+        # Every file in a backup set is a copy of memory: owner-only.
+        make_private_dir(self._backup_dir)
+        make_private_dir(staging_dir)
 
         existing_dbs = [
             db for db in self._managed_databases
@@ -201,6 +208,7 @@ class BackupCoordinator:
             if lance_src.is_dir():
                 lance_staging = staging_dir / "lance"
                 shutil.copytree(str(lance_src), str(lance_staging))
+                tighten_tree(lance_staging)
                 logger.info(
                     "Backup set %s: captured lance/ directory (%d items)",
                     set_id,
@@ -239,6 +247,7 @@ class BackupCoordinator:
 
         # Phase 6: atomic publish
         staging_dir.rename(final_dir)
+        create_private_file(final_dir / "manifest.json")
         (final_dir / "manifest.json").write_text(
             json.dumps(asdict(manifest), indent=2)
         )
@@ -474,7 +483,11 @@ class BackupCoordinator:
                     pass
 
     def _sqlite_backup(self, src: Path, dest: Path) -> None:
-        """Copy a SQLite database using the Online Backup API (hot copy)."""
+        """Copy a SQLite database using the Online Backup API (hot copy).
+
+        The copy is created owner-only before SQLite writes into it.
+        """
+        create_private_file(dest)
         src_conn = sqlite3.connect(str(src))
         dst_conn = sqlite3.connect(str(dest))
         try:
@@ -562,7 +575,7 @@ class BackupManager:
     # ------------------------------------------------------------------
 
     def _ensure_backup_dir(self) -> None:
-        self.backup_dir.mkdir(parents=True, exist_ok=True)
+        make_private_dir(self.backup_dir)
 
     def _load_config(self) -> Dict:
         if self._config_file.exists():
@@ -655,6 +668,7 @@ class BackupManager:
         backup_path = self.backup_dir / backup_name
 
         try:
+            create_private_file(backup_path)
             source = sqlite3.connect(str(self.db_path))
             dest = sqlite3.connect(str(backup_path))
             try:
@@ -701,6 +715,7 @@ class BackupManager:
                 prefix = db_file.stem
                 name = f"{prefix}-{timestamp}{suffix}.db"
                 path = self.backup_dir / name
+                create_private_file(path)
                 src = sqlite3.connect(str(db_file))
                 dst = sqlite3.connect(str(path))
                 try:

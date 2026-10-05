@@ -8,7 +8,7 @@ A remote key is bound to one profile (:mod:`server.remote_keys`). Every
 remote-callable tool is in exactly one of three groups:
 
 * :data:`ROUTED_TOOLS` (``recall``, ``remember``, ``list_corrections``,
-  ``review_correction``) are served for the key's profile through the
+  ``review_correction``, ``search``, ``fetch``, ``list_recent``) are served for the key's profile through the
   per-request profile path, whatever profile this computer is using. The
   wrapper sets ``profile_id`` to the key's profile; the host's active profile
   is neither read for the work nor moved.
@@ -67,6 +67,8 @@ SCOPED_WRITE_TOOLS: frozenset[str] = frozenset({"remember"})
 #: the host's active profile untouched.
 ROUTED_TOOLS: frozenset[str] = frozenset({
     "recall", "remember", "list_corrections", "review_correction",
+    # 4.1.21: the read tools a remote agent uses to check what it saved.
+    "search", "fetch", "list_recent",
 })
 
 #: Remote-callable tools that take ``profile_id``. Each gets the key's profile

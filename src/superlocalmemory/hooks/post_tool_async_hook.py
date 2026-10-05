@@ -110,8 +110,28 @@ def _summarize(obj, cap: int) -> str:
             return ""
 
 
+def _daemon_is_mine(url: str) -> bool:
+    """The daemon at ``url`` is this account's own, proven by its identity.
+
+    The install token and the tool summary go nowhere else: on a computer
+    shared by several accounts, the port may be another account's
+    SuperLocalMemory (or anything) when this account's daemon is not running.
+    """
+    try:
+        from urllib.parse import urlparse
+
+        from superlocalmemory.cli.daemon import owned_daemon_answers
+
+        port = urlparse(url).port or _DEFAULT_DAEMON_PORT
+        return owned_daemon_answers(port)
+    except Exception:
+        return False
+
+
 def _post(body: dict, token: str) -> None:
     """Fire the prewarm POST. Silently swallows all failures."""
+    if not _daemon_is_mine(DAEMON_URL):
+        return
     try:
         data = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(

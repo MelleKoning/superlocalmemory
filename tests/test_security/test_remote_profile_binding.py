@@ -256,6 +256,28 @@ def test_remember_and_recall_are_routed_to_the_keys_profile_whatever_is_active(a
     assert stub.leases_during_call == [0] and runtime.snapshot.profile_id == active
 
 
+@pytest.mark.parametrize("active", ["work", "personal"])
+@pytest.mark.parametrize("tool, args", [
+    ("search", {"query": "q"}), ("fetch", {"fact_ids": "f1"}), ("list_recent", {}),
+])
+def test_read_back_tools_are_routed_to_the_keys_profile_whatever_is_active(
+        tool, args, active) -> None:
+    """4.1.21: a remote agent can check what it saved while the host is elsewhere."""
+    _, answer, stub, runtime = _run(tool, args, READ_KEY, active=active)
+    assert answer["result"]["isError"] is False, tool
+    assert stub.reached[0]["params"]["arguments"]["profile_id"] == "work"
+    assert stub.leases_during_call == [0] and runtime.snapshot.profile_id == active
+
+
+@pytest.mark.parametrize("tool, args", [
+    ("search", {"query": "q"}), ("fetch", {"fact_ids": "f1"}), ("list_recent", {}),
+])
+def test_read_back_tools_cannot_name_another_profile(tool, args) -> None:
+    _, answer, stub, _ = _run(tool, {**args, "profile_id": "clientx"}, READ_KEY)
+    assert answer["result"]["isError"] is True and stub.reached == []
+    assert answer["result"]["structuredContent"]["error"] == binding.PROFILE_DENIAL
+
+
 @pytest.mark.parametrize("tool", sorted(binding.PROFILE_FREE_TOOLS))
 def test_profile_free_tools_run_whatever_is_active(tool) -> None:
     _, answer, stub, _ = _run(tool, {}, WRITE_KEY, active="personal")
@@ -263,14 +285,13 @@ def test_profile_free_tools_run_whatever_is_active(tool) -> None:
 
 
 def test_an_active_only_tool_holds_the_lease_for_the_whole_call() -> None:
-    _, answer, stub, runtime = _run("search", {"query": "q"}, READ_KEY, active="work")
+    _, answer, stub, runtime = _run("memory_kinds_status", {}, READ_KEY, active="work")
     assert answer["result"]["isError"] is False
     assert stub.leases_during_call == [1] and runtime._active_operations == 0
 
 
 def test_an_active_only_tool_is_refused_while_another_profile_is_active() -> None:
-    for tool, args in (("search", {"query": "q"}), ("fetch", {"fact_ids": "f1"}),
-                       ("list_recent", {}), ("health", {}), ("get_status", {}),
+    for tool, args in (("memory_kinds_status", {}), ("health", {}), ("get_status", {}),
                        ("prestage_context", {"query": "q"})):
         _, answer, stub, runtime = _run(tool, args, READ_KEY, active="secret-client")
         text = answer["result"]["content"][0]["text"]
@@ -312,7 +333,7 @@ def test_a_profile_switch_cannot_land_inside_a_remote_call() -> None:
     switcher.start()
     app = policy.RemoteToolScopeASGI(_Slow(runtime), runtime_for=lambda _s: runtime)
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                       "params": {"name": "search", "arguments": {"query": "q"}}}).encode()
+                       "params": {"name": "memory_kinds_status", "arguments": {}}}).encode()
     scope = {"type": "http", "method": "POST", "path": "/mcp/h", "root_path": "/mcp",
              "headers": [], "client": ("peer", 1), PRINCIPAL_SCOPE_KEY: READ_KEY}
     queue = [{"type": "http.request", "body": body, "more_body": False}]

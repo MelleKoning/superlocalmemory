@@ -78,6 +78,7 @@ def _write_cert(path: Path, *, expired=False, future=False, san=True, eku=True) 
     ("not_yet_valid", "cert_not_yet_valid"),
     ("no_san", "cert_no_san"),
     ("no_eku", "cert_no_server_auth"),
+    ("key_mismatch", "tls_unusable"),
     ("stateful", "stateful_mcp"),
     ("same_port", "port_conflict"),
     ("bad_listen", "invalid_listen"),
@@ -96,6 +97,8 @@ def test_config_refusals(case, code, monkeypatch) -> None:
     elif case in ("expired", "not_yet_valid", "no_san", "no_eku"):
         _write_cert(cert, expired=case == "expired", future=case == "not_yet_valid",
                     san=case != "no_san", eku=case != "no_eku")
+    elif case == "key_mismatch":
+        _write_cert(cert)  # a valid certificate for another key
     elif case == "stateful":
         monkeypatch.setenv("SLM_MCP_STATEFUL", "1")
     elif case == "bad_listen":
@@ -192,8 +195,10 @@ def test_primary_shutdown_stops_remote_before_lifespan_shutdown() -> None:
                     await send({"type": "lifespan.shutdown.complete"})
                     return
 
-    cfg = remote_listener.RemoteListenerConfig("127.0.0.1", 0, Path("c"), Path("k"),
-                                               ("localhost",), datetime.now(timezone.utc))
+    info = remote_commands.tls_init(["localhost"], [], 30, force=True)
+    cfg = remote_listener.RemoteListenerConfig(
+        "127.0.0.1", 0, Path(info["server_cert"]), Path(info["server_key"]),
+        ("localhost",), datetime.now(timezone.utc))
     main_cfg = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning")
     main_srv, remote_srv = remote_listener.make_servers(app, main_cfg, cfg)
 

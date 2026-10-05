@@ -20,12 +20,12 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import sqlite3
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
+from superlocalmemory.infra.private_files import copy_private, make_private_dir
 from superlocalmemory.storage._restore_types import SAFETY_DIR
 
 logger = logging.getLogger(__name__)
@@ -60,34 +60,25 @@ def live_store_problem(db: Path) -> str | None:
     return None if result == "ok" else f"quick_check: {result}"
 
 
-def _fsync(path: Path) -> None:
-    fd = os.open(str(path), os.O_RDWR | getattr(os, "O_BINARY", 0))
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
 def _keep_damaged(target: Path) -> Path:
     """Copy the damaged store and its companions aside, byte for byte."""
     safety_dir = target.parent / SAFETY_DIR
-    safety_dir.mkdir(parents=True, exist_ok=True)
+    make_private_dir(safety_dir)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     safety = safety_dir / f"{target.stem}-{stamp}-damaged-before-restore{target.suffix}"
+    # Copies of the store are owner-only, like the store (infra/private_files).
     if target.exists():
-        shutil.copyfile(target, safety)
-        _fsync(safety)
+        copy_private(target, safety)
     for suffix in _COMPANIONS[:1]:          # the log may hold the newest pages
         companion = Path(f"{target}{suffix}")
         if companion.exists() and companion.stat().st_size:
-            shutil.copyfile(companion, Path(f"{safety}{suffix}"))
+            copy_private(companion, Path(f"{safety}{suffix}"))
     return safety
 
 
 def _replace_file(staged: Path, target: Path) -> None:
     replacement = target.with_name(f"{target.name}.restoring")
-    shutil.copyfile(staged, replacement)
-    _fsync(replacement)
+    copy_private(staged, replacement)
     for suffix in _COMPANIONS:
         Path(f"{target}{suffix}").unlink(missing_ok=True)
     os.replace(replacement, target)
