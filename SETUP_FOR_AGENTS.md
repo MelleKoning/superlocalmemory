@@ -54,7 +54,7 @@ On failure: check write permissions on `~/.superlocalmemory/` (or `$SLM_HOME`).
 
 ### Step 3 — Pick an operating mode
 
-Decision rule — check for Ollama first:
+Decision rule — check for a local model server first (Ollama by default):
 ```bash
 ollama list 2>/dev/null && echo "use mode B" || echo "use mode A"
 ```
@@ -62,8 +62,8 @@ ollama list 2>/dev/null && echo "use mode B" || echo "use mode A"
 | Mode | When | Command |
 |------|------|---------|
 | A — Local Guardian | Default. No LLM calls. Zero-cost. | `slm mode a` |
-| B — Smart Local | Ollama installed and a model pulled. | `slm mode b` |
-| C — Full Power | Cloud provider (OpenAI / Anthropic / Azure). | `slm mode c` |
+| B — Smart Local | A model is running on this machine — Ollama installed and a model pulled by default, but any local OpenAI-compatible server works. | `slm mode b` |
+| C — Full Power | Your own endpoint, or a cloud provider (OpenAI / Anthropic / Azure). | `slm mode c` |
 
 ```bash
 slm mode a        # use this if unsure — always works
@@ -75,8 +75,15 @@ slm mode
 ```
 Expected: `Current mode: A`
 
-Mode C requires `OPENAI_API_KEY` (or equivalent); run
-`slm provider set openai` to configure.
+Mode C needs a cloud API key (`slm provider set openai` sets `OPENAI_API_KEY`
+or equivalent) — or your own keyless OpenAI-compatible endpoint:
+```bash
+slm provider set custom --endpoint http://192.168.1.50:8041/v1 --mode c
+```
+`--mode b` targets Mode B's local-model slot instead (llama.cpp, vLLM, LM
+Studio, …, in place of Ollama); `--key` is optional. Same rule as everywhere
+else in SLM: HTTPS is required unless the endpoint is loopback or a numeric
+private-LAN address.
 
 ---
 

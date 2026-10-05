@@ -21,7 +21,17 @@ def test_provider_set_named_provider_uses_noninteractive_path() -> None:
     configure_provider.assert_called_once()
     _config, = configure_provider.call_args.args
     assert _config is not None
-    assert configure_provider.call_args.kwargs == {"provider_name": "openrouter"}
+    # #112: cmd_provider also forwards the custom-endpoint fields
+    # (endpoint/api_key/model/target_mode) — None here because `args` (built
+    # by the CLI's own argparser) carries them as None when provider=custom
+    # is not selected. configure_provider only consults them for provider="custom".
+    assert configure_provider.call_args.kwargs == {
+        "provider_name": "openrouter",
+        "endpoint": None,
+        "api_key": None,
+        "model": None,
+        "target_mode": None,
+    }
 
 
 def test_named_provider_preserves_existing_runtime_configuration(tmp_path, monkeypatch) -> None:

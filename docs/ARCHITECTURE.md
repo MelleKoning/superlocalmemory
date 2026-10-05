@@ -118,8 +118,8 @@ at `c1669e94`) for the decision and its limits.
 | Mode | Retrieval | LLM Usage | Data Location |
 |------|-----------|-----------|---------------|
 | **A: Local** | Candidate retrieval + math-informed scoring | None for core memory operations | Local data root; optional integrations may use the network |
-| **B: Local LLM** | Candidate retrieval + local LLM enrichment | Ollama (local) | Local data root; optional integrations may use the network |
-| **C: Cloud LLM** | Candidate retrieval plus configured provider-backed enrichment | Cloud provider | Configured content is sent to the provider |
+| **B: Local LLM** | Candidate retrieval + local LLM enrichment | A model on this machine (Ollama by default, any local OpenAI-compatible server works) | Local data root; optional integrations may use the network |
+| **C: Your Endpoint or Cloud** | Candidate retrieval plus configured provider-backed enrichment | Your own endpoint, or a cloud provider | Configured content is sent to the provider |
 
 Mode A is the default. Core memory operations can run without a cloud model provider, but model and dependency downloads, connectors, cloud backup, and explicitly enabled integrations may use the network.
 
@@ -192,7 +192,7 @@ SuperLocalMemory provides controls that may support a deployment's privacy and c
 - **Auditability.** Retrieval and lifecycle surfaces expose local records and diagnostics, subject to release-specific verification.
 - **Policy controls.** Provenance, retention, and access-policy features are available for operator configuration.
 
-Mode C sends queries to a cloud LLM provider. In that mode, the cloud provider's compliance posture applies to those queries.
+Mode C sends queries to your configured endpoint or cloud provider. In that mode, that provider's compliance posture applies to those queries.
 
 ## Database
 

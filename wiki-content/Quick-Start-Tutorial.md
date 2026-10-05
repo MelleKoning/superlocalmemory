@@ -28,8 +28,8 @@ slm setup
 
 The wizard asks you to pick a mode:
 - **A (Local Guardian)** — Core memory operations use the local data root without a cloud model provider. Optional integrations have separate network behavior. Default.
-- **B (Smart Local)** — Local LLM via Ollama for answer synthesis.
-- **C (Full Power)** — Cloud LLM for maximum accuracy. Requires API key.
+- **B (Smart Local)** — A model on this machine for answer synthesis — Ollama by default, any local OpenAI-compatible server works.
+- **C (Full Power)** — Your own endpoint, or a cloud provider, for maximum accuracy. Requires an API key for a cloud provider; a keyless custom endpoint needs none.
 
 Most users should start with **Mode A** — you can switch anytime with `slm mode b` or `slm mode c`.
 

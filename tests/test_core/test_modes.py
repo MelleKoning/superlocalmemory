@@ -160,13 +160,16 @@ class TestValidateModeConfig:
         issues = validate_mode_config(Mode.A)
         assert issues == []
 
-    def test_mode_b_warns_no_ollama(self) -> None:
-        issues = validate_mode_config(Mode.B, has_ollama=False)
+    def test_mode_b_warns_no_llm(self) -> None:
+        """#112: the warning is about "no local model", not "no Ollama" —
+        Mode B works with any local OpenAI-compatible server, not just Ollama."""
+        issues = validate_mode_config(Mode.B, has_llm=False)
         assert len(issues) == 1
-        assert "Ollama" in issues[0]
+        assert "Ollama" not in issues[0]
+        assert "local model" in issues[0]
 
-    def test_mode_b_no_warning_with_ollama(self) -> None:
-        issues = validate_mode_config(Mode.B, has_ollama=True)
+    def test_mode_b_no_warning_with_llm_available(self) -> None:
+        issues = validate_mode_config(Mode.B, has_llm=True)
         assert len(issues) == 0
 
     def test_mode_c_warns_no_cloud_llm(self) -> None:

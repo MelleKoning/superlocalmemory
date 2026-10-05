@@ -8,7 +8,7 @@ mode c`; stored memory is not discarded by a mode change.
 | Mode | Core behavior | Model boundary | Best starting point |
 |---|---|---|---|
 | **A — Local Guardian** | Local memory, retrieval and mathematical/lifecycle components | No cloud model provider is required for core memory operations | Default for a local-first deployment |
-| **B — Smart Local** | Mode A plus an operator-configured Ollama endpoint | The selected endpoint and enabled integrations determine the data path | Local model synthesis/enrichment |
+| **B — Smart Local** | Mode A plus an operator-configured local model endpoint (Ollama by default; any local OpenAI-compatible server works) | The selected endpoint and enabled integrations determine the data path | Local model synthesis/enrichment |
 | **C — Provider-assisted** | Local memory plus configured provider-backed behavior | Query, ingestion or enrichment content may be sent to the configured provider | Approved external-provider deployment |
 
 ## Mode A: Local Guardian
@@ -24,10 +24,12 @@ a privacy or compliance determination.
 
 ## Mode B: Smart Local
 
-Mode B adds a local LLM path through Ollama. The operator chooses the endpoint
-and model, then verifies both with `slm doctor` and a representative store /
-recall witness. Answer and extraction quality depend on that selected model,
-the corpus, and the healthy retrieval channels.
+Mode B adds a local LLM path through a model running on this machine — Ollama
+by default, but any local OpenAI-compatible server (llama.cpp, vLLM, LM
+Studio, …) works. The operator chooses the endpoint and model, then verifies
+both with `slm doctor` and a representative store / recall witness. Answer
+and extraction quality depend on that selected model, the corpus, and the
+healthy retrieval channels.
 
 ```bash
 # Install Ollama using reviewed platform instructions, then:
@@ -35,6 +37,17 @@ ollama pull llama3.2
 slm mode b
 slm doctor
 ```
+
+A non-Ollama local server works the same way — no API key required:
+
+```bash
+slm provider set custom --endpoint http://192.168.1.50:8041/v1 --mode b
+```
+
+(or pick "another local server" in `slm setup`'s Mode B step). This applies
+the same endpoint-trust rule as the remote reranker: HTTPS is required for
+public hosts and bare hostnames; a numeric private-LAN address may use plain
+HTTP only when `retrieval.trust_plain_http_lan` is true (the default).
 
 ## Mode C: Provider-assisted
 
@@ -50,7 +63,7 @@ apply to content sent through this mode.
 |---|:---:|:---:|:---:|
 | Local canonical SQLite memory | Yes | Yes | Yes |
 | Multi-channel retrieval | Healthy channels participate | Healthy channels participate | Healthy channels participate |
-| Local LLM endpoint | Not required | Configured Ollama | Optional/configured |
+| Local LLM endpoint | Not required | Configured local model (Ollama by default) | Optional/configured |
 | External provider path | Not required for core memory | Not required for core memory | Configured provider path |
 | Optional adapters, backup, Mesh or proxy | Explicit operator choice | Explicit operator choice | Explicit operator choice |
 

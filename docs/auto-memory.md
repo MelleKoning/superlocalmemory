@@ -188,8 +188,9 @@ Core auto-capture and recall storage use the configured local data root. Mode A
 does not require a cloud model provider for core memory operations, but optional
 connectors, cloud backup, proxy providers, dependency/model downloads, and
 other explicitly enabled integrations can use the network. Mode C sends the
-constructed model request—including selected memory evidence—to the configured
-cloud provider. Review that provider's retention and privacy terms before use.
+constructed model request—including selected memory evidence—to your
+configured endpoint or cloud provider. Review that endpoint or provider's
+retention and privacy terms before use.
 
 ### Feedback query pseudonymization
 

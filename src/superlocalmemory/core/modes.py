@@ -60,6 +60,60 @@ class ModeCapabilities:
 
 
 # ---------------------------------------------------------------------------
+# Mode copy — single source of truth for user-facing mode text (#112)
+# ---------------------------------------------------------------------------
+#
+# Modes are named by what the user GETS, never by a vendor:
+#   A = no language model
+#   B = a model on this machine (Ollama by default, any local server works)
+#   C = your own endpoint or a cloud provider
+#
+# Every surface that describes a mode to a user (CLI help, setup wizard, MCP
+# tool descriptions, the dashboard) must read from here, or use wording that
+# matches it. A vendor name may appear as an EXAMPLE default, never as the
+# definition of the mode — Mode B's "requirement" is a model on this machine,
+# not Ollama specifically; Mode C's is an endpoint the user points at, not
+# "the cloud".
+
+MODE_SHORT_NAME: dict[Mode, str] = {
+    Mode.A: "Local Guardian",
+    Mode.B: "Smart Local",
+    Mode.C: "Full Power",
+}
+
+#: One-line, experience-defined description of each mode's model boundary.
+#: Mode A and B deliberately contain the exact substring "nothing leaves this
+#: device" — tools_v3._mode_description() swaps it for "nothing else leaves
+#: this device" once the optional online answer check is on. Do not reword
+#: that phrase without updating the swap.
+MODE_TAGLINE: dict[Mode, str] = {
+    Mode.A: "No language model runs — nothing leaves this device. Fastest and most private.",
+    Mode.B: (
+        "A model on this machine — Ollama by default, any local server works — "
+        "and nothing leaves this device."
+    ),
+    Mode.C: (
+        "Your own endpoint, or a cloud provider, for the best recall quality. "
+        "Your queries leave this device."
+    ),
+}
+
+
+def mode_short_name(mode: Mode | str) -> str:
+    """The 2-word product name for a mode (e.g. "Smart Local")."""
+    if isinstance(mode, str):
+        mode = Mode(mode.strip().lower())
+    return MODE_SHORT_NAME[mode]
+
+
+def mode_tagline(mode: Mode | str) -> str:
+    """The one-line, vendor-neutral capability blurb for a mode."""
+    if isinstance(mode, str):
+        mode = Mode(mode.strip().lower())
+    return MODE_TAGLINE[mode]
+
+
+# ---------------------------------------------------------------------------
 # Mode Definitions
 # ---------------------------------------------------------------------------
 
@@ -77,7 +131,7 @@ MODE_A = ModeCapabilities(
     eu_ai_act_compliant=None,
     data_stays_local=True,
     description=(
-        "Local Guardian — Zero LLM, zero cloud. "
+        "Local Guardian — No language model, zero cloud. "
         "Uses nomic-embed-text-v1.5 encoder (768d, 8K context) for embeddings. "
         "Deterministic rules for extraction and a local PyTorch cross-encoder. "
         "EU AI Act classification requires deployment assessment."
@@ -98,7 +152,8 @@ MODE_B = ModeCapabilities(
     eu_ai_act_compliant=None,
     data_stays_local=True,
     description=(
-        "Smart Local — Local Ollama LLM (Phi-3, Llama 3.2). "
+        "Smart Local — a model on this machine (Ollama by default, any local "
+        "OpenAI-compatible server works). "
         "LLM-quality extraction and classification, fully local. "
         "Local PyTorch cross-encoder reranking. No configured cloud inference. "
         "EU AI Act classification requires deployment assessment."
@@ -119,9 +174,10 @@ MODE_C = ModeCapabilities(
     eu_ai_act_compliant=None,
     data_stays_local=False,
     description=(
-        "FULL POWER — UNRESTRICTED. Best embeddings (text-embedding-3-large, 3072-dim). "
-        "Best configured cloud LLMs (e.g. GPT-5, Claude Opus 4). Agentic multi-round retrieval. "
-        "Cohere reranker option. Cloud processing requires deployment-specific "
+        "Full Power — your own endpoint, or a cloud provider, for the best "
+        "embeddings and LLMs you configure (3072-dim embeddings available). "
+        "Agentic multi-round retrieval. Optional cloud reranker. "
+        "Processing through a provider requires deployment-specific "
         "privacy, contractual, and EU AI Act assessment."
     ),
 )
@@ -148,16 +204,24 @@ def dashboard_mode_fields(mode: Mode | str) -> dict[str, object]:
     }
 
 
-def validate_mode_config(mode: Mode, *, has_ollama: bool = False, has_cloud_llm: bool = False) -> list[str]:
+def validate_mode_config(mode: Mode, *, has_llm: bool = False, has_cloud_llm: bool = False) -> list[str]:
     """Validate that required services are available for the chosen mode.
+
+    ``has_llm`` reports whether Mode B's model-on-this-machine is reachable —
+    Ollama by default, but any local OpenAI-compatible server qualifies
+    (#112). Naming it ``has_ollama`` baked one vendor into the check itself;
+    the capability Mode B needs is "a local model answers", not "Ollama
+    answers".
 
     Returns list of warnings/errors. Empty list = all good.
     """
     issues: list[str] = []
     caps = get_capabilities(mode)
 
-    if caps.llm_fact_extraction and mode == Mode.B and not has_ollama:
-        issues.append("Mode B requires Ollama but it is not available. Falling back to Mode A extraction.")
+    if caps.llm_fact_extraction and mode == Mode.B and not has_llm:
+        issues.append(
+            "Mode B has no local model available. Falling back to Mode A extraction."
+        )
 
     if caps.cloud_embeddings and not has_cloud_llm:
         issues.append("Mode C cloud embeddings configured but no API endpoint provided.")

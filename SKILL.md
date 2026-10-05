@@ -134,8 +134,8 @@ Error responses:
 | Mode | Description | Cloud Required |
 |------|-------------|----------------|
 | A | Local Guardian -- core memory runs without a cloud model provider; optional connectors and model downloads may use the network | None (for core memory) |
-| B | Smart Local -- local Ollama LLM, data stays on your machine | Local only |
-| C | Full Power -- cloud LLM for maximum accuracy | Yes |
+| B | Smart Local -- a model on this machine (Ollama by default, any local server works), data stays on your machine | Local only |
+| C | Full Power -- your own endpoint, or a cloud provider, for maximum accuracy | Yes, unless using a keyless custom endpoint |
 
 ## Dual Interface
 

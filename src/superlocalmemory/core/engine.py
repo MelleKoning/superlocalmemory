@@ -386,13 +386,15 @@ class MemoryEngine:
 
         # H-03 (3.7.9): surface mode-capability degradation explicitly at
         # startup. validate_mode_config existed but was never called, so Mode B
-        # silently using rule-based extraction after Ollama vanished (update,
-        # restart, port conflict) went unwarned. Each mode only checks its own
-        # capabilities, so passing the single llm-availability signal is safe.
+        # silently using rule-based extraction after its local model vanished
+        # (update, restart, port conflict) went unwarned. Each mode only
+        # checks its own capabilities, so passing the single llm-availability
+        # signal is safe — Mode B's model may be Ollama or any other local
+        # OpenAI-compatible server (#112); the check is vendor-neutral.
         from superlocalmemory.core.modes import validate_mode_config
         _llm_up = getattr(self, "_llm", None) is not None
         for _warning in validate_mode_config(
-            self._config.mode, has_ollama=_llm_up, has_cloud_llm=_llm_up,
+            self._config.mode, has_llm=_llm_up, has_cloud_llm=_llm_up,
         ):
             logger.warning("Mode config: %s", _warning)
 
