@@ -32,6 +32,12 @@ from ..isolation_guard import explicit_slm_root  # noqa: F401
 
 from superlocalmemory.core import laya_interpreter
 from superlocalmemory.core import laya_runtime as lr
+
+# Laya runs only on Apple silicon, and what these check — who may write the
+# interpreter, its #! line, symlinks into a venv — is the POSIX file model.
+pytestmark = pytest.mark.skipif(
+    os.name == "nt", reason="POSIX interpreter checks for a runtime that only runs on Apple silicon",
+)
 from tests.helpers.owned_python import owned_environment, owned_python
 
 

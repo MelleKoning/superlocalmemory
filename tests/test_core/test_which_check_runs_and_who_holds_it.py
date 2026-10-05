@@ -233,3 +233,15 @@ def test_the_online_check_is_told_where_the_choice_is_stored(world) -> None:  # 
 
     judge = engine_wiring.init_sufficiency_judge(_jev_cfg())
     assert judge.kwargs["state_dir"] == canonical_data_root()
+
+
+def test_a_windows_folder_path_is_a_folder_not_a_repo_id(monkeypatch) -> None:
+    """``C:\\...`` does not start with "/", and was read as a repo id and refused."""
+    import ntpath
+    import os
+    from types import SimpleNamespace
+
+    # Windows path rules for this module only (not the whole process).
+    monkeypatch.setattr(judge_selection, "os", SimpleNamespace(path=ntpath, environ=os.environ))
+    folder = r"C:\Users\someone\laya-weights"
+    assert judge_selection.pinned_weights(folder, "") == folder

@@ -204,7 +204,11 @@ def test_launcher_passes_and_publishes_one_process_identity() -> None:
     ):
         assert daemon._start_daemon_subprocess()
 
-    child_env = popen.call_args.kwargs["env"]
+    # The daemon launch, not the last Popen: on Windows, writing the
+    # descriptor then runs icacls to make it owner-only.
+    [launch] = [c for c in popen.call_args_list
+                if "superlocalmemory.server.unified_daemon" in c.args[0]]
+    child_env = launch.kwargs["env"]
     descriptor = read_descriptor()
     assert descriptor is not None
     assert descriptor.pid == 54321
