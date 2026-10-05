@@ -1,0 +1,153 @@
+# Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar
+# Licensed under AGPL-3.0-or-later - see LICENSE file
+# Part of SuperLocalMemory V3 | https://qualixar.com | https://varunpratap.com
+
+"""GitHub #150 with learned ranking switched on.
+
+Learned ranking (``SLM_RANKING``) runs after retrieval and rewrites every
+result's ranking score: the phase-2 heuristic from the displayed score, the
+phase-3 model from its own features, the ensemble from bandit-weighted
+channel scores. None of them knows the project, so a preference applied only
+inside retrieval is undone by them - on exactly the stores that have
+learning on. These tests run the issue's fixture under each mode, with a
+seeded learning store (feedback rows, and for phase 3 a real LightGBM model
+trained deterministically here), and check the project's memories still lead
+and the order repeats.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import sqlite3
+
+import numpy as np
+import pytest
+
+from tests.test_retrieval.test_project_scope_ranking import (  # noqa: F401 - fixture
+    PROJECT_PATH,
+    _PROJECT,
+    _contents,
+    _is_project,
+    _recall,
+    store,
+)
+
+QUERY = "what happens to an invoice"
+MODES = ("off", "v1", "v2", "v2-ensemble")
+
+
+def _trained_model() -> tuple[bytes, list[str]]:
+    """A real LightGBM booster, trained deterministically here on synthetic
+    rows shaped like recall's features (the displayed score near 0.5-0.6,
+    keyword and meaning evidence, ages in days) and rewarding the displayed
+    score and keyword evidence - a plausible learned taste that knows nothing
+    about projects, and that separates this fixture's memories."""
+    import lightgbm as lgb
+
+    from superlocalmemory.learning.features import FEATURE_NAMES
+
+    rng = np.random.RandomState(150)
+    x = np.zeros((600, len(FEATURE_NAMES)), dtype=np.float32)
+    col = FEATURE_NAMES.index
+    x[:, col("cross_encoder_score")] = rng.uniform(0.45, 0.65, 600)
+    x[:, col("bm25_score")] = rng.uniform(0.0, 5.0, 600)
+    x[:, col("semantic_score")] = rng.uniform(0.0, 1.0, 600)
+    x[:, col("fact_age_days")] = rng.uniform(0.0, 2.0, 600)
+    y = (10.0 * x[:, col("cross_encoder_score")] + 0.3 * x[:, col("bm25_score")]
+         + 0.5 * x[:, col("semantic_score")])
+    params = {"objective": "regression", "num_leaves": 15, "learning_rate": 0.2,
+              "min_data_in_leaf": 5, "deterministic": True, "num_threads": 1,
+              "seed": 150, "verbose": -1, "force_row_wise": True}
+    booster = lgb.train(params, lgb.Dataset(x, label=y, feature_name=list(FEATURE_NAMES)),
+                        num_boost_round=40)
+    return booster.model_to_string().encode("utf-8"), list(FEATURE_NAMES)
+
+
+@pytest.fixture()
+def learning(tmp_path, monkeypatch):
+    """A learning store past the phase-3 gate, with an active, verified model."""
+    from superlocalmemory.learning import model_cache
+    from superlocalmemory.learning.database import LearningDatabase
+    from superlocalmemory.storage.migrations import M002_model_state_history as m002
+
+    monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path))
+    path = tmp_path / "learning.db"
+    db = LearningDatabase(path)
+    conn = sqlite3.connect(str(path))
+    try:
+        if not m002.verify(conn):
+            conn.executescript(m002.DDL)
+    finally:
+        conn.close()
+    for i in range(210):
+        db.store_signal("default", f"q{i}", f"f{i}", "recall_hit", 1.0)
+    state, names = _trained_model()
+    db.persist_model(profile_id="default", state_bytes=state,
+                     bytes_sha256=hashlib.sha256(state).hexdigest(),
+                     feature_names=names, trained_on_count=210, metrics={})
+    model_cache.invalidate()
+    yield path
+    model_cache.invalidate()
+
+
+def _top(store, monkeypatch, mode: str, **facets) -> list:
+    monkeypatch.setenv("SLM_RANKING", mode)
+    return _recall(store, QUERY, limit=10, **facets).results
+
+
+def test_the_seeded_model_is_really_active(store, learning, monkeypatch) -> None:
+    from superlocalmemory.core.recall_pipeline import _ReadOnlyLearningView
+    from superlocalmemory.learning.model_cache import load_active
+
+    view = _ReadOnlyLearningView(learning)
+    assert view.count_signals("default") >= 200
+    assert load_active(view, "default") is not None
+    # Phase 3 really ranked: its scores are the model's, and they separate
+    # the memories (a constant model would rank nothing).
+    keys = [r.ranking_score for r in _top(store, monkeypatch, "v2")]
+    heuristic = [r.ranking_score for r in _top(store, monkeypatch, "v1")]
+    assert keys != heuristic and len(set(round(k, 6) for k in keys)) > 3
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_project_memories_lead_whatever_ranks_last(store, learning, monkeypatch, mode) -> None:
+    plain = _contents_of(_top(store, monkeypatch, mode))
+    after = _contents_of(_top(store, monkeypatch, mode, prefer_project=PROJECT_PATH))
+    # Without the preference, trivia sits among the project's memories in
+    # every mode - the order the preference has to win against.
+    assert not all(_is_project(c) for c in plain[:5]), (mode, plain)
+    # With it, the project's five lead, whatever ranked last.
+    assert sorted(after[:5]) == sorted(_PROJECT), (mode, after)
+    assert set(after) == set(plain), "the preference added or removed a memory"
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_the_order_repeats_under_learned_ranking(store, learning, monkeypatch, mode) -> None:
+    runs = [_top(store, monkeypatch, mode, prefer_project=PROJECT_PATH) for _ in range(3)]
+    shapes = [[r.fact.fact_id for r in run] for run in runs]
+    assert shapes[0] == shapes[1] == shapes[2], mode
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_the_bound_holds_on_the_final_score(store, learning, monkeypatch, mode) -> None:
+    """Whatever produced the final ranking score, a project memory only ever
+    passes a memory whose score is less than 1.25x its own."""
+    plain = _top(store, monkeypatch, mode)
+    preferred = _top(store, monkeypatch, mode, prefer_project=PROJECT_PATH)
+    from superlocalmemory.core.recall_pipeline import _rank_key
+
+    utility = {r.fact.fact_id: -_rank_key(r)[0] for r in plain}
+    order = [r.fact.fact_id for r in preferred]
+    for a in order:
+        for b in order:
+            if a not in utility or b not in utility:
+                continue
+            a_first_now = order.index(a) < order.index(b)
+            a_first_before = [r.fact.fact_id for r in plain].index(a) < \
+                [r.fact.fact_id for r in plain].index(b)
+            if a_first_now and not a_first_before:
+                assert utility[a] * 1.25 > utility[b] - 1e-12, (mode, a, b)
+
+
+def _contents_of(results) -> list[str]:
+    return [r.fact.content for r in results]

@@ -163,6 +163,13 @@ class MaintenanceScheduler:
         )
         self._initial_compact_timer.daemon = True
         self._initial_compact_timer.start()
+        # #150: session-end summaries get the project their text names. Same
+        # one-shot pattern, staggered after the others for the write lock.
+        self._initial_project_timer = threading.Timer(
+            330.0, self._project_backfill,
+        )
+        self._initial_project_timer.daemon = True
+        self._initial_project_timer.start()
         logger.info(
             "Maintenance scheduler started (interval=%dm)",
             self._config.forgetting.scheduler_interval_minutes,
@@ -185,6 +192,25 @@ class MaintenanceScheduler:
             _reclassify.apply(open_connection=self._db.raw_connection)
         except Exception as exc:
             logger.debug("Startup plan re-read skipped: %s", exc)
+
+    def _project_backfill(self) -> None:
+        """Tag a bounded batch of session-end summaries with their project
+        (storage/project_backfill.py). Idempotent; a no-op once converged."""
+        if not self._running:
+            return
+        try:
+            from superlocalmemory.storage.project_backfill import (
+                backfill_session_end_projects,
+            )
+            report = backfill_session_end_projects(self._db.raw_connection)
+            if report.tagged:
+                logger.info(
+                    "Project backfill: %d session summaries tagged (%s)",
+                    report.tagged, "done" if report.finished else "more next cycle",
+                )
+            self._record_step("project backfill", True)
+        except Exception as exc:  # noqa: BLE001
+            self._record_step("project backfill", False, str(exc))
 
     def _initial_vector_compaction(self) -> None:
         """Drop stale vector-store versions without waiting a full interval."""
@@ -256,6 +282,10 @@ class MaintenanceScheduler:
         if _compact_timer is not None:
             _compact_timer.cancel()
             self._initial_compact_timer = None
+        _project_timer = getattr(self, "_initial_project_timer", None)
+        if _project_timer is not None:
+            _project_timer.cancel()
+            self._initial_project_timer = None
         logger.info("Maintenance scheduler stopped")
 
     def _schedule_next(self) -> None:
@@ -498,6 +528,10 @@ class MaintenanceScheduler:
             self._record_step("re-reading plans", True)
         except Exception as exc:  # noqa: BLE001
             self._record_step("re-reading plans", False, str(exc))
+
+        # #150: once per cycle, all profiles in one sweep (each row stays in
+        # its own profile); batched, so the write lock is held per batch.
+        self._project_backfill()
 
         # Anything that has failed on several cycles running is not a blip.
         # Every step here logs and continues, which is right -- one broken step

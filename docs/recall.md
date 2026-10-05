@@ -21,6 +21,25 @@ results, and rerank them.
 Filters apply on every recall path and before the [answer check](answer-check.md),
 so the check judges only what you will see.
 
+## Recall inside a project
+
+| Flag (MCP / HTTP parameter) | Effect |
+|---|---|
+| `--prefer-project NAME` (`prefer_project`) | Memories saved under that project rank above others of similar relevance. Nothing is removed. |
+| `--project NAME` (`project`) | Only that project's memories. If none of the memories found were saved under it, you get the unfiltered results and a line saying they are not narrowed. |
+
+A project is a name or a path: `acme-billing`, `/Users/me/work/acme-billing`
+and `ACME-Billing/` are the same project (the last part of the path, ignoring
+case). `session_init` and `slm session open` prefer the project they are given.
+The preference is bounded: a project memory passes another memory only when its
+score is already at least 80% of that memory's, so a weak match never jumps a
+strong one. It is applied after learned ranking (`SLM_RANKING`), on the final
+order, so turning learning on does not undo it. The response's `project_scope` says what happened.
+
+Memories saved before 4.1.21 carry a project only if one was passed to
+`remember`. Session-end summaries (`[name] session ended ...`) are tagged with
+their project by background maintenance after upgrading.
+
 ## Time travel
 
 | Flag | Returns |

@@ -111,9 +111,12 @@ def test_fallback_facet_failure_returns_nothing_and_says_why(
 
     monkeypatch.setattr(facets_mod, "matching_fact_ids", _boom)
 
+    # A hard facet (saved_by). Since 4.1.21 (#150) a project that cannot be
+    # checked falls back to unfiltered results and says so in project_scope
+    # (tests/test_retrieval/test_project_scope.py) - it is not this case.
     out = _recall_keyword_fallback(
         engine_with_mock_deps, "deploy", 10,
-        facets=Facets.of(project="zephyr"),
+        facets=Facets.of(agent="claude-desktop"),
     )
 
     assert out["results"] == []

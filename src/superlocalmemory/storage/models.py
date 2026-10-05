@@ -539,3 +539,8 @@ class RecallResponse:
     # response did not come from the retrieval engine. In-process, like
     # ``answer_check_trace``: the MCP/HTTP recall envelope is unchanged.
     stage_ms: dict[str, float] = field(default_factory=dict)
+    # 4.1.21 (#150): what a recall's project did - ``{"filter": {...}}`` when
+    # ``project`` was given (``applied`` False, with a plain ``note``, when it
+    # fell back to unfiltered results), ``{"prefer": {...}}`` when
+    # ``prefer_project`` was. None when neither was. Additive.
+    project_scope: dict | None = None

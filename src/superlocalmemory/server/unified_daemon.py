@@ -1052,7 +1052,8 @@ from superlocalmemory.server.recall_core import (  # noqa: E402
 )
 
 
-def _facet_kwargs(project: str, saved_by: str, about: str, kind: str | None = None) -> dict:
+def _facet_kwargs(project: str, saved_by: str, about: str, kind: str | None = None,
+                  prefer_project: str = "") -> dict:
     """{"facets": ...} when any recall facet was given, else {} (stand-ins
     of the engine need not know about facets).
 
@@ -1066,7 +1067,8 @@ def _facet_kwargs(project: str, saved_by: str, about: str, kind: str | None = No
     """
     from superlocalmemory.retrieval.facets import Facets
 
-    facets = Facets.of(project=project, agent=saved_by, about=about, kind=kind)
+    facets = Facets.of(project=project, agent=saved_by, about=about, kind=kind,
+                       prefer_project=prefer_project)
     return {} if facets.empty else {"facets": facets}
 
 
@@ -4686,10 +4688,16 @@ def _register_daemon_routes(application: FastAPI) -> None:
         # gate). Empty or "full": every other recall. Anything else is a 400.
         answer_check: str = "",
         # 4.1.19 facets: only memories saved under this project, saved by this
-        # agent, or about this name (person, project, tool). Hard filters.
+        # agent, or about this name (person, project, tool). Hard filters,
+        # except that since 4.1.21 (#150) a project that matches nothing
+        # found falls back to unfiltered results and says so in
+        # ``project_scope``.
         project: str = "",
         saved_by: str = "",
         about: str = "",
+        # 4.1.21 (#150): rank this project's memories above others of similar
+        # relevance; removes nothing.
+        prefer_project: str = "",
         # 4.1.19 WP8: only memories whose DISPLAYED kind matches. Refused
         # before any retrieval when it does not parse (never silently
         # ignored). See core.kind_query / retrieval.kind_filter.
@@ -4830,7 +4838,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
             include_global=include_global, include_shared=include_shared,
             window=window, as_of=as_of, known_as_of=known_as_of, valid_at=valid_at,
             include_unknown=include_unknown,
-            facets=_facet_kwargs(project, saved_by, about, _kind).get("facets"),
+            facets=_facet_kwargs(project, saved_by, about, _kind, prefer_project).get("facets"),
             skip_answer_check=_skip_check, no_reorder=_check_request == "no_reorder",
             full=full, include_source=include_source,
             include_marker=bool(session_id),
@@ -4975,6 +4983,12 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 from superlocalmemory.core.metadata_guard import strip_reserved_metadata
 
                 meta.update(strip_reserved_metadata(extra))
+            if "project" in meta:
+                # #150: one rule for what a project is (core.project_identity);
+                # a value that names none ("/", "  ") is not saved as one.
+                from superlocalmemory.core.project_identity import storable_project
+
+                meta["project"] = storable_project(meta["project"])
             if declared_kind is not None:
                 from superlocalmemory.storage.memory_kinds import METADATA_KEY
 
@@ -5822,12 +5836,12 @@ def _register_daemon_routes(application: FastAPI) -> None:
         """
         _update_activity()
         engine = _get_engine_or_503()
-        if req.query:
-            query = req.query
-        elif req.project_path:
-            query = f"project context {req.project_path}"
-        else:
-            query = "recent important decisions"
+        from superlocalmemory.core.project_identity import session_context_query
+
+        query = req.query or session_context_query(req.project_path)
+        # #150: the session's project ranks its own memories first - the same
+        # bounded preference session_init uses, so warming loads what it shows.
+        _session_facets = _facet_kwargs("", "", "", None, req.project_path)
         # Warming loads at most what session_init would show. An unbounded
         # count from the request used to go straight into the recall.
         limit = max(1, min(int(req.max_results), _SESSION_OPEN_MAX_RESULTS))
@@ -5848,7 +5862,8 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 # the top memories to the online check and bill the user's
                 # key at every session start. Results are unaffected.
                 with skip_answer_check():
-                    return engine.recall(query, limit=limit, agent_id=actor_id)
+                    return engine.recall(query, limit=limit, agent_id=actor_id,
+                                         **_session_facets)
 
             # Off the event loop: a recall can take a second or more, and
             # every other client of this daemon would wait for it.

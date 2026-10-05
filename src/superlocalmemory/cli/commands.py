@@ -2052,7 +2052,8 @@ def cmd_recall(args: Namespace) -> None:
                 f"&{name}={quote(str(value).strip())}"
                 for name, value in (("project", getattr(args, "project", "")),
                                     ("saved_by", getattr(args, "saved_by", "")),
-                                    ("about", getattr(args, "about", "")))
+                                    ("about", getattr(args, "about", "")),
+                                    ("prefer_project", getattr(args, "prefer_project", "")))
                 if (value or "").strip()
             )
             kind_qs = f"&kind={quote(_kind)}" if _kind else ""
@@ -2070,10 +2071,15 @@ def cmd_recall(args: Namespace) -> None:
                         {"command": "slm list --json", "description": "List recent memories"},
                     ])
                     return
-                from superlocalmemory.cli.recall_text import empty_result_line, incomplete_line
+                from superlocalmemory.cli.recall_text import (
+                    empty_result_line,
+                    incomplete_line,
+                    project_line,
+                )
                 incomplete = incomplete_line(result)
                 if not result["results"]:
-                    return print("\n".join(filter(None, [empty_result_line(result), incomplete])))
+                    return print("\n".join(filter(None, [
+                        empty_result_line(result), incomplete, project_line(result)])))
                 # Text output.
                 # PR #101: ``dict.get(k, 0)`` returns the DEFAULT only when the
                 # key is ABSENT — a present-but-null value still reaches the
@@ -2086,7 +2092,8 @@ def cmd_recall(args: Namespace) -> None:
                 for i, r in enumerate(result["results"], 1):
                     score = r.get('score') or 0
                     print(f"  {i}. [{score:.2f}] {r['content']}")
-                for note in filter(None, (incomplete, _answer_check_line(result))):
+                for note in filter(None, (incomplete, project_line(result),
+                                          _answer_check_line(result))):
                     print(f"\n{note}")
                 return
     except Exception as _exc:  # noqa: BLE001

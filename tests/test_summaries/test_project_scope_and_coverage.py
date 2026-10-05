@@ -62,6 +62,10 @@ def _make_db(tmp_path, *, events: int, facts: int, profile: str = "default"):
             importance REAL, lifecycle TEXT, canonical_entities_json TEXT,
             created_at TEXT
         );
+        CREATE TABLE memories (
+            memory_id TEXT PRIMARY KEY, profile_id TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
         """
     )
     for i in range(events):

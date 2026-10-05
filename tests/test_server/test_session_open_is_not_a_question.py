@@ -3,7 +3,7 @@
 
 """``POST /session/open`` warms a session; it does not ask a question.
 
-Its recall ("project context <absolute path>") must run with the answer
+Its recall ("project context <project name>") must run with the answer
 check skipped, so with the online check on nothing is judged, sent or
 billed. It runs off the event loop, keeps its size bounded, and its failure
 message never quotes an exception (which can carry a path or a memory).
@@ -27,11 +27,11 @@ class _Engine:
         self.calls: list[dict] = []
         self._fail = fail
 
-    def recall(self, query, limit=10, agent_id=""):
+    def recall(self, query, limit=10, agent_id="", facets=None):
         import threading
 
         self.calls.append({"query": query, "limit": limit, "skipped": answer_check_skipped(),
-                           "thread": threading.current_thread().name})
+                           "thread": threading.current_thread().name, "facets": facets})
         if self._fail:
             raise RuntimeError("boom at /Users/someone/secret-project with memory text")
         return SimpleNamespace(results=[1, 2, 3])
@@ -55,7 +55,9 @@ def test_session_open_recall_skips_the_answer_check(client_and_engine):
     assert r.status_code == 200, r.text
     assert r.json()["warmed"] == 3
     assert engine.calls and engine.calls[0]["skipped"] is True
-    assert engine.calls[0]["query"] == "project context /Users/someone/private-project"
+    # 4.1.21 (#150): the project is preferred, and named - not its whole path.
+    assert engine.calls[0]["query"] == "project context private-project"
+    assert engine.calls[0]["facets"].prefer_project == "/Users/someone/private-project"
 
 
 def test_session_open_bounds_its_size(client_and_engine):

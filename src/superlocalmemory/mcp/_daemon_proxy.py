@@ -93,6 +93,7 @@ class DaemonPoolProxy:
         saved_by: str = "",
         about: str = "",
         kind: str = "",
+        prefer_project: str = "",
     ) -> dict[str, Any]:
         if self._unavailable:
             return self._unavailable_response()
@@ -124,7 +125,8 @@ class DaemonPoolProxy:
             _params["window"] = window
         # 4.1.19 facets, sent only when set.
         for _facet_name, _facet_value in (("project", project), ("saved_by", saved_by),
-                                          ("about", about)):
+                                          ("about", about),
+                                          ("prefer_project", prefer_project)):
             if (_facet_value or "").strip():
                 _params[_facet_name] = _facet_value.strip()
         # 4.1.19 WP8: sent only when set, so an unset kind keeps the query

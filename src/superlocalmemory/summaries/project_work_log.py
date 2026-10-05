@@ -114,8 +114,9 @@ def generate_project_work_log(
             profile_id=profile_id,
             content=(
                 f"No tool events or facts found for project '{project_path}'.\n"
-                f"Note: project scope is matched by tool_events.project_path "
-                f"(exact match)."
+                f"Note: a project is matched by its name (the last part of a "
+                f"path, ignoring case) in tool events and in the project each "
+                f"memory was saved under."
             ),
             source_fact_ids=[],
             coverage=COVERAGE_INSUFFICIENT,
@@ -227,6 +228,18 @@ def generate_project_work_log_by_prefix(
 
 # ── internal helpers ──────────────────────────────────────────────────────────
 
+def _like_pattern(key: str) -> str:
+    """A LIKE pattern that narrows the rows to read; project_key decides.
+
+    "Contains", not "ends with": a stored path may end in a slash. SQLite's
+    LIKE folds case for ASCII only, so for any other name every row is read.
+    """
+    if not key.isascii():
+        return "%"
+    escaped = key.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 def _query_project_data(
     db_path: Path,
     project_path: str,
@@ -235,52 +248,94 @@ def _query_project_data(
     """Query tool events and associated facts for the project.
 
     Returns (tool_rows, facts_rows, error_message_or_None).
-    Uses tool_events.project_path for project scoping — not project_name.
+
+    4.1.21 (#150): "the project" is ``core.project_identity.project_key`` -
+    the same rule recall uses - so a target of "superlocalmemory" and one of
+    "/Users/x/superlocalmemory" name the same project. Facts come from two
+    sources: memories SAVED under the project (``remember(project=...)``, the
+    session-end hook, the backfill), and facts recorded in sessions whose tool
+    events ran in it. Before this only the second existed, so a project whose
+    memories were tagged but never reached by a hook-observed session
+    reported "No tool events or facts found".
     """
+    from superlocalmemory.core.project_identity import project_key
+
+    key = project_key(project_path)
+    if key is None:
+        return [], [], None
+    pattern = _like_pattern(key)
     try:
         conn = sqlite3.connect(str(db_path), timeout=5.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA query_only=ON")
         try:
-            # Tool events scoped by project_path (the correct column).
-            # Using tool_events.project_path — NOT entity_profiles.project_name.
-            tool_rows = conn.execute(
+            # Tool events whose directory is this project. The LIKE narrows to
+            # paths ending in the name; project_key decides.
+            event_rows = [dict(r) for r in conn.execute(
                 """
-                SELECT tool_name, event_type, session_id,
+                SELECT tool_name, event_type, session_id, project_path,
                        input_summary, output_summary, created_at, duration_ms
                 FROM   tool_events
-                WHERE  profile_id   = ?
-                  AND  project_path = ?
-                ORDER  BY created_at ASC
+                WHERE  profile_id = ?
+                  AND  project_path LIKE ? ESCAPE '\\'
+                ORDER  BY created_at ASC, id ASC
                 """,
-                (profile_id, project_path),
-            ).fetchall()
+                (profile_id, pattern),
+            ).fetchall()]
+            tool_rows = [r for r in event_rows if project_key(r["project_path"]) == key]
+            paths = sorted({r["project_path"] for r in tool_rows})
 
-            # Facts recorded during sessions that touched this project.
             # Withheld and deleted rows are not memories a person may be shown.
             visible = visible_fact_clause_for_connection(conn, "af")
-            facts_rows = conn.execute(
+            session_facts: list[dict] = []
+            if paths:
+                marks = ",".join("?" * len(paths))
+                session_facts = [dict(r) for r in conn.execute(
+                    f"""
+                    SELECT DISTINCT af.fact_id, af.content, af.created_at,
+                                    af.importance, af.canonical_entities_json
+                    FROM   atomic_facts  af
+                    JOIN   tool_events   te
+                           ON  te.session_id  = af.session_id
+                           AND te.profile_id  = af.profile_id
+                    WHERE  af.profile_id   = ?
+                      AND  te.project_path IN ({marks})
+                      AND  af.lifecycle   != 'archived'{visible}
+                    """,  # noqa: S608 - the clauses are built from constants only
+                    (profile_id, *paths),
+                ).fetchall()]
+
+            saved_rows = [dict(r) for r in conn.execute(
                 f"""
-                SELECT DISTINCT af.fact_id, af.content, af.created_at,
-                                af.importance, af.canonical_entities_json
-                FROM   atomic_facts  af
-                JOIN   tool_events   te
-                       ON  te.session_id  = af.session_id
-                       AND te.profile_id  = af.profile_id
-                WHERE  af.profile_id   = ?
-                  AND  te.project_path = ?
-                  AND  af.lifecycle   != 'archived'{visible}
-                ORDER  BY af.importance DESC, af.created_at ASC, af.fact_id ASC
+                SELECT af.fact_id, af.content, af.created_at, af.importance,
+                       af.canonical_entities_json,
+                       json_extract(m.metadata_json, '$.project') AS project
+                FROM   atomic_facts af
+                JOIN   memories     m ON m.memory_id = af.memory_id
+                WHERE  af.profile_id = ?
+                  AND  af.lifecycle != 'archived'
+                  AND  json_valid(m.metadata_json)
+                  AND  json_extract(m.metadata_json, '$.project') LIKE ? ESCAPE '\\'{visible}
                 """,  # noqa: S608 - the clause is built from constants only
-                (profile_id, project_path),
-            ).fetchall()
+                (profile_id, pattern),
+            ).fetchall()]
         finally:
             conn.close()
     except Exception as exc:
         logger.warning("project work log query failed for %s: %s", project_path, exc)
         return [], [], str(exc)
 
-    return [dict(r) for r in tool_rows], [dict(r) for r in facts_rows], None
+    saved_facts = [
+        {k: v for k, v in r.items() if k != "project"}
+        for r in saved_rows if project_key(r.get("project")) == key
+    ]
+    merged = {r["fact_id"]: r for r in [*session_facts, *saved_facts]}
+    facts_rows = sorted(
+        merged.values(),
+        key=lambda r: (-(r.get("importance") or 0.0), str(r.get("created_at") or ""),
+                       str(r["fact_id"])),
+    )
+    return tool_rows, facts_rows, None
 
 
 def _build_extractive_content(

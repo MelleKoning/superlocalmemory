@@ -350,4 +350,9 @@ def recall_response_metadata(response: Any) -> dict:
         "answer_check_ran": _check_status == "judged",
         "answer_check_reason": _check_detail,
         "answer_check_note": answer_check_note(_check_status, _check_detail),
+        # 4.1.21 (#150): what the recall's project did. ``filter.applied``
+        # False means ``project`` matched nothing found for the question and
+        # the results are NOT narrowed to it; ``note`` says so in words. None
+        # when the recall named no project.
+        "project_scope": getattr(response, "project_scope", None),
     }
