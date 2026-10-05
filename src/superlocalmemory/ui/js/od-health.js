@@ -103,7 +103,7 @@
 
       // KPI strip: 4 status cards (Daemon, Memory DB, Math layers, Mesh broker)
       '<section class="kpi-strip" style="margin-bottom:16px" id="od-h-status">' +
-        '<div class="card kpi"><div class="dim" style="font-size:12px;padding:20px">Loading status…</div></div>' +
+        '<div class="card kpi"><div class="muted-info" style="font-size:12px;padding:20px">Loading status…</div></div>' +
       '</section>' +
 
       // Two-column: Math health + Trust signals
@@ -115,7 +115,7 @@
             '<span class="sub">Scoring layers · Consistency · Lifecycle</span>' +
           '</div>' +
           '<div class="card-pad" id="od-h-math">' +
-            '<div class="dim" style="text-align:center;padding:20px">Loading…</div>' +
+            '<div class="muted-info" style="text-align:center;padding:20px">Loading…</div>' +
           '</div>' +
         '</div>' +
 
@@ -127,11 +127,11 @@
           '<div class="card-pad">' +
             '<div style="display:flex;gap:24px;margin-bottom:16px">' +
               '<div>' +
-                '<div class="dim" style="font-size:11px">Avg trust score</div>' +
+                '<div class="muted-info" style="font-size:11px">Avg trust score</div>' +
                 '<div class="num" style="font-size:24px;font-weight:700" id="od-h-trust-avg">—</div>' +
               '</div>' +
               '<div>' +
-                '<div class="dim" style="font-size:11px">Total signals</div>' +
+                '<div class="muted-info" style="font-size:11px">Total signals</div>' +
                 '<div class="num" style="font-size:24px;font-weight:700" id="od-h-trust-total">—</div>' +
               '</div>' +
             '</div>' +
@@ -156,19 +156,19 @@
           // Summary stats row: 4 metrics
           '<div style="display:flex;gap:24px;margin-bottom:16px;flex-wrap:wrap" id="od-h-agent-stats">' +
             '<div>' +
-              '<div class="dim" style="font-size:11px">Total agents</div>' +
+              '<div class="muted-info" style="font-size:11px">Total agents</div>' +
               '<div class="num" style="font-size:22px;font-weight:700" id="od-h-agent-total">—</div>' +
             '</div>' +
             '<div>' +
-              '<div class="dim" style="font-size:11px">Active 24h</div>' +
+              '<div class="muted-info" style="font-size:11px">Active 24h</div>' +
               '<div class="num" style="font-size:22px;font-weight:700" id="od-h-agent-active">—</div>' +
             '</div>' +
             '<div>' +
-              '<div class="dim" style="font-size:11px">Total writes</div>' +
+              '<div class="muted-info" style="font-size:11px">Total writes</div>' +
               '<div class="num" style="font-size:22px;font-weight:700" id="od-h-agent-writes">—</div>' +
             '</div>' +
             '<div>' +
-              '<div class="dim" style="font-size:11px">Total recalls</div>' +
+              '<div class="muted-info" style="font-size:11px">Total recalls</div>' +
               '<div class="num" style="font-size:22px;font-weight:700" id="od-h-agent-recalls">—</div>' +
             '</div>' +
           '</div>' +
@@ -184,7 +184,7 @@
               '<th>Last seen</th>' +
             '</tr></thead>' +
             '<tbody id="od-h-agents-body">' +
-              '<tr><td colspan="6" class="dim" style="text-align:center;padding:24px">Loading…</td></tr>' +
+              '<tr><td colspan="6" class="muted-info" style="text-align:center;padding:24px">Loading…</td></tr>' +
             '</tbody>' +
           '</table>' +
         '</div>' +
@@ -200,7 +200,7 @@
           '<span class="sub">models &amp; dependencies · self-healing</span>' +
         '</div>' +
         '<div class="card-pad" id="od-h-components">' +
-          '<div class="dim" style="text-align:center;padding:20px">Loading…</div>' +
+          '<div class="muted-info" style="text-align:center;padding:20px">Loading…</div>' +
         '</div>' +
       '</div>'
     );
@@ -283,7 +283,7 @@
         '<div class="card kpi" style="cursor:pointer">' +
           '<div class="label">' + safeIcon('health') + ' ' + esc(c.label) + '</div>' +
           '<div class="value" style="font-size:20px;color:' + statusColor(c.cls) + '">' + c.value + '</div>' +
-          '<div class="dim" style="font-size:12px;margin-top:4px">' + c.detail + '</div>' +
+          '<div class="muted-info" style="font-size:12px;margin-top:4px">' + c.detail + '</div>' +
         '</div>'
       );
     }).join('');
@@ -343,7 +343,7 @@
 
       var kvsHtml = kvs.map(function (kv) {
         return '<span class="mono" style="font-size:12px">' +
-          '<span class="dim">' + esc(kv[0]) + '</span> ' + esc(kv[1]) +
+          '<span class="muted-info">' + esc(kv[0]) + '</span> ' + esc(kv[1]) +
           '</span>';
       }).join('');
 
@@ -367,7 +367,7 @@
 
     // API's own note (clarifies config-derived vs live probe)
     if (mathData.note) {
-      html += '<p class="dim" style="font-size:11px;margin-top:10px;font-style:italic">' +
+      html += '<p class="muted-info" style="font-size:11px;margin-top:10px;font-style:italic">' +
         esc(mathData.note) + '</p>';
     }
 
@@ -489,7 +489,7 @@
 
     if (agents.length === 0) {
       tbody.innerHTML =
-        '<tr><td colspan="6" class="dim" style="text-align:center;padding:24px">' +
+        '<tr><td colspan="6" class="muted-info" style="text-align:center;padding:24px">' +
         'No agents registered. Agents appear automatically when they connect via MCP, CLI, or REST.' +
         '</td></tr>';
       return;
@@ -510,7 +510,7 @@
           '<td class="num dim">—</td>' +
           // TODO: Recalls per-agent — no per-agent recall count in current API
           '<td class="num dim">—</td>' +
-          '<td class="dim">' + esc(timeAgo(a.registered_at)) + '</td>' +
+          '<td class="muted-info">' + esc(timeAgo(a.registered_at)) + '</td>' +
         '</tr>'
       );
     }

@@ -434,12 +434,12 @@
     if (grid) {
       grid.innerHTML =
         '<div style="grid-column:1/-1;text-align:center;padding:32px;' +
-          'color:var(--fg-3);font-size:13px">Agent activity unavailable — see the message above.</div>';
+          'color:var(--fg-2);font-size:13px">Agent activity unavailable — see the message above.</div>';
     }
     var table = document.getElementById('od-agents-table');
     if (table) {
       table.innerHTML =
-        '<div style="text-align:center;padding:32px;color:var(--fg-3);font-size:13px">' +
+        '<div style="text-align:center;padding:32px;color:var(--fg-2);font-size:13px">' +
           'Recent memories unavailable — see the message above.' +
         '</div>';
     }

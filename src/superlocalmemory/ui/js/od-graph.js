@@ -138,7 +138,7 @@
         // Delegation wired in wireControls() so buttons survive re-renders.
         '<div id="odg-insights-panel" style="border-top:1px solid var(--border);' +
           'padding:10px 12px 8px">' +
-          '<div style="font-size:10.5px;font-weight:600;color:var(--fg-3);' +
+          '<div style="font-size:10.5px;font-weight:600;color:var(--fg-2);' +
             'text-transform:uppercase;letter-spacing:0.06em;margin-bottom:7px">' +
             'Quick Insights</div>' +
           '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:7px">' +

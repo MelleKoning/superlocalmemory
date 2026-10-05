@@ -228,7 +228,13 @@
   padding: 2px 6px;
   border-radius: var(--ng-radius-sm);
   font-size: 0.875em;
-  color: var(--ng-accent);
+  /* --ng-accent (124,106,239) measured 3.79-4.11:1 against this chip's own
+     background — under WCAG AA (4.5:1). #9283f2 is the same hue/
+     saturation, lighter (L73% vs L67.6%): 4.98-5.36:1 against the range of
+     backgrounds <code> actually renders on in this app (loops-pane's
+     bare chips and mesh/agents-pane's tinted ones). Our own fix, in our
+     own dark-theme layer — not Bootstrap's --bs-code-color. */
+  color: #9283f2;
 }
 
 /* :not(:where(.star-cta)) — not a bare :not(.star-cta), for the same
@@ -1362,6 +1368,25 @@ body.ng-dark #memory-timeline-chart {
 [data-bs-theme="light"] .badge.bg-warning {
   color: #111827 !important;
 }
+
+/* Bootstrap's own .text-danger (--bs-danger, #dc3545) measured 4.3:1 here
+   ("Could not load Brain data.", Brain/Skill-Evolution panes' fetch-error
+   state) — under WCAG AA (4.5:1) in both themes (dark: 4.37:1). Fixed in
+   our own CSS, scoped to .app (the dashboard root), rather than touching
+   Bootstrap's utility class itself — --danger-text already exists for
+   exactly this "status color as plain text" pairing (.badge.danger) and
+   passes comfortably against a plain page background too (5.75:1 light /
+   6.57:1 dark). */
+.app .text-danger { color: var(--danger-text) !important; }
+
+/* Bootstrap's own <code> color (--bs-code-color, #d63384) measured 4.27:1
+   here ("SLM_AGENT_ID" etc.) — under WCAG AA (4.5:1). Fixed in our own
+   CSS, scoped to .app, rather than touching Bootstrap's --bs-code-color
+   — reuses the same blue already used for other accent-colored text on a
+   near-white background elsewhere in this file (#3e5ce5: 5.15:1). The
+   dark-theme equivalent is .ng-dark code above (already dashboard-only,
+   not Bootstrap's own rule). */
+[data-bs-theme="light"] .app code { color: #3e5ce5; }
 
 /* Not theme-scoped: Bootstrap's own --bs-progress-bar-color default is a
    flat white for every .bg-* variant, same as badges, but .progress-bar
