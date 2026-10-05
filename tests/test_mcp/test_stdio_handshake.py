@@ -33,10 +33,12 @@ _PROXY_VARS = (
 
 
 def _handshake_env(data_root: Path, home: Path) -> dict:
+    from tests._portable import child_env_base
+
     env = {name: os.environ[name] for name in _PASSTHROUGH_VARS if name in os.environ}
+    env.update(child_env_base(home))  # HOME, plus what Windows cannot run without
     env.update(
         {
-            "HOME": str(home),
             "PYTHONPATH": str(SRC_ROOT),
             "SLM_DATA_DIR": str(data_root),
             "SLM_MCP_TOOLS": "remember,recall",

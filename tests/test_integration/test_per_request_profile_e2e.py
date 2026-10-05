@@ -91,10 +91,12 @@ def _child_env(data_root: Path, port: int, home: Path, cache_root: Path) -> dict
     (offline so a cold cache can never trigger a network fetch). Proxy
     variables are stripped so loopback HTTP cannot be middle-boxed.
     """
+    from tests._portable import child_env_base
+
     env = {name: os.environ[name] for name in _PASSTHROUGH_VARS if name in os.environ}
+    env.update(child_env_base(home))  # HOME, plus what Windows cannot run without
     env.update(
         {
-            "HOME": str(home),
             "PYTHONPATH": str(SRC_ROOT),
             "SLM_DATA_DIR": str(data_root),
             "SLM_DAEMON_PORT": str(port),

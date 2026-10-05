@@ -143,3 +143,25 @@ def assert_owner_only(path: Path, posix_mode: int = 0o600) -> None:
     from superlocalmemory.infra.owner_only_acl import is_owner_only
 
     assert is_owner_only(path), f"{path.name} can be read by other accounts"
+
+
+#: Variables a Windows process cannot run without. Without SYSTEMROOT, Winsock
+#: fails to start (``import asyncio`` raises WinError 10106); without
+#: TEMP/TMP, COMSPEC or PATHEXT, temp files and subprocesses break. POSIX has
+#: no equivalent, so this is empty there.
+_WINDOWS_ESSENTIALS = ("SYSTEMROOT", "WINDIR", "SYSTEMDRIVE", "COMSPEC", "PATHEXT",
+                       "TEMP", "TMP", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE")
+
+
+def child_env_base(home: Path) -> dict[str, str]:
+    """What a constructed (never inherited) child environment must start with.
+
+    ``home`` is the child's home folder: HOME on POSIX, and on Windows also
+    USERPROFILE, which is where ``Path.home()`` looks there.
+    """
+    env = {"HOME": str(home)}
+    if os.name == "nt":
+        env.update({name: os.environ[name] for name in _WINDOWS_ESSENTIALS
+                    if name in os.environ})
+        env["USERPROFILE"] = str(home)
+    return env

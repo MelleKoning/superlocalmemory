@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._portable import child_env_base
+
 WORKER = (Path(__file__).resolve().parents[2]
           / "src" / "superlocalmemory" / "core" / "laya_worker.py")
 
@@ -64,8 +66,9 @@ def worker(tmp_path):
     proc = subprocess.Popen(
         [sys.executable, str(WORKER)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, bufsize=1, env={"PYTHONPATH": str(tmp_path), "PATH": "/usr/bin:/bin",
-                                   "LAYA_STUB_LOG": str(log), "HOME": str(tmp_path)},
+        text=True, bufsize=1, env={**child_env_base(tmp_path),  # Windows needs a few
+                                   "PYTHONPATH": str(tmp_path), "PATH": "/usr/bin:/bin",
+                                   "LAYA_STUB_LOG": str(log)},
     )
 
     def ask(request: dict) -> dict:

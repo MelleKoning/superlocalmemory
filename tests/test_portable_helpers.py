@@ -54,3 +54,19 @@ def test_on_windows_the_bit_is_the_one_git_recorded(tmp_path, monkeypatch):
         subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
     monkeypatch.setattr(_portable, "HAS_EXECUTABLE_BIT", False)
     assert _portable.committed_executable(script)
+
+
+def test_a_windows_child_environment_keeps_what_windows_needs(monkeypatch, tmp_path):
+    monkeypatch.setattr(_portable.os, "name", "nt")
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    monkeypatch.setenv("TEMP", r"C:\Temp")
+    env = _portable.child_env_base(tmp_path)
+    assert env["SYSTEMROOT"] == r"C:\Windows"  # Winsock needs it (WinError 10106)
+    assert env["TEMP"] == r"C:\Temp"
+    assert env["USERPROFILE"] == env["HOME"] == str(tmp_path)  # Path.home() there
+
+
+def test_a_posix_child_environment_is_only_home(monkeypatch, tmp_path):
+    monkeypatch.setattr(_portable.os, "name", "posix")
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    assert _portable.child_env_base(tmp_path) == {"HOME": str(tmp_path)}
