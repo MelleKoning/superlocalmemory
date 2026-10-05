@@ -80,3 +80,51 @@ def committed_executable(path: Path) -> bool:
     if mode is None:
         pytest.skip("Windows files have no executable bit and this is not a git checkout")
     return mode == "100755"
+
+
+def open_paths() -> set[str]:
+    """Real paths of the files this process has open right now."""
+    import psutil
+
+    return {os.path.realpath(entry.path) for entry in psutil.Process().open_files()}
+
+
+def emulate_windows_file_sharing(monkeypatch) -> None:
+    """Make renaming or deleting an open file fail, as it does on Windows.
+
+    Python opens files on Windows without ``FILE_SHARE_DELETE``, so while any
+    handle is open the file cannot be replaced, renamed over or deleted:
+    ``PermissionError: [WinError 32] The process cannot access the file because
+    it is being used by another process``. POSIX allows all three, which is how
+    a missing ``close()`` before a rename passes everywhere else.
+    """
+    real_replace, real_rename, real_unlink = os.replace, os.rename, os.unlink
+
+    def _refuse_if_open(*paths) -> None:
+        busy = open_paths()
+        for path in paths:
+            real = os.path.realpath(os.fspath(path))
+            if real in busy:
+                raise PermissionError(
+                    13, "[WinError 32] The process cannot access the file because "
+                    "it is being used by another process", os.fspath(path))
+
+    def replace(src, dst, *args, **kwargs):
+        if not args and not kwargs:
+            _refuse_if_open(src, dst)
+        return real_replace(src, dst, *args, **kwargs)
+
+    def rename(src, dst, *args, **kwargs):
+        if not args and not kwargs:
+            _refuse_if_open(src, dst)
+        return real_rename(src, dst, *args, **kwargs)
+
+    def unlink(path, *args, **kwargs):
+        if not args and not kwargs:
+            _refuse_if_open(path)
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", replace)
+    monkeypatch.setattr(os, "rename", rename)
+    monkeypatch.setattr(os, "unlink", unlink)
+    monkeypatch.setattr(os, "remove", unlink)
