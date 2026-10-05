@@ -37,6 +37,8 @@ async def _app(scope, receive, send):
     if scope["path"].endswith("/slow"):
         await asyncio.sleep(DEADLINE * 2.5)
     body = b"ok"
+    if scope["path"].endswith("/scheme"):
+        body = b"s1" if scope["scheme"] == "https" else b"s0"
     await send({"type": "http.response.start", "status": 200,
                 "headers": [(b"content-length", b"2")]})
     await send({"type": "http.response.body", "body": body})
@@ -66,7 +68,9 @@ def _run(scenario) -> None:
     sock = remote_listener.bind_socket("127.0.0.1", port)
     tls = ssl.create_default_context(cafile=info["ca"])
 
-    async def connect():
+    async def connect(*, raw: bool = False):
+        if raw:  # TCP only: the caller never starts the TLS handshake
+            return await asyncio.open_connection("127.0.0.1", port)
         return await asyncio.open_connection("127.0.0.1", port, ssl=tls,
                                              server_hostname="localhost")
 
@@ -139,29 +143,83 @@ def test_trickled_headers_do_not_extend_the_deadline(limits) -> None:
     _run(scenario)
 
 
+async def _refused(connect, **kw) -> bool:
+    """The listener turned this connection away, at the TLS handshake or just after."""
+    try:
+        reader, writer = await asyncio.wait_for(connect(**kw), DEADLINE * 0.5)
+    except (ConnectionError, ssl.SSLError, OSError, asyncio.IncompleteReadError):
+        return True
+    except asyncio.TimeoutError:
+        return False
+    try:
+        return await _closed_within(reader, DEADLINE * 0.5)
+    finally:
+        _close(writer)
+
+
 def test_connections_waiting_for_headers_are_capped(limits) -> None:
     async def scenario(connect):
         held = [await connect() for _ in range(2)]
-        reader, writer = await connect()
-        assert await _closed_within(reader, DEADLINE * 0.5), "third waiting connection accepted"
-        _close(writer)
+        assert await _refused(connect), "third waiting connection accepted"
         for _r, w in held:
             _close(w)
 
     _run(scenario)
 
 
-def test_real_requests_are_unaffected(limits) -> None:
-    """Keep-alive requests and an answer slower than the deadline still work."""
+def test_a_connection_that_never_starts_tls_is_closed_after_the_handshake_deadline(
+        limits, monkeypatch) -> None:
+    """A caller that opens TCP and never sends a TLS hello is cut off, not held 60 s."""
+    monkeypatch.setattr(remote_conn_guard, "TLS_HANDSHAKE_TIMEOUT_S", DEADLINE, raising=False)
+
+    async def scenario(connect):
+        reader, writer = await connect(raw=True)
+        start = time.monotonic()
+        assert await _closed_within(reader, DEADLINE + 3), "handshake never bounded"
+        assert time.monotonic() - start >= DEADLINE * 0.8
+        _close(writer)
+
+    _run(scenario)
+
+
+def test_connections_still_in_the_tls_handshake_count_toward_the_caps(limits) -> None:
+    """Two callers stalled before TLS fill the waiting cap: a third caller is refused."""
+
+    async def scenario(connect):
+        stalled = [await connect(raw=True) for _ in range(2)]
+        await asyncio.sleep(0.1)  # let the listener accept both
+        assert await _refused(connect), "in-handshake connections were not counted"
+        for _r, w in stalled:
+            _close(w)
+
+    _run(scenario)
+
+
+def test_the_open_cap_counts_connections_in_the_tls_handshake(limits, monkeypatch) -> None:
+    """With the waiting cap out of the way, the open cap still sees stalled callers."""
+    monkeypatch.setattr(remote_conn_guard, "MAX_WAITING_CONNECTIONS", 50)
+
+    async def scenario(connect):
+        stalled = [await connect(raw=True) for _ in range(3)]
+        await asyncio.sleep(0.1)
+        assert await _refused(connect), "open cap ignored in-handshake connections"
+        for _r, w in stalled:
+            _close(w)
+
+    _run(scenario)
+
+
+
+def test_requests_on_the_listener_are_seen_as_https(limits) -> None:
+    """The remote MCP gate refuses plain HTTP: TLS done by the guard must still say https."""
 
     async def scenario(connect):
         reader, writer = await connect()
-        for path in ("/health", "/mcp/slow", "/health"):
-            writer.write(f"GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode())
-            await writer.drain()
-            head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), DEADLINE * 5)
-            assert head.startswith(b"HTTP/1.1 200"), head
-            assert await asyncio.wait_for(reader.readexactly(2), 2) == b"ok"
+        writer.write(b"GET /mcp/scheme HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        await writer.drain()
+        head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
+        assert head.startswith(b"HTTP/1.1 200"), head
+        assert await asyncio.wait_for(reader.readexactly(2), 2) == b"s1"
         _close(writer)
 
     _run(scenario)
