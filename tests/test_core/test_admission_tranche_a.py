@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from typing import FrozenSet
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -59,6 +60,17 @@ class TestResolveDeploymentFailClosed:
         cfg = tmp_path / "config.toml"
         cfg.write_text("[deployment]\nmode = \"personal\"", encoding="utf-8")
         cfg.chmod(0o000)  # remove all permissions
+        if os.name == "nt":
+            # Windows ignores mode bits (0o000 only sets read-only), so make
+            # the read fail the way an access-denied file does there.
+            real_read_text = Path.read_text
+
+            def denied(self, *args, **kwargs):
+                if self == cfg:
+                    raise PermissionError(13, "Access is denied", str(self))
+                return real_read_text(self, *args, **kwargs)
+
+            monkeypatch.setattr(Path, "read_text", denied)
         try:
             from superlocalmemory.core.admission import _resolve_deployment
             deployment = _resolve_deployment()
