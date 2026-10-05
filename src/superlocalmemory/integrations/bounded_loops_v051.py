@@ -14,9 +14,9 @@ from __future__ import annotations
 
 import json
 import os
-import selectors
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -129,46 +129,61 @@ def _run_command(executable: str, *arguments: str) -> str:
 
 
 def _read_bounded_output(process: subprocess.Popen[bytes]) -> bytes:
-    """Read both pipes incrementally and terminate output that exceeds the cap."""
+    """Read both pipes and terminate a command whose output exceeds the cap.
+
+    One reader thread per pipe, as ``subprocess.communicate`` does, because
+    Windows can only ``select()`` on sockets: with a selector every command
+    failed there (WinError 10038). Returns stdout; stderr is drained and
+    counted toward the cap but not kept.
+    """
     if process.stdout is None or process.stderr is None:
         raise BoundedLoopsReceiptError("bounded-loops command pipes are unavailable")
-    selector = selectors.DefaultSelector()
-    selector.register(process.stdout, selectors.EVENT_READ, data="stdout")
-    selector.register(process.stderr, selectors.EVENT_READ, data="stderr")
     deadline = time.monotonic() + _TIMEOUT_SECONDS
     stdout = bytearray()
-    total = 0
+    counted = threading.Lock()
+    total = [0]
+    too_big = threading.Event()
+
+    def pump(stream, keep: bool) -> None:
+        while not too_big.is_set():
+            chunk = stream.read1(64 * 1024)
+            if not chunk:
+                return
+            with counted:
+                total[0] += len(chunk)
+                if total[0] > _MAX_OUTPUT_BYTES:
+                    too_big.set()
+                    return
+                if keep:
+                    stdout.extend(chunk)
+
+    readers = [
+        threading.Thread(target=pump, args=(process.stdout, True),
+                         name="bl-stdout", daemon=True),
+        threading.Thread(target=pump, args=(process.stderr, False),
+                         name="bl-stderr", daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
     try:
-        while selector.get_map():
+        while any(reader.is_alive() for reader in readers) and not too_big.is_set():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                process.kill()
-                process.wait()
                 raise subprocess.TimeoutExpired(process.args, _TIMEOUT_SECONDS)
-            for key, _ in selector.select(remaining):
-                descriptor = (
-                    key.fileobj if isinstance(key.fileobj, int) else key.fileobj.fileno()
-                )
-                chunk = os.read(descriptor, 64 * 1024)
-                if not chunk:
-                    selector.unregister(key.fileobj)
-                    continue
-                total += len(chunk)
-                if total > _MAX_OUTPUT_BYTES:
-                    process.kill()
-                    process.wait()
-                    raise BoundedLoopsReceiptError(
-                        "bounded-loops response exceeds the import size limit"
-                    )
-                if key.data == "stdout":
-                    stdout.extend(chunk)
+            too_big.wait(min(remaining, 0.05))
+        if too_big.is_set():
+            raise BoundedLoopsReceiptError(
+                "bounded-loops response exceeds the import size limit"
+            )
         process.wait(timeout=max(0.001, deadline - time.monotonic()))
     finally:
-        selector.close()
         if process.poll() is None:
             process.kill()
             process.wait()
-    return bytes(stdout)
+        for reader in readers:  # the pipes close with the process
+            reader.join(timeout=1.0)
+    with counted:
+        return bytes(stdout)
 
 
 def _normalize_projection(status: Any) -> VerifiedBoundedLoopsReceipt:
