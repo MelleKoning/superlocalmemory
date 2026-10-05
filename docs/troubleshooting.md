@@ -335,6 +335,41 @@ slm consolidate --cognitive
 slm decay
 ```
 
+## Native libraries on macOS
+
+On a Mac, NumPy, SciPy and PyTorch (which SLM uses for its maths and its
+embedding model) hand linear algebra to Apple's Accelerate framework. Two
+kinds of work go there:
+
+- **Matrix products and vector lengths.** Everything SLM does when it saves,
+  recalls, runs background maintenance or computes embeddings is this kind.
+- **Matrix factorizations** (QR, Cholesky, SVD and the solvers built on
+  them). Accelerate has reported defects here on recent macOS releases: QR
+  writes outside its memory for square matrices of roughly 576 to 1,000 rows
+  (found by us; before 4.1.20 it could crash SLM at random), Cholesky can
+  crash at very large sizes ([scipy#26145](https://github.com/scipy/scipy/issues/26145)), SVD can
+  hang on a matrix that contains an infinite value
+  ([numpy#32591](https://github.com/numpy/numpy/issues/32591)), and one
+  symmetric solver no longer notices a singular matrix on macOS 26.5
+  ([scipy#25313](https://github.com/scipy/scipy/issues/25313)).
+
+What SLM does about it:
+
+- Saving, recall, maintenance and embedding make **no** factorization calls.
+  The test suite counts every call into Accelerate's factorization routines
+  while it saves, recalls and maintains a store, and fails if there is one.
+- The random rotation used to compress embeddings is computed without
+  Accelerate's QR since 4.1.20.
+- One feature still uses a factorization: learning the match threshold of the
+  experimental semantic cache in SLM Optimize (off by default). Its matrix is
+  never larger than 10 x 10, far below any reported failure size, and a test
+  runs it under macOS Guard Malloc, which stops the process on the first
+  out-of-bounds write.
+
+Nothing needs to be configured. If SLM ever quits unexpectedly on a Mac and
+the crash report names `libLAPACK` or `Accelerate`, please open an issue with
+that report and the output of `slm status --json`.
+
 ## Health Check
 
 Run a full diagnostic:

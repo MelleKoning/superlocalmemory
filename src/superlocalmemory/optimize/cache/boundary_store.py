@@ -48,6 +48,13 @@ except ImportError:  # pragma: no cover
 
 _BOUNCE_EPS: float = 1e-9
 
+# L-BFGS-B factorizes a matrix whose order is the number of stored
+# corrections, through native LAPACK (Accelerate's dpotrf on macOS, which has
+# a reported out-of-bounds fault at large orders). Bounding the corrections
+# keeps that matrix at most 10 x 10 however many samples arrive. 10 is SciPy's
+# own default, so the fit itself is unchanged.
+_LBFGSB_MAX_CORRECTIONS: int = 10
+
 # LRU cap for the in-memory write-through cache.  Records are durable in
 # SQLite (boundary_upsert), so eviction from _cache is lossless — a miss
 # simply falls back to DB.get().  50 000 covers the practical warm-cache
@@ -278,7 +285,8 @@ def _fit_logistic_mle(
                 x0=[t_warm, gamma_warm],
                 method="L-BFGS-B",
                 bounds=[(0.5, 1.0), (0.1, 100.0)],
-                options={"maxiter": 200, "ftol": 1e-10, "gtol": 1e-8},
+                options={"maxiter": 200, "ftol": 1e-10, "gtol": 1e-8,
+                         "maxcor": _LBFGSB_MAX_CORRECTIONS},
             )
             t_out, g_out = float(result.x[0]), float(result.x[1])
             # Guard: refuse to return a value outside the observed sample range

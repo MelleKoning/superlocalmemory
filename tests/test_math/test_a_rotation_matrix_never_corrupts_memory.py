@@ -13,10 +13,6 @@ rotation is now built without LAPACK; these tests pin that.
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
-import textwrap
 from pathlib import Path
 
 import numpy as np
@@ -26,9 +22,12 @@ from superlocalmemory.core.config import PolarQuantConfig
 from superlocalmemory.math.orthogonal import haar_orthogonal
 from superlocalmemory.math.polar_quant import PolarQuantEncoder
 from superlocalmemory.math.turbo_quant import TurboQuantEncoder
-
-_SRC = Path(__file__).resolve().parents[2] / "src"
-_GUARD_MALLOC = Path("/usr/lib/libgmalloc.dylib")
+from tests.helpers.native_guard import (
+    GUARD_MALLOC_AVAILABLE,
+    SKIP_REASON,
+    assert_no_stray_write,
+    run_under_guard_malloc,
+)
 
 
 def _lapack_qr_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -73,12 +72,9 @@ def test_a_768_rotation_is_orthogonal_and_repeatable() -> None:
     assert not np.array_equal(first, haar_orthogonal(768, seed=43))
 
 
-@pytest.mark.skipif(
-    sys.platform != "darwin" or not _GUARD_MALLOC.exists(),
-    reason="Guard Malloc is the macOS allocator that faults on the first stray write",
-)
+@pytest.mark.skipif(not GUARD_MALLOC_AVAILABLE, reason=SKIP_REASON)
 def test_creating_768_dimension_encoders_makes_no_stray_memory_write(tmp_path: Path) -> None:
-    script = textwrap.dedent(
+    done = run_under_guard_malloc(
         f"""
         from superlocalmemory.core.config import PolarQuantConfig
         from superlocalmemory.math.polar_quant import PolarQuantEncoder
@@ -90,23 +86,7 @@ def test_creating_768_dimension_encoders_makes_no_stray_memory_write(tmp_path: P
                 seed=42,
             ))
         print("created")
-        """
+        """,
+        tmp_path,
     )
-    env = {
-        **os.environ,
-        "DYLD_INSERT_LIBRARIES": str(_GUARD_MALLOC),
-        "PYTHONMALLOC": "malloc",
-        "PYTHONPATH": str(_SRC),
-        "HOME": str(tmp_path / "home"),
-        "SLM_DATA_DIR": str(tmp_path / "data"),
-    }
-    done = subprocess.run(
-        [sys.executable, "-c", script],
-        env=env, capture_output=True, text=True, timeout=300,
-    )
-    assert done.returncode == 0, (
-        f"exit {done.returncode}: a stray memory write was caught\n"
-        + "\n".join(line for line in done.stderr.splitlines()
-                    if not line.startswith("GuardMalloc"))[-2000:]
-    )
-    assert "created" in done.stdout
+    assert_no_stray_write(done, "created")
