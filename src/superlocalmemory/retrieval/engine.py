@@ -679,7 +679,11 @@ class RetrievalEngine:
         facts = {fid: f for fid, f in facts.items() if fid in selected_ids}
 
         # 6. Build response
-        results = self._build_results(final_top, facts, strat, preferred=preferred)
+        # #150: the ORDER of these results is preferred once, at the end of
+        # recall (core.recall_pipeline -> project_scope.prefer_in_final_order),
+        # after learned ranking has rewritten every score. Here it only chose
+        # which candidates made the cut (boost_order above).
+        results = self._build_results(final_top, facts, strat)
         ms = (time.monotonic() - t0) * 1000.0
         stage_ms["retrieval_total"] = round(ms, 1)
         no_match = floor_enabled and len(results) == 0
@@ -1531,7 +1535,7 @@ class RetrievalEngine:
 
     def _build_results(
         self, fused: list[FusionResult], fact_map: dict[str, AtomicFact],
-        strat: QueryStrategy, preferred: frozenset[str] = frozenset(),
+        strat: QueryStrategy,
     ) -> list[RetrievalResult]:
         from datetime import UTC, datetime
         now = datetime.now(UTC)
@@ -1636,13 +1640,6 @@ class RetrievalEngine:
             # boosts push raw scores well above 1 (observed: 27.97). A sigmoid
             # preserves rank (monotonic) while giving users a readable 0-1 range.
             normalized_score = 1.0 / (1.0 + math.exp(-boosted_score * 0.5))
-            # #150: the same-project boost moves the RANK only. score and
-            # relevance_score stay what retrieval measured, so a boosted
-            # memory never reads as more relevant than it is.
-            if fr.fact_id in preferred:
-                from superlocalmemory.retrieval.project_scope import lift
-                boosted_score = lift(boosted_score)
-                evidence = [*evidence, "same_project"]
             results.append(RetrievalResult(
                 fact=fact, score=round(normalized_score, 4),
                 channel_scores=fr.channel_scores,

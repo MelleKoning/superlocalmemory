@@ -1446,6 +1446,20 @@ def run_recall(
             play_sink, profile_id, response.results, _shown_before,
         )
 
+    # #150: the session's / caller's project, preferred on the FINAL order:
+    # after learned ranking and continuity, which both rewrite ranking scores
+    # without knowing the project, and before the exact-hit pin and kind
+    # awareness, which keep their guarantees above it. Bounded by
+    # project_scope.BOOST on the final ranking key.
+    if response.results and facets is not None and getattr(facets, "prefer_project", None):
+        from superlocalmemory.retrieval import project_scope as _project_scope
+
+        _shown_before_project = _top_ids(response.results)
+        response.results = _project_scope.prefer_in_final_order(
+            response.results, _project_scope.preferred_in(db, response.results, facets))
+        _resettle_shown_after_bias(play_sink, profile_id, response.results,
+                                   _shown_before_project)
+
     _preserve_exact_lexical_evidence(response, query)
 
     # Kind-aware ordering: "what did we decide" favours decisions, "current

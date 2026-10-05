@@ -338,3 +338,69 @@ def test_stop_hook_saves_the_summary_under_its_project(mock_run, mock_post, _con
     assert path == "/remember"
     assert body["metadata"] == {"project": "/Users/dev/work/acme-billing"}
     assert body["content"].startswith("[acme-billing] session ended")
+
+
+# -- recall_trace explains the recall it claims to ------------------------------
+
+
+def _tools_with_pool(monkeypatch, pool):
+    from superlocalmemory.mcp import _daemon_proxy
+    from superlocalmemory.mcp.tools_core import register_core_tools
+    from superlocalmemory.mcp.tools_v3 import register_v3_tools
+
+    monkeypatch.setattr(_daemon_proxy, "choose_pool", lambda: pool)
+    srv = _Server()
+    register_core_tools(srv, lambda: SimpleNamespace(profile_id="default"))
+    register_v3_tools(srv, lambda: SimpleNamespace(profile_id="default"))
+    return srv.tools
+
+
+def test_recall_trace_takes_the_same_project_arguments_as_recall(monkeypatch) -> None:
+    calls: list[dict] = []
+    envelope = {"ok": True, "result_count": 1, "project_scope": _FILTER_FELL_BACK,
+                "results": [{"fact_id": "f1", "content": "x", "score": 0.5,
+                             "evidence_chain": ["bm25(rank=1)", "same_project"]}]}
+
+    class _Pool:
+        def recall(self, *args, **kwargs):
+            calls.append(kwargs)
+            return dict(envelope)
+
+    tools = _tools_with_pool(monkeypatch, _Pool())
+    args = {"project": " ghost ", "prefer_project": " /x/acme "}
+    asyncio.run(tools["recall"]("q", **args))
+    trace = asyncio.run(tools["recall_trace"]("q", **args))
+
+    project_args = [{k: c.get(k) for k in ("project", "prefer_project")} for c in calls]
+    assert project_args[0] == project_args[1] == {"project": "ghost", "prefer_project": "/x/acme"}
+    assert trace["success"] is True
+    assert trace["project_scope"] == _FILTER_FELL_BACK
+    assert trace["results"][0]["evidence_chain"][-1] == "same_project"
+
+
+def test_recall_trace_without_a_project_sends_none(monkeypatch) -> None:
+    calls: list[dict] = []
+
+    class _Pool:
+        def recall(self, *args, **kwargs):
+            calls.append(kwargs)
+            return {"ok": True, "results": []}
+
+    tools = _tools_with_pool(monkeypatch, _Pool())
+    asyncio.run(tools["recall_trace"]("q", project="  "))
+    assert "project" not in calls[0] and "prefer_project" not in calls[0]
+
+
+def test_daemon_proxy_answers_recall_trace_keywords(monkeypatch) -> None:
+    """The real proxy accepts every keyword recall_trace sends (a fake pool
+    would accept anything)."""
+    from superlocalmemory.cli import daemon
+    from superlocalmemory.mcp import _daemon_proxy
+
+    paths: list[str] = []
+    monkeypatch.setattr(daemon, "daemon_request",
+                        lambda method, path, *a, **k: paths.append(path) or {"results": []})
+    tools = _tools_with_pool(monkeypatch, _daemon_proxy.DaemonPoolProxy(port=48517))
+    out = asyncio.run(tools["recall_trace"]("q", project="acme", prefer_project="/x/acme"))
+    assert out["success"] is True, out
+    assert "project=acme" in paths[0] and "prefer_project=%2Fx%2Facme" in paths[0]

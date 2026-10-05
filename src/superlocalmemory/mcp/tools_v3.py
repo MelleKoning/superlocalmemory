@@ -302,6 +302,8 @@ def register_v3_tools(server, get_engine: Callable) -> None:
         known_as_of: str | None = None,
         valid_at: str | None = None,
         include_unknown: bool = False,
+        project: str = "",
+        prefer_project: str = "",
     ) -> dict:
         """Recall with per-channel score breakdown.
 
@@ -313,6 +315,10 @@ def register_v3_tools(server, get_engine: Callable) -> None:
             limit: Maximum results (default 10).
             as_of: Optional ISO 8601 UTC datetime for point-in-time recall
                 (e.g. "2024-01-01T00:00:00Z"). Omit for current-state recall.
+            project / prefer_project: exactly as ``recall`` takes them, so the
+                order explained here is the order recall returns for the same
+                arguments. A preferred memory's evidence names
+                ``same_project``; ``project_scope`` says what was applied.
         """
         try:
             import asyncio
@@ -341,6 +347,11 @@ def register_v3_tools(server, get_engine: Callable) -> None:
                     query=query, limit=limit, as_of=_as_of,
                     known_as_of=_known_as_of, valid_at=_valid_at,
                     include_unknown=include_unknown,
+                    # #150: sent only when set, as recall does, so a trace of a
+                    # project recall explains that recall and not another one.
+                    **{k: v.strip() for k, v in (("project", project),
+                                                 ("prefer_project", prefer_project))
+                       if (v or "").strip()},
                 )
             )
             items = raw.get("results", []) if isinstance(raw, dict) else []

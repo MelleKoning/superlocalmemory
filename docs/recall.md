@@ -33,7 +33,8 @@ and `ACME-Billing/` are the same project (the last part of the path, ignoring
 case). `session_init` and `slm session open` prefer the project they are given.
 The preference is bounded: a project memory passes another memory only when its
 score is already at least 80% of that memory's, so a weak match never jumps a
-strong one. The response's `project_scope` says what happened.
+strong one. It is applied after learned ranking (`SLM_RANKING`), on the final
+order, so turning learning on does not undo it. The response's `project_scope` says what happened.
 
 Memories saved before 4.1.21 carry a project only if one was passed to
 `remember`. Session-end summaries (`[name] session ended ...`) are tagged with

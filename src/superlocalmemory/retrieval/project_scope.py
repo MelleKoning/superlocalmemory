@@ -10,7 +10,10 @@ Two ways to say it, both opt-in per recall:
   rank above others of *similar* relevance; nothing is removed, and memories
   saved with no project (most of any store written before 4.1.21) stay
   exactly as findable as before. ``session_init`` passes the session's project
-  this way.
+  this way. It acts twice, each time bounded by BOOST: on which candidates
+  make the cut (``boost_order``, inside retrieval) and on the final order
+  (``prefer_in_final_order``, the last ranking step of recall, after learned
+  ranking - which rewrites every score without knowing the project).
 * ``project`` - a filter. Only memories saved under that project are kept.
   When none of the memories found for the question were saved under it - a
   project with no tagged memories, a misspelt name - the filter is not applied,
@@ -47,9 +50,9 @@ logger = logging.getLogger(__name__)
 #: relevant one - at two thirds of the other's score it stays below it.
 #: Measured on the ranking fixture (tests/test_retrieval/
 #: test_project_scope_ranking.py): the on-topic project memories that
-#: cross-project trivia outranked sat at 0.84-0.98 of the trivia's ranking
-#: score, so 0.25 puts every one of them first; one on-topic memory at
-#: 0.61-0.65 of the trivia stays below it, which is the bound doing its job. Half the
+#: cross-project trivia outranked sat at 0.87-0.98 of the trivia's ranking
+#: score, so 0.25 puts every one of them first; one on-topic memory at 0.65
+#: of the trivia stays below it, which is the bound doing its job. Half the
 #: kind-aware ceiling (retrieval.kind_aware.MAX_BOOST). A constant, not a
 #: setting, so two installations rank the same question alike.
 BOOST = 0.25
@@ -209,5 +212,75 @@ def boost_order(items: Sequence[Any], preferred: frozenset[str], *,
     return [items[i] for i in keyed]
 
 
-__all__ = ["BOOST", "Scoped", "boost_order", "lift", "narrow", "project_keys",
-           "stored_projects"]
+def _utility(result: Any) -> float:
+    from superlocalmemory.core.recall_pipeline import _rank_key
+
+    return -_rank_key(result)[0]
+
+
+def prefer_in_final_order(results: list, preferred: frozenset[str]) -> list:
+    """The finished answer with same-project results lifted, as recall's
+    last ordering step - after learned ranking, which rewrites every ranking
+    score and knows nothing of projects, so a preference applied only inside
+    retrieval was undone on every store with learning switched on.
+
+    The same bound, on the final ranking key (``recall_pipeline._rank_key``):
+    a same-project result moves up past a neighbour only while that
+    neighbour's key is below its own lifted by BOOST, and never past another
+    same-project result. Every other result keeps its relative order. Moved
+    or not, a same-project result carries "same_project" in its evidence and
+    its lifted key, so a later bounded pass (kind awareness) compares against
+    what decided this order. New objects; the input is not modified.
+    """
+    if not preferred or not results:
+        return results
+    ids = [getattr(getattr(r, "fact", None), "fact_id", None) for r in results]
+    marked = [fid in preferred for fid in ids]
+    if not any(marked):
+        return results
+    keys = [_utility(r) for r in results]
+    lifted = [lift(k) if m else k for k, m in zip(keys, marked)]
+    order = list(range(len(results)))
+    for item in range(len(results)):
+        if not marked[item]:
+            continue
+        pos = order.index(item)
+        while pos > 0:
+            above = order[pos - 1]
+            if marked[above] or keys[above] >= lifted[item]:
+                break
+            order[pos - 1], order[pos] = item, above
+            pos -= 1
+    out = []
+    for rank, i in enumerate(order, start=1):
+        r = results[i]
+        if marked[i]:
+            chain = list(r.evidence_chain or [])
+            r = replace(r, ranking_score=lifted[i], rank_position=rank,
+                        evidence_chain=chain + ([] if "same_project" in chain
+                                                else ["same_project"]))
+        else:
+            r = replace(r, rank_position=rank)
+        out.append(r)
+    return out
+
+
+def preferred_in(db: Any, results: list, facets: Any) -> frozenset[str]:
+    """Which of ``results`` were saved under ``facets.prefer_project``.
+    Empty when no preference was asked for, it names no project, or the store
+    cannot be read (logged; the order is then simply left alone)."""
+    want = project_key(getattr(facets, "prefer_project", None))
+    if want is None or not results:
+        return frozenset()
+    ids = [r.fact.fact_id for r in results if getattr(r, "fact", None) is not None]
+    try:
+        keys = project_keys(db, ids)
+    except Exception as exc:  # noqa: BLE001 - ordering is advisory, reported
+        logger.warning("Recall project lookup for the final order failed (%s)",
+                       type(exc).__name__)
+        return frozenset()
+    return frozenset(fid for fid, key in keys.items() if key == want)
+
+
+__all__ = ["BOOST", "Scoped", "boost_order", "lift", "narrow", "preferred_in",
+           "prefer_in_final_order", "project_keys", "stored_projects"]

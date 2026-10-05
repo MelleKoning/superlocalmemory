@@ -170,3 +170,64 @@ def test_a_long_path_keeps_its_project(db) -> None:
     a = _save(db, "a", project="acme-billing")
     assert narrow(db, [a], "default", Facets.of(project=path)).kept == (a,)
     assert Facets.of(prefer_project=path).prefer_project == path
+
+
+# -- the final order (after learned ranking) ----------------------------------
+
+
+def _result(fid: str, key: float):
+    from superlocalmemory.storage.models import RetrievalResult
+
+    return RetrievalResult(fact=AtomicFact(fact_id=fid, content=fid), score=0.5,
+                           ranking_score=key, evidence_chain=["bm25(rank=1)"])
+
+
+def test_final_order_passes_only_close_neighbours_and_keeps_the_rest() -> None:
+    from superlocalmemory.retrieval.project_scope import prefer_in_final_order
+
+    results = [_result("t1", 1.0), _result("t2", 0.9), _result("p1", 0.85),
+               _result("t3", 0.5), _result("p2", 0.3)]
+    out = prefer_in_final_order(results, frozenset({"p1", "p2"}))
+    assert [r.fact.fact_id for r in out] == ["p1", "t1", "t2", "t3", "p2"]
+    assert [r.rank_position for r in out] == [1, 2, 3, 4, 5]
+    lifted = {r.fact.fact_id: r for r in out}
+    assert lifted["p1"].ranking_score == pytest.approx(0.85 * 1.25)
+    assert lifted["p2"].evidence_chain[-1] == "same_project"
+    assert lifted["t1"].ranking_score == 1.0 and "same_project" not in lifted["t1"].evidence_chain
+    assert results[2].ranking_score == 0.85 and results[2].evidence_chain == ["bm25(rank=1)"]
+
+
+def test_final_order_never_reorders_two_project_results() -> None:
+    from superlocalmemory.retrieval.project_scope import prefer_in_final_order
+
+    results = [_result("p1", 0.5), _result("p2", 0.6)]  # learned order, kept
+    out = prefer_in_final_order(results, frozenset({"p1", "p2"}))
+    assert [r.fact.fact_id for r in out] == ["p1", "p2"]
+
+
+def test_final_order_uses_score_when_no_ranking_score() -> None:
+    from superlocalmemory.retrieval.project_scope import prefer_in_final_order
+    from superlocalmemory.storage.models import RetrievalResult
+
+    a = RetrievalResult(fact=AtomicFact(fact_id="t", content="t"), score=0.6)
+    b = RetrievalResult(fact=AtomicFact(fact_id="p", content="p"), score=0.5)
+    assert [r.fact.fact_id for r in prefer_in_final_order([a, b], frozenset({"p"}))] == ["p", "t"]
+
+
+def test_final_order_without_matches_is_the_same_list() -> None:
+    from superlocalmemory.retrieval.project_scope import prefer_in_final_order
+
+    results = [_result("a", 1.0)]
+    assert prefer_in_final_order(results, frozenset({"zzz"})) is results
+    assert prefer_in_final_order(results, frozenset()) is results
+
+
+def test_preferred_in_reads_the_saved_project(db) -> None:
+    from superlocalmemory.retrieval.project_scope import preferred_in
+    from superlocalmemory.storage.models import RetrievalResult
+
+    a = _save(db, "a", project="/x/acme")
+    b = _save(db, "b")
+    results = [RetrievalResult(fact=AtomicFact(fact_id=f, content=f)) for f in (a, b)]
+    assert preferred_in(db, results, Facets.of(prefer_project="ACME")) == frozenset({a})
+    assert preferred_in(db, results, Facets.of(project="acme")) == frozenset()
