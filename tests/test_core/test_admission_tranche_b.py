@@ -60,6 +60,33 @@ def _mock_get_engine() -> MagicMock:
     return MagicMock()
 
 
+def _capture_real_tool(register_fn, tool_name: str, *register_args):
+    """Call a register_*_tools function with a capturing mock server and
+    return the ACTUAL decorated tool function registered under *tool_name*.
+
+    Unlike a hand-built stand-in decorated with the same OperationKind, this
+    proves the real tool — the one a caller actually invokes over MCP — is
+    the thing under test, not a lookalike that merely shares a decorator.
+    """
+    registered: dict = {}
+
+    def capturing_tool(*_args, **_kwargs):
+        def decorator(fn):
+            registered[fn.__name__] = fn
+            return fn
+        return decorator
+
+    mock_server = MagicMock()
+    mock_server.tool.side_effect = capturing_tool
+    register_fn(mock_server, *register_args)
+    tool = registered.get(tool_name)
+    assert tool is not None, (
+        f"{tool_name!r} was not registered by {register_fn.__name__} — "
+        "check the tool name or the register function"
+    )
+    return tool
+
+
 # ---------------------------------------------------------------------------
 # B1 — Tool inventory: every Tranche B tool in _GATED_MCP_TOOLS
 # ---------------------------------------------------------------------------
@@ -192,87 +219,114 @@ class TestTrancheBToolInventory:
 # ---------------------------------------------------------------------------
 
 class TestTrancheBEnterpriseAnonymousDenied:
-    """In enterprise mode, anonymous MCP caller must be denied for each tool."""
+    """In enterprise mode, anonymous MCP caller must be denied by the REAL
+    tool function registered under each name — not a hand-built stand-in
+    that merely shares the same OperationKind. A stand-in only proves the
+    @admits decorator works in general; it says nothing about whether this
+    specific tool actually carries it.
+    """
 
-    def _enterprise_fake_result(
-        self,
-        kind_name: str,
-        tmp_path: Path,
-        monkeypatch,
-    ) -> dict:
+    def _enterprise_env(self, tmp_path: Path, monkeypatch) -> None:
         monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path))
         _write_config(tmp_path, '[deployment]\nmode = "enterprise"\nrequire_login = true\n')
 
-        from superlocalmemory.core.admission import admits
-        from superlocalmemory.core.operation_request import OperationKind
-
-        kind = getattr(OperationKind, kind_name)
-
-        @admits(kind)
-        async def fake_tool() -> dict:
-            return {"success": True}
-
-        return asyncio.run(fake_tool())
+    def _assert_denied(self, result: dict) -> None:
+        assert result.get("success") is False
+        assert result.get("error") == "not_authorized"
 
     def test_reinforce_assertion_enterprise_denied(self, tmp_path, monkeypatch):
-        result = self._enterprise_fake_result("CORRECT", tmp_path, monkeypatch)
-        assert result.get("success") is False
-        assert result.get("error") == "not_authorized"
+        self._enterprise_env(tmp_path, monkeypatch)
+        from superlocalmemory.mcp.tools_learning import register_learning_tools
+        tool = _capture_real_tool(
+            register_learning_tools, "reinforce_assertion", _mock_get_engine()
+        )
+        self._assert_denied(asyncio.run(tool(assertion_id="assertion-1")))
 
     def test_contradict_assertion_enterprise_denied(self, tmp_path, monkeypatch):
-        result = self._enterprise_fake_result("FORGET", tmp_path, monkeypatch)
-        assert result.get("success") is False
-        assert result.get("error") == "not_authorized"
+        self._enterprise_env(tmp_path, monkeypatch)
+        from superlocalmemory.mcp.tools_learning import register_learning_tools
+        tool = _capture_real_tool(
+            register_learning_tools, "contradict_assertion", _mock_get_engine()
+        )
+        self._assert_denied(asyncio.run(tool(assertion_id="assertion-1")))
 
     def test_report_outcome_enterprise_denied(self, tmp_path, monkeypatch):
-        result = self._enterprise_fake_result("REMEMBER", tmp_path, monkeypatch)
-        assert result.get("success") is False
-        assert result.get("error") == "not_authorized"
+        self._enterprise_env(tmp_path, monkeypatch)
+        from superlocalmemory.mcp.tools_v28 import register_v28_tools
+        tool = _capture_real_tool(
+            register_v28_tools, "report_outcome", _mock_get_engine()
+        )
+        self._assert_denied(
+            asyncio.run(tool(memory_ids="mem-1", outcome="success"))
+        )
 
     def test_report_feedback_enterprise_denied(self, tmp_path, monkeypatch):
-        result = self._enterprise_fake_result("REMEMBER", tmp_path, monkeypatch)
-        assert result.get("success") is False
-        assert result.get("error") == "not_authorized"
+        self._enterprise_env(tmp_path, monkeypatch)
+        from superlocalmemory.mcp.tools_active import register_active_tools
+        tool = _capture_real_tool(
+            register_active_tools, "report_feedback", _mock_get_engine()
+        )
+        self._assert_denied(asyncio.run(tool(fact_id="fact-1")))
 
     def test_observe_enterprise_denied(self, tmp_path, monkeypatch):
-        result = self._enterprise_fake_result("REMEMBER", tmp_path, monkeypatch)
-        assert result.get("success") is False
-        assert result.get("error") == "not_authorized"
+        self._enterprise_env(tmp_path, monkeypatch)
+        from superlocalmemory.mcp.tools_active import register_active_tools
+        tool = _capture_real_tool(
+            register_active_tools, "observe", _mock_get_engine()
+        )
+        self._assert_denied(asyncio.run(tool(content="test content")))
 
     def test_slm_cache_set_enterprise_denied(self, tmp_path, monkeypatch):
-        result = self._enterprise_fake_result("REMEMBER", tmp_path, monkeypatch)
-        assert result.get("success") is False
-        assert result.get("error") == "not_authorized"
+        self._enterprise_env(tmp_path, monkeypatch)
+        from superlocalmemory.mcp.tools_optimize import register_optimize_tools
+        tool = _capture_real_tool(register_optimize_tools, "slm_cache_set")
+        self._assert_denied(asyncio.run(tool(key="k", value="v")))
 
     def test_slm_compress_enterprise_denied(self, tmp_path, monkeypatch):
-        result = self._enterprise_fake_result("CONSOLIDATE", tmp_path, monkeypatch)
-        assert result.get("success") is False
-        assert result.get("error") == "not_authorized"
+        self._enterprise_env(tmp_path, monkeypatch)
+        from superlocalmemory.mcp.tools_optimize import register_optimize_tools
+        tool = _capture_real_tool(register_optimize_tools, "slm_compress")
+        self._assert_denied(asyncio.run(tool(content="some text to compress")))
 
     def test_build_graph_enterprise_denied(self, tmp_path, monkeypatch):
-        result = self._enterprise_fake_result("CORRECT", tmp_path, monkeypatch)
-        assert result.get("success") is False
-        assert result.get("error") == "not_authorized"
+        self._enterprise_env(tmp_path, monkeypatch)
+        from superlocalmemory.mcp.tools_core import register_core_tools
+        tool = _capture_real_tool(
+            register_core_tools, "build_graph", _mock_get_engine()
+        )
+        self._assert_denied(asyncio.run(tool()))
 
     def test_update_code_graph_enterprise_denied(self, tmp_path, monkeypatch):
-        result = self._enterprise_fake_result("CORRECT", tmp_path, monkeypatch)
-        assert result.get("success") is False
-        assert result.get("error") == "not_authorized"
+        self._enterprise_env(tmp_path, monkeypatch)
+        from superlocalmemory.mcp.tools_code_graph import register_code_graph_tools
+        tool = _capture_real_tool(
+            register_code_graph_tools, "update_code_graph", _mock_get_engine()
+        )
+        self._assert_denied(asyncio.run(tool()))
 
     def test_mesh_summary_enterprise_denied(self, tmp_path, monkeypatch):
-        result = self._enterprise_fake_result("MESH_SEND", tmp_path, monkeypatch)
-        assert result.get("success") is False
-        assert result.get("error") == "not_authorized"
+        self._enterprise_env(tmp_path, monkeypatch)
+        from superlocalmemory.mcp.tools_mesh import register_mesh_tools
+        tool = _capture_real_tool(
+            register_mesh_tools, "mesh_summary", _mock_get_engine()
+        )
+        self._assert_denied(asyncio.run(tool()))
 
     def test_close_session_enterprise_denied(self, tmp_path, monkeypatch):
-        result = self._enterprise_fake_result("CONSOLIDATE", tmp_path, monkeypatch)
-        assert result.get("success") is False
-        assert result.get("error") == "not_authorized"
+        self._enterprise_env(tmp_path, monkeypatch)
+        from superlocalmemory.mcp.tools_active import register_active_tools
+        tool = _capture_real_tool(
+            register_active_tools, "close_session", _mock_get_engine()
+        )
+        self._assert_denied(asyncio.run(tool()))
 
     def test_quantize_enterprise_denied(self, tmp_path, monkeypatch):
-        result = self._enterprise_fake_result("CONSOLIDATE", tmp_path, monkeypatch)
-        assert result.get("success") is False
-        assert result.get("error") == "not_authorized"
+        self._enterprise_env(tmp_path, monkeypatch)
+        from superlocalmemory.mcp.tools_v33 import register_v33_tools
+        tool = _capture_real_tool(
+            register_v33_tools, "quantize", _mock_get_engine()
+        )
+        self._assert_denied(asyncio.run(tool()))
 
 
 # ---------------------------------------------------------------------------
