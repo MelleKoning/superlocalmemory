@@ -65,8 +65,11 @@ describe('OD memory browsing', function () {
     };
     evalModule(h.window, 'od-memories.js');
     h.window.odRenderMemories(h.document.getElementById('memory-test-root'));
+    // index 0 is the initial listing (/api/memories); the rest is the ONE
+    // /api/memories/kind-counts request _loadCatCounts now fires (it used to
+    // be one `?category=X&limit=1` request per legacy category).
     pending.slice(1).forEach(function (request) {
-      request.next.resolve(response({ total: request.url.includes('semantic') ? 1 : 0 }));
+      request.next.resolve(response({ counts: { semantic: 1 }, truncated: false }));
     });
     await flushPromises();
 
@@ -82,7 +85,9 @@ describe('OD memory browsing', function () {
     const category = h.document.querySelector('[data-od-act="cat"][data-cat="semantic"]');
     category.click();
     const current = pending[pending.length - 1];
-    assert.match(current.url, /category=semantic/);
+    // kind=, not category=: the chip filters on the DISPLAYED memory kind
+    // (server-side kind_fields), not the raw legacy fact_type.
+    assert.match(current.url, /kind=semantic/);
     assert.match(current.url, /offset=0/);
     current.next.resolve(response({
       memories: [{ id: 'new', content: 'semantic truth', category: 'semantic' }],

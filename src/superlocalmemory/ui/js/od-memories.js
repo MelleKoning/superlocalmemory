@@ -4,9 +4,15 @@
 // nosemgrep: innerHTML — all dynamic values escaped via _esc()
 //
 // Endpoints (live daemon 127.0.0.1:8765):
-//   GET /api/memories?limit=N&offset=N[&category=X]
-//       → { memories[{id,memory_id,content,category,importance(0-1),
+//   GET /api/memories?limit=N&offset=N[&kind=X][&category=X]
+//       → { memories[{id,memory_id,content,category,memory_kind,
+//                      memory_kind_label,memory_kind_state,importance(0-1),
 //                      access_count,created_at,project_name}], total }
+//       `kind` filters on the DISPLAYED kind (nine memory_kind values,
+//       e.g. "decision"), the same precedence `slm list`/recall use
+//       (core/kind_query.py). `category` still filters on the raw legacy
+//       fact_type for callers that want that instead.
+//   GET /api/memories/kind-counts[?scope=X] → { counts:{<kind>:n,...}, truncated }
 //   GET /api/memories/{id}/facts → { facts[{fact_type,content}] }
 //   GET /api/v3/timeline/?range=Xd&group_by=category&limit=N
 //       → { events[{id,timestamp,category}] }
@@ -50,11 +56,15 @@
     return v >= 0.7 ? 'ok' : v >= 0.4 ? 'warn' : 'danger';
   }
 
-  // API category → badge class
-  function _catCls(cat) {
-    var MAP = { semantic: 'violet', episodic: 'cyan', opinion: 'warn',
-                temporal: 'ok', consolidation: 'danger' };
-    return MAP[String(cat).toLowerCase()] || 'neutral';
+  // memory_kind → badge class. Only 6 .badge modifier colors exist
+  // (design-system.css .badge.ok/.warn/.danger/.violet/.cyan/.neutral) for
+  // the nine kinds, so two pairs share a color; the label text (not the
+  // color) is what distinguishes them.
+  function _catCls(kind) {
+    var MAP = { semantic: 'violet', episodic: 'cyan', status: 'neutral',
+                opinion: 'warn', rule: 'violet', decision: 'ok',
+                procedure: 'cyan', prospective: 'ok', correction: 'danger' };
+    return MAP[String(kind).toLowerCase()] || 'neutral';
   }
 
   // Normalize /api/search result → memory shape (fact_id→id, score→importance)
@@ -111,8 +121,21 @@
     requestSeq: 0,
   };
 
-  // Known categories from the daemon (pre-fetched at render time)
-  var KNOWN_CATS = ['semantic', 'episodic', 'opinion', 'temporal', 'consolidation'];
+  // The nine memory kinds (storage/memory_kinds.py MemoryKind) and their
+  // human-facing labels (storage/memory_kinds.py LABELS). Kept in this
+  // fixed order (same as the Python enum) rather than sorted by count, so
+  // the chip bar does not reshuffle every time counts change.
+  var KNOWN_KINDS = [
+    { kind: 'semantic',    label: 'Fact' },
+    { kind: 'episodic',    label: 'Event' },
+    { kind: 'status',      label: 'Current state' },
+    { kind: 'opinion',     label: 'Preference or view' },
+    { kind: 'rule',        label: 'Standing rule' },
+    { kind: 'decision',    label: 'Decision' },
+    { kind: 'procedure',   label: 'How-to' },
+    { kind: 'prospective', label: 'Plan or to-do' },
+    { kind: 'correction',  label: 'Correction' },
+  ];
 
   // ── Main entry ──────────────────────────────────────────────────────────────
 
@@ -220,10 +243,14 @@
                 '<option value="20">20</option>' +
                 '<option value="50">50</option>' +
               '</select>' +
-              '<button id="recall-lab-search" ' +
-                'style="padding:8px 18px;background:var(--accent);color:#fff;' +
-                  'border:none;border-radius:6px;font-size:13px;cursor:pointer;' +
-                  'white-space:nowrap">Run Trace</button>' +
+              // class="btn primary" (not an inline var(--accent) background —
+              // --accent is not a defined token anywhere in this codebase, so
+              // the background resolved to transparent and left white-on-white
+              // text). `.btn.primary` is the design system's real primary-action
+              // style already used elsewhere in the app; its own sizing matches
+              // the input/select next to it.
+              '<button id="recall-lab-search" class="btn primary" ' +
+                'style="white-space:nowrap">Run Trace</button>' +
             '</div>' +
           '</div>' +
           // #recall-lab-meta — written by recall-lab.js before results (timing, count, etc.)
@@ -260,7 +287,7 @@
       // Filter bar: category chips (populated after cat-count fetch) + sort seg
       '<div id="' + id + '-cats" ' +
         'style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;align-items:center">' +
-        '<div class="chip on" data-od-act="cat" data-cat="">All categories</div>' +
+        '<div class="chip on" data-od-act="cat" data-cat="">All kinds</div>' +
         '<div style="flex:1"></div>' +
         // Scope view: Mine (this profile) / Shared with me / Global / Everything
         '<div class="seg" title="Which memories to show">' +
@@ -373,20 +400,23 @@
     if (tab === 'views' && window.ODViews) window.ODViews.onShow(id);
   }
 
-  // ── Category counts (pre-fetch real totals) ──────────────────────────────────
+  // ── Kind counts (pre-fetch real totals) ──────────────────────────────────────
 
   function _loadCatCounts(id) {
-    Promise.all(KNOWN_CATS.map(function (cat) {
-      return fetch('/api/memories?limit=1&category=' + encodeURIComponent(cat))
-        .then(function (r) { return r.json(); })
-        .then(function (d) { return { cat: cat, total: d.total || 0 }; })
-        .catch(function () { return { cat: cat, total: 0 }; });
-    })).then(function (results) {
-      var counts = {};
-      results.forEach(function (r) { if (r.total > 0) counts[r.cat] = r.total; });
-      _st = Object.assign({}, _st, { catCounts: counts });
-      _rebuildCatBar(id);
-    });
+    // One request classifies every visible row by its DISPLAYED kind
+    // (server-side kind_fields, same precedence as `slm list`/recall) —
+    // not nine (or, before 4.1.21, five) separate ?category=X round trips,
+    // which could only ever count legacy fact_type buckets.
+    fetch('/api/memories/kind-counts')
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        _st = Object.assign({}, _st, { catCounts: d.counts || {} });
+        _rebuildCatBar(id);
+      })
+      .catch(function () {
+        _st = Object.assign({}, _st, { catCounts: {} });
+        _rebuildCatBar(id);
+      });
   }
 
   // Rebuild the full filter bar (chips + sort) from current _st
@@ -395,12 +425,14 @@
     if (!bar) return;
     var active = _st.category || '';
     var html = '<div class="chip' + (!active ? ' on' : '') +
-      '" data-od-act="cat" data-cat="">All categories</div>';
-    Object.keys(_st.catCounts).forEach(function (cat) {
-      html += '<div class="chip' + (_st.category === cat ? ' on' : '') +
-        '" data-od-act="cat" data-cat="' + _esc(cat) + '">' +
-        _esc(cat) + ' <span class="cnt">' +
-        _st.catCounts[cat].toLocaleString() + '</span></div>';
+      '" data-od-act="cat" data-cat="">All kinds</div>';
+    KNOWN_KINDS.forEach(function (k) {
+      var count = _st.catCounts[k.kind] || 0;
+      if (count <= 0) return;
+      html += '<div class="chip' + (_st.category === k.kind ? ' on' : '') +
+        '" data-od-act="cat" data-cat="' + _esc(k.kind) + '">' +
+        _esc(k.label) + ' <span class="cnt">' +
+        count.toLocaleString() + '</span></div>';
     });
     var sv = _st.scopeView || 'mine';
     html += '<div style="flex:1"></div>' +
@@ -427,7 +459,7 @@
   function _loadMem(id) {
     var url = '/api/memories?limit=' + _st.pageSize +
       '&offset=' + (_st.page * _st.pageSize);
-    if (_st.category) url += '&category=' + encodeURIComponent(_st.category);
+    if (_st.category) url += '&kind=' + encodeURIComponent(_st.category);
     if (_st.scopeView && _st.scopeView !== 'mine') {
       url += '&scope=' + encodeURIComponent(_st.scopeView);
     }
@@ -487,7 +519,12 @@
       var impCls   = imp >= 8 ? 'ok' : imp >= 5 ? 'warn' : 'neutral';
       var scorePct = Math.round((parseFloat(m.importance) || 0) * 100);
       var scoreCls = _scoreCls(m.importance);
-      var cat      = m.category || 'semantic';
+      // memory_kind_label (server: storage/memory_kinds.py kind_fields(),
+      // the same confirmed/suggested/legacy-fallback precedence `slm list`
+      // and recall use) over the raw legacy category — a v2 store with no
+      // kind support at all still falls back to m.category.
+      var kind     = m.memory_kind || m.category || 'semantic';
+      var catLabel = m.memory_kind_label || m.category || 'semantic';
       var preview  = (m.content || '').substring(0, 120);
       if ((m.content || '').length > 120) preview += '…';
 
@@ -498,7 +535,7 @@
           '</b>' +
           '<div style="margin-top:2px">' + _esc(preview) + '</div>' +
         '</td>' +
-        '<td><span class="badge ' + _esc(_catCls(cat)) + '">' + _esc(cat) + '</span></td>' +
+        '<td><span class="badge ' + _esc(_catCls(kind)) + '">' + _esc(catLabel) + '</span></td>' +
         '<td class="mono dim" style="font-size:12px">' + _esc(m.project_name || '—') + '</td>' +
         '<td><b class="num">' + imp + '</b>/10</td>' +
         '<td><span class="badge ' + _esc(scoreCls) + '">' + scorePct + '%</span></td>' +
@@ -509,7 +546,7 @@
     wrap.innerHTML =
       '<table class="tbl">' +
         '<thead><tr>' +
-          '<th>Memory</th><th>Category</th><th>Project</th>' +
+          '<th>Memory</th><th>Kind</th><th>Project</th>' +
           '<th>Importance</th><th>Score</th><th>Created</th>' +
         '</tr></thead>' +
         '<tbody>' + rows + '</tbody>' +
@@ -966,7 +1003,8 @@
     if (!drawer || !scrim) return;
 
     var imp      = _imp(mem.importance);
-    var cat      = mem.category || 'semantic';
+    var kind     = mem.memory_kind || mem.category || 'semantic';
+    var catLabel = mem.memory_kind_label || mem.category || 'semantic';
     var scorePct = Math.round((parseFloat(mem.importance) || 0) * 100);
 
     drawer.innerHTML =
@@ -982,7 +1020,7 @@
         _esc(mem.content || '') +
       '</div>' +
       '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">' +
-        '<span class="badge ' + _esc(_catCls(cat)) + '">' + _esc(cat) + '</span>' +
+        '<span class="badge ' + _esc(_catCls(kind)) + '">' + _esc(catLabel) + '</span>' +
         '<span class="badge neutral">' + _esc(mem.project_name || 'no project') + '</span>' +
         '<span class="badge ' + (mem.scope === 'global' ? 'success' : mem.scope === 'shared' ? 'warn' : 'neutral') +
           '">' + _esc(mem.scope || 'personal') + '</span>' +
