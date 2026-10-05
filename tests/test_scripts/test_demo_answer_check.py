@@ -65,6 +65,26 @@ def _account_home(tmp_path, monkeypatch) -> Path:
     return home
 
 
+#: The account lookup reads the POSIX account database. Windows has none, and
+#: there the demo stops before any lookup (see the test below this marker).
+_POSIX_ACCOUNTS = pytest.mark.skipif(
+    demo.pwd is None, reason="no POSIX account database (pwd) on this platform")
+
+
+def test_a_computer_without_an_account_database_exits_3_before_anything(
+    tmp_path, monkeypatch, capsys,
+) -> None:
+    monkeypatch.setattr(demo, "pwd", None)
+    touched = []
+    monkeypatch.setattr(demo, "find_laya", lambda home: touched.append("laya"))
+    monkeypatch.setattr(demo, "start_daemon", lambda *a: touched.append("daemon"))
+    target = tmp_path / "d"
+    assert demo.main(["--data-dir", str(target), "--once"]) == 3
+    assert touched == [] and not target.exists()
+    assert "Apple silicon" in capsys.readouterr().err
+
+
+@_POSIX_ACCOUNTS
 def test_owner_roots_include_the_account_home_not_just_home_env(
     tmp_path, monkeypatch,
 ) -> None:
@@ -77,6 +97,7 @@ def test_owner_roots_include_the_account_home_not_just_home_env(
     assert (tmp_path / "override").resolve() not in roots
 
 
+@_POSIX_ACCOUNTS
 def test_owner_roots_follow_the_account_config_redirect(tmp_path, monkeypatch) -> None:
     home = _account_home(tmp_path, monkeypatch)
     moved = tmp_path / "moved-store"

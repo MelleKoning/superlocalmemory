@@ -14,7 +14,6 @@ it inside its own deadline instead of going unjudged.
 from __future__ import annotations
 
 import json
-import sys
 import threading
 import time
 from pathlib import Path
@@ -25,8 +24,7 @@ from superlocalmemory.core import recall_gate
 from superlocalmemory.encoding.memory_kind_recipe import KINDS_V1, KindAnswer
 from superlocalmemory.retrieval import sufficiency as mod
 from superlocalmemory.retrieval.sufficiency import LayaSufficiencyJudge, SufficiencyVerdict
-
-pytestmark = pytest.mark.usefixtures("safely_owned_interpreter")
+from tests.helpers.owned_python import owned_python
 
 _FAKE_WORKER = r'''
 import json, os, sys, time
@@ -82,7 +80,7 @@ def worker(tmp_path, monkeypatch):
 
 def _judge(path: Path, **kw) -> LayaSufficiencyJudge:
     kw.setdefault("timeout_s", 2.0)
-    return LayaSufficiencyJudge(python=sys.executable, worker_path=path, **kw)
+    return LayaSufficiencyJudge(python=str(owned_python(path.parent)), worker_path=path, **kw)
 
 
 def _wait(predicate, timeout: float = 10.0) -> bool:

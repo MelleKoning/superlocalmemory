@@ -17,7 +17,6 @@ Against a fake worker that speaks the real protocol, so no model is loaded:
 
 from __future__ import annotations
 
-import sys
 import threading
 import time
 from pathlib import Path
@@ -28,6 +27,7 @@ from superlocalmemory.retrieval import answer_check_status as acs
 from superlocalmemory.retrieval import sufficiency as mod
 from superlocalmemory.retrieval.judge_recipe import JudgeDocument
 from superlocalmemory.retrieval.sufficiency import LayaSufficiencyJudge
+from tests.helpers.owned_python import owned_python
 
 _MEASURED = "20aed815fc6acde75733882e7ec0e3f28aeb9717"
 
@@ -89,7 +89,7 @@ def fake(tmp_path, monkeypatch):
     def build(**kw) -> LayaSufficiencyJudge:
         kw.setdefault("timeout_s", 1.5)
         kw.setdefault("start", True)
-        judge = LayaSufficiencyJudge(python=kw.pop("python", sys.executable),
+        judge = LayaSufficiencyJudge(python=kw.pop("python", str(owned_python(tmp_path))),
                                      worker_path=path, **kw)
         judges.append(judge)
         return judge
@@ -148,14 +148,24 @@ class TestTransientFailuresBackOffAcrossCycles:
     def test_each_failed_cycle_waits_longer_before_the_next(self, fake, monkeypatch) -> None:
         monkeypatch.setenv("FAKE_MODE", "fail_transient")
         monkeypatch.setattr(mod, "_COOLDOWN_BASE_S", 0.3)
-        judge = fake()
+        # The wait each failed cycle chose, measured from the moment it failed:
+        # reading what is left when this thread next wakes would also measure
+        # how late it woke, which on a loaded CI machine is over 0.1 s.
         waits: list[float] = []
-        for _ in range(3):
-            assert _wait(lambda: not judge.loading)
-            waits.append(judge._next_attempt_at - time.monotonic())
+        note_failure = LayaSufficiencyJudge._note_failure
+
+        def timed_note_failure(judge_self) -> None:
+            failed_at = time.monotonic()
+            note_failure(judge_self)
+            waits.append(judge_self._next_attempt_at - failed_at)
+
+        monkeypatch.setattr(LayaSufficiencyJudge, "_note_failure", timed_note_failure)
+        judge = fake()
+        for cycle in range(3):
+            assert _wait(lambda: not judge.loading and len(waits) > cycle)
             assert _wait(lambda: time.monotonic() >= judge._next_attempt_at, timeout=5)
             judge.assess("q", _docs("the answer"))  # a recall starts the next cycle
-            assert _wait(lambda: judge.loading or fake.events("load") >= 3 * (len(waits) + 1))
+            assert _wait(lambda: judge.loading or fake.events("load") >= 3 * (cycle + 2))
         assert waits[1] > waits[0] + 0.1 and waits[2] > waits[1] + 0.2, waits
 
     def test_no_recall_starts_a_cycle_during_the_cooldown(self, fake, monkeypatch) -> None:
@@ -302,7 +312,3 @@ class TestOnlyTheMeasuredWeightsMayAbstain:
         assert judge.threshold == 0.0
         assert judge.calibration_status == "not_measured_cannot_abstain"
 
-
-# A worker is started from the interpreter running the suite; on a CI runner
-# whose tool cache is group-writable the Laya safety rule would refuse it.
-pytestmark = pytest.mark.usefixtures("safely_owned_interpreter")

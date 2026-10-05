@@ -55,6 +55,13 @@ class WriteDeadlineExceededError(WriteCoordinatorError):
     """Raised before a queued write can start within its caller deadline."""
 
 
+class WriterStoppedError(WriteDeadlineExceededError):
+    """The writer stopped while this write waited for another writer: not saved.
+
+    Contention, not a fault: a journaled write is replayed at the next start.
+    """
+
+
 class CommandConflictError(WriteCoordinatorError):
     """A durable command id was reused for a different immutable request."""
 
@@ -225,6 +232,12 @@ _Priority = Literal["foreground", "control", "background"]
 _MAX_QUEUE_DEPTH = 4_096
 _FOREGROUND_BURST = 8
 _SQLITE_BUSY_CODES = {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+#: Longest single wait for another writer before the worker looks again at the
+#: clock, its caller and stop(). SQLite's busy wait is one call that cannot be
+#: interrupted and counts the sleeps it asks for, not the time that passes, so
+#: a wait handed the caller's whole budget could outlast both the caller and
+#: stop() on a machine whose sleeps overrun.
+_WAIT_SLICE_S = 0.05
 
 
 @dataclass(slots=True)
@@ -708,11 +721,10 @@ class WriteCoordinator:
                 self._stall_logged_once = False
             item.completion.set()
             return
-        remaining = max(0.0, item.deadline - time.monotonic())
-        if not self._process_write_lock.acquire(timeout=remaining):
-            item.error = WriteDeadlineExceededError(
-                "canonical write expired waiting for its process lock"
-            )
+        try:
+            self._acquire_process_lock(item)
+        except WriteDeadlineExceededError as exc:
+            item.error = exc
             with self._condition:
                 self._inflight_started_at = None
                 self._inflight_op_id = None
@@ -727,14 +739,9 @@ class WriteCoordinator:
                     "canonical write expired after waiting for its process lock"
                 )
                 return
-            remaining_ms = max(
-                1,
-                int(remaining * 1_000),
-            )
-            conn.execute(f"PRAGMA busy_timeout={remaining_ms}")
             synchronous = "FULL" if item.lane is Lane.FOREGROUND else "NORMAL"
             conn.execute(f"PRAGMA synchronous={synchronous}")
-            conn.execute("BEGIN IMMEDIATE")
+            self._begin_when_free(conn, item)
             with self._condition:
                 if item.cancelled or time.monotonic() >= item.deadline:
                     item.error = WriteDeadlineExceededError(
@@ -785,6 +792,50 @@ class WriteCoordinator:
                     self._writer_stalled = False
                     self._stall_logged_once = False
             item.completion.set()
+
+    def _check_still_wanted(self, item: _Execution, waiting_for: str, *, waited: bool) -> float:
+        """Seconds the item may still wait; raises once it must stop waiting.
+
+        stop() ends a wait, never a write that needs none: work queued before
+        stop() still drains when the database is free.
+        """
+        if waited and self._stopping:
+            raise WriterStoppedError(f"canonical writer stopped while waiting for {waiting_for}")
+        remaining = item.deadline - time.monotonic()
+        if item.cancelled or remaining <= 0:
+            raise WriteDeadlineExceededError(
+                f"canonical write expired waiting for {waiting_for}"
+            )
+        return remaining
+
+    def _acquire_process_lock(self, item: _Execution) -> None:
+        """Take this process's write lock, waiting in slices (see _WAIT_SLICE_S)."""
+        waited = False
+        while True:
+            remaining = self._check_still_wanted(item, "its process lock", waited=waited)
+            if self._process_write_lock.acquire(timeout=min(remaining, _WAIT_SLICE_S)):
+                return
+            waited = True
+
+    def _begin_when_free(self, conn: sqlite3.Connection, item: _Execution) -> None:
+        """BEGIN IMMEDIATE, waiting for another writer in slices (see _WAIT_SLICE_S)."""
+        waited = False
+        while True:
+            remaining = self._check_still_wanted(item, "another writer", waited=waited)
+            conn.execute(
+                f"PRAGMA busy_timeout={max(1, int(min(remaining, _WAIT_SLICE_S) * 1_000))}"
+            )
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError as exc:
+                if not self._is_busy(exc):
+                    raise
+                waited = True
+                continue
+            # Statements inside the transaction keep the whole remaining budget.
+            left_ms = max(1, int((item.deadline - time.monotonic()) * 1_000))
+            conn.execute(f"PRAGMA busy_timeout={left_ms}")
+            return
 
     def _execute_command(self, conn: sqlite3.Connection, command: WriteCommand) -> WriteResult:
         """Dispatch one command and atomically append its immutable receipt."""
@@ -941,6 +992,7 @@ __all__ = [
     "Lane",
     "OwnershipRequiredError",
     "QueueOverloadedError",
+    "WriterStoppedError",
     "WriteCapability",
     "WriteCommand",
     "WriteCoordinator",

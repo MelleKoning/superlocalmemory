@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
@@ -28,6 +27,7 @@ import pytest
 
 from superlocalmemory.core import laya_process
 from superlocalmemory.core import laya_runtime as lr
+from tests.helpers.owned_python import owned_environment
 
 
 @pytest.fixture(autouse=True)
@@ -58,10 +58,7 @@ def _stopped_setup() -> Path:
 
 
 def _external_install(tmp_path: Path) -> tuple[Path, Path]:
-    python = tmp_path / "ext" / "bin" / "python"
-    python.parent.mkdir(parents=True)
-    python.symlink_to(sys.executable)
-    _write(tmp_path / "ext" / "pyvenv.cfg", "home = /usr/bin\n")
+    python = owned_environment(tmp_path / "ext")
     model = tmp_path / "ext-model"
     model.mkdir()
     return python, model

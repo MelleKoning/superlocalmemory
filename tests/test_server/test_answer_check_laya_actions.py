@@ -14,7 +14,6 @@ record). Every worker is a local fake; nothing loads a model or downloads.
 from __future__ import annotations
 
 import json
-import sys
 import time
 from pathlib import Path
 
@@ -25,6 +24,7 @@ from fastapi.testclient import TestClient
 from superlocalmemory.core import laya_process, laya_runtime as lr
 from superlocalmemory.retrieval import sufficiency
 from superlocalmemory.server.routes import answer_check, answer_check_actions
+from tests.helpers.owned_python import owned_environment
 
 API = "/api/v3/answer-check"
 
@@ -50,13 +50,10 @@ def client(monkeypatch, tmp_path):
 
 
 def _external(tmp_path: Path) -> tuple[str, str]:
-    env = tmp_path / "laya-venv"
-    (env / "bin").mkdir(parents=True)
-    (env / "pyvenv.cfg").write_text("home = /usr/bin\n")
-    (env / "bin" / "python").symlink_to(sys.executable)
+    python = owned_environment(tmp_path / "laya-venv")
     model = tmp_path / "model"
     model.mkdir()
-    return str(env / "bin" / "python"), str(model)
+    return str(python), str(model)
 
 
 def _varuns_machine(tmp_path: Path) -> tuple[str, str]:

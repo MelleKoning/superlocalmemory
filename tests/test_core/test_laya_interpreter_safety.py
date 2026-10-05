@@ -21,8 +21,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -32,6 +32,7 @@ from ..isolation_guard import explicit_slm_root  # noqa: F401
 
 from superlocalmemory.core import laya_interpreter
 from superlocalmemory.core import laya_runtime as lr
+from tests.helpers.owned_python import owned_environment, owned_python
 
 
 @pytest.fixture(autouse=True)
@@ -72,10 +73,16 @@ def _venv(root: Path, *, target: Path | None = None, cfg: bool = True) -> Path:
     if cfg:
         (root / "pyvenv.cfg").write_text("home = /usr/bin\n")
     python = root / "bin" / "python"
-    if target is None:
-        python.symlink_to(sys.executable)
-    else:
-        python.symlink_to(target)
+    python.symlink_to(target if target is not None else owned_python(root.parent))
+    return python
+
+
+def _running_interpreter(monkeypatch, root: Path) -> Path:
+    """An owned launcher outside any environment, standing in for the Python
+    SLM runs on (sys.executable as the rule sees it)."""
+    python = owned_environment(root)
+    (root / "pyvenv.cfg").unlink()
+    monkeypatch.setattr(laya_interpreter, "sys", SimpleNamespace(executable=str(python)))
     return python
 
 
@@ -92,11 +99,21 @@ def _script(path: Path, mode: int = 0o755) -> Path:
 
 
 class TestTheRule:
-    def test_the_interpreter_slm_runs_on_is_accepted(self, safely_owned_interpreter):
-        assert lr.check_interpreter(sys.executable) == ""
+    def test_the_interpreter_slm_runs_on_is_accepted(self, tmp_path, not_temp, monkeypatch):
+        python = _running_interpreter(monkeypatch, tmp_path / "runtime")
+        assert lr.check_interpreter(str(python)) == ""
 
-    def test_a_python_inside_an_environment_is_accepted(
-            self, tmp_path, not_temp, safely_owned_interpreter):
+    def test_the_interpreter_slm_runs_on_is_refused_when_others_can_change_it(
+            self, tmp_path, not_temp, monkeypatch):
+        # GitHub's hosted runners: the tool cache's Python is world-writable.
+        python = _running_interpreter(monkeypatch, tmp_path / "runtime")
+        python.parent.chmod(0o777)
+        try:
+            assert "other" in lr.check_interpreter(str(python)).lower()
+        finally:
+            python.parent.chmod(0o755)
+
+    def test_a_python_inside_an_environment_is_accepted(self, tmp_path, not_temp):
         assert lr.check_interpreter(str(_venv(tmp_path / "venv"))) == ""
 
     def test_a_shell_is_refused(self):
@@ -220,15 +237,15 @@ def recording_worker(tmp_path, monkeypatch):
 
 class TestTheCanaryIsBounded:
     def test_the_load_request_carries_a_memory_cap(
-            self, recording_worker, tmp_path, safely_owned_interpreter):
-        ok, _ = lr.verify(sys.executable, "", str(tmp_path))
+            self, recording_worker, tmp_path):
+        ok, _ = lr.verify(str(owned_python(tmp_path)), "", str(tmp_path))
         assert ok is True
         load = json.loads(recording_worker.read_text().splitlines()[0])
         assert load["cmd"] == "load"
         assert isinstance(load.get("memory_limit_mb"), int) and load["memory_limit_mb"] > 0
 
     def test_no_second_model_while_the_answer_check_holds_the_slot(
-            self, recording_worker, tmp_path, monkeypatch, safely_owned_interpreter):
+            self, recording_worker, tmp_path, monkeypatch):
         from superlocalmemory.retrieval import sufficiency
 
         held = sufficiency._take_slot()
@@ -238,7 +255,7 @@ class TestTheCanaryIsBounded:
             real_popen = subprocess.Popen
             monkeypatch.setattr(lr.subprocess, "Popen",
                                 lambda *a, **k: spawned.append(a) or real_popen(*a, **k))
-            ok, reason = lr.verify(sys.executable, "", str(tmp_path))
+            ok, reason = lr.verify(str(owned_python(tmp_path)), "", str(tmp_path))
         finally:
             sufficiency._release_slot(held)
         assert ok is False
@@ -246,10 +263,10 @@ class TestTheCanaryIsBounded:
         assert spawned == []
 
     def test_the_slot_is_given_back_afterwards(
-            self, recording_worker, tmp_path, safely_owned_interpreter):
+            self, recording_worker, tmp_path):
         from superlocalmemory.retrieval import sufficiency
 
-        assert lr.verify(sys.executable, "", str(tmp_path))[0] is True
+        assert lr.verify(str(owned_python(tmp_path)), "", str(tmp_path))[0] is True
         again = sufficiency._take_slot()
         assert again is not None
         sufficiency._release_slot(again)

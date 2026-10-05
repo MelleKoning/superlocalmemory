@@ -33,6 +33,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -75,8 +76,25 @@ INSERT_SQL = (
 )
 
 _flush_lock = threading.Lock()
-_thread: threading.Thread | None = None
-_stop = threading.Event()
+#: Serialises start_writer / stop_writer.
+_lifecycle_lock = threading.Lock()
+
+
+@dataclass(frozen=True)
+class _Writer:
+    """One writer thread and its own stop signal, which is never cleared.
+
+    A stop that outlasts its wait (the writer is inside a save held up by a
+    locked database) leaves the thread finishing that save. With a shared,
+    re-armed stop signal the next start would clear it and that thread would
+    carry on beside the new one; its own signal keeps it stopped.
+    """
+
+    thread: threading.Thread
+    stop: threading.Event
+
+
+_writer: _Writer | None = None
 _conn: sqlite3.Connection | None = None
 _state: dict[str, Any] = {"learning_db": None, "memory_db": None,
                           "retention_days": DEFAULT_RETENTION_DAYS,
@@ -243,8 +261,8 @@ def flush_once() -> int:
         return len(batch)
 
 
-def _tick() -> None:
-    while flush_once() >= BATCH_MAX and not _stop.is_set():
+def _tick(stop: threading.Event) -> None:
+    while flush_once() >= BATCH_MAX and not stop.is_set():
         pass
     with _flush_lock:
         apply_remote_tombstones(_writer_conn())
@@ -254,22 +272,40 @@ def _tick() -> None:
               retention_days=_state["retention_days"], max_rows=_state["max_rows"])
 
 
-def _loop() -> None:
+def _loop(stop: threading.Event, predecessor: threading.Thread | None) -> None:
+    if predecessor is not None:
+        predecessor.join()  # a stopped writer finishing its save: never two at once
+    try:
+        if not stop.is_set():
+            _run(stop)
+    finally:
+        _close_conn()  # no other writer uses it until this thread has ended
+
+
+def _run(stop: threading.Event) -> None:
     try:
         reconcile_with_profiles(_state["learning_db"], _state["memory_db"])
     except Exception as exc:  # noqa: BLE001 — retried at the next start
         _log_once("Answer Check history: could not check for erasures made by an "
                   "older version (%s); will look again at the next start", exc)
     wake = history.wake_event()
-    while not _stop.is_set():
+    while not stop.is_set():
         wake.wait(FLUSH_INTERVAL_S)
         wake.clear()
-        if _stop.is_set():
+        if stop.is_set():
             break
         try:
-            _tick()
+            _tick(stop)
         except Exception as exc:  # noqa: BLE001 — the writer must outlive one bad tick
             _log_once("Answer Check history: writer tick failed (%s)", exc)
+
+
+def _close_conn() -> None:
+    global _conn
+    with _flush_lock:
+        if _conn is not None:
+            _conn.close()
+            _conn = None
 
 
 def clamp_settings(retention_days: Any, max_rows: Any) -> tuple[int, int]:
@@ -289,41 +325,56 @@ def start_writer(learning_db: Path, *, retention_days: Any = DEFAULT_RETENTION_D
     version ran is applied before anything else is saved. ``memory_db``
     defaults to the ``memory.db`` beside ``learning_db``.
     """
-    global _thread
+    global _writer
     days, rows = clamp_settings(retention_days, max_rows)
     learning = Path(learning_db)
-    _state.update(learning_db=learning, retention_days=days, max_rows=rows, last_sweep=0.0,
-                  memory_db=Path(memory_db) if memory_db else learning.with_name("memory.db"))
-    if _thread is not None and _thread.is_alive():
-        return
-    _stop.clear()
-    history.enable(True)
-    _thread = threading.Thread(target=_loop, name="slm-answer-check-history", daemon=True)
-    _thread.start()
+    with _lifecycle_lock:
+        _state.update(learning_db=learning, retention_days=days, max_rows=rows,
+                      last_sweep=0.0,
+                      memory_db=Path(memory_db) if memory_db else learning.with_name("memory.db"))
+        current = _writer
+        if current is not None and current.thread.is_alive() and not current.stop.is_set():
+            return
+        # A stopped writer still finishing a save is waited for by its
+        # successor, never restarted and never run beside it.
+        finishing = current.thread if current is not None and current.thread.is_alive() else None
+        stop = threading.Event()
+        thread = threading.Thread(target=_loop, args=(stop, finishing),
+                                  name="slm-answer-check-history", daemon=True)
+        history.enable(True)
+        _writer = _Writer(thread=thread, stop=stop)
+        thread.start()
 
 
 def stop_writer(*, timeout_s: float = 2.0) -> int:
-    """Stop recording, save what is left (≤ 1 s), close. Returns entries unsaved."""
-    global _thread, _conn
-    history.enable(False)
-    _stop.set()
-    history.wake_event().set()
-    if _thread is not None:
-        _thread.join(timeout_s)
-        _thread = None
-    deadline = time.monotonic() + 1.0
-    if _state["learning_db"] is not None:
-        while time.monotonic() < deadline and flush_once() > 0:
-            pass
-    with _flush_lock:
-        if _conn is not None:
-            _conn.close()
-            _conn = None
+    """Stop recording, save what is left (≤ 1 s), close. Returns entries unsaved.
+
+    A writer still inside a save after ``timeout_s`` keeps its stop signal:
+    it ends when that save does, and is never revived by a later start.
+    """
+    global _writer
+    with _lifecycle_lock:
+        history.enable(False)
+        writer = _writer
+        if writer is not None:
+            writer.stop.set()
+        history.wake_event().set()
+        if writer is not None:
+            writer.thread.join(timeout_s)
+            if not writer.thread.is_alive():
+                _writer = None
+        deadline = time.monotonic() + 1.0
+        if _state["learning_db"] is not None:
+            while time.monotonic() < deadline and flush_once() > 0:
+                pass
+        _close_conn()
     return history.counters()["unsaved"]
 
 
 def writer_info() -> dict[str, Any]:
-    return {"running": _thread is not None and _thread.is_alive(),
+    writer = _writer
+    running = writer is not None and writer.thread.is_alive() and not writer.stop.is_set()
+    return {"running": running,
             "last_saved_ms": _state["last_saved_ms"],
             "retention_days": _state["retention_days"], "max_rows": _state["max_rows"]}
 

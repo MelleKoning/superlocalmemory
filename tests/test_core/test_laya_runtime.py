@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sys
 import tempfile
 import threading
 import time
@@ -36,6 +35,7 @@ import pytest
 from ..isolation_guard import explicit_slm_root  # noqa: F401
 
 from superlocalmemory.core import laya_runtime as lr
+from tests.helpers.owned_python import owned_link, owned_python
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -108,43 +108,42 @@ def fake_worker(tmp_path, monkeypatch):
 class TestVerify:
     def test_passes_when_the_canary_separates_cleanly(self, fake_worker, monkeypatch):
         monkeypatch.setenv("FAKE_LAYA_MODE", "pass")
-        ok, reason = lr.verify(sys.executable, "", str(fake_worker.parent))
+        ok, reason = lr.verify(str(owned_python(fake_worker.parent)), "", str(fake_worker.parent))
         assert ok is True
         assert isinstance(reason, str) and reason
 
     def test_fails_when_the_canary_does_not_separate(self, fake_worker, monkeypatch):
         monkeypatch.setenv("FAKE_LAYA_MODE", "fail_values")
-        ok, _ = lr.verify(sys.executable, "", str(fake_worker.parent))
+        ok, _ = lr.verify(str(owned_python(fake_worker.parent)), "", str(fake_worker.parent))
         assert ok is False
 
     def test_fails_when_load_fails(self, fake_worker, monkeypatch):
         monkeypatch.setenv("FAKE_LAYA_MODE", "load_fail")
-        ok, reason = lr.verify(sys.executable, "", str(fake_worker.parent))
+        ok, reason = lr.verify(str(owned_python(fake_worker.parent)), "", str(fake_worker.parent))
         assert ok is False
         assert "load" in reason.lower()
 
     def test_fails_when_judge_errors(self, fake_worker, monkeypatch):
         monkeypatch.setenv("FAKE_LAYA_MODE", "judge_error")
-        ok, _ = lr.verify(sys.executable, "", str(fake_worker.parent))
+        ok, _ = lr.verify(str(owned_python(fake_worker.parent)), "", str(fake_worker.parent))
         assert ok is False
 
     def test_fails_on_a_malformed_response(self, fake_worker, monkeypatch):
         monkeypatch.setenv("FAKE_LAYA_MODE", "malformed")
-        ok, _ = lr.verify(sys.executable, "", str(fake_worker.parent))
+        ok, _ = lr.verify(str(owned_python(fake_worker.parent)), "", str(fake_worker.parent))
         assert ok is False
 
     def test_never_contains_a_traceback_or_secret(self, fake_worker, monkeypatch):
         monkeypatch.setenv("FAKE_LAYA_MODE", "judge_error")
-        ok, reason = lr.verify(sys.executable, "", str(fake_worker.parent))
+        ok, reason = lr.verify(str(owned_python(fake_worker.parent)), "", str(fake_worker.parent))
         assert ok is False
         assert "Traceback" not in reason
         assert "boom" not in reason  # the worker's raw error never leaks out
 
     def test_times_out_and_kills_a_hung_worker(self, fake_worker, monkeypatch):
-        import sys as _sys
         monkeypatch.setenv("FAKE_LAYA_MODE", "hang")
         start = time.monotonic()
-        ok, reason = lr.verify(_sys.executable, "", str(fake_worker.parent), timeout_s=0.5)
+        ok, reason = lr.verify(str(owned_python(fake_worker.parent)), "", str(fake_worker.parent), timeout_s=0.5)
         elapsed = time.monotonic() - start
         assert ok is False
         assert "time" in reason.lower()
@@ -172,8 +171,7 @@ class TestDetectOrder:
     def test_ready_from_managed_marker(self, tmp_path):
         run_dir = lr.runtime_dir()
         python = run_dir / "venv" / "bin" / "python"
-        python.parent.mkdir(parents=True)
-        python.symlink_to(sys.executable)
+        owned_link(python, tmp_path)
         model = run_dir / "hf-cache" / "model"
         model.mkdir(parents=True)
         _write_json(run_dir / ".slm-managed", {
@@ -185,11 +183,10 @@ class TestDetectOrder:
         assert status.managed is True
         assert status.model_revision == "rev1"
 
-    def test_failed_when_managed_marker_is_unverified(self):
+    def test_failed_when_managed_marker_is_unverified(self, tmp_path):
         run_dir = lr.runtime_dir()
         python = run_dir / "venv" / "bin" / "python"
-        python.parent.mkdir(parents=True)
-        python.symlink_to(sys.executable)
+        owned_link(python, tmp_path)
         model = run_dir / "hf-cache" / "model"
         model.mkdir(parents=True)
         _write_json(run_dir / ".slm-managed", {
@@ -213,8 +210,7 @@ class TestDetectOrder:
 
     def test_ready_from_adopted_record(self, tmp_path):
         python = tmp_path / "ext-venv" / "bin" / "python"
-        python.parent.mkdir(parents=True)
-        python.symlink_to(sys.executable)
+        owned_link(python, tmp_path)
         model = tmp_path / "ext-model"
         model.mkdir()
         run_dir = lr.runtime_dir()
@@ -228,8 +224,7 @@ class TestDetectOrder:
     def test_adopted_takes_precedence_over_managed(self, tmp_path):
         run_dir = lr.runtime_dir()
         managed_python = run_dir / "venv" / "bin" / "python"
-        managed_python.parent.mkdir(parents=True)
-        managed_python.symlink_to(sys.executable)
+        owned_link(managed_python, tmp_path)
         managed_model = run_dir / "hf-cache" / "model"
         managed_model.mkdir(parents=True)
         _write_json(run_dir / ".slm-managed", {
@@ -237,8 +232,7 @@ class TestDetectOrder:
         })
 
         adopted_python = tmp_path / "ext-venv" / "bin" / "python"
-        adopted_python.parent.mkdir(parents=True)
-        adopted_python.symlink_to(sys.executable)
+        owned_link(adopted_python, tmp_path)
         adopted_model = tmp_path / "ext-model"
         adopted_model.mkdir()
         _write_json(run_dir / "adopted.json", {
@@ -251,8 +245,7 @@ class TestDetectOrder:
 
     def test_explicit_cfg_matching_adopted_wins(self, tmp_path):
         python = tmp_path / "ext-venv" / "bin" / "python"
-        python.parent.mkdir(parents=True)
-        python.symlink_to(sys.executable)
+        owned_link(python, tmp_path)
         model = tmp_path / "ext-model"
         model.mkdir()
         run_dir = lr.runtime_dir()
@@ -266,11 +259,10 @@ class TestDetectOrder:
         assert status.state == lr.STATE_READY
         assert status.hf_home == "/override/hf"
 
-    def test_explicit_cfg_matching_managed_wins(self):
+    def test_explicit_cfg_matching_managed_wins(self, tmp_path):
         run_dir = lr.runtime_dir()
         python = run_dir / "venv" / "bin" / "python"
-        python.parent.mkdir(parents=True)
-        python.symlink_to(sys.executable)
+        owned_link(python, tmp_path)
         model = run_dir / "hf-cache" / "model"
         model.mkdir(parents=True)
         _write_json(run_dir / ".slm-managed", {
@@ -298,8 +290,7 @@ class TestDetectOrder:
         """sufficiency_model defaults to the bare repo id ('aac6fef/laya-mlx'),
         not a filesystem path — that must never be read as "explicit"."""
         python = tmp_path / "ext-venv" / "bin" / "python"
-        python.parent.mkdir(parents=True)
-        python.symlink_to(sys.executable)
+        owned_link(python, tmp_path)
         model = tmp_path / "ext-model"
         model.mkdir()
         run_dir = lr.runtime_dir()
@@ -402,11 +393,10 @@ class TestInstall:
         assert "Errno" not in result.error
         assert "ConnectionError" not in result.error
 
-    def test_resumable_install_skips_steps_already_done(self, monkeypatch):
+    def test_resumable_install_skips_steps_already_done(self, monkeypatch, tmp_path):
         run_dir = lr.runtime_dir()
         venv_python = run_dir / "venv" / "bin" / "python"
-        venv_python.parent.mkdir(parents=True)
-        venv_python.symlink_to(sys.executable)
+        owned_link(venv_python, tmp_path)
         _write_json(run_dir / ".install-steps.json", {"venv": True, "pip": True})
 
         venv_calls, pip_calls, weight_calls = [], [], []
@@ -541,15 +531,10 @@ class TestLayaInstallJob:
 
 class TestAdopt:
     def _venv(self, tmp_path, name="venv"):
-        import sys
-
         # A real interpreter is required: verify() actually spawns it to run
-        # the fake worker script. A symlink to the current interpreter keeps
-        # the "venv/bin/python" shape adopt() expects without a real venv.
-        python = tmp_path / name / "bin" / "python"
-        python.parent.mkdir(parents=True)
-        python.symlink_to(sys.executable)
-        return python
+        # the fake worker script. A link to an owned launcher keeps the
+        # "venv/bin/python" shape adopt() expects without a real venv.
+        return owned_link(tmp_path / name / "bin" / "python", tmp_path)
 
     def test_refuses_a_missing_python(self, tmp_path):
         result = lr.adopt(str(tmp_path / "nope" / "python"), "")
@@ -749,7 +734,3 @@ class TestSmallHelpers:
         assert lr._classify_subprocess_error("ConnectionError: timed out") == "network"
         assert lr._classify_subprocess_error("SyntaxError: invalid syntax") == "other"
 
-
-# Workers start from the interpreter running the suite; on a CI runner whose
-# tool cache is group-writable the Laya safety rule would refuse it.
-pytestmark = pytest.mark.usefixtures("safely_owned_interpreter")

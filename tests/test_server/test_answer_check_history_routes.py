@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -168,21 +169,51 @@ def test_cursor_validation_400(app) -> None:
         routes._reset_for_testing()
 
 
-def test_pagination_walks_saved_and_unsaved(app) -> None:
-    _record(7)
-    store.flush_once()
-    _record(3)                                            # unsaved, newest
+def _walk(app, limit: int = 4) -> list[str]:
     client = _client(app)
     seen, cursor = [], None
     while True:
-        params = {"limit": 4, **({"cursor": cursor} if cursor else {})}
+        params = {"limit": limit, **({"cursor": cursor} if cursor else {})}
         body = client.get("/api/v3/answer-check/history", params=params).json()
         routes._reset_for_testing()
         seen += [item["id"] for item in body["items"]]
         cursor = body["next_cursor"]
         if not cursor:
-            break
+            return seen
+
+
+def _frozen_clock(monkeypatch) -> None:
+    """Every check from now on is recorded in this same millisecond."""
+    now_s = int(time.time() * 1000) / 1000
+    monkeypatch.setattr(h, "time", SimpleNamespace(time=lambda: now_s))
+
+
+def test_pagination_walks_saved_and_unsaved(app) -> None:
+    _record(7)
+    store.flush_once()
+    _record(3)                                            # unsaved, newest
+    seen = _walk(app)
     assert len(seen) == 10 and len(set(seen)) == 10
+
+
+def test_pagination_lists_unsaved_checks_that_share_a_millisecond(app, monkeypatch) -> None:
+    # Checks recorded close together (or under a coarse clock) share a
+    # timestamp; the order within it is by id, so unsaved ones fall on any page.
+    # Ids chosen so the unsaved checks sort last: newest first is ms, then id.
+    _frozen_clock(monkeypatch)
+    for i in range(7):
+        _record(query_id=f"f{i:031x}")
+    store.flush_once()
+    for i in range(3):
+        _record(query_id=f"0{i:031x}")
+    seen = _walk(app)
+    assert len(seen) == 10 and len(set(seen)) == 10
+
+
+def test_pagination_lists_more_unsaved_checks_than_one_page(app) -> None:
+    _record(6)                                            # none saved yet
+    seen = _walk(app, limit=4)
+    assert len(seen) == 6 and len(set(seen)) == 6
 
 
 def test_rate_limit_429_with_retry_after(app) -> None:

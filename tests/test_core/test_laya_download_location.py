@@ -20,7 +20,6 @@ from __future__ import annotations
 import io
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -33,6 +32,7 @@ hub = pytest.importorskip("huggingface_hub")
 from huggingface_hub.file_download import repo_folder_name  # noqa: E402
 
 from superlocalmemory.core import laya_runtime as lr  # noqa: E402
+from tests.helpers.owned_python import owned_python  # noqa: E402
 
 #: Loads only a folder that exists, as the real worker's _resolve_model does.
 _WORKER = r'''
@@ -81,15 +81,13 @@ class _FinishedDownload:
 
 
 @pytest.fixture()
-def offline_install(monkeypatch, tmp_path, safely_owned_interpreter):
+def offline_install(monkeypatch, tmp_path):
     """Every step but the network: the venv is a real interpreter, pip is a
     no-op, and the download puts files where the real library would.
 
-    The venv's python is a symlink to ``sys.executable`` (below), so
-    ``lr.install()``'s final ownership check lands on the real running
-    interpreter. ``safely_owned_interpreter`` keeps that check honest without
-    making it a precondition these tests have to satisfy by luck of where CI
-    happens to install Python.
+    The venv's python links to a launcher this test owns (below), so
+    ``lr.install()``'s final ownership check runs unchanged and passes on
+    every machine, whoever can change the Python running the suite.
     """
     worker = tmp_path / "worker.py"
     worker.write_text(_WORKER)
@@ -101,7 +99,7 @@ def offline_install(monkeypatch, tmp_path, safely_owned_interpreter):
         (venv_dir / "pyvenv.cfg").write_text("home = /usr/bin\n")
         python = venv_dir / "bin" / "python"
         if not python.exists():
-            python.symlink_to(sys.executable)
+            python.symlink_to(owned_python(tmp_path))
         return True, "", ""
 
     monkeypatch.setattr(lr, "_create_venv", _venv)

@@ -51,6 +51,15 @@ jobs:
       matrix:
         os: [ubuntu-22.04, macos-14, windows-latest]
         python-version: ["3.12", "3.13", "3.14"]
+        # Windows runs the suite about 1.5x slower and reached only 81% of it in
+        # 70 minutes, so it runs in 3 fixed parts (tests/_shard_plugin.py): a
+        # part that times out cannot hide the failures of the others.
+        shard: [1, 2, 3]
+        exclude:
+          - {os: ubuntu-22.04, shard: 2}
+          - {os: ubuntu-22.04, shard: 3}
+          - {os: macos-14, shard: 2}
+          - {os: macos-14, shard: 3}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -62,8 +71,10 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install libomp
 
+      # No fallback: a failed dev install must fail here, not run the suite
+      # without its test dependencies.
       - name: Install package
-        run: pip install -e ".[dev]" 2>/dev/null || pip install -e .
+        run: pip install -e ".[dev]"
         shell: bash
 
       - name: Install portalocker (Windows file locking)
@@ -71,12 +82,19 @@ jobs:
         run: pip install portalocker
 
       - name: Install test dependencies
-        run: pip install pytest pytest-asyncio sqlite-vec
+        run: pip install pytest pytest-asyncio sqlite-vec pytest-reportlog==1.0.0
 
+      # The report log is written one test at a time, so a run that is
+      # cancelled or times out still names every test that ran and failed.
       - name: Run tests
         shell: bash
+        timeout-minutes: 70
+        env:
+          SHARD: ${{ matrix.os == 'windows-latest' && format('{0}/3', matrix.shard) || '1/1' }}
         run: |
           python -m pytest tests/ -q --tb=short -o faulthandler_timeout=300 \
+            -p tests._shard_plugin --shard "$SHARD" \
+            -rfE --durations=30 --report-log=test-report.jsonl \
             --ignore=tests/test_integration/test_mode_b_ollama.py \
             --ignore=tests/test_integration/test_e2e.py \
             --ignore=tests/test_integration/test_e2e_v32.py \
@@ -84,6 +102,35 @@ jobs:
             --ignore=tests/test_benchmarks/ \
             --ignore=tests/graph/test_cozo_backend.py \
             --ignore=tests/vector/test_lancedb_backend.py
+
+      - name: List every failed test
+        if: failure() || cancelled()
+        shell: bash
+        run: |
+          python - <<'EOF'
+          import json, pathlib
+          log = pathlib.Path("test-report.jsonl")
+          if not log.exists():
+              raise SystemExit("No test report: the run stopped before any test ran.")
+          bad = {}
+          for line in log.read_text(encoding="utf-8").splitlines():
+              rec = json.loads(line)
+              if rec.get("$report_type") in ("TestReport", "CollectReport") \
+                      and rec.get("outcome") == "failed":
+                  bad.setdefault(rec["nodeid"] or "(collection)", rec.get("when", "collect"))
+          print(f"{len(bad)} failed or errored:")
+          for nodeid, when in bad.items():
+              print(f"  {when:8} {nodeid}")
+          EOF
+
+      - name: Upload the test report
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-report-${{ matrix.os }}-py${{ matrix.python-version }}-part${{ matrix.shard }}
+          path: test-report.jsonl
+          retention-days: 14
+          if-no-files-found: warn
 
   windows-focused:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.focused_windows }}

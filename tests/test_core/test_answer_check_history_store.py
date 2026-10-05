@@ -179,17 +179,26 @@ def test_writer_flushes_on_interval_and_on_wake(learning_db) -> None:
     assert time.monotonic() - started < 1.5, "woken early, not on the 2 s timer"
 
 
-def test_writer_survives_locked_db(learning_db) -> None:
+def test_writer_survives_locked_db(learning_db, monkeypatch) -> None:
+    # What is tested is surviving a lock, not how long SQLite waits for one. At
+    # the real 5 s busy wait the first failure lands at ~7 s, and SQLite counts
+    # the sleeps it asks for, not the time that passes, so on a VM whose sleeps
+    # overrun that lands past this test's 10 s deadline (most likely why it
+    # failed on every GitHub macOS runner).
+    monkeypatch.setattr(store, "BUSY_TIMEOUT_MS", 200)
+    monkeypatch.setattr(store, "CONNECT_TIMEOUT_S", 0.2)
     store.start_writer(learning_db)
     h.record_recall_verdict(make_response(), profile_id="default")
     blocker = sqlite3.connect(learning_db, isolation_level=None)
     blocker.execute("BEGIN IMMEDIATE")
-    deadline = time.monotonic() + 10   # first try at <= 2 s, gives up after the 5 s busy wait
-    while h.counters()["save_failures"] < 1 and time.monotonic() < deadline:
-        time.sleep(0.1)
-    assert h.counters()["save_failures"] >= 1
-    blocker.execute("ROLLBACK")
-    blocker.close()
+    try:
+        deadline = time.monotonic() + 10   # first try at <= 2 s, gives up after 0.2 s
+        while h.counters()["save_failures"] < 1 and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert h.counters()["save_failures"] >= 1
+    finally:
+        blocker.execute("ROLLBACK")
+        blocker.close()
     deadline = time.monotonic() + 6
     while _count(learning_db) < 1 and time.monotonic() < deadline:
         time.sleep(0.1)
@@ -204,6 +213,56 @@ def test_stop_writer_final_flush(learning_db) -> None:
     assert _count(learning_db) == 50
     h.record_recall_verdict(make_response(), profile_id="default")
     assert h.counters()["recorded"] == 50, "stopped writer means recording is off"
+
+
+def _writers() -> list[threading.Thread]:
+    return [t for t in threading.enumerate()
+            if t.name == "slm-answer-check-history" and t.is_alive()]
+
+
+def test_a_writer_stopped_mid_save_stays_stopped(learning_db, monkeypatch) -> None:
+    """A stop that outlasts its wait must not leave that writer to be revived."""
+    in_tick, release = threading.Event(), threading.Event()
+    busy: list[threading.Thread] = []
+    peak = [0]
+    real_tick = store._tick
+
+    def tick(*args, **kwargs):
+        busy.append(threading.current_thread())
+        peak[0] = max(peak[0], len(busy))
+        try:
+            if not in_tick.is_set():   # the first save sticks, like a long lock
+                in_tick.set()
+                release.wait(5)
+            return real_tick(*args, **kwargs)
+        finally:
+            busy.remove(threading.current_thread())
+
+    monkeypatch.setattr(store, "_tick", tick)
+    store.start_writer(learning_db)
+    h.wake_event().set()
+    assert in_tick.wait(3)
+    stopped = _writers()
+    assert len(stopped) == 1
+    store.stop_writer(timeout_s=0.1)          # gives up waiting: the save is stuck
+    store.start_writer(learning_db)
+    try:
+        h.wake_event().set()                  # the new writer would save now
+        time.sleep(0.3)
+        release.set()
+        stopped[0].join(5)
+        assert not stopped[0].is_alive(), "the stopped writer was revived"
+        h.record_recall_verdict(make_response(), profile_id="default")
+        h.wake_event().set()
+        deadline = time.monotonic() + 5
+        while _count(learning_db) < 1 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert _count(learning_db) == 1, "the new writer saves"
+        assert len(_writers()) == 1 and peak[0] == 1, "two writers ran at once"
+    finally:
+        release.set()
+        store.stop_writer()
+    assert _writers() == []
 
 
 def test_history_survives_restart(learning_db) -> None:
