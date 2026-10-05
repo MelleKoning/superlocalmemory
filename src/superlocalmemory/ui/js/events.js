@@ -32,7 +32,8 @@ function initEventStream() {
             }
         };
 
-        ['memory.created', 'memory.updated', 'memory.deleted', 'memory.recalled',
+        ['memory.stored', 'memory.captured', 'memory.updated', 'memory.deleted',
+         'memory.recalled',
          'agent.connected', 'agent.disconnected', 'graph.updated', 'pattern.learned'
         ].forEach(function(type) {
             _eventSource.addEventListener(type, function(e) {
@@ -63,13 +64,15 @@ function appendEventToStream(event) {
     if (filterValue && event.event_type !== filterValue) return;
 
     var typeColors = {
-        'memory.created': 'text-success', 'memory.updated': 'text-info',
+        'memory.stored': 'text-success',
+        'memory.captured': 'text-success', 'memory.updated': 'text-info',
         'memory.deleted': 'text-danger', 'memory.recalled': 'text-primary',
         'agent.connected': 'text-warning', 'agent.disconnected': 'text-secondary',
         'graph.updated': 'text-info', 'pattern.learned': 'text-success'
     };
     var typeIcons = {
-        'memory.created': 'bi-plus-circle', 'memory.updated': 'bi-pencil',
+        'memory.stored': 'bi-save',
+        'memory.captured': 'bi-plus-circle', 'memory.updated': 'bi-pencil',
         'memory.deleted': 'bi-trash', 'memory.recalled': 'bi-search',
         'agent.connected': 'bi-plug', 'agent.disconnected': 'bi-plug',
         'graph.updated': 'bi-diagram-3', 'pattern.learned': 'bi-lightbulb'

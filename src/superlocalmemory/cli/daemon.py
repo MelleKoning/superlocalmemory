@@ -456,11 +456,43 @@ class DaemonNotFound(RuntimeError):
     ``unknown_profile`` indistinguishable from a dead daemon (#audit).
     """
 
-    def __init__(self, status: int, code: str, message: str, path: str = "") -> None:
+    def __init__(self, status: int, code: str, message: str, path: str = "", *,
+                 error_code: str = "", error_message: str = "") -> None:
         self.status = int(status)
         self.code = code or "not_found"
         self.message = message or "daemon returned 404"
+        # A per-request-routing route answers an unknown profile with
+        # ``{"error": {"code": "unknown_profile", ...}}`` rather than a
+        # ``detail``. Kept apart from ``code`` so no existing caller changes;
+        # a routed caller reads it (mcp/tools_core._routed_daemon_call).
+        self.error_code = error_code
+        self.error_message = error_message
         super().__init__(self.message + (f" for {path}" if path else ""))
+
+
+def not_found_from(payload: object, path: str = "") -> DaemonNotFound:
+    """The :class:`DaemonNotFound` for a 404 response body.
+
+    L3-11: every 404 in this codebase is a plain FastAPI
+    HTTPException(404, detail="...") -- {"detail": "..."} or {"detail": {...}}
+    -- so ``code`` and ``message`` come from ``detail``. The routed-profile
+    routes' ``{"error": {...}}`` body fills ``error_code``/``error_message``.
+    """
+    code, message = "not_found", "daemon returned 404"
+    error_code, error_message = "", ""
+    if isinstance(payload, dict):
+        detail = payload.get("detail")
+        if isinstance(detail, dict):
+            code = str(detail.get("code", code))
+            message = str(detail.get("message", message))
+        elif isinstance(detail, str) and detail:
+            message = detail
+        error = payload.get("error")
+        if isinstance(error, dict) and isinstance(error.get("code"), str):
+            error_code = error["code"]
+            error_message = str(error.get("message", ""))
+    return DaemonNotFound(404, code, message, path,
+                          error_code=error_code, error_message=error_message)
 
 
 class DaemonUnprocessable(RuntimeError):
@@ -614,23 +646,13 @@ def daemon_request(
                 pass
             raise DaemonConflict(detail) from exc
         if exc.code == 404 and preserve_not_found:
-            # L3-11: every 404 in this codebase is a plain FastAPI
-            # HTTPException(404, detail="...") -- {"detail": "..."}, never
-            # {"error": {...}}. Reading "error" here always found nothing, so
-            # the real reason (e.g. "Memory not found") was discarded in
-            # favour of the generic fallback below on every single 404.
-            code, message = "not_found", "daemon returned 404"
+            # The reason is read from the body (not_found_from): discarding
+            # it made "Memory not found" or "no such profile" look alike.
             try:
                 payload = json.loads(exc.read().decode())
-                detail = payload.get("detail") if isinstance(payload, dict) else None
-                if isinstance(detail, dict):
-                    code = str(detail.get("code", code))
-                    message = str(detail.get("message", message))
-                elif isinstance(detail, str) and detail:
-                    message = detail
             except Exception:
-                pass
-            raise DaemonNotFound(exc.code, code, message, path) from exc
+                payload = None
+            raise not_found_from(payload, path) from exc
         if exc.code == 422 and preserve_unprocessable:
             raise _unprocessable(exc) from exc
         return None
