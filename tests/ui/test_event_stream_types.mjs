@@ -4,13 +4,14 @@
  *
  * The filter offered "Memory created" (memory.created), an event nothing
  * emits: the event bus refuses that type. A capture is emitted as
- * memory.captured, which the page did not even subscribe to, so captures never
- * appeared in the stream under any filter.
+ * memory.captured and a save as memory.stored, neither of which the page
+ * subscribed to, so neither ever appeared in the stream. "Memory recalled" and
+ * "Agent connected" were offered too, and nothing emits either.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync, statSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import vm from 'vm';
@@ -24,6 +25,24 @@ function validEventTypes() {
   const block = source.match(/VALID_EVENT_TYPES = frozenset\(\[([\s\S]*?)\]\)/);
   assert.ok(block, 'VALID_EVENT_TYPES not found in event_bus.py');
   return new Set([...block[1].matchAll(/"([a-z_.]+)"/g)].map((m) => m[1]));
+}
+
+/** Every event type a product module (not the bus itself) passes to an emit. */
+function emittedEventTypes(valid) {
+  const found = new Set();
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) { walk(path); continue; }
+      if (!name.endsWith('.py') || path.endsWith(join('infra', 'event_bus.py'))) continue;
+      const source = readFileSync(path, 'utf8');
+      for (const type of valid) {
+        if (source.includes(`"${type}"`)) found.add(type);
+      }
+    }
+  };
+  walk(join(ROOT, 'src/superlocalmemory'));
+  return found;
 }
 
 function filterOptions() {
@@ -55,8 +74,10 @@ describe('live event stream filter', function () {
   const subscribed = subscribedTypes();
 
   it('offers only event types the product emits', function () {
+    const emitted = emittedEventTypes(valid);
     for (const { value } of options) {
-      assert.ok(valid.has(value), `filter option ${value} is not an event the product emits`);
+      assert.ok(valid.has(value), `filter option ${value} is not an event the bus accepts`);
+      assert.ok(emitted.has(value), `nothing in the product emits ${value}`);
     }
   });
 
@@ -66,10 +87,12 @@ describe('live event stream filter', function () {
     }
   });
 
-  it('offers captured memories as "Memory captured"', function () {
-    const captured = options.find((o) => o.value === 'memory.captured');
-    assert.ok(captured, 'no filter option for memory.captured');
-    assert.equal(captured.label, 'Memory captured');
-    assert.ok(!options.some((o) => o.value === 'memory.created'));
+  it('offers saved, captured, corrected and deleted memories', function () {
+    assert.deepEqual(options, [
+      { value: 'memory.stored', label: 'Memory saved' },
+      { value: 'memory.captured', label: 'Memory captured' },
+      { value: 'memory.updated', label: 'Memory corrected' },
+      { value: 'memory.deleted', label: 'Memory deleted' },
+    ]);
   });
 });

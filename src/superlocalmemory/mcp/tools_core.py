@@ -1308,10 +1308,8 @@ def register_core_tools(server, get_engine: Callable) -> None:
                 if named and isinstance(result, dict) and result.get("code"):
                     return result
                 if isinstance(result, dict) and result.get("success"):
-                    _emit_event("memory.deleted", {
-                        "fact_id": fact_id,
-                        "agent_id": agent_id,
-                    }, source_agent=agent_id)
+                    # The daemon's DELETE route announces it (once, for every
+                    # surface); announcing here too showed every MCP delete twice.
                     return {
                         "success": True, "deleted": fact_id,
                         "agent_id": agent_id,
