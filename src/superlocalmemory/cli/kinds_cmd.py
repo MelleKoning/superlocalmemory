@@ -34,6 +34,7 @@ from superlocalmemory.cli.daemon import (
     DaemonUnprocessable,
     daemon_request,
 )
+from superlocalmemory.cli.daemon_paths import InvalidDaemonId, describe, validate_daemon_id
 from superlocalmemory.core.kind_query import InvalidKind, resolve_kind
 
 _BASE = "/api/memory-kinds"
@@ -347,7 +348,20 @@ def _backfill(args: Namespace) -> None:
                       f"{run['total_estimate']} memories to look at. Undo it any time "
                       f"with: slm kinds backfill revert {run['run_id']}")
         return
-    run = _request(out, "POST", f"/backfill/{args.run_id}/{action}")
+    run_id = args.run_id
+    # Issue #148, same bug class: run_id is interpolated straight into a
+    # daemon URL path below. A real run_id is always
+    # uuid.uuid4().hex[:16] (storage/memory_kind_store.py::create_run), so
+    # anything outside [A-Za-z0-9_-]+ is rejected here, before it reaches
+    # an f-string path, instead of letting http.client discover it.
+    try:
+        validate_daemon_id(run_id, label="run ID")
+    except InvalidDaemonId:
+        out.fail(
+            f"invalid run ID {describe(run_id)} "
+            "— run 'slm kinds backfill status' to see the active run"
+        )
+    run = _request(out, "POST", f"/backfill/{run_id}/{action}")
     out.emit(run, _run_line(run))
 
 

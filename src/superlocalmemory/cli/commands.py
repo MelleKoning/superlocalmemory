@@ -4153,6 +4153,16 @@ def cmd_dashboard(args: Namespace) -> None:
 
 def _switch_profile_runtime(config, profile_name: str) -> dict:
     """Switch through the resident daemon, or persist an offline fallback."""
+    from superlocalmemory.cli.daemon_paths import validate_daemon_id
+
+    # Issue #148, same bug class: profile_name is interpolated straight into
+    # a daemon URL path below. The daemon's own validate_profile_name
+    # (server/routes/helpers.py) already restricts every profile it will
+    # accept to ^[a-zA-Z0-9_-]+$; reject anything else here too, before it
+    # is interpolated into a path, rather than letting http.client discover
+    # the problem.
+    validate_daemon_id(profile_name, label="profile name")
+
     from superlocalmemory.cli.daemon import daemon_request, is_daemon_running
 
     if is_daemon_running():
