@@ -96,14 +96,20 @@ class AuditChain:
     def _make_conn_from_path(path: str) -> sqlite3.Connection:
         """Create a configured SQLite connection."""
         conn = sqlite3.connect(path)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.row_factory = sqlite3.Row
-        # C4: audit chain holds a tamper-evident record — keep it owner-only.
         try:
-            from superlocalmemory.core.security_primitives import harden_db_perms
-            harden_db_perms(path)
-        except Exception:
-            pass
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.row_factory = sqlite3.Row
+            # C4: audit chain holds a tamper-evident record — keep it owner-only.
+            try:
+                from superlocalmemory.core.security_primitives import harden_db_perms
+                harden_db_perms(path)
+            except Exception:
+                pass
+        except BaseException:
+            # Setup failed: close it now, or the file stays open (Windows
+            # then cannot delete or replace it) for as long as the error lives.
+            conn.close()
+            raise
         return conn
 
     def _make_conn(self) -> sqlite3.Connection:

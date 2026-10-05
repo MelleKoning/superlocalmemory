@@ -177,14 +177,20 @@ def _conn_for(db_path: Path) -> sqlite3.Connection:
             pass
     conn = sqlite3.connect(path_str, timeout=10.0, isolation_level=None)
     try:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-    except sqlite3.Error:  # pragma: no cover — best-effort
-        pass
-    conn.row_factory = sqlite3.Row
-    _holder.conn = conn
-    _holder.path = path_str
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+        except sqlite3.Error:  # pragma: no cover — best-effort
+            pass
+        conn.row_factory = sqlite3.Row
+        _holder.conn = conn
+        _holder.path = path_str
+    except BaseException:
+        # Setup failed: close it now, or the file stays open (Windows
+        # then cannot delete or replace it) for as long as the error lives.
+        conn.close()
+        raise
     return conn
 
 

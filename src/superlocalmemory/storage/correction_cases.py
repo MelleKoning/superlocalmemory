@@ -566,10 +566,16 @@ class _CorrectionTransaction:
         try:
             conn = sqlite3.connect(str(self._path), timeout=5, isolation_level=None)
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=5000")
-            conn.execute("BEGIN IMMEDIATE")
-            self._conn = conn
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA busy_timeout=5000")
+                conn.execute("BEGIN IMMEDIATE")
+                self._conn = conn
+            except BaseException:
+                # Setup failed: close it now, or the file stays open (Windows
+                # then cannot delete or replace it) for as long as the error lives.
+                conn.close()
+                raise
             return conn
         except Exception:
             self._lock.release()
@@ -596,8 +602,14 @@ class _CorrectionReadConnection:
     def __enter__(self) -> sqlite3.Connection:
         conn = sqlite3.connect(f"file:{self._path}?mode=ro", uri=True, timeout=0.25)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA query_only=ON")
-        self._conn = conn
+        try:
+            conn.execute("PRAGMA query_only=ON")
+            self._conn = conn
+        except BaseException:
+            # Setup failed: close it now, or the file stays open (Windows
+            # then cannot delete or replace it) for as long as the error lives.
+            conn.close()
+            raise
         return conn
 
     def __exit__(self, _exc_type, _exc, _traceback) -> None:

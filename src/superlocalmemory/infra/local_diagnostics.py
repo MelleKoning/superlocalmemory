@@ -123,16 +123,22 @@ class LocalDiagnostics:
         if os.name == "posix":
             os.chmod(self._db_file.parent, 0o700)
         conn = sqlite3.connect(str(self._db_file), timeout=5.0)
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS diagnostic_aggregates ("
-            "day TEXT NOT NULL, group_name TEXT NOT NULL, "
-            "dimension TEXT NOT NULL, bucket TEXT NOT NULL, "
-            "value INTEGER NOT NULL CHECK(value >= 0), "
-            "PRIMARY KEY(day, group_name, dimension, bucket))"
-        )
-        conn.commit()
-        if os.name == "posix":
-            os.chmod(self._db_file, 0o600)
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS diagnostic_aggregates ("
+                "day TEXT NOT NULL, group_name TEXT NOT NULL, "
+                "dimension TEXT NOT NULL, bucket TEXT NOT NULL, "
+                "value INTEGER NOT NULL CHECK(value >= 0), "
+                "PRIMARY KEY(day, group_name, dimension, bucket))"
+            )
+            conn.commit()
+            if os.name == "posix":
+                os.chmod(self._db_file, 0o600)
+        except BaseException:
+            # Setup failed: close it now, or the file stays open (Windows
+            # then cannot delete or replace it) for as long as the error lives.
+            conn.close()
+            raise
         return conn
 
     def _today(self) -> datetime:

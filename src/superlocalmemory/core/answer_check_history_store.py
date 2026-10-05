@@ -109,7 +109,13 @@ def connect(db: Path, *, readonly: bool) -> sqlite3.Connection:
         return sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2.0)
     conn = sqlite3.connect(str(db), timeout=CONNECT_TIMEOUT_S, isolation_level=None,
                            check_same_thread=False)
-    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+    try:
+        conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+    except BaseException:
+        # Setup failed: close it now, or the file stays open (Windows
+        # then cannot delete or replace it) for as long as the error lives.
+        conn.close()
+        raise
     return conn
 
 

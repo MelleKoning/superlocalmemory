@@ -94,13 +94,19 @@ class ViewStore:
         if not self._path.exists():
             raise ViewError(VIEWS_UNAVAILABLE, _UNAVAILABLE)
         conn = sqlite3.connect(str(self._path), timeout=10.0, isolation_level=None)
-        conn.execute("PRAGMA busy_timeout=10000")
-        present = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='saved_views'"
-        ).fetchone()
-        if not present:
+        try:
+            conn.execute("PRAGMA busy_timeout=10000")
+            present = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='saved_views'"
+            ).fetchone()
+            if not present:
+                conn.close()
+                raise ViewError(VIEWS_UNAVAILABLE, _UNAVAILABLE)
+        except BaseException:
+            # Setup failed: close it now, or the file stays open (Windows
+            # then cannot delete or replace it) for as long as the error lives.
             conn.close()
-            raise ViewError(VIEWS_UNAVAILABLE, _UNAVAILABLE)
+            raise
         return conn
 
     @staticmethod

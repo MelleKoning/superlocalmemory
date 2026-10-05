@@ -266,8 +266,14 @@ class _ReadOnlyLearningView:
             timeout=0.25,
         )
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA query_only=ON")
-        connection.execute("PRAGMA busy_timeout=250")
+        try:
+            connection.execute("PRAGMA query_only=ON")
+            connection.execute("PRAGMA busy_timeout=250")
+        except BaseException:
+            # Setup failed: close it now, or the file stays open (Windows
+            # then cannot delete or replace it) for as long as the error lives.
+            connection.close()
+            raise
         return connection
 
     def count_signals(self, profile_id: str) -> int:

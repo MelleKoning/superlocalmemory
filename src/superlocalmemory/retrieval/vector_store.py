@@ -109,13 +109,19 @@ class VectorStore:
 
         conn = sqlite3.connect(str(self._db_path))
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout = 10000")
-        # FK enforcement is OFF here because VectorStore operates on its own
-        # tables (fact_embeddings + embedding_metadata). The store pipeline
-        # guarantees fact/profile exist before calling upsert.
-        conn.enable_load_extension(True)
-        sqlite_vec.load(conn)
-        conn.enable_load_extension(False)
+        try:
+            conn.execute("PRAGMA busy_timeout = 10000")
+            # FK enforcement is OFF here because VectorStore operates on its own
+            # tables (fact_embeddings + embedding_metadata). The store pipeline
+            # guarantees fact/profile exist before calling upsert.
+            conn.enable_load_extension(True)
+            sqlite_vec.load(conn)
+            conn.enable_load_extension(False)
+        except BaseException:
+            # Setup failed: close it now, or the file stays open (Windows
+            # then cannot delete or replace it) for as long as the error lives.
+            conn.close()
+            raise
         return conn
 
     @contextmanager

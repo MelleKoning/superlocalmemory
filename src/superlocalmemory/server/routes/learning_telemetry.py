@@ -58,8 +58,14 @@ def _readonly_connection(db_path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(
         f"file:{db_path}?mode=ro", uri=True, timeout=1.0,
     )
-    connection.execute("PRAGMA busy_timeout=1000")
-    connection.row_factory = sqlite3.Row
+    try:
+        connection.execute("PRAGMA busy_timeout=1000")
+        connection.row_factory = sqlite3.Row
+    except BaseException:
+        # Setup failed: close it now, or the file stays open (Windows
+        # then cannot delete or replace it) for as long as the error lives.
+        connection.close()
+        raise
     return connection
 
 

@@ -293,8 +293,14 @@ _MIGRATION_BUSY_TIMEOUT_MS = 15_000
 def _connect(db_path: Path) -> sqlite3.Connection:
     # isolation_level=None → we manage transactions explicitly via DDL.
     conn = sqlite3.connect(db_path, isolation_level=None)
-    conn.execute(f"PRAGMA busy_timeout = {_MIGRATION_BUSY_TIMEOUT_MS};")
-    conn.execute("PRAGMA foreign_keys = OFF;")
+    try:
+        conn.execute(f"PRAGMA busy_timeout = {_MIGRATION_BUSY_TIMEOUT_MS};")
+        conn.execute("PRAGMA foreign_keys = OFF;")
+    except BaseException:
+        # Setup failed: close it now, or the file stays open (Windows
+        # then cannot delete or replace it) for as long as the error lives.
+        conn.close()
+        raise
     return conn
 
 

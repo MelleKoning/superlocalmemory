@@ -141,8 +141,14 @@ def open_memory_db() -> sqlite3.Connection:
         timeout=2.0,
         isolation_level=None,  # autocommit — each statement is its own txn
     )
-    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
-    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+        conn.row_factory = sqlite3.Row
+    except BaseException:
+        # Setup failed: close it now, or the file stays open (Windows
+        # then cannot delete or replace it) for as long as the error lives.
+        conn.close()
+        raise
     return conn
 
 

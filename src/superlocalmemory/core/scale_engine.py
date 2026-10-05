@@ -541,8 +541,14 @@ class ScaleEngineManager:
 
     def _readonly_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
-        conn.execute("PRAGMA query_only=ON")
-        load_sqlite_vec_extension(conn)
+        try:
+            conn.execute("PRAGMA query_only=ON")
+            load_sqlite_vec_extension(conn)
+        except BaseException:
+            # Setup failed: close it now, or the file stays open (Windows
+            # then cannot delete or replace it) for as long as the error lives.
+            conn.close()
+            raise
         return conn
 
     def _canonical_counts(self, conn: sqlite3.Connection) -> dict[str, int]:
