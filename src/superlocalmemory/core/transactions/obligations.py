@@ -306,23 +306,52 @@ class ObligationLedger:
         more than ``cap_s``. Computed in SQL so a waiting obligation never
         takes a slot from one that is due.
         """
-        free, base_s, cap_s = backoff
-        rows = conn.execute(
-            "SELECT operation_id FROM projection_obligations "
-            "WHERE kind = ? AND profile_id = ? AND state NOT IN (?, ?) "
-            "AND (detail IS NULL OR detail NOT LIKE '%admin_cancel%') "
-            "AND updated_at + CASE WHEN verify_attempts < ? THEN 0 "
-            "ELSE MIN(?, ? * (1 << MIN(verify_attempts - ?, 30))) END <= ? "
-            "GROUP BY operation_id ORDER BY MIN(updated_at) LIMIT ?",
-            (
-                str(ObligationKind.ERASE), profile_id,
-                str(ObligationState.VERIFIED), str(ObligationState.ERASED),
-                free, cap_s, base_s, free,
-                time.time() if now is None else now,
-                limit,
-            ),
-        ).fetchall()
+        rows = _due_erasures(conn, "AND profile_id = ? ", (profile_id,),
+                             "operation_id", limit=limit, now=now, backoff=backoff)
         return tuple(row[0] for row in rows)
+
+    def due_erasures_in_every_profile(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        limit: int = 100,
+        now: float | None = None,
+        backoff: tuple[int, float, float] = (0, 0.0, 0.0),
+    ) -> tuple[tuple[str, str], ...]:
+        """``(operation_id, profile_id)`` of every profile's erasures due for
+        re-proof, oldest touch first, under the same rules as
+        :meth:`unfinished_erase_operation_ids`.
+
+        One pass, bounded by ``limit`` across all profiles. A profile that no
+        longer exists is skipped: there is no profile left to prove it in.
+        """
+        rows = _due_erasures(
+            conn, "AND profile_id IN (SELECT profile_id FROM profiles) ", (),
+            "operation_id, profile_id", limit=limit, now=now, backoff=backoff)
+        return tuple((row[0], row[1]) for row in rows)
+
+
+def _due_erasures(
+    conn: sqlite3.Connection, profile_clause: str, profile_params: tuple, group_by: str,
+    *, limit: int, now: float | None, backoff: tuple[int, float, float],
+) -> list[Any]:
+    """The erase obligations due for re-proof, grouped by ``group_by``."""
+    free, base_s, cap_s = backoff
+    return conn.execute(
+        f"SELECT {group_by} FROM projection_obligations "
+        f"WHERE kind = ? {profile_clause}AND state NOT IN (?, ?) "
+        "AND (detail IS NULL OR detail NOT LIKE '%admin_cancel%') "
+        "AND updated_at + CASE WHEN verify_attempts < ? THEN 0 "
+        "ELSE MIN(?, ? * (1 << MIN(verify_attempts - ?, 30))) END <= ? "
+        f"GROUP BY {group_by} ORDER BY MIN(updated_at) LIMIT ?",
+        (
+            str(ObligationKind.ERASE), *profile_params,
+            str(ObligationState.VERIFIED), str(ObligationState.ERASED),
+            free, cap_s, base_s, free,
+            time.time() if now is None else now,
+            limit,
+        ),
+    ).fetchall()
 
 
 def _row_to_obligation(row: Any) -> Obligation:

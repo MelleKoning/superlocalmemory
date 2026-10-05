@@ -88,8 +88,9 @@ def _routed_daemon_call(method: str, path: str, body: dict | None = None) -> dic
     try:
         return daemon_request(method, path, body, preserve_not_found=True)
     except DaemonNotFound as exc:
-        return {"success": False, "code": exc.code, "retryable": False,
-                "error": exc.message}
+        # The route's own code (unknown_profile) when it gave one.
+        return {"success": False, "code": exc.error_code or exc.code, "retryable": False,
+                "error": exc.error_message or exc.message}
 
 def _emit_event(event_type: str, payload: dict | None = None,
                 source_agent: str = "mcp_client") -> None:
@@ -1307,10 +1308,8 @@ def register_core_tools(server, get_engine: Callable) -> None:
                 if named and isinstance(result, dict) and result.get("code"):
                     return result
                 if isinstance(result, dict) and result.get("success"):
-                    _emit_event("memory.deleted", {
-                        "fact_id": fact_id,
-                        "agent_id": agent_id,
-                    }, source_agent=agent_id)
+                    # The daemon's DELETE route announces it (once, for every
+                    # surface); announcing here too showed every MCP delete twice.
                     return {
                         "success": True, "deleted": fact_id,
                         "agent_id": agent_id,

@@ -120,6 +120,11 @@ def _command_requires_daemon(args: argparse.Namespace) -> bool:
 
 def main() -> None:
     """Parse CLI arguments and dispatch to command handlers."""
+    # First, before anything prints: on a Windows pipe or file Python encodes
+    # with the code page, which has no ✓ or ✗, and output would crash.
+    from superlocalmemory.cli.stdio_encoding import make_stdio_safe
+    make_stdio_safe()
+
     # Fast path: hook invocations bypass argparse entirely (stdlib only, ~30ms)
     if len(sys.argv) >= 3 and sys.argv[1] == "hook":
         from superlocalmemory.hooks.hook_handlers import handle_hook

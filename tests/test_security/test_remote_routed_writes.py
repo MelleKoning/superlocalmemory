@@ -260,6 +260,36 @@ def test_brain_receipts_are_recorded_for_the_keys_profile(host) -> None:
 
 
 @pytest.mark.parametrize("tool, args", [
+    ("delete_memory", {"fact_id": "f"}),
+    ("update_memory", {"fact_id": "f", "content": "A new version of it."}),
+])
+def test_a_routed_delete_or_update_for_a_deleted_profile_says_unknown_profile(
+        host, tool, args) -> None:
+    """The daemon's answer, not "daemon returned 404": a key whose profile was
+    deleted is told so, and that retrying will not help."""
+    out = asyncio.run(host.tools[tool](**args, profile_id=OTHER))
+    assert out["success"] is False and out["retryable"] is False, out
+    assert out["code"] == "unknown_profile", out
+    assert OTHER in out["error"] and "daemon returned 404" not in out["error"], out
+
+
+def test_the_404_reader_keeps_detail_codes_and_adds_the_routes_error_code() -> None:
+    """Every other caller reads ``code`` exactly as before."""
+    from superlocalmemory.cli.daemon import not_found_from
+    from superlocalmemory.server.routed_profile import unknown_profile_body
+
+    routed = not_found_from(unknown_profile_body(OTHER), "/api/memories/f")
+    assert (routed.code, routed.message) == ("not_found", "daemon returned 404")
+    assert routed.error_code == "unknown_profile" and OTHER in routed.error_message
+    plain = not_found_from({"detail": "Memory not found"}, "/api/memories/f")
+    assert (plain.code, plain.message, plain.error_code) == (
+        "not_found", "Memory not found", "")
+    typed = not_found_from({"detail": {"code": "view_not_found", "message": "No view"}}, "/v")
+    assert (typed.code, typed.message, typed.error_code) == ("view_not_found", "No view", "")
+    assert not_found_from(None, "/x").code == "not_found"
+
+
+@pytest.mark.parametrize("tool, args", [
     ("delete_memory", {"fact_id": "f"}), ("update_memory", {"fact_id": "f", "content": "c"}),
     ("set_memory_kind", {"fact_id": "f", "kind": "rule"}),
     ("core_memory", {"action": "list"}), ("log_tool_event", {"tool_name": "Bash"}),

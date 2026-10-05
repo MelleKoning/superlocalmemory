@@ -213,6 +213,18 @@ def _unknown_profile_response(profile_id: str):
     return JSONResponse(unknown_profile_body(profile_id), status_code=404)
 
 
+def _announce(event_type: str, payload: dict, actor: str) -> None:
+    """Tell the live event stream about a delete or a correction.
+
+    Announced here, by the daemon route every surface uses (dashboard, CLI,
+    MCP), so each change is seen once whichever surface made it. Best-effort:
+    the event bus never affects the answer.
+    """
+    from superlocalmemory.server.unified_daemon import _emit_event
+
+    _emit_event(event_type, payload, source_agent=actor or "dashboard")
+
+
 def _routed_mutation_error(exc: Exception, profile: str | None, detail: str):
     """The answer to a failed routed mutation: the routed profile was deleted
     between the route's check and the writer's own is an unknown profile, not
@@ -1504,6 +1516,8 @@ async def delete_memory(request: Request, fact_id: str, profile_id: str = ""):
                     detail="Erasure incomplete (projection residue); retry shortly",
                 )
             raise HTTPException(status_code=404, detail="Memory not found")
+        _announce("memory.deleted", {"fact_id": fact_id, "profile_id": target_profile},
+                  hook_context["agent_id"])
         return {
             "success": True,
             "deleted": fact_id,
@@ -1631,6 +1645,11 @@ async def edit_memory(request: Request, fact_id: str):
         if result.get("unchanged"):
             return {"success": True, "fact_id": fact_id, "content": new_content, "unchanged": True}
         correction = result["correction_case"]
+        _announce("memory.updated", {
+            "fact_id": fact_id, "successor_fact_id": result["successor_fact_id"],
+            "case_id": correction.get("case_id"), "profile_id": target_profile,
+            "status": "proposed", "content_preview": new_content[:120],
+        }, hook_context["agent_id"])
         return {
             "success": True,
             "fact_id": fact_id,
@@ -1692,6 +1711,8 @@ async def review_correction(request: Request, case_id: str, action: str):
 
             purge_profile_context_cache(engine, target_profile)
         engine._hooks.run_post("update", hook_context)
+        _announce("memory.updated", {"case_id": case_id, "profile_id": target_profile,
+                                     "status": action}, hook_context["agent_id"])
         return {"success": True, "correction_case": result}
     except HTTPException:
         raise
