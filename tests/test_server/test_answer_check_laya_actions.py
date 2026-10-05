@@ -14,6 +14,7 @@ record). Every worker is a local fake; nothing loads a model or downloads.
 from __future__ import annotations
 
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -169,6 +170,8 @@ def test_forget_an_install_made_elsewhere_leaves_its_files(client, tmp_path):
     assert status["laya"]["state"] == "not_installed"
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="the stand-in interpreter is a shell script; Laya runs only on Apple silicon")
 def test_cancel_stops_a_running_setup(client, tmp_path, monkeypatch):
     monkeypatch.setattr(lr, "_check_disk_space", lambda p: True)
     monkeypatch.setattr(lr, "_create_venv", lambda *a, **k: (True, "", ""))
