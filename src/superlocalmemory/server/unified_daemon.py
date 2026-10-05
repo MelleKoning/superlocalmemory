@@ -1586,8 +1586,17 @@ async def _fact_entity_association_repair_loop(
                 "retry_delay_seconds": 0.0,
             }
             if durable["state"] == "complete":
-                return
+                break
             await asyncio.sleep(max(0.0, float(tick_seconds)))
+        # Then index every fact M028 never reached (storage/entity_index.py).
+        from superlocalmemory.server.entity_index_repair import (
+            run_entity_index_backfill,
+        )
+
+        await run_entity_index_backfill(
+            application, memory_db_path,
+            batch_size=batch_size, tick_seconds=tick_seconds,
+        )
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -5587,6 +5596,10 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 application.state,
                 "fact_entity_association_repair_status",
                 None,
+            ),
+            # Background fill of the entity index bridge discovery reads.
+            "entity_index_backfill": getattr(
+                application.state, "entity_index_status", None,
             ),
             # v3.8.2: zero-pain self-heal progress (embeddings/expansion/vector
             # index backfill after an upgrade). Dashboard renders a plain
