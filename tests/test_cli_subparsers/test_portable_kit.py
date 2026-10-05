@@ -678,7 +678,14 @@ def test_atomic_write_cleans_up_tmp_on_failure(tmp_path: Path, monkeypatch):
     def _boom(*a, **kw):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(pk.json, "dumps", _boom)
+    # Replace only portable_kit's view of json. Patching json.dumps itself
+    # breaks every other user of the json module in this process, including
+    # pytest's own result log.
+    import json as _json
+    import types
+
+    monkeypatch.setattr(pk, "json", types.SimpleNamespace(
+        dumps=_boom, loads=_json.loads, JSONDecodeError=_json.JSONDecodeError))
 
     with pytest.raises(RuntimeError, match="boom"):
         _atomic_write(config_path, {"key": "val"}, "json")
