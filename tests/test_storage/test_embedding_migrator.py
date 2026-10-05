@@ -514,23 +514,11 @@ class TestModeConfigDefaults:
 def test_the_staging_database_is_closed_before_its_folder_is_removed(tmp_path, monkeypatch):
     """On Windows an open file cannot be deleted, so the migration aborted
     after activating the new vectors and never recorded the new signature."""
-    import tempfile as _tempfile
-
-    from tests._portable import open_paths
-
-    real = _tempfile.TemporaryDirectory
-    still_open: list[str] = []
-
-    class _Checked(real):
-        def cleanup(self):
-            folder = str(Path(self.name).resolve())
-            still_open.extend(p for p in open_paths() if p.startswith(folder))
-            super().cleanup()
-
     from superlocalmemory.storage import embedding_migrator, schema
     from superlocalmemory.storage.database import DatabaseManager
+    from tests._portable import record_files_open_at_tempdir_cleanup
 
-    monkeypatch.setattr(embedding_migrator.tempfile, "TemporaryDirectory", _Checked)
+    still_open = record_files_open_at_tempdir_cleanup(monkeypatch, embedding_migrator)
     db = DatabaseManager(tmp_path / "memory.db")
     db.initialize(schema)
     db.execute("INSERT INTO memories (memory_id, profile_id, content, created_at, "

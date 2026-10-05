@@ -174,7 +174,11 @@ def cmd_benchmark(args: Namespace) -> None:
 
     with tempfile.TemporaryDirectory(prefix="slm-bench-") as d:
         bench = EvoMemoryBenchmark(profile_id="bench_v1", data_dir=Path(d))
-        result = bench.run_full_30_day_simulation()
+        try:
+            result = bench.run_full_30_day_simulation()
+        finally:
+            # Before the folder goes: Windows cannot delete an open database.
+            bench.close()
 
     if as_json:
         print(json.dumps(result, default=str))
