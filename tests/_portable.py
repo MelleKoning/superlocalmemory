@@ -165,3 +165,20 @@ def child_env_base(home: Path) -> dict[str, str]:
                     if name in os.environ})
         env["USERPROFILE"] = str(home)
     return env
+
+
+def record_files_open_at_tempdir_cleanup(monkeypatch, module) -> list[str]:
+    """Every file still open inside a ``module.tempfile.TemporaryDirectory``
+    at the moment it is removed. Windows cannot delete an open file, so on
+    Windows each of these fails the removal with WinError 32."""
+    real = module.tempfile.TemporaryDirectory
+    still_open: list[str] = []
+
+    class _Checked(real):
+        def cleanup(self):
+            folder = os.path.realpath(self.name) + os.sep
+            still_open.extend(p for p in open_paths() if p.startswith(folder))
+            super().cleanup()
+
+    monkeypatch.setattr(module.tempfile, "TemporaryDirectory", _Checked)
+    return still_open

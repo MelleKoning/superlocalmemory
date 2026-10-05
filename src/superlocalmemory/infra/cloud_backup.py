@@ -24,6 +24,7 @@ import tempfile
 from datetime import datetime, UTC, timezone
 from pathlib import Path
 from typing import Any
+from contextlib import closing
 
 from superlocalmemory.infra.cloud_backup_github import (  # noqa: F401 - re-exported
     MAX_GITHUB_RELEASES,
@@ -278,7 +279,7 @@ def remove_destination(dest_id: str, db_path: Path | None = None) -> bool:
         import sqlite3 as _sqlite3
         creds_ref = None
         try:
-            with _sqlite3.connect(str(path)) as rconn:
+            with closing(_sqlite3.connect(str(path))) as rconn, rconn:
                 row = rconn.execute(
                     "SELECT credentials_ref FROM backup_destinations WHERE id = ?",
                     (dest_id,),

@@ -26,6 +26,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from contextlib import closing
 
 import numpy as np
 
@@ -93,7 +94,7 @@ def _activate_staged_vectors(
     from superlocalmemory.storage.write_lock import get_write_lock
 
     db_path = Path(db_path)
-    with get_write_lock(db_path), sqlite3.connect(stage_path) as stage:
+    with get_write_lock(db_path), closing(sqlite3.connect(stage_path)) as stage, stage:
         conn = sqlite3.connect(db_path)
         try:
             conn.execute("PRAGMA busy_timeout=10000")
@@ -368,7 +369,7 @@ def run_embedding_migration(
             dir=config.base_dir,
         ) as stage_dir:
             stage_path = Path(stage_dir) / "shadow.sqlite3"
-            with sqlite3.connect(stage_path) as stage:
+            with closing(sqlite3.connect(stage_path)) as stage, stage:
                 stage.execute(
                     "CREATE TABLE staged_embeddings ("
                     "fact_id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, "

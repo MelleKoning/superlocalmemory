@@ -32,6 +32,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
+from contextlib import closing
 
 from superlocalmemory.learning.model_cache import invalidate as invalidate_model_cache
 from superlocalmemory.learning.ranker_common import (
@@ -271,7 +272,7 @@ def _persist_candidate(
     fn_json = json.dumps(list(feature_names), separators=(",", ":"))
     shadow_json = json.dumps(shadow_results or {}, separators=(",", ":"))
 
-    with sqlite3.connect(learning_db_path, timeout=10) as conn:
+    with closing(sqlite3.connect(learning_db_path, timeout=10)) as conn, conn:
         try:
             conn.execute("BEGIN IMMEDIATE")
             # Wipe any stale candidate first (one-at-a-time contract).
@@ -336,7 +337,7 @@ def _promote_candidate(
       3. Candidate → is_active=1, is_candidate=0, promoted_at=now.
     """
     now = datetime.now(timezone.utc).isoformat()
-    with sqlite3.connect(learning_db_path, timeout=10) as conn:
+    with closing(sqlite3.connect(learning_db_path, timeout=10)) as conn, conn:
         conn.row_factory = sqlite3.Row
         try:
             conn.execute("BEGIN IMMEDIATE")
