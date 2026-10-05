@@ -36,8 +36,25 @@ Get or set the LLM provider for Mode B/C.
 ```bash
 slm provider          # Show current provider
 slm provider set      # Interactive provider selector
-slm provider set openai   # Set provider directly
+slm provider set openai   # Set a named cloud provider directly
 ```
+
+`provider set custom` points Mode B or Mode C at your own OpenAI-compatible
+endpoint (llama.cpp, vLLM, LM Studio, …) — no key required:
+
+```bash
+slm provider set custom --endpoint http://192.168.1.50:8041/v1 --mode b
+slm provider set custom --endpoint https://my-llm.example.com/v1 --key sk-... --mode c
+```
+
+`--mode` is `b` or `c` (default `c`); `--key` and `--model` are optional. The
+save is followed by a connection test, printed immediately — the same probe
+``POST /api/v3/provider/test`` runs for the dashboard, so the CLI and
+dashboard never disagree about whether an endpoint is reachable. Endpoint
+rules match the remote reranker's: HTTPS is required for public hosts and
+bare hostnames; a numeric private-LAN address may use plain HTTP only when
+`retrieval.trust_plain_http_lan` is true (the default); loopback is always
+allowed.
 
 ### `slm connect [ide]`
 

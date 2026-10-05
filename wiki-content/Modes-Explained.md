@@ -38,8 +38,16 @@ slm mode b
 slm doctor
 ```
 
-A non-Ollama local server works the same way: point the configured LLM
-endpoint at it (no API key required) and switch to Mode B.
+A non-Ollama local server works the same way — no API key required:
+
+```bash
+slm provider set custom --endpoint http://192.168.1.50:8041/v1 --mode b
+```
+
+(or pick "another local server" in `slm setup`'s Mode B step). This applies
+the same endpoint-trust rule as the remote reranker: HTTPS is required for
+public hosts and bare hostnames; a numeric private-LAN address may use plain
+HTTP only when `retrieval.trust_plain_http_lan` is true (the default).
 
 ## Mode C: Provider-assisted
 

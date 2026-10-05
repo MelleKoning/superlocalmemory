@@ -76,8 +76,14 @@ slm mode
 Expected: `Current mode: A`
 
 Mode C needs a cloud API key (`slm provider set openai` sets `OPENAI_API_KEY`
-or equivalent) — or a custom OpenAI-compatible endpoint configured via the
-dashboard, which needs no key.
+or equivalent) — or your own keyless OpenAI-compatible endpoint:
+```bash
+slm provider set custom --endpoint http://192.168.1.50:8041/v1 --mode c
+```
+`--mode b` targets Mode B's local-model slot instead (llama.cpp, vLLM, LM
+Studio, …, in place of Ollama); `--key` is optional. Same rule as everywhere
+else in SLM: HTTPS is required unless the endpoint is loopback or a numeric
+private-LAN address.
 
 ---
 

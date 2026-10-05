@@ -244,8 +244,31 @@ def main() -> None:
     )
     provider_p.add_argument(
         "provider", nargs="?",
-        choices=["openai", "anthropic", "azure", "ollama", "openrouter"],
-        help="Provider to configure; omit to use the interactive selector",
+        choices=["openai", "anthropic", "azure", "ollama", "openrouter", "custom"],
+        help=(
+            "Provider to configure; omit to use the interactive selector. "
+            "'custom' points at your own OpenAI-compatible endpoint "
+            "(llama.cpp, vLLM, LM Studio, …) — no key required."
+        ),
+    )
+    provider_p.add_argument(
+        "--endpoint", metavar="URL", default=None,
+        help="Endpoint URL for provider=custom (e.g. http://192.168.1.50:8041/v1)",
+    )
+    provider_p.add_argument(
+        "--key", dest="api_key", metavar="KEY", default=None,
+        help="API key for provider=custom; omit for a keyless local server",
+    )
+    provider_p.add_argument(
+        "--model", metavar="NAME", default=None,
+        help="Model name for provider=custom",
+    )
+    provider_p.add_argument(
+        "--mode", choices=["b", "c"], default=None,
+        help=(
+            "Target mode for provider=custom: 'b' (a local model on this "
+            "machine) or 'c' (your own endpoint). Default: c"
+        ),
     )
 
     connect_p = sub.add_parser("connect", help="Auto-configure a supported IDE integration")

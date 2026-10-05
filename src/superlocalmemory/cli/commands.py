@@ -1416,7 +1416,14 @@ def cmd_provider(args: Namespace) -> None:
     if args.action == "set":
         from superlocalmemory.cli.setup_wizard import configure_provider
 
-        configure_provider(config, provider_name=getattr(args, "provider", None))
+        configure_provider(
+            config,
+            provider_name=getattr(args, "provider", None),
+            endpoint=getattr(args, "endpoint", None),
+            api_key=getattr(args, "api_key", None),
+            model=getattr(args, "model", None),
+            target_mode=getattr(args, "mode", None),
+        )
     else:
         print(f"Provider: {config.llm.provider or 'none (Mode A)'}")
         if config.llm.model:

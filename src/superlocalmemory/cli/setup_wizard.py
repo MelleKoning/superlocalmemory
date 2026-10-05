@@ -282,6 +282,49 @@ def _laya_summary_line_applies(*, interactive: bool = True) -> bool:
         return False
 
 
+def _run_mode_b_server_step(config: Any, *, interactive: bool) -> None:
+    """Step 2b: pick Mode B's local model server, then save (#112).
+
+    Offers Ollama (the default — unchanged behavior) or another local
+    OpenAI-compatible server (llama.cpp, vLLM, LM Studio, …), which the
+    dashboard's Settings pane could already configure but the CLI wizard
+    could not. The custom-server path prompts for the URL/model, applies
+    the same endpoint-trust rules as the remote reranker, saves, and runs
+    the same connection test ``slm provider set custom`` does — see
+    ``cli.provider_custom_endpoint``.
+
+    Non-interactive runs (``auto``/CI) always keep the Ollama default,
+    matching the wizard's existing zero-prompt contract.
+    """
+    print()
+    use_custom_server = False
+    if interactive:
+        print("  [1] Ollama (default)")
+        print("  [2] Another local server (llama.cpp, vLLM, LM Studio, …)")
+        server_choice = _prompt(
+            "  Select local model server [1/2] (default: 1): ", "1",
+        )
+        use_custom_server = server_choice.strip() == "2"
+
+    if use_custom_server:
+        from superlocalmemory.cli.provider_custom_endpoint import (
+            configure_custom_endpoint_provider,
+        )
+
+        configure_custom_endpoint_provider(
+            config, endpoint=None, api_key=None, model=None,
+            target_mode="b", interactive=True,
+        )
+        return
+
+    if shutil.which("ollama"):
+        print("  ✓ Ollama found!")
+    else:
+        print("  ⚠ Ollama not found. Install: https://ollama.ai")
+        print("    After installing: ollama pull llama3.2")
+    config.save(mode_change=True)
+
+
 def _run_laya_step(config: Any, *, interactive: bool) -> None:
     """Step 4d: offer to install the local answer check (Laya).
 
@@ -624,14 +667,8 @@ def run_wizard(auto: bool = False) -> None:
         print("  ✓ Shared memory OFF (default) — enable later in mode_*.json if needed.")
 
     if choice == "b":
-        print()
-        if shutil.which("ollama"):
-            print("  ✓ Ollama found!")
-        else:
-            print("  ⚠ Ollama not found. Install: https://ollama.ai")
-            print("    After installing: ollama pull llama3.2")
-
-    if choice == "c" and interactive:
+        _run_mode_b_server_step(config, interactive=interactive)
+    elif choice == "c" and interactive:
         configure_provider(config)
     else:
         config.save(mode_change=True)
@@ -1209,13 +1246,26 @@ def _install_autostart_service() -> bool:
 # Mode C provider config (preserved from original)
 # ---------------------------------------------------------------------------
 
-def configure_provider(config: object, provider_name: str | None = None) -> None:
-    """Configure an LLM provider for Mode C.
+def configure_provider(
+    config: object,
+    provider_name: str | None = None,
+    *,
+    endpoint: str | None = None,
+    api_key: str | None = None,
+    model: str | None = None,
+    target_mode: str | None = None,
+) -> None:
+    """Configure an LLM provider for Mode B or Mode C.
 
     When ``provider_name`` is supplied by ``slm provider set <provider>``,
     configuration is non-interactive and resolves its credential from the
     provider's documented environment variable. Omitting it preserves the
     existing interactive picker.
+
+    ``provider_name="custom"`` (#112) configures your own OpenAI-compatible
+    endpoint instead of a named preset — llama.cpp, vLLM, LM Studio, or any
+    other self-hosted server, with no key required. ``endpoint``/``api_key``/
+    ``model``/``target_mode`` are only consulted for that case.
     """
     from superlocalmemory.core.config import SLMConfig
     from superlocalmemory.storage.models import Mode
@@ -1231,16 +1281,40 @@ def configure_provider(config: object, provider_name: str | None = None) -> None
         for i, name in enumerate(providers, 1):
             preset = presets[name]
             print(f"    [{i}] {name.capitalize()} — {preset['model']}")
+        print(
+            f"    [{len(providers) + 1}] Custom endpoint — your own "
+            f"OpenAI-compatible server (llama.cpp, vLLM, LM Studio, …); "
+            f"no key needed"
+        )
         print()
 
-        idx = _prompt(f"  Select provider [1-{len(providers)}]: ", "1")
+        idx = _prompt(f"  Select provider [1-{len(providers) + 1}]: ", "1")
         try:
-            provider_name = providers[int(idx) - 1]
+            choice_idx = int(idx)
+            if choice_idx == len(providers) + 1:
+                provider_name = "custom"
+            else:
+                provider_name = providers[choice_idx - 1]
         except (ValueError, IndexError):
             print("  Invalid choice. Using OpenAI.")
             provider_name = "openai"
-    elif provider_name not in presets:
+    elif provider_name != "custom" and provider_name not in presets:
         raise ValueError(f"Unsupported provider: {provider_name}")
+
+    if provider_name == "custom":
+        from superlocalmemory.cli.provider_custom_endpoint import (
+            configure_custom_endpoint_provider,
+        )
+
+        configure_custom_endpoint_provider(
+            config,
+            endpoint=endpoint,
+            api_key=api_key,
+            model=model,
+            target_mode=target_mode,
+            interactive=interactive_selection,
+        )
+        return
 
     preset = presets[provider_name]
 
