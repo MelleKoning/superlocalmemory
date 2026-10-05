@@ -68,8 +68,12 @@ def _daemon_get(path: str, timeout_s: float = 10.0) -> dict | None:
     port = _get_daemon_port()
     url = f"http://127.0.0.1:{port}{path}"
     try:
-        with _outbound.urlopen(url, timeout=timeout_s) as resp:
-            raw = resp.read().decode()
+        # Only the connect+send phase is wrapped: this is where
+        # http.client actually raises on a bad path (see
+        # _REQUEST_BUILD_ERRORS below). Reading and decoding the response
+        # happens after, outside this try, so a malformed response body
+        # is never misreported as an invalid request path.
+        resp = _outbound.urlopen(url, timeout=timeout_s)
     except _uerr.HTTPError as exc:
         if exc.code == 403:
             _die(
@@ -89,11 +93,11 @@ def _daemon_get(path: str, timeout_s: float = 10.0) -> dict | None:
         # cli/daemon_paths.py), so this should never fire -- but a request
         # that cannot be built or sent must still end in a friendly
         # one-liner, not whatever stdlib exception leaked out of
-        # http.client. Scoped to request build/send only (never wraps the
-        # JSON parse below), so a malformed daemon response still surfaces
-        # as it always has -- this is not a response-parsing error.
+        # http.client.
         _die(f"invalid request path {describe(path)}")
         return None  # unreachable; _die exits
+    with resp:
+        raw = resp.read().decode()
     return _json.loads(raw)
 
 
@@ -108,8 +112,8 @@ def _daemon_post(path: str, body: dict, timeout_s: float = 10.0) -> dict | None:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with _outbound.urlopen(req, timeout=timeout_s) as resp:
-            raw = resp.read().decode()
+        # Same split as _daemon_get: only build+connect+send is wrapped.
+        resp = _outbound.urlopen(req, timeout=timeout_s)
     except _uerr.HTTPError as exc:
         if exc.code == 403:
             _die(
@@ -130,6 +134,8 @@ def _daemon_post(path: str, body: dict, timeout_s: float = 10.0) -> dict | None:
         # Same defense in depth as _daemon_get -- see the comment there.
         _die(f"invalid request path {describe(path)}")
         return None  # unreachable; _die exits
+    with resp:
+        raw = resp.read().decode()
     return _json.loads(raw)
 
 

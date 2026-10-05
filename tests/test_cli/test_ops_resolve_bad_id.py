@@ -212,3 +212,22 @@ class TestListProfileFilterBadValue:
 
         assert proc.returncode == 0, proc.stderr
         assert handler.seen_paths == ["/operations/failed?profile=work-team_1"]
+
+
+class TestMalformedResponseNotMisreportedAsBadPath:
+    """CRIT self-check: the new defense-in-depth catch in _daemon_get/
+    _daemon_post must only wrap building and sending the request, never
+    reading or decoding the daemon's response -- otherwise a response the
+    daemon sends back broken would be misreported as "invalid request
+    path", which is a different bug and not one this issue is about."""
+
+    def test_non_utf8_response_body_is_not_reported_as_a_bad_path(
+        self, tmp_path, fake_daemon
+    ):
+        port, handler = fake_daemon
+        handler.response_body = b"\xff\xfe not valid utf-8"
+        valid_id = "real-op-id-003"
+
+        proc = _run_cli(tmp_path, port, "ops", "resolve", valid_id, "--action", "cancel")
+
+        assert "invalid request path" not in (proc.stdout + proc.stderr)
