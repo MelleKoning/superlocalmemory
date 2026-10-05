@@ -137,7 +137,8 @@ def test_each_scope_is_cached_and_reused_under_its_own_key(
     seeds = ch._seed_search(q, REQ, **kw)
     if include_global or include_shared:
         seeds = ch._merge_cross_scope_seeds(q, seeds, REQ, **kw)
-    key = ch._compute_query_hash(q, REQ, seeds=seeds, **kw)
+    graph = ch._graph_version(REQ, cross_scope=include_global or include_shared)
+    key = ch._compute_query_hash(q, REQ, seeds=seeds, graph=graph, **kw)
     stored = store.db.execute(
         "SELECT COUNT(*) AS c FROM activation_cache WHERE query_hash = ?", (key,),
     )[0]["c"]
