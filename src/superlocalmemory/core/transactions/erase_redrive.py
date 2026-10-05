@@ -12,11 +12,18 @@ only when the memory is gone from the canonical store, its tombstone exists,
 and the owning projection holds nothing for it. Proof is read-only; nothing
 here deletes or restores data. When proof fails the obligation is marked
 FAILED with the reason, and once that has happened ``MAX_REPROOFS`` times the
-erasure is reported by ``slm ops status`` instead of sitting silently.
+erasure is reported by ``slm ops status`` instead of sitting silently. From
+then on it is re-checked with a capped exponential back-off rather than every
+pass, so a deletion that stays unconfirmed is not rewritten every 30 s forever.
+
+Which memories an erasure covered comes from its erasure receipt: a fact
+erasure names its one fact, an entity or profile erasure lists them in the
+receipt's evidence. A receipt is trusted only after its seal verifies.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -35,8 +42,28 @@ logger = logging.getLogger(__name__)
 # Failed re-proofs after which an unfinished erasure counts as exhausted.
 MAX_REPROOFS = MAX_ERASE_ATTEMPTS
 
+# Back-off after MAX_REPROOFS: 30 s, 60 s, 120 s, ... never more than an hour.
+RECHECK_BASE_S = 30.0
+RECHECK_CAP_S = 3600.0
+
 REASON_STILL_STORED = "the memory is still stored"
+REASON_ONE_STILL_STORED = "a memory it covered is still stored"
 REASON_NO_TOMBSTONE = "no deletion record exists for it"
+REASON_RECEIPT_NO_LIST = "its erasure receipt does not list which memories it covered"
+REASON_RECEIPT_UNSEALED = "its erasure receipt failed its integrity check"
+
+
+def recheck_delay_s(reproofs: int) -> float:
+    """Seconds to wait after the last re-check before the next one.
+
+    Deterministic and capped: no wait for the first ``MAX_REPROOFS`` (so an
+    unconfirmed deletion is reported within minutes), then doubling from
+    ``RECHECK_BASE_S`` up to ``RECHECK_CAP_S``. ``unfinished_erase_operation_ids``
+    applies the same rule in SQL.
+    """
+    if reproofs < MAX_REPROOFS:
+        return 0.0
+    return min(RECHECK_CAP_S, RECHECK_BASE_S * 2 ** min(reproofs - MAX_REPROOFS, 30))
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +85,7 @@ def reconcile_pending_erasures(engine: Any, *, limit: int = 20) -> int:
     with db.raw_connection() as conn:
         op_ids = ledger.unfinished_erase_operation_ids(
             conn, profile_id=profile_id, limit=limit,
+            backoff=(MAX_REPROOFS, RECHECK_BASE_S, RECHECK_CAP_S),
         )
     closed = 0
     for operation_id in op_ids:
@@ -69,7 +97,10 @@ def reconcile_pending_erasures(engine: Any, *, limit: int = 20) -> int:
 
 
 def reconcile_erase_operation(engine: Any, operation_id: str) -> EraseOutcome:
-    """Re-prove every unfinished erase obligation of one operation."""
+    """Re-prove every unfinished erase obligation of one operation, now.
+
+    Ignores the back-off: this is also what an explicit Reconcile runs.
+    """
     from superlocalmemory.core.transactions.concrete_owners import (
         build_erasure_service,
     )
@@ -126,20 +157,53 @@ def _reconcile_group(
 ) -> str:
     """Close one subject's obligations, or record why not. Returns the reason."""
     subject_id = obs[0].subject_id
-    # Fact-shaped erasures only: entity and profile erasures name a subject that
-    # is not a fact id, so the tombstone check fails them closed with a reason.
-    context = OperationContext(
-        operation_id=operation_id,
-        profile_id=profile_id,
-        subject_id=subject_id,
-        fact_ids=(subject_id,),
-    )
-    reason, proven = _unproven_reason(db, service, context, obs)
+    fact_ids, reason = _covered_fact_ids(db, operation_id, profile_id, subject_id)
+    proven: list[tuple[str, str | None]] = []
+    if not reason:
+        context = OperationContext(
+            operation_id=operation_id,
+            profile_id=profile_id,
+            subject_id=subject_id,
+            fact_ids=fact_ids,
+        )
+        reason, proven = _unproven_reason(db, service, context, obs)
     if reason:
         _record_unproven(db, ledger, obs, reason)
         return reason
     _close(db, ledger, operation_id, profile_id, proven, has_apply)
     return ""
+
+
+def _covered_fact_ids(
+    db: Any, operation_id: str, profile_id: str, subject_id: str,
+) -> tuple[tuple[str, ...], str]:
+    """The memories an erasure covered, or ``((), reason)`` if unknowable.
+
+    No receipt, or a fact receipt: the subject is the fact (a receipt is
+    written after the purge, so an erasure still in flight has none yet).
+    Entity and profile erasures: the sealed receipt's ``fact_ids``.
+    """
+    from superlocalmemory.core.transactions.erasure import verify_receipt
+
+    from superlocalmemory.core.transactions.tombstones import _table_exists
+
+    with db.raw_connection() as conn:
+        row = conn.execute(
+            "SELECT subject_type, owner_evidence_json FROM erasure_receipts "
+            "WHERE erasure_id = ? AND profile_id = ?",
+            (operation_id, profile_id),
+        ).fetchone() if _table_exists(conn, "erasure_receipts") else None
+        if row is None or row[0] == "fact":
+            return (subject_id,), ""
+        if not verify_receipt(conn, operation_id, profile_id=profile_id):
+            return (), REASON_RECEIPT_UNSEALED
+    try:
+        listed = json.loads(row[1]).get("fact_ids")
+    except (TypeError, ValueError, AttributeError):
+        listed = None
+    if not isinstance(listed, list) or not all(isinstance(f, str) for f in listed):
+        return (), REASON_RECEIPT_NO_LIST
+    return tuple(sorted(set(listed))), ""
 
 
 def _unproven_reason(
@@ -148,13 +212,18 @@ def _unproven_reason(
     """Read-only proof. Returns ``("", proofs)`` or ``(reason, [])``."""
     from superlocalmemory.core.transactions.erasure import is_tombstoned
 
-    if db.execute(
-        "SELECT 1 FROM atomic_facts WHERE fact_id = ? AND profile_id = ? LIMIT 1",
-        (context.subject_id, context.profile_id),
-    ):
-        return REASON_STILL_STORED, []
+    for fact_id in context.fact_ids:
+        if db.execute(
+            "SELECT 1 FROM atomic_facts WHERE fact_id = ? AND profile_id = ? LIMIT 1",
+            (fact_id, context.profile_id),
+        ):
+            single = len(context.fact_ids) == 1
+            return REASON_STILL_STORED if single else REASON_ONE_STILL_STORED, []
     with db.raw_connection() as conn:
-        if not is_tombstoned(conn, context.profile_id, context.subject_id):
+        if not all(
+            is_tombstoned(conn, context.profile_id, fact_id)
+            for fact_id in context.fact_ids
+        ):
             return REASON_NO_TOMBSTONE, []
     proven: list[tuple[str, str | None]] = []
     for ob in obs:
@@ -221,6 +290,9 @@ def _close(
 
 __all__ = [
     "MAX_REPROOFS",
+    "RECHECK_BASE_S",
+    "RECHECK_CAP_S",
+    "recheck_delay_s",
     "EraseOutcome",
     "reconcile_erase_operation",
     "reconcile_pending_erasures",

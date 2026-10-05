@@ -203,6 +203,7 @@ def _fetch_exhausted_obligations(
             "SELECT operation_id, MAX(profile_id) AS profile_id, "
             "MAX(attempts) AS attempts, MAX(updated_at) AS updated_at, "
             "GROUP_CONCAT(DISTINCT kind) AS kinds, "
+            "MAX(CASE WHEN kind = 'erase' THEN detail END) AS erase_detail, "
             "SUM(CASE WHEN detail LIKE '%admin_cancel%' THEN 1 ELSE 0 END) AS cancelled "
             f"FROM projection_obligations WHERE {where} "
             "GROUP BY operation_id "
@@ -228,8 +229,23 @@ def _fetch_exhausted_obligations(
             "when": row["updated_at"],
             "what_happened": _ERASE_UNCONFIRMED if erase_only else _SYNC_EXHAUSTED,
         }
+        reason = _detail_error(row["erase_detail"]) if erase_only else ""
+        if reason:
+            entry["error"] = reason
         result.append(entry)
     return result
+
+
+def _detail_error(detail_raw: str | None) -> str:
+    """The plain-English reason recorded on an obligation, or ``""``."""
+    import json
+
+    try:
+        parsed = json.loads(detail_raw) if detail_raw else {}
+    except (TypeError, ValueError):
+        return ""
+    error = parsed.get("error") if isinstance(parsed, dict) else None
+    return str(error) if error else ""
 
 
 # ---------------------------------------------------------------------------

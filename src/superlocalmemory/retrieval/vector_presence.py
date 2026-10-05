@@ -18,43 +18,56 @@ if TYPE_CHECKING:
 logger = logging.getLogger("superlocalmemory.retrieval.vector_store")
 
 
+class VectorPresenceUnknown(RuntimeError):
+    """The vector store could not be read, so presence is unknown.
+
+    Raised instead of answering ``False``: a caller proving an erasure must
+    treat an unreadable store as "not proven", never as "nothing there".
+    """
+
+
 def raw_vector_present(store: VectorStore, fact_id: str) -> bool:
-    if not store._available:
+    """Whether any vector for ``fact_id`` is still stored.
+
+    ``False`` only when the store was read and holds nothing for the fact --
+    including a store that has no vector tables yet, which cannot hold one.
+    Raises ``VectorPresenceUnknown`` when the store cannot be read.
+    """
+    if store._available:
         try:
-            conn = sqlite3.connect(str(store._db_path))
-            try:
+            with store._managed_connection() as conn:
                 row = conn.execute(
-                    "SELECT 1 FROM vector_row_map WHERE fact_id = ? LIMIT 1",
+                    "SELECT 1 FROM vector_row_map vrm "
+                    "WHERE vrm.fact_id = ? "
+                    "AND EXISTS (SELECT 1 FROM fact_embeddings fe "
+                    "WHERE fe.rowid = vrm.vec_rowid)",
                     (fact_id,),
                 ).fetchone()
                 return row is not None
-            finally:
-                conn.close()
-        except Exception:
-            return False
+        except Exception as exc:  # noqa: BLE001
+            # The vec0 join is unreadable; the plain fact map below can still
+            # answer, and fails closed itself if it cannot.
+            logger.debug("vector presence join failed for %s: %s", fact_id, exc)
+    return _map_present(store, fact_id)
+
+
+def _map_present(store: VectorStore, fact_id: str) -> bool:
     try:
-        with store._managed_connection() as conn:
+        conn = sqlite3.connect(str(store._db_path))
+        try:
             row = conn.execute(
-                "SELECT 1 FROM vector_row_map vrm "
-                "WHERE vrm.fact_id = ? "
-                "AND EXISTS (SELECT 1 FROM fact_embeddings fe "
-                "WHERE fe.rowid = vrm.vec_rowid)",
+                "SELECT 1 FROM vector_row_map WHERE fact_id = ? LIMIT 1",
                 (fact_id,),
             ).fetchone()
             return row is not None
-    except Exception:
-        try:
-            conn2 = sqlite3.connect(str(store._db_path))
-            try:
-                row = conn2.execute(
-                    "SELECT 1 FROM vector_row_map WHERE fact_id = ? LIMIT 1",
-                    (fact_id,),
-                ).fetchone()
-                return row is not None
-            finally:
-                conn2.close()
-        except Exception:
+        finally:
+            conn.close()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc):
             return False
+        raise VectorPresenceUnknown(f"vector store unreadable: {exc}") from exc
+    except sqlite3.Error as exc:
+        raise VectorPresenceUnknown(f"vector store unreadable: {exc}") from exc
 
 
 def is_searchable_by_meaning(

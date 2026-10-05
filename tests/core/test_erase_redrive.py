@@ -327,6 +327,13 @@ def test_unconfirmed_deletion_is_reported_then_clears_once_deleted(
 
     retried = _delete(engine, fact_id)
     assert retried["ok"] is True, retried
+    # Reported erasures are re-checked with back-off; let the first wait pass.
+    with engine._db.raw_connection() as conn:
+        conn.execute(
+            "UPDATE projection_obligations SET updated_at = updated_at - 31 "
+            "WHERE operation_id = ?",
+            (first_id,),
+        )
     _redrive(engine, passes=1)
 
     assert all(r["state"] == "erased" for r in _erase_rows(engine, first_id).values())

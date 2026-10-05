@@ -291,21 +291,35 @@ class ObligationLedger:
         *,
         profile_id: str,
         limit: int = 100,
+        now: float | None = None,
+        backoff: tuple[int, float, float] = (0, 0.0, 0.0),
     ) -> tuple[str, ...]:
-        """Erasures with an obligation not yet proven erased, oldest touch first.
+        """Erasures with an obligation due for re-proof, oldest touch first.
 
         Deliberately not bounded by ``attempts``: an erase obligation is closed
         by proof, not by retrying, so one exhausted by an earlier release must
         still be re-proven. Admin-cancelled obligations are left as cancelled.
+
+        ``backoff`` is ``(free, base_s, cap_s)``: the first ``free`` re-proofs
+        are due at once; after that an obligation is due ``base_s * 2**k``
+        seconds after its last touch (k = re-proofs beyond ``free``), never
+        more than ``cap_s``. Computed in SQL so a waiting obligation never
+        takes a slot from one that is due.
         """
+        free, base_s, cap_s = backoff
         rows = conn.execute(
             "SELECT operation_id FROM projection_obligations "
             "WHERE kind = ? AND profile_id = ? AND state NOT IN (?, ?) "
             "AND (detail IS NULL OR detail NOT LIKE '%admin_cancel%') "
+            "AND updated_at + CASE WHEN verify_attempts < ? THEN 0 "
+            "ELSE MIN(?, ? * (1 << MIN(verify_attempts - ?, 30))) END <= ? "
             "GROUP BY operation_id ORDER BY MIN(updated_at) LIMIT ?",
             (
                 str(ObligationKind.ERASE), profile_id,
-                str(ObligationState.VERIFIED), str(ObligationState.ERASED), limit,
+                str(ObligationState.VERIFIED), str(ObligationState.ERASED),
+                free, cap_s, base_s, free,
+                time.time() if now is None else now,
+                limit,
             ),
         ).fetchall()
         return tuple(row[0] for row in rows)
