@@ -451,7 +451,7 @@ def restore_pre_migration_snapshot(
     # Safety copy of what we are about to overwrite, deliberately NOT in the
     # snapshot directory — nothing prunes this location.
     safety_dir = target.parent / "pre-restore"
-    safety_dir.mkdir(parents=True, exist_ok=True)
+    _make_private_dir(safety_dir)
     # Microseconds, and never over an existing copy: a restore re-run within the
     # same second (a crash after the write, before the intent was retired) would
     # otherwise replace the first safety copy -- the only one holding the state

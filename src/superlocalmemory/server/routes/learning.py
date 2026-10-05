@@ -717,7 +717,10 @@ def learning_backup(request: Request):
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         backup_name = f"learning.db.backup_{timestamp}"
         backup_path = MEMORY_DIR / backup_name
-        shutil.copy2(str(LEARNING_DB), str(backup_path))
+        # A copy of what SLM learned is as private as learning.db itself.
+        from superlocalmemory.infra.private_files import copy_private
+
+        copy_private(LEARNING_DB, backup_path)
 
         return {
             "success": True, "filename": backup_name,

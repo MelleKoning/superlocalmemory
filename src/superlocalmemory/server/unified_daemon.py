@@ -2099,6 +2099,18 @@ async def lifespan(application: FastAPI):
                 logger.info("restore point applied at start-up: %s", _restored)
         except Exception as _restore_exc:  # never block start-up; the request stays pending
             logger.error("requested restore did not run: %s", _restore_exc)
+        # 4.1.21: restore points, backups and remote secrets an older release
+        # wrote readable by other accounts are made owner-only (idempotent).
+        try:
+            from superlocalmemory.infra.data_root import canonical_data_root
+            from superlocalmemory.infra.private_files import tighten_private_files
+
+            # The stores' folder, and the state root the remote keys live in
+            # (the same folder unless config.json moves the stores).
+            for _private_root in dict.fromkeys((Path(_data_root), canonical_data_root())):
+                tighten_private_files(_private_root)
+        except Exception as _tighten_exc:  # never block start-up
+            logger.error("could not check backup file permissions: %s", _tighten_exc)
         import time as _time_mod
         _t0 = _time_mod.monotonic()
         _result = apply_all(_learning_db, _memory_db)
