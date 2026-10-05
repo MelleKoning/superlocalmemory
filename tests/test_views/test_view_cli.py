@@ -54,9 +54,11 @@ def cli(tmp_path, monkeypatch):
     app.include_router(routes.router)
     app.state.engine = SimpleNamespace(
         _config=SimpleNamespace(), profile_id="default",
+        _db=SimpleNamespace(get_memory_content_batch=lambda *a, **k: {}),
         recall=lambda query, **kw: SimpleNamespace(
             results=[_result("f-2", "Second memory"), _result("f-1", "First memory")],
-            query_type="semantic", retrieval_time_ms=2.0, no_confident_match=False))
+            query_type="semantic", retrieval_time_ms=2.0, channel_weights={},
+            no_confident_match=False))
     tc = TestClient(app)
     from superlocalmemory.core.security_primitives import ensure_install_token
 
@@ -109,7 +111,7 @@ def test_names_with_slashes_and_spaces_reach_the_right_view(cli, capsys) -> None
     _run(capsys, "view", "create", "a/b c?&", "q")
     out, _ = _run(capsys, "view", "run", "a/b c?&")
     assert "a/b c?&" in out
-    assert any("/run?name=a%2Fb%20c%3F%26" in call for call in cli)
+    assert any("/run?name=a%2Fb%20c%3F%26&via=cli" in call for call in cli)
 
 
 def test_json_envelope(cli, capsys) -> None:

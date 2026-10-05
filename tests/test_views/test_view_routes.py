@@ -166,10 +166,11 @@ class TestRunIsRecall:
 
         def recall(query, **kw):
             calls.append((query, kw))
-            return SimpleNamespace(results=[], query_type="semantic",
+            return SimpleNamespace(results=[], query_type="semantic", channel_weights={},
                                    retrieval_time_ms=1.0, no_confident_match=True)
-        app.state.engine = SimpleNamespace(recall=recall, _config=SimpleNamespace(),
-                                           profile_id="default")
+        app.state.engine = SimpleNamespace(
+            recall=recall, _config=SimpleNamespace(), profile_id="default",
+            _db=SimpleNamespace(get_memory_content_batch=lambda *a, **k: {}))
         ViewStore(data_dir / "learning.db").create(
             "default", name="Work", query="what shipped", limit=7,
             filters={"kind": "decision", "window": "7d"})

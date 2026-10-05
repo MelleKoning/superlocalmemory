@@ -28,21 +28,58 @@ class _Collector:
         return register
 
 
-class _Pool:
-    def __init__(self) -> None:
-        self.calls: list[tuple] = []
+class _Daemon:
+    """The daemon's real views routes, reached the way the tool reaches them.
 
-    def recall(self, query, **kw):
-        self.calls.append((query, kw))
-        return {"ok": True, "profile": kw.get("profile_id"), "no_confident_match": False,
-                "results": [{"fact_id": "f-9", "memory_id": "m-9", "content": "nine",
-                             "score": 0.9},
-                            {"fact_id": "f-3", "memory_id": "m-3", "content": "three",
-                             "score": 0.3}]}
+    ``engine.recall`` is a stand-in that records what it was asked; everything
+    between the tool and it is the real code path.
+    """
+
+    def __init__(self, profile: dict) -> None:
+        from types import SimpleNamespace
+
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from superlocalmemory.server.routes import views as routes
+
+        self.calls: list[tuple] = []
+        self.paths: list[str] = []
+        app = FastAPI()
+        app.include_router(routes.router)
+
+        def recall(query, **kw):
+            self.calls.append((query, kw))
+            fact = lambda fid: SimpleNamespace(  # noqa: E731
+                fact_id=fid, memory_id="m-" + fid, content=fid, created_at="",
+                fact_type=None, lifecycle=None, access_count=0)
+            hit = lambda fid, score: SimpleNamespace(  # noqa: E731
+                fact=fact(fid), score=score, confidence=0.5, trust_score=0.5,
+                channel_scores={}, evidence_chain=[])
+            return SimpleNamespace(results=[hit("f-9", 0.9), hit("f-3", 0.3)],
+                                   query_type="semantic", channel_weights={},
+                                   retrieval_time_ms=1.0, no_confident_match=False)
+        app.state.engine = SimpleNamespace(
+            recall=recall, _config=SimpleNamespace(), profile_id="alice",
+            _db=SimpleNamespace(get_memory_content_batch=lambda *a, **k: {}))
+        self.client = TestClient(app)
+        self.profile = profile
+
+    def request(self, method, path, body=None, **kw):
+        from superlocalmemory.cli.daemon import DaemonNotFound
+
+        self.paths.append(path)
+        res = self.client.request(method, path, json=body)
+        if res.status_code == 404 and kw.get("preserve_not_found"):
+            detail = res.json()["detail"]
+            raise DaemonNotFound(404, detail["code"], detail["message"], path)
+        return res.json() if res.status_code == 200 else None
 
 
 @pytest.fixture()
 def mcp(tmp_path, monkeypatch):
+    from superlocalmemory.server.routes import views as routes
+
     monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path))
     learning_db(tmp_path)
     profile = {"name": "alice"}
@@ -50,11 +87,12 @@ def mcp(tmp_path, monkeypatch):
     async def runtime_profile(_get_engine, explicit=""):
         return profile["name"]
     monkeypatch.setattr("superlocalmemory.mcp.tools_core._runtime_profile", runtime_profile)
-    pool = _Pool()
-    monkeypatch.setattr("superlocalmemory.mcp._daemon_proxy.choose_pool", lambda: pool)
+    monkeypatch.setattr(routes, "_profile", lambda: profile["name"])
+    daemon = _Daemon(profile)
+    monkeypatch.setattr("superlocalmemory.cli.daemon.daemon_request", daemon.request)
     collector = _Collector()
     tools_views.register_view_tools(collector, lambda: None)
-    return collector.tools, pool, profile, ViewStore(tmp_path / "learning.db")
+    return collector.tools, daemon, profile, ViewStore(tmp_path / "learning.db")
 
 
 def _call(fn, **kw):
@@ -62,7 +100,7 @@ def _call(fn, **kw):
 
 
 def test_create_list_run_rename_delete(mcp) -> None:
-    tools, pool, _profile, _store = mcp
+    tools, daemon, _profile, _store = mcp
     made = _call(tools["manage_view"], action="create", name="Work", query="what shipped",
                  filters={"window": "7d"}, limit=4)
     assert made["success"] and made["view"]["filters"] == {"window": "7d"}
@@ -70,9 +108,11 @@ def test_create_list_run_rename_delete(mcp) -> None:
     assert [v["name"] for v in listed["views"]] == ["Work"]
     run = _call(tools["run_view"], name="work")
     assert run["result_ids"] == ["f-9", "f-3"]
-    (query, kw), = pool.calls
+    (query, kw), = daemon.calls
     assert query == "what shipped" and kw["limit"] == 4 and kw["window"] == "7d"
     assert kw["profile_id"] == "alice" and kw["session_id"].startswith("view:")
+    # The tool used the daemon's run route, the one run path, labelled "mcp".
+    assert daemon.paths == ["/api/v3/views/run?name=work&via=mcp"]
     renamed = _call(tools["manage_view"], action="rename", name="Work", new_name="Shipped")
     assert renamed["view"]["name"] == "Shipped"
     gone = _call(tools["manage_view"], action="delete", name="Shipped")
@@ -83,10 +123,10 @@ def test_a_run_is_not_a_conversation(mcp) -> None:
     """Continuity must ignore view runs, or a second run is biased by the first."""
     from superlocalmemory.core.session_identity import is_conversation
 
-    tools, pool, _profile, store = mcp
+    tools, daemon, _profile, store = mcp
     store.create("alice", name="W", query="q")
     _call(tools["run_view"], name="W")
-    assert is_conversation(pool.calls[0][1]["session_id"], "alice") is False
+    assert is_conversation(daemon.calls[0][1]["session_id"], "alice") is False
 
 
 @pytest.mark.parametrize("kw, code", [
@@ -105,26 +145,22 @@ def test_refusals_carry_stable_codes(mcp, kw, code) -> None:
 
 
 def test_a_view_of_another_profile_cannot_be_reached(mcp) -> None:
-    tools, pool, profile, store = mcp
+    tools, daemon, profile, store = mcp
     store.create("bob", name="Bob only", query="secret")
     assert _call(tools["run_view"])["views"] == []
     answer = _call(tools["run_view"], name="Bob only")
-    assert answer["code"] == "view_not_found" and pool.calls == []
+    assert answer["code"] == "view_not_found" and daemon.calls == []
     profile["name"] = "bob"
     assert [v["name"] for v in _call(tools["run_view"])["views"]] == ["Bob only"]
 
 
-def test_a_failed_recall_is_reported_not_dressed_up(mcp, monkeypatch) -> None:
-    tools, _pool, _profile, store = mcp
+def test_a_daemon_that_is_down_is_reported_not_dressed_up(mcp, monkeypatch) -> None:
+    tools, _daemon, _profile, store = mcp
     store.create("alice", name="W", query="q")
-
-    class Down:
-        def recall(self, *a, **k):
-            return {"ok": False, "code": "DAEMON_UNAVAILABLE", "retryable": True,
-                    "error": "daemon is down"}
-    monkeypatch.setattr("superlocalmemory.mcp._daemon_proxy.choose_pool", lambda: Down())
+    monkeypatch.setattr("superlocalmemory.cli.daemon.daemon_request", lambda *a, **k: None)
     answer = _call(tools["run_view"], name="W")
     assert answer["success"] is False and answer["code"] == "DAEMON_UNAVAILABLE"
+    assert answer["retryable"] is True
 
 
 class TestRemoteKeys:

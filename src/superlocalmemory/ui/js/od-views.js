@@ -4,7 +4,7 @@
 // with textContent, never as HTML.
 //
 // A saved view is a question someone asks their memory often, saved under a
-// name. Running it is running recall — the same search as Recall Lab — so the
+// name. Running it is running recall — the same search an AI assistant's recall runs — so the
 // answer is the same each time on an unchanged store, and every result shows
 // the id of the memory it came from (click a result to open that memory).
 //
@@ -39,7 +39,7 @@
       '<div id="' + id + '-views" style="padding-top:12px">' +
         '<p style="font-size:13px;color:var(--fg-2);margin-bottom:12px">' +
           'A saved view is a question you ask your memory often. Save it once and run ' +
-          'it any time: it uses the same search as Recall Lab, so it gives the same ' +
+          'it any time: it runs the same search your AI assistant uses, so it gives the same ' +
           'answer, and every result shows the memory it came from.' +
         '</p>' +
         '<div id="' + id + '-views-list" style="margin-bottom:18px">Loading your views…</div>' +

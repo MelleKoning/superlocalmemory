@@ -32,6 +32,11 @@
                    'result_count', 'total_ms', 'over_ceiling',
                    'retrieval_ms', 'embed_ms', 'rerank_ms', 'judge_ms'];
 
+  // A saved view run, by where it was run from (4.1.21). Counted like any
+  // question; the badge only says who asked.
+  var VIEW_ORIGIN_TEXT = { 'view-dashboard': 'Saved view · dashboard',
+                           'view-cli': 'Saved view · terminal', 'view-mcp': 'Saved view · agent' };
+
   var ctl = null; // the one live controller; replaced on every render
 
   function tryit() { return window.SLMAnswerCheckTryIt || {}; }
@@ -307,6 +312,7 @@
       el('td', {}, [
         el('span', { class: 'badge ' + tone, text: outcomeText(it.outcome) }),
         it.origin === 'dashboard' ? el('span', { class: 'badge neutral', style: 'margin-left:6px', text: 'Dashboard test' }) : null,
+        VIEW_ORIGIN_TEXT[it.origin] ? el('span', { class: 'badge neutral', style: 'margin-left:6px', text: VIEW_ORIGIN_TEXT[it.origin] }) : null,
       ]),
       el('td', { text: it.judge === 'laya' ? 'Laya' : it.judge === 'jev' ? 'Jev' : '—' }),
       el('td', { text: typeof it.answer_confidence === 'number' ? it.answer_confidence.toFixed(2) : '—' }),

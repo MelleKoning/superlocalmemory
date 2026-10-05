@@ -164,6 +164,21 @@ def test_origin_contextvar_requires_known_name() -> None:
     assert [ev.origin for _, ev in items] == ["", "dashboard", "dashboard"]
 
 
+def test_view_origins_are_known_and_nothing_else_is() -> None:
+    """4.1.21: a saved view run is tagged with where it ran; "" and made-up
+    names are still refused."""
+    h.enable(True)
+    for name in ("", "view", "view-evil", "VIEW-CLI"):
+        with pytest.raises(ValueError):
+            with h.origin(name):
+                pass
+    for name in ("view-dashboard", "view-cli", "view-mcp"):
+        with h.origin(name):
+            h.record_recall_verdict(make_response(), profile_id="default")
+    items, _ = h.recent("default", after_seq=0, limit=50)
+    assert [ev.origin for _, ev in items] == ["view-mcp", "view-cli", "view-dashboard"]
+
+
 def test_recent_is_newest_first_and_respects_after_seq() -> None:
     h.enable(True)
     for _ in range(5):

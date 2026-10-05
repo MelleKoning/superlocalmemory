@@ -997,12 +997,6 @@ def _hot_reconfigure_engine(application, new_config, *, mode_change: bool) -> No
 # ---------------------------------------------------------------------------
 
 from superlocalmemory.core.recall_gate import (
-    begin_recall as _begin_recall,
-)
-from superlocalmemory.core.recall_gate import (
-    end_recall as _end_recall,
-)
-from superlocalmemory.core.recall_gate import (
     in_flight as _recalls_in_flight,
 )
 
@@ -1045,9 +1039,17 @@ def _emit_event(
 # /recall calls spawn N × full-recall threads → Ollama serialises, reranker
 # lock queues, and total wall time is N × single-recall-time. 3 concurrent
 # full recalls gives parallelism benefit without resource oversaturation.
-import asyncio as _asyncio
-
-_recall_semaphore = _asyncio.Semaphore(3)
+# The semaphore, budget and sanitiser live in server/recall_core.py (4.1.21),
+# shared by /recall and saved views; the old names stay importable.
+from superlocalmemory.server.recall_core import (  # noqa: E402
+    RECALL_SEMAPHORE as _recall_semaphore,  # noqa: F401 — kept importable
+)
+from superlocalmemory.server.recall_core import (  # noqa: E402
+    recall_budget_s as _recall_budget_s,  # noqa: F401 — kept importable
+)
+from superlocalmemory.server.recall_core import (  # noqa: E402
+    sanitize_json_text as _sanitize_json_text,
+)
 
 
 def _facet_kwargs(project: str, saved_by: str, about: str, kind: str | None = None) -> dict:
@@ -1068,26 +1070,10 @@ def _facet_kwargs(project: str, saved_by: str, about: str, kind: str | None = No
     return {} if facets.empty else {"facets": facets}
 
 
-def _recall_budget_s() -> float:
-    """Generous latency budget for a recall before the keyword fallback (v3.8.3).
-
-    SLM's value is quality recall under heavy multi-agent load, so semantic
-    recall is given ample time; the keyword fallback is a LAST-RESORT safety
-    net for a genuine hang (e.g. a wedged embedder), not a speed cutoff. Tune
-    with SLM_SEARCH_RECALL_TIMEOUT_S (shared with the dashboard search route).
-    """
-    import os
-    try:
-        v = float(os.environ.get("SLM_SEARCH_RECALL_TIMEOUT_S", ""))
-        return v if v > 0 else 25.0
-    except (TypeError, ValueError):
-        return 25.0
-
-
 # The over-budget keyword answer lives in server/recall_fallback.py; the old
 # name stays importable for callers and tests.
 from superlocalmemory.server.recall_fallback import (  # noqa: E402
-    recall_keyword_fallback as _recall_keyword_fallback,
+    recall_keyword_fallback as _recall_keyword_fallback,  # noqa: F401 — kept importable
 )
 
 
@@ -1109,27 +1095,6 @@ def upgrade_banner(previous: str, current: str) -> str:
             "your memories are kept, and a restore point is taken before any change "
             "to the store. Changelog: "
             "https://github.com/qualixar/superlocalmemory/blob/main/CHANGELOG.md")
-
-
-def _sanitize_json_text(text: str) -> str:
-    """Strip control characters that break JSON serialization.
-
-    Facts ingested from agent conversations can contain raw \\n, \\r, \\t,
-    null bytes, and other ASCII control chars (0x00-0x1F) that survive
-    database round-trips but cause ``json.JSONDecodeError: Invalid control
-    character`` when FastAPI serialises the /recall response payload.
-
-    We replace them with spaces rather than dropping them so the byte
-    length is preserved and :300 truncation semantics stay predictable.
-    Python's ``str.isprintable()`` is too aggressive (it also drops
-    Unicode line separators), so we target only the ASCII control range.
-    """
-    if not text:
-        return text
-    # Fast path: most facts are clean JSON text. Check in C before allocating.
-    if all(c >= " " or c in "\n\r\t" for c in text):
-        return text
-    return "".join(c if c >= " " or c in "\n\r\t" else " " for c in text)
 
 
 # ---------------------------------------------------------------------------
@@ -4855,151 +4820,29 @@ def _register_daemon_routes(application: FastAPI) -> None:
         # Phase-1/D2: clamp cross-profile scope flags per enterprise recall policy.
         from superlocalmemory.core.admission import enforce_read_scope
         include_global, include_shared = enforce_read_scope(include_global, include_shared)
-        # v3.4.32: mark recall in-flight so the pending materializer pauses
-        # v3.4.52: run engine.recall() in a thread-pool executor so the
-        # FastAPI event loop stays responsive for /health, /remember, and
-        # concurrent /recall requests. Without this, a single slow full
-        # recall (reranker timeout, cold embedder) blocks ALL endpoints.
-        import asyncio
-        _begin_recall()
-        # v3.4.53: Opt-in deep recalls are gated by a semaphore to
-        # prevent resource oversaturation. Ollama serialises concurrent
-        # embedding calls and the reranker subprocess has a single lock —
-        # queuing more than ~3 concurrent full recalls just adds latency.
-        # Fast recalls retain the bounded retrieval channels but skip remote
-        # agentic verification, so they do not need the full-recall semaphore.
-        if not fast:
-            await _recall_semaphore.acquire()
+        # Everything from here to the response body is shared with saved views
+        # (server/recall_core.py), so a view and this route cannot drift apart.
+        from superlocalmemory.server.recall_core import RecallCall, run_recall
+
+        call = RecallCall(
+            query=search_query, limit=limit, session_id=effective_sid,
+            agent_id=recall_actor, fast=fast, profile_id=req_profile,
+            include_global=include_global, include_shared=include_shared,
+            window=window, as_of=as_of, known_as_of=known_as_of, valid_at=valid_at,
+            include_unknown=include_unknown,
+            facets=_facet_kwargs(project, saved_by, about, _kind).get("facets"),
+            skip_answer_check=_skip_check, no_reorder=_check_request == "no_reorder",
+            full=full, include_source=include_source,
+            include_marker=bool(session_id),
+        )
         try:
-            # v3.8.3: bound the recall so CLI/MCP callers never hang on a
-            # wedged embedder. Poll the executor future (which cannot be
-            # cancelled) without blocking the loop, and give quality recall a
-            # GENEROUS budget; only if it is exceeded do we serve the fast
-            # keyword fallback. The orphaned recall finishes in the background.
-            loop = asyncio.get_running_loop()
-
-            def _run_recall():
-                # The skip marker is entered HERE, on the executor thread: a
-                # context variable set on the event loop does not cross
-                # run_in_executor.
-                from contextlib import nullcontext
-
-                from superlocalmemory.core.answer_check_scope import skip_answer_check
-                with skip_answer_check() if _skip_check else nullcontext():
-                    return engine.recall(
-                        search_query, limit=limit, session_id=effective_sid,
-                        agent_id=recall_actor,
-                        fast=fast,
-                        profile_id=req_profile or None,
-                        include_global=include_global,
-                        include_shared=include_shared,
-                        window=window or None,
-                        as_of=as_of or None,
-                        known_as_of=known_as_of or None,
-                        valid_at=valid_at or None,
-                        include_unknown=include_unknown,
-                        **_facet_kwargs(project, saved_by, about, _kind),
-                        # Only when asked: an engine stand-in need not know it.
-                        **({"answer_check": "no_reorder"}
-                           if _check_request == "no_reorder" else {}),
-                    )
-
-            _rf = loop.run_in_executor(None, _run_recall)
-            _budget = _recall_budget_s()
-            _deadline = loop.time() + _budget
-            while not _rf.done() and loop.time() < _deadline:
-                await asyncio.sleep(0.05)
-            if not _rf.done():
-                _rf.add_done_callback(lambda f: (f.cancelled() or f.exception()))
-                logger.warning(
-                    "recall: semantic recall exceeded %.0fs budget for %r — "
-                    "serving keyword fallback", _budget, (search_query or "")[:80],
-                )
-                from superlocalmemory.server.profile_runtime import get_profile_runtime
-                fallback_snapshot = get_profile_runtime(application.state).snapshot
-                # L2-09/L3-10: the fallback must honour the same facets (and
-                # the kind facet) the primary path was asked for — reuse the
-                # identical construction so the two paths cannot drift.
-                return _recall_keyword_fallback(
-                    engine, search_query, limit, profile_id=req_profile or None,
-                    profile=req_profile or fallback_snapshot.profile_id,
-                    profile_generation=fallback_snapshot.generation,
-                    facets=_facet_kwargs(project, saved_by, about, _kind).get("facets"),
-                )
-            response = _rf.result()
-            # v3.4.26: return the same field shape as recall_worker so
-            # MCP processes proxying through the daemon get recall_trace-
-            # compatible data without a second round trip.
-            memory_ids = list({
-                r.fact.memory_id for r in response.results[:limit]
-                if r.fact.memory_id
-            })
-            memory_map = (
-                engine._db.get_memory_content_batch(
-                    memory_ids, req_profile or engine.profile_id,
-                    include_global=True, include_shared=True,
-                )
-                if memory_ids else {}
-            )
-            # v3.6.6: single shared serialization chokepoint — budget + source
-            # discipline + no_confident_match, identical across every surface.
-            from superlocalmemory.server.recall_serializer import (
-                recall_response_metadata,
-                serialize_recall_response,
-            )
-            _rc = getattr(engine._config, "retrieval", None)
-            results, no_confident_match = serialize_recall_response(
-                response,
-                limit=limit,
-                memory_map={k: _sanitize_json_text(v) for k, v in memory_map.items()},
-                per_fact_max=getattr(_rc, "recall_per_fact_max_chars", 2400),
-                total_max=getattr(_rc, "recall_total_max_chars", 12000),
-                # Option B: markers only on session-bearing recalls. A marker can
-                # only buy a learning signal when a pending_outcomes row exists
-                # to settle, and those exist only when session_id is present.
-                include_marker=bool(session_id),
-                full=full,
-                include_source=include_source,
-            )
-            for _r in results:
-                _r["content"] = _sanitize_json_text(_r.get("content", ""))
-            from superlocalmemory.server.profile_runtime import get_profile_runtime
-
-            profile_snapshot = get_profile_runtime(application.state).snapshot
-            return {
-                "ok": True,
-                # The profile that actually served this recall: the routed
-                # profile when ?profile_id= named one, else the active one.
-                # Reporting the active profile for a routed request would
-                # tell the caller their b-profile answer came from "default".
-                # profile_generation stays from the snapshot — it describes
-                # global switch state, which per-request routing never moves.
-                "profile": req_profile or profile_snapshot.profile_id,
-                "profile_generation": profile_snapshot.generation,
-                "query": search_query,
-                "query_type": response.query_type,
-                "result_count": len(results),
-                "retrieval_time_ms": round(response.retrieval_time_ms, 1),
-                "channel_weights": {
-                    k: round(v, 3)
-                    for k, v in (response.channel_weights or {}).items()
-                },
-                "total_candidates": getattr(response, "total_candidates", 0),
-                "results": results,
-                "count": len(results),
-                "no_confident_match": no_confident_match,
-                **recall_response_metadata(response),
-            }
+            return await run_recall(engine, call, app_state=application.state)
         except Exception:
             # L3-06: never let str(exc) leave the server — it can carry a
             # local path, a stack value, or other internal detail that is
             # none of the caller's business.
             logger.exception("GET /recall failed")
             raise HTTPException(500, detail="recall failed; see server logs")
-        finally:
-            if not fast:
-                _recall_semaphore.release()
-            _end_recall()
 
     @application.post("/remember")
     async def remember(

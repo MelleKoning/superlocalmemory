@@ -127,7 +127,7 @@ def _create(args: Namespace, out: _Out) -> None:
 
 
 def _run(args: Namespace, out: _Out) -> None:
-    data = _request(out, "GET", f"/run?name={quote(args.name, safe='')}")
+    data = _request(out, "GET", f"/run?name={quote(args.name, safe='')}&via=cli")
     out.emit(data, _run_text(data))
 
 

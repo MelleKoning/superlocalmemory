@@ -352,3 +352,19 @@ describe('Answer Check tab — behaviour', function () {
     assert.equal(first.stopped, true);
   });
 });
+
+describe('Answer Check tab — saved view runs (4.1.21)', function () {
+  it('labels each view run by where it was run from, and nothing else', async function () {
+    const p = await render({
+      '/api/v3/answer-check/history': { status: 200, body: { enabled: true, next_cursor: null,
+        items: [item('v1', { origin: 'view-dashboard' }), item('v2', { origin: 'view-cli' }),
+                item('v3', { origin: 'view-mcp' }), item('v4', { origin: 'view-evil' })] } },
+    });
+    const feed = [...p.d.querySelectorAll('#ac-feed tr[data-id]')].map(r => r.textContent).join('|');
+    assert.match(feed, /Saved view · dashboard/);
+    assert.match(feed, /Saved view · terminal/);
+    assert.match(feed, /Saved view · agent/);
+    assert.equal((feed.match(/Saved view/g) || []).length, 3,
+      'an unknown origin must not get a label');
+  });
+});
