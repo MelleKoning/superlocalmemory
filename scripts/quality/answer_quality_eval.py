@@ -255,7 +255,46 @@ def run_judges(args: argparse.Namespace) -> dict:
     for provider, block in report["providers"].items():
         block["suggested"] = choose_threshold(
             block["sweep"], max_false_accept_rate=args.max_false_accept)
+    if args.write_calibration:
+        report["calibration_file"] = _write_calibration(
+            Path(args.write_calibration), report["providers"])
     return report
+
+
+def calibration_entries(providers: dict) -> list[dict]:
+    """One file entry per judge whose suggested threshold rests on enough data."""
+    from superlocalmemory.retrieval import judge_calibration_file as jcf
+    from superlocalmemory.retrieval.judge_recipe import ACTIVE_RECIPE
+
+    entries = []
+    for provider, block in sorted(providers.items()):
+        row = block.get("suggested")
+        if provider not in jcf.BACKENDS or row is None:
+            continue
+        answered = row["correct_accept"] + row["false_abstain"]
+        unanswered = row["false_accept"] + row["correct_abstain"]
+        if answered < jcf.MIN_ANSWERED or unanswered < jcf.MIN_UNANSWERED:
+            continue
+        entries.append({"backend": provider, "recipe_id": ACTIVE_RECIPE.recipe_id,
+                        "threshold": row["threshold"], "answered": answered,
+                        "unanswered": unanswered,
+                        "measured_at": time.strftime("%Y-%m-%d")})
+    return entries
+
+
+def _write_calibration(path: Path, providers: dict) -> dict:
+    """Write the measured thresholds, never a file the product would refuse."""
+    from superlocalmemory.retrieval import judge_calibration_file as jcf
+
+    entries = calibration_entries(providers)
+    if not entries:
+        return {"written": False, "reason": "no judge had enough answered and "
+                f"unanswered questions ({jcf.MIN_ANSWERED}/{jcf.MIN_UNANSWERED})"}
+    payload = {"schema": jcf.SCHEMA, "entries": entries}
+    jcf.parse_entries(payload)  # the same check the product applies
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return {"written": True, "path": str(path), "backends": [e["backend"] for e in entries]}
 
 
 # -- shared ----------------------------------------------------------------------
@@ -287,6 +326,9 @@ def _parser() -> argparse.ArgumentParser:
     j.add_argument("--max-false-accept", type=float, default=0.10)
     j.add_argument("--timeout", type=float, default=30.0)
     j.add_argument("--out", help="per-question outcomes (JSON Lines)")
+    j.add_argument("--write-calibration", metavar="PATH",
+                   help="write the suggested thresholds as an "
+                        "answer_check_calibration.json (review before use)")
     return p
 
 
