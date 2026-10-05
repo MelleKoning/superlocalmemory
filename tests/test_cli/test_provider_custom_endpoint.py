@@ -18,6 +18,8 @@ from unittest.mock import patch
 
 import pytest
 
+from tests._portable import child_env_base
+
 from superlocalmemory.core.config import SLMConfig
 from superlocalmemory.storage.models import Mode
 from tests.fixtures.stub_llm_server import StubLLMServer
@@ -258,7 +260,7 @@ class TestCliWiring:
             "main()\n"
         )
         env = dict(os.environ)
-        env["HOME"] = str(tmp_path)
+        env.update(child_env_base(tmp_path))  # HOME, and USERPROFILE on Windows
         env["SLM_DATA_DIR"] = str(tmp_path / "data")
         env["SLM_NON_INTERACTIVE"] = "1"
         env["CI"] = "1"

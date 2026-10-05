@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._portable import child_env_base
+
 from superlocalmemory.cli import remote_commands
 
 REPO = Path(__file__).resolve().parents[2]
@@ -26,7 +28,7 @@ STRICT_FLAGS = ssl.VERIFY_X509_STRICT | ssl.VERIFY_X509_PARTIAL_CHAIN
 
 def _slm(tmp_path: Path, *argv: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "PYTHONPATH": str(REPO / "src"), "SLM_DATA_DIR": str(tmp_path),
-           "HOME": str(tmp_path / "home"), "SLM_SKIP_FIRST_USE": "1"}
+           **child_env_base(tmp_path / "home"), "SLM_SKIP_FIRST_USE": "1"}
     return subprocess.run([sys.executable, "-m", "superlocalmemory.cli.main", *argv],
                           env=env, capture_output=True, text=True, timeout=120)
 

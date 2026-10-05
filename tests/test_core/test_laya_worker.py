@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._portable import child_env_base
+
 WORKER = (Path(__file__).resolve().parents[2]
           / "src" / "superlocalmemory" / "core" / "laya_worker.py")
 
@@ -59,7 +61,7 @@ def worker(tmp_path):
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, bufsize=1, env={"PYTHONPATH": str(tmp_path), "PATH": "/usr/bin:/bin",
                                    "LAYA_STUB_LOG": str(tmp_path / "seen.jsonl"),
-                                   "HOME": str(tmp_path)},
+                                   **child_env_base(tmp_path)},
     )
 
     def ask(request: dict) -> dict:

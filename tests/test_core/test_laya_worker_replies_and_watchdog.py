@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._portable import child_env_base
+
 WORKER = (Path(__file__).resolve().parents[2]
           / "src" / "superlocalmemory" / "core" / "laya_worker.py")
 
@@ -55,7 +57,7 @@ def _spawn(tmp_path: Path, *, with_library: bool = True) -> subprocess.Popen:
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, bufsize=1,
         env={"PYTHONPATH": str(tmp_path) if with_library else "",
-             "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+             "PATH": "/usr/bin:/bin", **child_env_base(tmp_path)},
     )
 
 

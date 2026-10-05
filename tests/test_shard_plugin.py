@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._portable import child_env_base
+
 from tests._shard_plugin import parse_shard, shard_of
 
 REPO = Path(__file__).resolve().parents[1]
@@ -40,7 +42,7 @@ def _collected(tmp_path: Path, *extra: str) -> list[str]:
     # A child pytest of its own: this run's data root would read as live to it.
     env = {k: v for k, v in os.environ.items()
            if k not in ("SLM_DATA_DIR", "SL_MEMORY_PATH", "SLM_HOME")}
-    env.update(PYTHONPATH=str(REPO), HOME=str(tmp_path / "home"))
+    env.update(PYTHONPATH=str(REPO), **child_env_base(tmp_path / "home"))
     out = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "--collect-only", "-p", "no:cacheprovider",
          "-p", "tests._shard_plugin", "--rootdir", str(tmp_path), "-c", os.devnull,

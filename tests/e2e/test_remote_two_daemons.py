@@ -28,6 +28,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._portable import child_env_base
+
 REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "src"
 PRODUCTION_PORTS = {8765, 8767}
@@ -51,7 +53,8 @@ def _free_port() -> int:
 def _env(root: Path, port: int) -> dict:
     env = {k: os.environ[k] for k in ("PATH", "LANG", "LC_ALL", "TMPDIR") if k in os.environ}
     env.update({
-        "HOME": str(root / "home"), "PYTHONPATH": str(SRC), "SLM_DATA_DIR": str(root / "data"),
+        **child_env_base(root / "home"), "PYTHONPATH": str(SRC),
+        "SLM_DATA_DIR": str(root / "data"),
         "SLM_DAEMON_PORT": str(port), "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
         "HF_HOME": str(root / "cache" / "hf"), "XDG_CACHE_HOME": str(root / "cache"),
         "SENTENCE_TRANSFORMERS_HOME": str(root / "cache" / "st"), "CI": "1",
