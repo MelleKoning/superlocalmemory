@@ -67,8 +67,8 @@ def _owned_daemon_port() -> int:
     """The port of this account's own daemon, or exit with a plain message.
 
     On a computer shared by several accounts the port may be answered by
-    another account's SuperLocalMemory; nothing is sent until the daemon
-    proves it is this account's.
+    another account's SuperLocalMemory, so the operation request waits until
+    the daemon proves it is this account's.
     """
     port = _get_daemon_port()
     try:
