@@ -26,7 +26,7 @@ def test_save_includes_active_profile(tmp_path):
     config = SLMConfig.for_mode(Mode.A)
     config.active_profile = "work"
     config.save(tmp_path / "config.json")
-    data = json.loads((tmp_path / "config.json").read_text())
+    data = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
     assert data["active_profile"] == "work"
 
 
@@ -41,7 +41,7 @@ def test_load_restores_active_profile(tmp_path):
 
 def test_load_missing_profile_defaults_to_default(tmp_path):
     # Write a config without active_profile field
-    (tmp_path / "config.json").write_text('{"mode": "a", "llm": {"provider": ""}}')
+    (tmp_path / "config.json").write_text('{"mode": "a", "llm": {"provider": ""}}', encoding="utf-8")
     config = SLMConfig.load(tmp_path / "config.json")
     assert config.active_profile == "default"
 

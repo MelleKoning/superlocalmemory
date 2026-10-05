@@ -109,7 +109,7 @@ def _run_without_root_conftest(tmp_path: Path, *, pinned: bool) -> Path:
     test_file = tmp_path / ("test_pinned.py" if pinned else "test_unpinned.py")
     test_file.write_text(_RUNTIME_WRITER.format(fixture_import=(
         "from tests.isolation_guard import explicit_slm_root  # noqa: F401"
-        if pinned else "")))
+        if pinned else "")), encoding="utf-8")
     env = {k: v for k, v in os.environ.items()
            if k not in ("SLM_DATA_DIR", "SL_MEMORY_PATH", "SLM_HOME")}
     env.update(HOME=str(home),
@@ -167,7 +167,7 @@ def _run_noconftest(tmp_path: Path, name: str, *, prelude: str, extra: list[str]
     home.mkdir(parents=True)
     live.mkdir()
     test_file = case / f"test_{name}.py"
-    test_file.write_text(_LOCK_WRITER.format(prelude=prelude))
+    test_file.write_text(_LOCK_WRITER.format(prelude=prelude), encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith(("SLM_", "SL_MEMORY"))}
     env.update(HOME=str(home), SLM_DATA_DIR=str(live), FAKE_LIVE_ROOT=str(live),
                SLM_DAEMON_PORT="48733",

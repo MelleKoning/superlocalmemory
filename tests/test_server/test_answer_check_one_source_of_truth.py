@@ -157,7 +157,7 @@ def test_no_mode_file_keeps_its_own_copy_of_the_consent(client, live, three_mode
     SLMConfig.switch_mode("a", three_modes)
     SLMConfig.switch_mode("b", three_modes)
     for name in ("config.json", "mode_a.json", "mode_b.json", "mode_c.json"):
-        retrieval = json.loads((three_modes / name).read_text()).get("retrieval", {})
+        retrieval = json.loads((three_modes / name).read_text(encoding="utf-8")).get("retrieval", {})
         leaked = sorted(k for k in retrieval if k.startswith("sufficiency_"))
         assert leaked == [], f"{name} still carries {leaked}"
 
@@ -171,9 +171,9 @@ def _drift_config_json_away_from_current_mode(root) -> None:
     """What a dashboard mode switch leaves behind: config.json says one mode,
     ``current_mode`` another, so ``SLMConfig.load()`` reads mode_<current>.json."""
     path = root / "config.json"
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     data["mode"] = "c"
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
 
 
 def test_withdrawing_after_a_dashboard_mode_switch_really_turns_jev_off(
@@ -265,12 +265,12 @@ def test_a_damaged_settings_file_never_reads_as_consent(client, live, three_mode
     so use whatever the config file says"."""
     _turn_jev_and_reordering_on(client)
     path = three_modes / "config.json"
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     data.setdefault("retrieval", {}).update(
         sufficiency_judge="jev", sufficiency_jev_consent=True,
         sufficiency_jev_rerank=True, sufficiency_jev_rerank_consent=True)
-    path.write_text(json.dumps(data))
-    (three_modes / STATE_FILE).write_text("{not json")
+    path.write_text(json.dumps(data), encoding="utf-8")
+    (three_modes / STATE_FILE).write_text("{not json", encoding="utf-8")
     after = _answer_check(SLMConfig.load())
     assert after["consent"] is False
     assert after["rerank_consent"] is False

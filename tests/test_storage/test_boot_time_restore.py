@@ -75,7 +75,7 @@ def test_refuses_while_another_daemon_is_alive(tmp_path) -> None:
     learning_db, memory_db, point = _scenario(tmp_path)
     other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     try:
-        (tmp_path / "daemon.pid").write_text(str(other.pid))
+        (tmp_path / "daemon.pid").write_text(str(other.pid), encoding="utf-8")
         before = file_digest(memory_db)
 
         outcome = _restore(tmp_path, learning_db, memory_db, point)
@@ -178,7 +178,7 @@ def test_intent_is_renamed_before_return(tmp_path) -> None:
     assert outcome.status == "restored"
     assert not (tmp_path / "restore-intent.json").exists()
     assert len(list(tmp_path.glob("restore-intent.done-*.json"))) == 1
-    recorded = json.loads((tmp_path / "restore-outcome.json").read_text())
+    recorded = json.loads((tmp_path / "restore-outcome.json").read_text(encoding="utf-8"))
     assert recorded["status"] == "restored" and recorded["point_id"] == point.point_id
     assert ur.perform_pending_restore(tmp_path, memory_db, learning_db) is None
 
@@ -209,7 +209,7 @@ def test_confirmed_kinds_are_reapplied(tmp_path) -> None:
         row = conn.execute("SELECT memory_kind, memory_kind_source, fact_type FROM "
                            "atomic_facts WHERE fact_id='f1'").fetchone()
     assert row == ("rule", "user", "semantic")
-    assert json.loads((tmp_path / "restore-outcome.json").read_text())[
+    assert json.loads((tmp_path / "restore-outcome.json").read_text(encoding="utf-8"))[
         "reimport_pending"] is False
 
 
@@ -295,7 +295,7 @@ def test_stale_vector_and_graph_copies_stop_serving_after_a_restore(tmp_path) ->
     stage.mkdir(parents=True)
     (stage / "scale-engine.json").write_text(json.dumps({
         "schema_version": 1, "stage_id": stage.name, "state": "verified",
-        "created_at": "2026-10-01T00:00:00Z", "profile_id": "default"}))
+        "created_at": "2026-10-01T00:00:00Z", "profile_id": "default"}), encoding="utf-8")
     saved: list[str] = []
     config = SimpleNamespace(base_dir=tmp_path, data_dir=tmp_path, db_path=memory_db,
                              active_profile="default", scale_engine_state="promoted",
@@ -307,7 +307,7 @@ def test_stale_vector_and_graph_copies_stop_serving_after_a_restore(tmp_path) ->
     assert outcome.projections == "rebuild_scheduled"
     assert (config.scale_engine_state, config.graph_backend, config.vector_backend) == (
         "local_core", "auto", "auto") and saved == ["local_core"]
-    assert json.loads((stage / "scale-engine.json").read_text())["state"] == "superseded"
+    assert json.loads((stage / "scale-engine.json").read_text(encoding="utf-8"))["state"] == "superseded"
 
 
 def test_a_full_disk_part_way_through_changes_nothing(tmp_path, monkeypatch) -> None:

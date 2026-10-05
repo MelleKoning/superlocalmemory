@@ -71,7 +71,7 @@ def _venv(root: Path, *, target: Path | None = None, cfg: bool = True) -> Path:
     """A Python environment shape: <root>/bin/python (+ pyvenv.cfg)."""
     (root / "bin").mkdir(parents=True)
     if cfg:
-        (root / "pyvenv.cfg").write_text("home = /usr/bin\n")
+        (root / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
     python = root / "bin" / "python"
     python.symlink_to(target if target is not None else owned_python(root.parent))
     return python
@@ -88,7 +88,7 @@ def _running_interpreter(monkeypatch, root: Path) -> Path:
 
 def _script(path: Path, mode: int = 0o755) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("#!/bin/sh\necho pwned\n")
+    path.write_text("#!/bin/sh\necho pwned\n", encoding="utf-8")
     path.chmod(mode)
     return path
 
@@ -198,7 +198,7 @@ class TestCheckedAgainBeforeRunning:
         model.mkdir()
         record = {"python": str(python), "model_path": str(model), "verified": True}
         lr.runtime_dir().mkdir(parents=True, exist_ok=True)
-        (lr.runtime_dir() / "adopted.json").write_text(json.dumps(record))
+        (lr.runtime_dir() / "adopted.json").write_text(json.dumps(record), encoding="utf-8")
         assert lr.detect().state == lr.STATE_READY
 
         target.chmod(0o777)  # someone else can now swap what runs
@@ -228,7 +228,7 @@ for raw in sys.stdin:
 @pytest.fixture()
 def recording_worker(tmp_path, monkeypatch):
     worker = tmp_path / "worker.py"
-    worker.write_text(_RECORDING_WORKER)
+    worker.write_text(_RECORDING_WORKER, encoding="utf-8")
     log = tmp_path / "requests.jsonl"
     monkeypatch.setattr(lr, "WORKER_PATH", worker)
     monkeypatch.setenv("FAKE_LOG", str(log))
@@ -240,7 +240,7 @@ class TestTheCanaryIsBounded:
             self, recording_worker, tmp_path):
         ok, _ = lr.verify(str(owned_python(tmp_path)), "", str(tmp_path))
         assert ok is True
-        load = json.loads(recording_worker.read_text().splitlines()[0])
+        load = json.loads(recording_worker.read_text(encoding="utf-8").splitlines()[0])
         assert load["cmd"] == "load"
         assert isinstance(load.get("memory_limit_mb"), int) and load["memory_limit_mb"] > 0
 
@@ -279,9 +279,9 @@ class TestTheCanaryIsBounded:
         model.mkdir(parents=True)
         record = {"python": str(venv_python), "model_path": str(model), "verified": True,
                   "verified_at": "earlier"}
-        (run_dir / ".slm-managed").write_text(json.dumps(record))
+        (run_dir / ".slm-managed").write_text(json.dumps(record), encoding="utf-8")
         monkeypatch.setattr(lr, "verify", lambda *a, **k: (False, lr.VERIFY_BUSY))
 
         ok, _ = lr._verify_and_record(run_dir, venv_python, run_dir / "hf", model)
-        assert json.loads((run_dir / ".slm-managed").read_text())["verified"] is True
+        assert json.loads((run_dir / ".slm-managed").read_text(encoding="utf-8"))["verified"] is True
         assert ok is True

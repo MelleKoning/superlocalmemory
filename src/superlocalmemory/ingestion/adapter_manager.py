@@ -53,14 +53,14 @@ def _adapter_log_dir() -> Path:
 def _load_config() -> dict:
     config_path = _adapters_config_path()
     if config_path.exists():
-        return json.loads(config_path.read_text())
+        return json.loads(config_path.read_text(encoding="utf-8"))
     return {name: {"enabled": False} for name in _VALID_ADAPTERS}
 
 
 def _save_config(config: dict) -> None:
     config_path = _adapters_config_path()
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(config, indent=2))
+    config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
 
 def _pid_file(name: str) -> Path:
@@ -73,7 +73,7 @@ def _is_running(name: str) -> tuple[bool, int | None]:
     if not pf.exists():
         return False, None
     try:
-        pid = int(pf.read_text().strip())
+        pid = int(pf.read_text(encoding="utf-8").strip())
         try:
             import psutil
             return psutil.pid_exists(pid), pid
@@ -156,10 +156,10 @@ def start_adapter(name: str) -> dict:
     else:
         kwargs["start_new_session"] = True
 
-    with open(log_path, "a") as lf:
+    with open(log_path, "a", encoding="utf-8") as lf:
         proc = subprocess.Popen(cmd, stdout=lf, stderr=lf, **kwargs)
 
-    _pid_file(name).write_text(str(proc.pid))
+    _pid_file(name).write_text(str(proc.pid), encoding="utf-8")
     return {"ok": True, "message": f"{name} started (PID {proc.pid})", "pid": proc.pid}
 
 

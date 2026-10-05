@@ -69,7 +69,7 @@ for raw in sys.stdin:
 @pytest.fixture()
 def worker(tmp_path, monkeypatch) -> Path:
     path = tmp_path / "fake_laya_worker.py"
-    path.write_text(_FAKE_WORKER)
+    path.write_text(_FAKE_WORKER, encoding="utf-8")
     monkeypatch.setattr(mod, "_WARMUP_BACKOFF_S", 0.01)
     return path
 
@@ -201,7 +201,7 @@ _SNAPSHOT_SHA = "20aed815fc6acde75733882e7ec0e3f28aeb9717"
 def _requests(log: Path, cmd: str) -> list[dict]:
     if not log.exists():
         return []
-    rows = [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+    rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
     return [r for r in rows if r.get("cmd") == cmd]
 
 

@@ -74,7 +74,7 @@ class CalendarAdapter(BaseAdapter):
         adapters_path = _adapters_config_path()
         cfg = {}
         if adapters_path.exists():
-            cfg = json.loads(adapters_path.read_text()).get("calendar", {})
+            cfg = json.loads(adapters_path.read_text(encoding="utf-8")).get("calendar", {})
 
         if cfg.get("tier") == "ics" or cfg.get("ics_path"):
             self._tier = "ics"
@@ -342,7 +342,7 @@ if __name__ == "__main__":
     adapters_path = _adapters_config_path()
     tier = "auto"
     if adapters_path.exists():
-        cfg = json.loads(adapters_path.read_text()).get("calendar", {})
+        cfg = json.loads(adapters_path.read_text(encoding="utf-8")).get("calendar", {})
         tier = cfg.get("tier", "auto")
 
     adapter = CalendarAdapter(tier=tier)

@@ -60,13 +60,13 @@ class TestCheckEmbeddingMigration:
         stored signature is refreshed to the current form (converges)."""
         # seed config.json with the OLD prefixed signature (as a real M5 DB has)
         (tmp_path / "config.json").write_text(json.dumps(
-            {"embedding_signature": "nomic-ai/nomic-embed-text-v1.5::768"}))
+            {"embedding_signature": "nomic-ai/nomic-embed-text-v1.5::768"}), encoding="utf-8")
         cfg = _cfg(tmp_path, "nomic-embed-text-v1.5", 768)
 
         assert check_embedding_migration(cfg) is False  # no re-embed
 
         # stored signature refreshed to current form
-        stored = json.loads((tmp_path / "config.json").read_text())["embedding_signature"]
+        stored = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))["embedding_signature"]
         assert stored == "nomic-embed-text-v1.5::768"
         # idempotent second call
         assert check_embedding_migration(cfg) is False
@@ -74,17 +74,17 @@ class TestCheckEmbeddingMigration:
     def test_first_run_initializes_no_migration(self, tmp_path: Path) -> None:
         cfg = _cfg(tmp_path, "nomic-embed-text-v1.5", 768)
         assert check_embedding_migration(cfg) is False
-        stored = json.loads((tmp_path / "config.json").read_text())["embedding_signature"]
+        stored = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))["embedding_signature"]
         assert stored == "nomic-embed-text-v1.5::768"
 
     def test_genuine_model_change_triggers_migration(self, tmp_path: Path) -> None:
         (tmp_path / "config.json").write_text(json.dumps(
-            {"embedding_signature": "nomic-embed-text-v1.5::768"}))
+            {"embedding_signature": "nomic-embed-text-v1.5::768"}), encoding="utf-8")
         cfg = _cfg(tmp_path, "bge-large-en-v1.5", 1024)
         assert check_embedding_migration(cfg) is True
 
     def test_dimension_change_triggers_migration(self, tmp_path: Path) -> None:
         (tmp_path / "config.json").write_text(json.dumps(
-            {"embedding_signature": "nomic-embed-text-v1.5::768"}))
+            {"embedding_signature": "nomic-embed-text-v1.5::768"}), encoding="utf-8")
         cfg = _cfg(tmp_path, "nomic-embed-text-v1.5", 1024)
         assert check_embedding_migration(cfg) is True

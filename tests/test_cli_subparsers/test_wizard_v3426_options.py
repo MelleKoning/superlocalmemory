@@ -84,7 +84,7 @@ class TestPersistence:
         )
         persist_v3426_options(opts, slm_home)
 
-        out = json.loads((slm_home / "v3426_options.json").read_text())
+        out = json.loads((slm_home / "v3426_options.json").read_text(encoding="utf-8"))
         assert out == {
             "queue_enabled": True,
             "rate_limit_per_pid": 30,
@@ -101,7 +101,7 @@ class TestPersistence:
     def test_persist_overwrites(self, slm_home):
         persist_v3426_options(V3426Options(True, 30, 10, 100), slm_home)
         persist_v3426_options(V3426Options(False, 5, 2, 20), slm_home)
-        out = json.loads((slm_home / "v3426_options.json").read_text())
+        out = json.loads((slm_home / "v3426_options.json").read_text(encoding="utf-8"))
         assert out["queue_enabled"] is False
         assert out["rate_limit_per_pid"] == 5
 

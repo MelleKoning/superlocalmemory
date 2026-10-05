@@ -49,7 +49,7 @@ def load(model, **kwargs):
 
 def _spawn(tmp_path: Path, *, with_library: bool = True) -> subprocess.Popen:
     if with_library:
-        (tmp_path / "laya_mlx.py").write_text(_STUB)
+        (tmp_path / "laya_mlx.py").write_text(_STUB, encoding="utf-8")
     return subprocess.Popen(
         [sys.executable, str(WORKER)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,

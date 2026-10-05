@@ -21,6 +21,6 @@ def test_scale_engine_selection_round_trips_without_promotion(tmp_path) -> None:
 
 def test_invalid_scale_engine_state_fails_closed_to_local_core(tmp_path) -> None:
     path = tmp_path / "config.json"
-    path.write_text('{"mode":"a", "scale_engine_state":"active_everywhere"}')
+    path.write_text('{"mode":"a", "scale_engine_state":"active_everywhere"}', encoding="utf-8")
 
     assert SLMConfig.load(path).scale_engine_state == "local_core"

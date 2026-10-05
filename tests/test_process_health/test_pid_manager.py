@@ -92,7 +92,7 @@ class TestPidManagerCorruption:
     """T7: Corrupt PID file is deleted and recreated, not crashed on."""
 
     def test_pid_file_corruption_recovery(self, tmp_pid_file: Path) -> None:
-        tmp_pid_file.write_text("{invalid json !!!")
+        tmp_pid_file.write_text("{invalid json !!!", encoding="utf-8")
         from superlocalmemory.infra.pid_manager import PidManager
 
         mgr = PidManager(tmp_pid_file)
@@ -105,7 +105,7 @@ class TestPidManagerCorruption:
 
     def test_malformed_structure(self, tmp_pid_file: Path) -> None:
         """PID file with valid JSON but wrong structure returns empty."""
-        tmp_pid_file.write_text(json.dumps({"wrong_key": []}))
+        tmp_pid_file.write_text(json.dumps({"wrong_key": []}), encoding="utf-8")
         from superlocalmemory.infra.pid_manager import PidManager
 
         mgr = PidManager(tmp_pid_file)
@@ -146,7 +146,7 @@ class TestAtomicWrite:
         mgr.register(1234, 5678)
 
         # Read current state as baseline
-        original_content = tmp_pid_file.read_text()
+        original_content = tmp_pid_file.read_text(encoding="utf-8")
 
         # Mock os.replace to simulate crash during atomic write
         with patch("os.replace", side_effect=OSError("Simulated disk failure")):
@@ -188,7 +188,7 @@ class TestReadAllUnlinkError:
 
     def test_corrupt_file_unlink_fails(self, tmp_pid_file: Path) -> None:
         """OSError on unlink of corrupt file is handled gracefully."""
-        tmp_pid_file.write_text("{invalid json !!!")
+        tmp_pid_file.write_text("{invalid json !!!", encoding="utf-8")
         from superlocalmemory.infra.pid_manager import PidManager
 
         mgr = PidManager(tmp_pid_file)
@@ -207,7 +207,7 @@ class TestReadAllOSError:
 
     def test_os_error_on_read(self, tmp_pid_file: Path) -> None:
         """OSError on reading PID file returns empty list."""
-        tmp_pid_file.write_text('{"pids": []}')
+        tmp_pid_file.write_text('{"pids": []}', encoding="utf-8")
         from superlocalmemory.infra.pid_manager import PidManager
 
         mgr = PidManager(tmp_pid_file)

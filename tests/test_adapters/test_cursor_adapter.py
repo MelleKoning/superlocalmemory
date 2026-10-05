@@ -53,7 +53,7 @@ def _make_adapter(tmp_path: Path, *, scope: str = "project", recall=None,
 def test_mdc_frontmatter_has_only_verified_fields(tmp_path, monkeypatch, fake_recall):
     adapter = _make_adapter(tmp_path, recall=fake_recall, monkeypatch=monkeypatch)
     adapter.sync()
-    text = adapter.target_path.read_text()
+    text = adapter.target_path.read_text(encoding="utf-8")
     keys = set(_parse_frontmatter(text).keys())
     assert keys <= {"description", "alwaysApply", "globs"}
     for banned in ("name", "scope", "type", "internal_type"):
@@ -63,7 +63,7 @@ def test_mdc_frontmatter_has_only_verified_fields(tmp_path, monkeypatch, fake_re
 def test_mdc_frontmatter_valid_yaml(tmp_path, monkeypatch, fake_recall):
     adapter = _make_adapter(tmp_path, recall=fake_recall, monkeypatch=monkeypatch)
     adapter.sync()
-    text = adapter.target_path.read_text()
+    text = adapter.target_path.read_text(encoding="utf-8")
     assert text.startswith("---\n")
     assert "\n---\n" in text
     fm = _parse_frontmatter(text)

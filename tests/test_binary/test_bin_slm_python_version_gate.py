@@ -51,7 +51,7 @@ def _fake_python_env(tmp_path: Path, fake_version: str) -> dict:
         fi
         echo "PYFALLBACK $*"
         exit 0
-    """))
+    """), encoding="utf-8")
     fake_py.chmod(fake_py.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
     bin_dir = tmp_path / "stub_bin"

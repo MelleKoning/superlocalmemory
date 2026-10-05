@@ -126,8 +126,8 @@ def test_a_stale_pid_file_naming_another_accounts_process_is_not_adopted(
 
     port, server = daemon
     pid = os.getpid()  # a live PID; the process below claims to be the other account's
-    (data_root / "daemon.pid").write_text(str(pid))
-    (data_root / "daemon.port").write_text(str(port))
+    (data_root / "daemon.pid").write_text(str(pid), encoding="utf-8")
+    (data_root / "daemon.port").write_text(str(port), encoding="utf-8")
     server.health = {"status": "ok", "pid": pid}  # a pre-identity daemon's health
 
     import psutil

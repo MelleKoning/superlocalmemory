@@ -43,7 +43,7 @@ def test_wrap_agent_unknown_returns_1() -> None:
 def test_wrap_agent_proxy_disabled_returns_1(tmp_path: Path) -> None:
     """proxy_enabled=False → fail with clear message."""
     cfg_path = tmp_path / "optimize.json"
-    cfg_path.write_text(json.dumps({"proxy_enabled": False, "enabled": True}))
+    cfg_path.write_text(json.dumps({"proxy_enabled": False, "enabled": True}), encoding="utf-8")
     store = ConfigStore(config_path=cfg_path, poll_interval=3600.0)
     _set_config_store(store)
     try:
@@ -104,7 +104,7 @@ def test_withSLM_returns_unchanged_when_disabled(monkeypatch, tmp_path: Path) ->
     from superlocalmemory.optimize.config.schema import OptimizeConfig
 
     p = tmp_path / "oc.json"
-    p.write_text(json.dumps({"enabled": False}))
+    p.write_text(json.dumps({"enabled": False}), encoding="utf-8")
     store = ConfigStore(config_path=p, poll_interval=3600.0)
     _set_config_store(store)
     try:
@@ -120,7 +120,7 @@ def test_withSLM_returns_unchanged_for_unknown_type(monkeypatch, tmp_path: Path)
     from superlocalmemory.optimize.config.store import ConfigStore
 
     p = tmp_path / "oc.json"
-    p.write_text(json.dumps({"enabled": True}))
+    p.write_text(json.dumps({"enabled": True}), encoding="utf-8")
     store = ConfigStore(config_path=p, poll_interval=3600.0)
     _set_config_store(store)
     try:
@@ -164,7 +164,7 @@ def test_wrap_agent_settings_file_writes(tmp_path: Path) -> None:
     settings_dir = tmp_path / ".claude"
     settings_dir.mkdir()
     settings_path = settings_dir / "settings.json"
-    settings_path.write_text(json.dumps({"existing": "value"}))
+    settings_path.write_text(json.dumps({"existing": "value"}), encoding="utf-8")
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         json.dump({"proxy_enabled": True, "enabled": True}, f)
@@ -181,7 +181,7 @@ def test_wrap_agent_settings_file_writes(tmp_path: Path) -> None:
         try:
             rc = wrap_agent("claude-settings", [])
             assert rc == 0
-            written = json.loads(settings_path.read_text())
+            written = json.loads(settings_path.read_text(encoding="utf-8"))
             assert "env" in written
             assert "existing" in written
         finally:
@@ -264,7 +264,7 @@ def test_wrap_agent_config_file_writes(tmp_path: Path) -> None:
     settings_dir = tmp_path / "Code" / "User"
     settings_dir.mkdir(parents=True)
     settings_path = settings_dir / "settings.json"
-    settings_path.write_text(json.dumps({}))
+    settings_path.write_text(json.dumps({}), encoding="utf-8")
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         json.dump({"proxy_enabled": True, "enabled": True}, f)
@@ -284,7 +284,7 @@ def test_wrap_agent_config_file_writes(tmp_path: Path) -> None:
         try:
             rc = wrap_agent("cline", [])
             assert rc == 0
-            written = json.loads(settings_path.read_text())
+            written = json.loads(settings_path.read_text(encoding="utf-8"))
             assert "cline.testKey" in written
         finally:
             _agent_registry.AGENT_REGISTRY.clear()
@@ -526,7 +526,7 @@ def test_wrap_agent_config_file_json_decode_error(tmp_path: Path) -> None:
     settings_dir = tmp_path / "Code" / "User"
     settings_dir.mkdir(parents=True)
     settings_path = settings_dir / "settings.json"
-    settings_path.write_text("not valid json {{{")  # corrupt
+    settings_path.write_text("not valid json {{{", encoding="utf-8")  # corrupt
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         json.dump({"proxy_enabled": True, "enabled": True}, f)
@@ -546,7 +546,7 @@ def test_wrap_agent_config_file_json_decode_error(tmp_path: Path) -> None:
         try:
             rc = wrap_agent("cline", [])
             assert rc == 0
-            written = json.loads(settings_path.read_text())
+            written = json.loads(settings_path.read_text(encoding="utf-8"))
             assert "cline.testKey" in written
         finally:
             _agent_registry.AGENT_REGISTRY.clear()
@@ -567,6 +567,6 @@ def test_atomic_write_text(tmp_path: Path) -> None:
     fpath = tmp_path / "test.json"
     _atomic_write_text(fpath, json.dumps({"key": "val"}))
     assert fpath.exists()
-    assert json.loads(fpath.read_text()) == {"key": "val"}
+    assert json.loads(fpath.read_text(encoding="utf-8")) == {"key": "val"}
     # Verify no .tmp file left behind
     assert not list(tmp_path.glob("*.tmp"))

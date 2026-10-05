@@ -50,7 +50,7 @@ def _get_version() -> str:
                 root = root.parent
             pkg_json = root / "package.json"
             if pkg_json.exists():
-                with open(pkg_json) as f:
+                with open(pkg_json, encoding="utf-8") as f:
                     v = _json.load(f).get("version", "")
                     if v:
                         return v
@@ -286,7 +286,7 @@ def get_active_profile() -> str:
     config_file = MEMORY_DIR / "profiles.json"
     if config_file.exists():
         try:
-            with open(config_file, "r") as f:
+            with open(config_file, "r", encoding="utf-8") as f:
                 pconfig = json.load(f)
             return pconfig.get("active_profile", "default")
         except (json.JSONDecodeError, IOError):
@@ -441,7 +441,7 @@ def _load_profiles_json() -> dict:
     config_file = MEMORY_DIR / "profiles.json"
     if config_file.exists():
         try:
-            with open(config_file, "r") as f:
+            with open(config_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
             # Handle ProfileManager array format → convert to dict format
             if isinstance(data.get("profiles"), list):
@@ -466,7 +466,7 @@ def _save_profiles_json(config: dict) -> None:
     """Save profiles.json config."""
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     config_file = MEMORY_DIR / "profiles.json"
-    with open(config_file, "w") as f:
+    with open(config_file, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
 

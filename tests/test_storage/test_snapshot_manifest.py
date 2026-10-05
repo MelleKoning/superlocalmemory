@@ -50,7 +50,7 @@ def _manifests(root: Path) -> list[Path]:
 
 def test_manifest_written_after_rename_with_sha256(tmp_path, monkeypatch) -> None:
     learning_db, memory_db = _simple_store(tmp_path)
-    (tmp_path / ".last_version").write_text("4.1.18")
+    (tmp_path / ".last_version").write_text("4.1.18", encoding="utf-8")
     snaps = tmp_path / "pre-migration-snapshots"
     seen: list[tuple[bool, bool]] = []
     real = sm.write_generation_manifest
@@ -67,7 +67,7 @@ def test_manifest_written_after_rename_with_sha256(tmp_path, monkeypatch) -> Non
     assert seen == [(True, False)], "manifest must be written after both renames"
     [manifest_file] = _manifests(snaps)
     assert stat.S_IMODE(manifest_file.stat().st_mode) == 0o600
-    manifest = json.loads(manifest_file.read_text())
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
     assert manifest["reason"] == "migration"
     assert manifest["from_version"] == "4.1.18"
     assert manifest["counts"]["facts"] == 3 and manifest["counts"]["memories"] == 1
@@ -91,7 +91,7 @@ def test_gc_prunes_manifest_with_its_generation(tmp_path) -> None:
     left = _manifests(snaps)
     assert len(left) == 2 and oldest not in left
     for manifest_file in left:
-        for entry in json.loads(manifest_file.read_text())["files"]:
+        for entry in json.loads(manifest_file.read_text(encoding="utf-8"))["files"]:
             assert (snaps / entry["snapshot"]).is_file()
 
 
@@ -135,7 +135,7 @@ def test_verify_snapshot_detects_a_flipped_byte(tmp_path) -> None:
     learning_db, memory_db = _simple_store(tmp_path, facts=200)
     snaps = tmp_path / "pre-migration-snapshots"
     backup._pre_migration_backup(learning_db, memory_db, backups_root=snaps)
-    entry = next(f for f in json.loads(_manifests(snaps)[0].read_text())["files"]
+    entry = next(f for f in json.loads(_manifests(snaps)[0].read_text(encoding="utf-8"))["files"]
                  if f["db"] == "memory.db")
     snapshot = snaps / entry["snapshot"]
     backup.verify_snapshot(snapshot, entry["sha256"])          # intact: passes
@@ -184,7 +184,7 @@ def test_a_store_with_unflushed_log_is_copied_whole(tmp_path) -> None:
     finally:
         writer.close()
 
-    manifest = json.loads(_manifests(snaps)[0].read_text())
+    manifest = json.loads(_manifests(snaps)[0].read_text(encoding="utf-8"))
     assert manifest["counts"]["facts"] == 55
     entry = next(f for f in manifest["files"] if f["db"] == "memory.db")
     backup.verify_snapshot(snaps / entry["snapshot"], entry["sha256"])

@@ -25,7 +25,7 @@ def _get_version() -> str:
     try:
         pkg_json = pkg_root / "package.json"
         if pkg_json.exists():
-            with open(pkg_json) as f:
+            with open(pkg_json, encoding="utf-8") as f:
                 v = json.load(f).get("version", "")
                 if v:
                     return v

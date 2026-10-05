@@ -56,7 +56,7 @@ def strict(client, monkeypatch, tmp_path):  # noqa: F811
     else:
         monkeypatch.delattr(answer_check, "_require_credential", raising=False)
     token_file = tmp_path / ".install_token"
-    token_file.write_text(TOKEN)
+    token_file.write_text(TOKEN, encoding="utf-8")
     monkeypatch.setattr(security_primitives, "_install_token_path", lambda: token_file)
     return client
 

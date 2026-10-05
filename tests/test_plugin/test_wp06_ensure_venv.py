@@ -284,7 +284,8 @@ def test_rejects_python_less_than_3_11(tmp_path: pytest.TempPathFactory) -> None
         '    exit 1\n'
         '  fi\n'
         'fi\n'
-        'exec /usr/bin/env python3 "$@"\n'
+        'exec /usr/bin/env python3 "$@"\n',
+        encoding="utf-8",
     )
     fake_py.chmod(fake_py.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 

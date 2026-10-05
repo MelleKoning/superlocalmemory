@@ -46,7 +46,7 @@ import pytest
 
 def _write_config(base: Path, text: str) -> None:
     cfg = base / "config.toml"
-    cfg.write_text(text)
+    cfg.write_text(text, encoding="utf-8")
 
 
 def _mock_server() -> MagicMock:

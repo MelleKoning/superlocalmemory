@@ -128,7 +128,7 @@ class TestCallSitesAreGated:
         from pathlib import Path
 
         src = Path("src") / module_path
-        text = src.read_text()
+        text = src.read_text(encoding="utf-8")
         assert "include_marker=bool(session_id)" in text, (
             f"{module_path} serializes recalls without threading the marker gate"
         )
@@ -138,5 +138,5 @@ class TestCallSitesAreGated:
         later cite a fact. Markers there are pure noise in the trace output."""
         from pathlib import Path
 
-        text = Path("src/superlocalmemory/server/routes/v3_api.py").read_text()
+        text = Path("src/superlocalmemory/server/routes/v3_api.py").read_text(encoding="utf-8")
         assert "include_marker" not in text

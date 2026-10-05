@@ -148,7 +148,7 @@ class TestWorkerManagement:
         with patch.object(reranker, "_spawn_process", return_value=mock_proc):
             reranker._ensure_worker()
         assert reranker._worker_proc is mock_proc
-        assert isolated_spawn.read_text() == "99999"
+        assert isolated_spawn.read_text(encoding="utf-8") == "99999"
 
     def test_ensure_worker_noop_if_alive(self) -> None:
         reranker = _make_reranker(model_name="fake-model")
@@ -171,7 +171,7 @@ class TestWorkerManagement:
             reranker._ensure_worker()
         spawn.assert_called_once()
         assert reranker._worker_proc is new_proc
-        assert isolated_spawn.read_text() == "99998"
+        assert isolated_spawn.read_text(encoding="utf-8") == "99998"
 
     def test_ensure_worker_handles_spawn_failure(self) -> None:
         reranker = _make_reranker(model_name="fake-model")

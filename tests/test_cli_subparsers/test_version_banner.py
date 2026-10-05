@@ -130,7 +130,7 @@ class TestSecurityHardening:
         if sys.platform == "win32":
             pytest.skip("symlink perms differ on Windows")
         target = tmp_path / "elsewhere.txt"
-        target.write_text("3.4.99")
+        target.write_text("3.4.99", encoding="utf-8")
         marker = slm_home / ".version"
         marker.symlink_to(target)
         assert read_marker_version() is None
@@ -142,7 +142,7 @@ class TestSecurityHardening:
 
     def test_read_refuses_garbage_version(self, slm_home):
         marker = slm_home / ".version"
-        marker.write_text("not a version string!!!!")
+        marker.write_text("not a version string!!!!", encoding="utf-8")
         assert read_marker_version() is None
 
     def test_write_rejects_non_version_input(self, slm_home):
@@ -181,7 +181,7 @@ class TestIdempotencyAndFailureMode:
         target = tmp_path / "fresh"
         monkeypatch.setenv("SLM_DATA_DIR", str(target))
         write_marker_version("3.4.26")
-        assert (target / ".version").read_text().strip() == "3.4.26"
+        assert (target / ".version").read_text(encoding="utf-8").strip() == "3.4.26"
 
     def test_check_never_raises_on_io_error(self, tmp_path, monkeypatch):
         # Point at a read-only parent to force a write failure — must not

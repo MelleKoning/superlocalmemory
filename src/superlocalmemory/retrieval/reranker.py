@@ -48,7 +48,7 @@ def _is_reranker_worker_alive() -> bool:
         pid_file = _reranker_pid_file()
         if not pid_file.exists():
             return False
-        pid = int(pid_file.read_text().strip())
+        pid = int(pid_file.read_text(encoding="utf-8").strip())
         os.kill(pid, 0)
         return True
     except (ValueError, OSError, ProcessLookupError):
@@ -352,7 +352,7 @@ class CrossEncoderReranker:
             # v3.4.13: Register PID for machine-wide singleton
             pid_file = _reranker_pid_file()
             pid_file.parent.mkdir(parents=True, exist_ok=True)
-            pid_file.write_text(str(self._worker_proc.pid))
+            pid_file.write_text(str(self._worker_proc.pid), encoding="utf-8")
             logger.info(
                 "Reranker worker spawned (PID %d)", self._worker_proc.pid,
             )
@@ -595,7 +595,7 @@ class CrossEncoderReranker:
         try:
             pid_file = _reranker_pid_file()
             pid_file.parent.mkdir(parents=True, exist_ok=True)
-            pid_file.write_text(str(pid))
+            pid_file.write_text(str(pid), encoding="utf-8")
         except OSError as exc:
             logger.debug("Reranker PID file not updated: %s", exc)
 

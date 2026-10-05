@@ -100,7 +100,7 @@ class TestTheOnlineCheckReReadsTheChoice:
 
     def test_a_damaged_store_means_no_consent(self, online) -> None:
         build, provider, state_dir = online
-        answer_check_state.state_path(state_dir).write_text("{not json")
+        answer_check_state.state_path(state_dir).write_text("{not json", encoding="utf-8")
         assert build().assess("q?", _DOCS).verdict is None
         assert provider.bodies == []
 

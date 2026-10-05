@@ -72,7 +72,7 @@ def test_a_forgotten_memory_stays_forgotten_while_a_lost_one_returns(tmp_path) -
     assert outcome.status == "restored", outcome.message
     assert fact_ids(memory_db) == {"f1", "f2"}
     assert memory_ids(memory_db) == {"m1"}
-    deleted = [json.loads(line) for line in (export / "deleted.jsonl").read_text().splitlines()]
+    deleted = [json.loads(line) for line in (export / "deleted.jsonl").read_text(encoding="utf-8").splitlines()]
     assert {d.get("fact_id") or d.get("memory_id") for d in deleted} == {"f3", "m2"}
     assert all(d["intent"] == "tombstone" for d in deleted), deleted
 

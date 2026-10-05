@@ -273,7 +273,7 @@ class TestSimRunOfflineWritesArtifacts:
             capture_output=True, text=True, timeout=30,
             env={**os.environ, "SLM_DATA_DIR": str(tmp_path)},
         )
-        data = json.loads(json_path.read_text())
+        data = json.loads(json_path.read_text(encoding="utf-8"))
         delta = data["delta"]
         pricing = data["pricing"]
         computed = data["computed"]
@@ -310,7 +310,7 @@ class TestSimRunOfflineWritesArtifacts:
             capture_output=True, text=True, timeout=30,
             env={**os.environ, "SLM_DATA_DIR": str(tmp_path)},
         )
-        data = json.loads(json_path.read_text())
+        data = json.loads(json_path.read_text(encoding="utf-8"))
         assert data["delta"]["hits"] == n_prompts * r_repeat
 
     def test_sim_uses_real_cache_manager_not_hardcoded(self, tmp_path):
@@ -331,7 +331,7 @@ class TestSimRunOfflineWritesArtifacts:
             capture_output=True, text=True, timeout=30,
             env={**os.environ, "SLM_DATA_DIR": str(tmp_path)},
         )
-        data = json.loads(json_path.read_text())
+        data = json.loads(json_path.read_text(encoding="utf-8"))
         # The formula field must cite tokens from delta, not a literal percentage
         formula = data["computed"]["formula"]
         assert "tokens_saved" in formula.lower() or "/" in formula

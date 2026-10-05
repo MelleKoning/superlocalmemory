@@ -63,7 +63,7 @@ def test_put_applies_live_and_persists(client, tmp_path):
     assert live["injection"]["enabled"] is False
 
     # Durable: persisted to config.json so it survives a restart.
-    saved = json.loads((tmp_path / "config.json").read_text())
+    saved = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
     assert saved["retrieval"]["top_k"] == 42
     assert saved["retrieval"]["use_cross_encoder"] is False
     assert saved["injection"]["enabled"] is False

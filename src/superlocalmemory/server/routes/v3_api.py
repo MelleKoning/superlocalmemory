@@ -1777,7 +1777,7 @@ def _load_auto_invoke_json() -> dict:
     config_path = MEMORY_DIR / "config.json"
     if config_path.exists():
         try:
-            data = json.loads(config_path.read_text())
+            data = json.loads(config_path.read_text(encoding="utf-8"))
             return data.get("auto_invoke", {})
         except (json.JSONDecodeError, IOError):
             pass
@@ -1791,12 +1791,12 @@ def _save_auto_invoke_json(auto_invoke_data: dict) -> None:
     cfg: dict = {}
     if config_path.exists():
         try:
-            cfg = json.loads(config_path.read_text())
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, IOError):
             pass
     cfg["auto_invoke"] = auto_invoke_data
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(cfg, indent=2))
+    config_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
 
 # ── 1. GET /api/v3/auto-invoke/config ─────────────────────────

@@ -26,7 +26,7 @@ _CURRENT = sv.SUPPORTED_SCHEMA_VERSION
 @pytest.fixture()
 def store(tmp_path, monkeypatch):
     learning_db, memory_db = current_store(tmp_path)
-    (tmp_path / ".last_version").write_text("4.1.19")
+    (tmp_path / ".last_version").write_text("4.1.19", encoding="utf-8")
     monkeypatch.setattr(sm, "package_version", lambda: "4.1.19")
     monkeypatch.setattr(sv, "_detect_all_installs", lambda: [])
     assert sv.read_schema_version(memory_db) == _CURRENT
@@ -62,7 +62,7 @@ def test_lowers_stamp_and_writes_marker(store) -> None:
     report = _prepare(root, learning_db, memory_db)
     assert report.prepared and report.target_schema == 51
     assert sv.read_schema_version(memory_db) == 51 == sv.read_schema_version(learning_db)
-    marker = json.loads((root / ".downgrade-prepared").read_text())
+    marker = json.loads((root / ".downgrade-prepared").read_text(encoding="utf-8"))
     assert marker["prepared_by"] == "4.1.19" and marker["target_schema"] == 51
     assert marker["last_version"] == "4.1.19"
     [point] = ur.list_restore_points(root)
@@ -84,8 +84,8 @@ def test_marker_dropped_after_another_build_ran(store) -> None:
     root, learning_db, memory_db = store
     _prepare(root, learning_db, memory_db)
     version = root / ".last_version"
-    version.write_text("4.1.18")                      # the older build started ...
-    version.write_text("4.1.19")                      # ... and this one again after it
+    version.write_text("4.1.18", encoding="utf-8")                      # the older build started ...
+    version.write_text("4.1.19", encoding="utf-8")                      # ... and this one again after it
     later = version.stat().st_mtime + 5
     os.utime(version, (later, later))
 

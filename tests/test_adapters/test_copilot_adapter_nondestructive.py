@@ -52,11 +52,11 @@ def test_sync_preserves_existing_user_content(tmp_path):
     """User prose before the SLM block must survive a sync."""
     target = _target(tmp_path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("# My Project Rules\n\nAlways use our logging library.\n")
+    target.write_text("# My Project Rules\n\nAlways use our logging library.\n", encoding="utf-8")
 
     _adapter(tmp_path).sync()
 
-    result = target.read_text()
+    result = target.read_text(encoding="utf-8")
     assert "# My Project Rules" in result
     assert "Always use our logging library." in result
     assert SLM_MARKER_START in result
@@ -68,12 +68,13 @@ def test_sync_preserves_content_after_slm_block(tmp_path):
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         f"{SLM_MARKER_START}\nold slm content\n{SLM_MARKER_END}\n"
-        "\n## Post-SLM user notes\nDo not delete me.\n"
+        "\n## Post-SLM user notes\nDo not delete me.\n",
+        encoding="utf-8",
     )
 
     _adapter(tmp_path).sync()
 
-    result = target.read_text()
+    result = target.read_text(encoding="utf-8")
     assert "Do not delete me." in result
     assert SLM_MARKER_START in result
 
@@ -87,12 +88,13 @@ def test_sync_replaces_only_slm_block(tmp_path):
     target.write_text(
         user_before
         + f"{SLM_MARKER_START}\nstale slm block\n{SLM_MARKER_END}\n"
-        + user_after
+        + user_after,
+        encoding="utf-8",
     )
 
     _adapter(tmp_path).sync()
 
-    result = target.read_text()
+    result = target.read_text(encoding="utf-8")
     assert "Use snake_case." in result
     assert "Review all PRs." in result
     assert "stale slm block" not in result
@@ -113,7 +115,7 @@ def test_disable_strips_slm_block_but_keeps_file(tmp_path):
     adapter.disable()
 
     assert target.exists(), "disable() must not delete the file"
-    content = target.read_text()
+    content = target.read_text(encoding="utf-8")
     assert SLM_MARKER_START not in content
 
 
@@ -121,13 +123,13 @@ def test_disable_preserves_user_content(tmp_path):
     """User content outside the SLM block must survive disable()."""
     target = _target(tmp_path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("# My notes\n\nKeep this.\n")
+    target.write_text("# My notes\n\nKeep this.\n", encoding="utf-8")
 
     adapter = _adapter(tmp_path)
     adapter.sync()
     adapter.disable()
 
-    assert "Keep this." in target.read_text()
+    assert "Keep this." in target.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -138,13 +140,13 @@ def test_sync_refuses_on_orphaned_start_marker(tmp_path):
     """If SLM-START has no matching SLM-END, sync must not write."""
     target = _target(tmp_path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(f"# Notes\n\n{SLM_MARKER_START}\nno end marker here\n")
-    original = target.read_text()
+    target.write_text(f"# Notes\n\n{SLM_MARKER_START}\nno end marker here\n", encoding="utf-8")
+    original = target.read_text(encoding="utf-8")
 
     result = _adapter(tmp_path).sync()
 
     assert result is False
-    assert target.read_text() == original
+    assert target.read_text(encoding="utf-8") == original
 
 
 # ---------------------------------------------------------------------------
@@ -155,9 +157,9 @@ def test_sync_is_idempotent(tmp_path):
     """Two syncs with identical recall data must produce identical file content."""
     adapter = _adapter(tmp_path)
     adapter.sync()
-    first = _target(tmp_path).read_text()
+    first = _target(tmp_path).read_text(encoding="utf-8")
 
     adapter.sync()
-    second = _target(tmp_path).read_text()
+    second = _target(tmp_path).read_text(encoding="utf-8")
 
     assert first == second

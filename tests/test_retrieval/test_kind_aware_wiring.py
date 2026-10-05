@@ -59,12 +59,12 @@ def test_the_config_file_sets_both_and_a_boost_of_50_is_clamped(tmp_path) -> Non
     cfg_path.write_text(json.dumps({
         "mode": "a", "active_profile": "default",
         "retrieval": {"kind_aware": False, "kind_aware_boost": 50},
-    }))
+    }), encoding="utf-8")
     loaded = SLMConfig.load(cfg_path)
     assert loaded.retrieval.kind_aware is False
     assert loaded.retrieval.kind_aware_boost == 0.5
     loaded.save(cfg_path)
-    saved = json.loads(cfg_path.read_text())["retrieval"]
+    saved = json.loads(cfg_path.read_text(encoding="utf-8"))["retrieval"]
     assert saved["kind_aware"] is False and saved["kind_aware_boost"] == 0.5
 
 

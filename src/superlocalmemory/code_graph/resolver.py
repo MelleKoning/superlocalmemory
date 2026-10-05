@@ -266,7 +266,7 @@ class ImportResolver:
             return None
 
         try:
-            tsconfig = json.loads(tsconfig_path.read_text())
+            tsconfig = json.loads(tsconfig_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return None
 

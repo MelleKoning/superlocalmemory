@@ -149,7 +149,7 @@ if __name__ == "__main__":
     watch_dir = ""
     adapters_path = _adapters_config_path()
     if adapters_path.exists():
-        cfg = json.loads(adapters_path.read_text())
+        cfg = json.loads(adapters_path.read_text(encoding="utf-8"))
         watch_dir = cfg.get("transcript", {}).get("watch_dir", "")
 
     if not watch_dir:

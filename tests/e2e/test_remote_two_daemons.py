@@ -107,7 +107,7 @@ class Daemon:
             self.proc.wait(timeout=20)
 
     def log_tail(self) -> str:
-        return (self.root / "daemon.log").read_text(errors="replace")[-4000:]
+        return (self.root / "daemon.log").read_text(errors="replace", encoding="utf-8")[-4000:]
 
     def fact_count(self) -> int:
         import sqlite3
@@ -252,7 +252,7 @@ def test_hook_token_never_leaves_loopback(pair, monkeypatch) -> None:
     assert json.loads(out.stdout.strip()) == f"http://127.0.0.1:{pair['h'].port}"
     # (b) A loopback name pointed at S's remote listener: plain HTTP is refused by TLS,
     #     and over HTTPS the hook endpoint does not exist there.
-    token = (pair["h"].root / "data" / ".install_token").read_text().strip()
+    token = (pair["h"].root / "data" / ".install_token").read_text(encoding="utf-8").strip()
     request = urllib.request.Request(f"http://localhost:{pair['port']}/internal/prewarm",
                                      data=b"{}", method="POST",
                                      headers={"X-SLM-Hook-Token": token})

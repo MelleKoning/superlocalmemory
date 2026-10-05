@@ -144,12 +144,12 @@ class TestAnotherDaemonByItsLease:
     def test_an_old_daemon_holding_the_lease_is_reported(self, store, caplog) -> None:
         learning_db, memory_db, _snapshots = store
         # The starting daemon has already written its own pid here.
-        (memory_db.parent / "daemon.pid").write_text(str(os.getpid()))
+        (memory_db.parent / "daemon.pid").write_text(str(os.getpid()), encoding="utf-8")
         other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
         try:
             Path(f"{memory_db}.writer.lock").write_text(json.dumps(
                 {"pid": other.pid, "claimed_at_ms": int(time.time() * 1000)},
-            ))
+            ), encoding="utf-8")
             _forget_migration(memory_db, "M042_correction_case_ledger")
             with caplog.at_level(logging.WARNING):
                 eager = apply_all(learning_db, memory_db)
@@ -164,7 +164,7 @@ class TestAnotherDaemonByItsLease:
         learning_db, memory_db, _snapshots = store
         dead = subprocess.Popen([sys.executable, "-c", "pass"])
         dead.wait()
-        Path(f"{memory_db}.writer.lock").write_text(json.dumps({"pid": dead.pid}))
+        Path(f"{memory_db}.writer.lock").write_text(json.dumps({"pid": dead.pid}), encoding="utf-8")
         _forget_migration(memory_db, "M042_correction_case_ledger")
         with caplog.at_level(logging.WARNING):
             eager = apply_all(learning_db, memory_db)
@@ -207,7 +207,7 @@ class TestCrashedStagingFiles:
         root = tmp_path / "snaps"
         root.mkdir()
         other = root / "notes.partial"
-        other.write_text("mine")
+        other.write_text("mine", encoding="utf-8")
         when = time.time() - 3 * 3600
         os.utime(other, (when, when))
         _gc_old_backups(root, keep=2)

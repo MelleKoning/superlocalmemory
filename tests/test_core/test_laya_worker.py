@@ -53,7 +53,7 @@ def load(model, **kwargs):
 
 @pytest.fixture()
 def worker(tmp_path):
-    (tmp_path / "laya_mlx.py").write_text(_STUB)
+    (tmp_path / "laya_mlx.py").write_text(_STUB, encoding="utf-8")
     proc = subprocess.Popen(
         [sys.executable, str(WORKER)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -143,7 +143,7 @@ def _seen(tmp_path: Path, kind: str) -> list:
     log = tmp_path / "seen.jsonl"
     if not log.exists():
         return []
-    rows = [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+    rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
     return [r["value"] for r in rows if r["kind"] == kind]
 
 
@@ -220,7 +220,7 @@ def test_the_worker_stays_self_contained() -> None:
     """It runs under Laya's own interpreter, where SLM is not installed."""
     import ast
 
-    tree = ast.parse(WORKER.read_text())
+    tree = ast.parse(WORKER.read_text(encoding="utf-8"))
     imported = {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import)
                 for alias in node.names}
     imported |= {node.module or "" for node in ast.walk(tree)

@@ -45,7 +45,7 @@ def _stage(quarantine: Path, dir_name: str, body: str) -> Path:
     d = quarantine / dir_name
     d.mkdir(parents=True, exist_ok=True)
     p = d / "SKILL.md"
-    p.write_text(body)
+    p.write_text(body, encoding="utf-8")
     return p
 
 
@@ -53,7 +53,7 @@ def _live(live: Path, skill: str, body: str) -> Path:
     d = live / skill
     d.mkdir(parents=True, exist_ok=True)
     p = d / "SKILL.md"
-    p.write_text(body)
+    p.write_text(body, encoding="utf-8")
     return p
 
 
@@ -66,7 +66,7 @@ def test_approving_replaces_the_live_instructions(activator, roots):
         "brainstorming", "brainstorming-vabc12", actor_id="dashboard",
     )
 
-    assert (live / "brainstorming" / "SKILL.md").read_text() == "improved instructions\n"
+    assert (live / "brainstorming" / "SKILL.md").read_text(encoding="utf-8") == "improved instructions\n"
     assert result["content_hash"]
     assert result["actor_id"] == "dashboard"
 
@@ -80,7 +80,7 @@ def test_the_previous_version_is_kept_so_approval_is_reversible(activator, roots
     rolled = activator.rollback("brainstorming")
 
     assert rolled["rolled_back"] is True
-    assert (live / "brainstorming" / "SKILL.md").read_text() == "old instructions\n"
+    assert (live / "brainstorming" / "SKILL.md").read_text(encoding="utf-8") == "old instructions\n"
 
 
 def test_rolling_back_a_brand_new_skill_removes_it(activator, roots):

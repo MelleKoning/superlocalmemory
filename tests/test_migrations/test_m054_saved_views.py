@@ -80,7 +80,7 @@ class TestGoingBackStillWorks:
     @pytest.fixture()
     def store(self, tmp_path, monkeypatch):
         learning, memory = current_store(tmp_path)
-        (tmp_path / ".last_version").write_text("4.1.21")
+        (tmp_path / ".last_version").write_text("4.1.21", encoding="utf-8")
         monkeypatch.setattr(sm, "package_version", lambda: "4.1.21")
         monkeypatch.setattr(sv, "_detect_all_installs", lambda: [])
         _a_view(learning)

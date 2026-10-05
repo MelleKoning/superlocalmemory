@@ -120,7 +120,7 @@ class TestDetectTier:
     def test_explicit_mbox_tier_from_config(self, monkeypatch, tmp_path):
         cfg = tmp_path / "adapters.json"
         cfg.write_text(json.dumps(
-            {"gmail": {"tier": "mbox", "mbox_path": "/data/takeout.mbox"}}))
+            {"gmail": {"tier": "mbox", "mbox_path": "/data/takeout.mbox"}}), encoding="utf-8")
         monkeypatch.setattr(gmail_adapter, "_adapters_config_path", lambda: cfg)
 
         adapter = GmailAdapter(tier="auto")
@@ -131,7 +131,7 @@ class TestDetectTier:
 
     def test_mbox_path_alone_selects_mbox(self, monkeypatch, tmp_path):
         cfg = tmp_path / "adapters.json"
-        cfg.write_text(json.dumps({"gmail": {"mbox_path": "/x/y.mbox"}}))
+        cfg.write_text(json.dumps({"gmail": {"mbox_path": "/x/y.mbox"}}), encoding="utf-8")
         monkeypatch.setattr(gmail_adapter, "_adapters_config_path", lambda: cfg)
 
         adapter = GmailAdapter(tier="auto")
@@ -142,7 +142,7 @@ class TestDetectTier:
 
     def test_explicit_imap_tier_from_config(self, monkeypatch, tmp_path):
         cfg = tmp_path / "adapters.json"
-        cfg.write_text(json.dumps({"gmail": {"tier": "imap"}}))
+        cfg.write_text(json.dumps({"gmail": {"tier": "imap"}}), encoding="utf-8")
         monkeypatch.setattr(gmail_adapter, "_adapters_config_path", lambda: cfg)
 
         adapter = GmailAdapter(tier="auto")
@@ -152,7 +152,7 @@ class TestDetectTier:
 
     def test_oauth_selected_when_refresh_token_present(self, monkeypatch, tmp_path):
         cfg = tmp_path / "adapters.json"  # exists but empty gmail section
-        cfg.write_text(json.dumps({"gmail": {}}))
+        cfg.write_text(json.dumps({"gmail": {}}), encoding="utf-8")
         monkeypatch.setattr(gmail_adapter, "_adapters_config_path", lambda: cfg)
         monkeypatch.setattr(
             "superlocalmemory.ingestion.credentials.has_credential",
@@ -175,7 +175,7 @@ class TestDetectTier:
         import_dir = tmp_path / "import"
         import_dir.mkdir()
         found = import_dir / "archive.mbox"
-        found.write_text("From dummy\n")
+        found.write_text("From dummy\n", encoding="utf-8")
         monkeypatch.setattr(gmail_adapter, "_import_dir", lambda: import_dir)
 
         adapter = GmailAdapter(tier="auto")
@@ -304,7 +304,7 @@ class TestFetchMbox:
                 return iter(self._messages)
 
         path = tmp_path / "mixed.mbox"
-        path.write_text("placeholder")  # existence check only
+        path.write_text("placeholder", encoding="utf-8")  # existence check only
         monkeypatch.setattr("mailbox.mbox", lambda p: _FakeMbox([bad, good]))
 
         adapter = GmailAdapter(tier="mbox")

@@ -636,8 +636,8 @@ def _publish_process_descriptor(
     write_descriptor(descriptor)
     pid_file = descriptor_path().with_name("daemon.pid")
     port_file = descriptor_path().with_name("daemon.port")
-    pid_file.write_text(str(descriptor.pid))
-    port_file.write_text(str(descriptor.port))
+    pid_file.write_text(str(descriptor.pid), encoding="utf-8")
+    port_file.write_text(str(descriptor.port), encoding="utf-8")
     return descriptor
 
 
@@ -650,7 +650,7 @@ def _cleanup_process_descriptor(descriptor: DaemonDescriptor | None) -> None:
         (descriptor_path().with_name("daemon.port"), str(descriptor.port)),
     ):
         try:
-            if path.read_text().strip() == expected:
+            if path.read_text(encoding="utf-8").strip() == expected:
                 path.unlink()
         except OSError:
             pass
@@ -4457,7 +4457,7 @@ def _register_dashboard_routes(application: FastAPI) -> None:
                 "asset version rewrite unavailable, serving index.html as "
                 "written: %s: %s", type(exc).__name__, exc,
             )
-            return index_path.read_text().replace("__SLM_VERSION__", _SLM_VERSION)
+            return index_path.read_text(encoding="utf-8").replace("__SLM_VERSION__", _SLM_VERSION)
 
     @application.get("/favicon.ico", include_in_schema=False)
     async def favicon():
@@ -6687,7 +6687,7 @@ def install_thread_dump_signal() -> "os.PathLike | str | None":
         # Held on a module global on purpose: faulthandler keeps the raw file
         # descriptor, so a closed or garbage-collected handle turns the next
         # signal into a crash instead of a diagnostic.
-        _thread_dump_file = open(path, "a", buffering=1)  # noqa: SIM115
+        _thread_dump_file = open(path, "a", buffering=1, encoding="utf-8")  # noqa: SIM115
         faulthandler.register(
             signal.SIGUSR1, file=_thread_dump_file,
             all_threads=True, chain=False,
@@ -6903,7 +6903,7 @@ def rotate_oversized_logs(log_dir: Optional[Path] = None,
                 # launchd), fall back to truncation so we at least reclaim
                 # disk without breaking the redirect.
                 try:
-                    with open(path, "w"):
+                    with open(path, "w", encoding="utf-8"):
                         pass
                 except Exception:
                     pass

@@ -170,7 +170,7 @@ def test_notifications_initialized_is_gracefully_absorbed(tmp_path) -> None:
                 last_error = exc
         assert proc.poll() is None, (
             "mcp child died on notifications/initialized; "
-            f"stderr tail: {stderr_path.read_text(errors='replace')[-1500:]}"
+            f"stderr tail: {stderr_path.read_text(errors='replace', encoding="utf-8")[-1500:]}"
         )
         assert listed is not None, f"tools/list never answered: {last_error}"
         assert "result" in listed, listed

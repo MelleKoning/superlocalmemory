@@ -71,7 +71,7 @@ for raw in sys.stdin:
 @pytest.fixture()
 def worker(tmp_path, monkeypatch):
     path = tmp_path / "fake_laya_worker.py"
-    path.write_text(_FAKE_WORKER)
+    path.write_text(_FAKE_WORKER, encoding="utf-8")
     log = tmp_path / "requests.jsonl"
     monkeypatch.setenv("FAKE_LAYA_LOG", str(log))
     monkeypatch.setattr(mod, "_WARMUP_BACKOFF_S", 0.01)
@@ -95,7 +95,7 @@ def _wait(predicate, timeout: float = 10.0) -> bool:
 def _requests(log: Path, cmd: str) -> list[dict]:
     if not log.exists():
         return []
-    return [r for r in map(json.loads, log.read_text().splitlines()) if r.get("cmd") == cmd]
+    return [r for r in map(json.loads, log.read_text(encoding="utf-8").splitlines()) if r.get("cmd") == cmd]
 
 
 def _in_background(fn):

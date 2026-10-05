@@ -563,7 +563,7 @@ def test_cache_stats_with_bad_db(
 ) -> None:
     from superlocalmemory.server.routes import brain as brain_mod
     bad = tmp_path / "bad.db"
-    bad.write_text("not a sqlite file")
+    bad.write_text("not a sqlite file", encoding="utf-8")
     monkeypatch.setattr(brain_mod, "_memory_db_path", lambda: bad)
     stats = brain_mod._compute_cache_stats()
     assert stats["entry_count"] == 0

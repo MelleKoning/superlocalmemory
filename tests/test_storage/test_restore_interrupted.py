@@ -96,7 +96,7 @@ def test_kill_during_backup_step_leaves_target_intact(crashed) -> None:
     root, _learning_db, memory_db, before, _snap = crashed
     assert integrity(memory_db) == "ok"
     assert logical_digest(memory_db) == before, "a half-written restore reached the store"
-    intent = json.loads((root / "restore-intent.json").read_text())
+    intent = json.loads((root / "restore-intent.json").read_text(encoding="utf-8"))
     assert intent["stage"] == "writing" and Path(intent["final_delta_dir"]).is_dir()
     assert any((root / "pre-restore").glob("memory-*-before-restore.db"))
 
@@ -115,7 +115,7 @@ def test_rerun_after_crash_completes(crashed) -> None:
     # The export taken before the interrupted write is the one used afterwards:
     # the memory written after the copy is still on its way back.
     added = [json.loads(line)["memory_id"] for line in
-             (Path(outcome.delta_dir) / "memories.jsonl").read_text().splitlines()]
+             (Path(outcome.delta_dir) / "memories.jsonl").read_text(encoding="utf-8").splitlines()]
     assert added == ["later"] and outcome.reimport_pending
     assert not (root / "restore-intent.json").exists()
 
@@ -146,5 +146,5 @@ def test_a_crash_after_the_write_keeps_the_newer_memories(tmp_path, monkeypatch)
 
     assert outcome.status == "restored"
     added = [json.loads(line)["memory_id"] for line in
-             (Path(outcome.delta_dir) / "memories.jsonl").read_text().splitlines()]
+             (Path(outcome.delta_dir) / "memories.jsonl").read_text(encoding="utf-8").splitlines()]
     assert added == ["later"] and outcome.reimport_pending

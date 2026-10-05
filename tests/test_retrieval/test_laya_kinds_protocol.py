@@ -59,7 +59,7 @@ CRITERIA = {"semantic": "a lasting fact", "episodic": "something that happened",
 
 @pytest.fixture()
 def worker(tmp_path):
-    (tmp_path / "laya_mlx.py").write_text(_STUB)
+    (tmp_path / "laya_mlx.py").write_text(_STUB, encoding="utf-8")
     log = tmp_path / "seen.jsonl"
     proc = subprocess.Popen(
         [sys.executable, str(WORKER)],
@@ -76,7 +76,7 @@ def worker(tmp_path):
     def seen() -> list[dict]:
         if not log.exists():
             return []
-        return [json.loads(line) for line in log.read_text().splitlines()]
+        return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
 
     yield ask, seen
     if proc.poll() is None:

@@ -64,7 +64,7 @@ def test_default_transport_is_stdio(fake_home: Path) -> None:
     assert result["error"] is None
     desc = IDE_MATRIX["cursor"]
     config_path = fake_home / desc.mcp_path_global
-    data = json.loads(config_path.read_text())
+    data = json.loads(config_path.read_text(encoding="utf-8"))
     block = data[desc.server_key]["superlocalmemory"]
     assert block["type"] == "stdio", f"Default transport changed: got {block!r}"
     assert block["command"] == "slm"
@@ -83,7 +83,7 @@ def test_transport_http_writes_native_block(fake_home: Path) -> None:
     assert result["error"] is None, f"Unexpected error: {result['error']}"
     desc = IDE_MATRIX["cursor"]
     config_path = fake_home / desc.mcp_path_global
-    data = json.loads(config_path.read_text())
+    data = json.loads(config_path.read_text(encoding="utf-8"))
     block = data[desc.server_key]["superlocalmemory"]
 
     assert block["type"] == "http", f"Expected http block, got: {block!r}"
@@ -105,7 +105,7 @@ def test_transport_http_mcp_remote_writes_bridge_block(fake_home: Path) -> None:
     assert result["error"] is None, f"Unexpected error: {result['error']}"
     desc = IDE_MATRIX["gemini-cli"]
     config_path = fake_home / desc.mcp_path_global
-    data = json.loads(config_path.read_text())
+    data = json.loads(config_path.read_text(encoding="utf-8"))
     block = data[desc.server_key]["superlocalmemory"]
 
     assert block["type"] == "stdio"
@@ -128,7 +128,7 @@ def test_transport_http_with_profile_appends_query_param(fake_home: Path) -> Non
     assert result["error"] is None
     desc = IDE_MATRIX["cursor"]
     config_path = fake_home / desc.mcp_path_global
-    data = json.loads(config_path.read_text())
+    data = json.loads(config_path.read_text(encoding="utf-8"))
     block = data[desc.server_key]["superlocalmemory"]
 
     assert block["type"] == "http"
@@ -147,7 +147,7 @@ def test_transport_http_with_custom_port(fake_home: Path) -> None:
     assert result["error"] is None
     desc = IDE_MATRIX["cursor"]
     config_path = fake_home / desc.mcp_path_global
-    data = json.loads(config_path.read_text())
+    data = json.loads(config_path.read_text(encoding="utf-8"))
     block = data[desc.server_key]["superlocalmemory"]
 
     assert block["type"] == "http"
@@ -181,7 +181,7 @@ def test_transport_http_daemon_unreachable_no_crash(
     desc = IDE_MATRIX["cursor"]
     config_path = fake_home / desc.mcp_path_global
     assert config_path.exists()
-    data = json.loads(config_path.read_text())
+    data = json.loads(config_path.read_text(encoding="utf-8"))
     block = data[desc.server_key]["superlocalmemory"]
     assert block["type"] == "http"
 
@@ -216,7 +216,7 @@ def test_transport_mcp_remote_url_in_args(fake_home: Path) -> None:
     assert result["error"] is None
     desc = IDE_MATRIX["cursor"]
     config_path = fake_home / desc.mcp_path_global
-    data = json.loads(config_path.read_text())
+    data = json.loads(config_path.read_text(encoding="utf-8"))
     block = data[desc.server_key]["superlocalmemory"]
 
     assert block["args"][0] == "http://127.0.0.1:8765/mcp/"
@@ -260,7 +260,7 @@ def test_connect_many_propagates_transport(fake_home: Path) -> None:
         assert r["error"] is None, f"Error for {r['ide']}: {r['error']}"
         desc = IDE_MATRIX[r["ide"]]
         config_path = fake_home / desc.mcp_path_global
-        data = json.loads(config_path.read_text())
+        data = json.loads(config_path.read_text(encoding="utf-8"))
         block = data[desc.server_key]["superlocalmemory"]
         assert block["type"] == "http", f"IDE {r['ide']} did not get http block"
 
@@ -325,7 +325,7 @@ def test_transport_mcp_remote_custom_port(fake_home: Path) -> None:
     assert result["error"] is None
     desc = IDE_MATRIX["cursor"]
     config_path = fake_home / desc.mcp_path_global
-    data = json.loads(config_path.read_text())
+    data = json.loads(config_path.read_text(encoding="utf-8"))
     block = data[desc.server_key]["superlocalmemory"]
 
     assert "9001" in block["args"][0]
@@ -345,7 +345,7 @@ def test_transport_mcp_remote_with_profile(fake_home: Path) -> None:
     assert result["error"] is None
     desc = IDE_MATRIX["cursor"]
     config_path = fake_home / desc.mcp_path_global
-    data = json.loads(config_path.read_text())
+    data = json.loads(config_path.read_text(encoding="utf-8"))
     block = data[desc.server_key]["superlocalmemory"]
 
     assert "?profile=code" in block["args"][0], (

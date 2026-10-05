@@ -64,8 +64,8 @@ class TestStartDaemonSubprocessHelper:
         assert result is True
         popen.assert_called_once()
         wait.assert_called_once()
-        assert (tmp_path / "daemon.pid").read_text() == "99999"
-        assert (tmp_path / "daemon.port").read_text() == str(_daemon._DEFAULT_PORT)
+        assert (tmp_path / "daemon.pid").read_text(encoding="utf-8") == "99999"
+        assert (tmp_path / "daemon.port").read_text(encoding="utf-8") == str(_daemon._DEFAULT_PORT)
 
     def test_returns_false_when_wait_for_daemon_times_out(self, tmp_path) -> None:
         """B1: helper propagates _wait_for_daemon's timeout result honestly."""
@@ -224,7 +224,7 @@ class TestRestartStep3UsesHelperNotEnsureDaemon:
             / "cli"
             / "commands.py"
         )
-        text = commands_py.read_text()
+        text = commands_py.read_text(encoding="utf-8")
 
         # Find the cmd_restart function body
         start = text.index("def cmd_restart(")

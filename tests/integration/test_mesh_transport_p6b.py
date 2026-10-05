@@ -439,7 +439,7 @@ class TestHttpClientTLS:
     def test_custom_ca_is_passed_to_client(self, broker, tmp_path):
         """When SLM_MESH_TLS_CA is set, _http_client passes verify=<path>."""
         ca_file = tmp_path / "fake_ca.pem"
-        ca_file.write_text("FAKE CA")  # existence check only
+        ca_file.write_text("FAKE CA", encoding="utf-8")  # existence check only
 
         from superlocalmemory.mesh.remote_sync import RemoteSyncClient
         with patch.dict("os.environ", {"SLM_MESH_TLS_CA": str(ca_file)}):

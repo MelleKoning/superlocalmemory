@@ -144,7 +144,7 @@ def test_claude_hook_metadata_writes_only_to_selected_root(
     installed = claude_code_hooks.install_hooks(include_gate=True)
 
     assert installed["success"] is True
-    assert (selected / "hooks" / ".version").read_text() == (
+    assert (selected / "hooks" / ".version").read_text(encoding="utf-8") == (
         claude_code_hooks.HOOKS_VERSION
     )
     assert settings.exists()

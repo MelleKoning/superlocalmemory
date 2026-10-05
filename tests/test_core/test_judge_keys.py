@@ -167,7 +167,7 @@ def test_load_refuses_a_symlinked_key_file(store, tmp_path):
     secrets_dir.mkdir(parents=True)
     os.chmod(secrets_dir, 0o700)
     target = tmp_path / "elsewhere.txt"
-    target.write_text("not a key")
+    target.write_text("not a key", encoding="utf-8")
     (secrets_dir / "jev-typesafe.key").symlink_to(target)
 
     with pytest.raises(JudgeKeyStoreError):
@@ -183,13 +183,13 @@ def test_set_key_refuses_to_overwrite_a_symlink(store, tmp_path):
     secrets_dir.mkdir(parents=True)
     os.chmod(secrets_dir, 0o700)
     target = tmp_path / "elsewhere.txt"
-    target.write_text("not a key")
+    target.write_text("not a key", encoding="utf-8")
     (secrets_dir / "jev-typesafe.key").symlink_to(target)
 
     with pytest.raises(JudgeKeyStoreError):
         store.set_key("typesafe", VALID_KEY)
     # The symlink target must be untouched.
-    assert target.read_text() == "not a key"
+    assert target.read_text(encoding="utf-8") == "not a key"
 
 
 def test_clear_removes_a_symlink_without_following_it(store, tmp_path):
@@ -198,13 +198,13 @@ def test_clear_removes_a_symlink_without_following_it(store, tmp_path):
     secrets_dir.mkdir(parents=True)
     os.chmod(secrets_dir, 0o700)
     target = tmp_path / "elsewhere.txt"
-    target.write_text("must survive")
+    target.write_text("must survive", encoding="utf-8")
     (secrets_dir / "jev-typesafe.key").symlink_to(target)
 
     store.clear("typesafe")
 
     assert not (secrets_dir / "jev-typesafe.key").exists()
-    assert target.read_text() == "must survive"
+    assert target.read_text(encoding="utf-8") == "must survive"
 
 
 def test_load_refuses_a_non_regular_file(store, tmp_path):

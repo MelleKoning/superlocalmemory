@@ -106,6 +106,7 @@ class GraphAnalyzer:
                 labels_dir.mkdir(parents=True, exist_ok=True)
                 (labels_dir / f"{profile_id}_community_labels.json").write_text(
                     json.dumps(labels, indent=2),
+                    encoding="utf-8",
                 )
             except Exception as exc:
                 logger.debug("Community labels skipped: %s", exc)

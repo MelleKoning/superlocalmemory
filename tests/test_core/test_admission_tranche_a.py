@@ -57,7 +57,7 @@ class TestResolveDeploymentFailClosed:
         """config.toml present but unreadable (permissions) → fail-closed."""
         monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path))
         cfg = tmp_path / "config.toml"
-        cfg.write_text("[deployment]\nmode = \"personal\"")
+        cfg.write_text("[deployment]\nmode = \"personal\"", encoding="utf-8")
         cfg.chmod(0o000)  # remove all permissions
         try:
             from superlocalmemory.core.admission import _resolve_deployment

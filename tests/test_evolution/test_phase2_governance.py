@@ -544,7 +544,7 @@ class TestSkillActivator:
         result = activator.activate("brainstorming", quarantine_skill)
         live_path = tmp_path / "live" / "brainstorming" / "SKILL.md"
         assert live_path.exists()
-        assert live_path.read_text() == "# Evolved skill content"
+        assert live_path.read_text(encoding="utf-8") == "# Evolved skill content"
         assert result["skill_name"] == "brainstorming"
         assert result["content_hash"] is not None
 
@@ -559,7 +559,7 @@ class TestSkillActivator:
 
         backup = tmp_path / "backup" / "brainstorming" / "SKILL.md.bak"
         assert backup.exists()
-        assert backup.read_text() == "# Original skill content"
+        assert backup.read_text(encoding="utf-8") == "# Original skill content"
 
     def test_activate_atomic_via_tmp_rename(self, activator, quarantine_skill, tmp_path):
         """After activate(), no .tmp file must remain."""
@@ -580,7 +580,7 @@ class TestSkillActivator:
 
         assert result["rolled_back"] is True
         live_path = tmp_path / "live" / "brainstorming" / "SKILL.md"
-        assert live_path.read_text() == original_content
+        assert live_path.read_text(encoding="utf-8") == original_content
 
     def test_rollback_with_no_backup_removes_live(self, activator, quarantine_skill, tmp_path):
         """rollback() with no backup (new skill) removes the live file."""
@@ -619,7 +619,7 @@ class TestSkillActivator:
         activator.rollback("brainstorming")
 
         live_path = live_dir / "SKILL.md"
-        assert live_path.read_text() == original
+        assert live_path.read_text(encoding="utf-8") == original
 
 
 # ---------------------------------------------------------------------------
@@ -809,7 +809,7 @@ class TestAuditRemediations:
     def test_quarantine_dir_absolute_path_rejected(self, activator, tmp_path):
         evil = tmp_path / "evil"
         evil.mkdir()
-        (evil / "SKILL.md").write_text("PWNED")
+        (evil / "SKILL.md").write_text("PWNED", encoding="utf-8")
         with pytest.raises(ValueError):
             activator.activate("victim", str(evil))
         assert not (tmp_path / "live" / "victim" / "SKILL.md").exists()
@@ -822,7 +822,7 @@ class TestAuditRemediations:
         (tmp_path / "quarantine").mkdir(parents=True, exist_ok=True)
         evil = tmp_path / "evil"
         evil.mkdir()
-        (evil / "SKILL.md").write_text("PWNED")
+        (evil / "SKILL.md").write_text("PWNED", encoding="utf-8")
         link = tmp_path / "quarantine" / "linkdir"
         try:
             os.symlink(evil, link)
@@ -836,14 +836,14 @@ class TestAuditRemediations:
     def test_rollback_is_atomic_no_tmp(self, activator, tmp_path):
         q = tmp_path / "quarantine" / "s-v1"
         q.mkdir(parents=True)
-        (q / "SKILL.md").write_text("new")
+        (q / "SKILL.md").write_text("new", encoding="utf-8")
         live_dir = tmp_path / "live" / "s"
         live_dir.mkdir(parents=True)
-        (live_dir / "SKILL.md").write_text("orig")
+        (live_dir / "SKILL.md").write_text("orig", encoding="utf-8")
         activator.activate("s", "s-v1")
         activator.rollback("s")
         assert list(live_dir.glob("*.tmp")) == []
-        assert (live_dir / "SKILL.md").read_text() == "orig"
+        assert (live_dir / "SKILL.md").read_text(encoding="utf-8") == "orig"
 
     # --- P1-3: DELETE is forbidden (append-only, not just UPDATE) ---
     def test_delete_transition_row_forbidden(self, tmp_path):

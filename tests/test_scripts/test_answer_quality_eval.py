@@ -30,7 +30,7 @@ def _gold(tmp_path: Path, answerable: int, unanswerable: int) -> Path:
     rows += [{"qid": f"U{i}", "question": f"unanswerable {i}", "answerable": False}
              for i in range(unanswerable)]
     path = tmp_path / "gold.jsonl"
-    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
     return path
 
 
@@ -67,7 +67,7 @@ class TestJudgeMode:
         assert observed["false_abstain"] == 25 and observed["correct_abstain"] == 12
         suggested = report["providers"]["laya"]["suggested"]
         assert suggested["correct_accept"] == 25 and suggested["false_accept"] == 0
-        entries = jcf.parse_entries(json.loads(out.read_text()))
+        entries = jcf.parse_entries(json.loads(out.read_text(encoding="utf-8")))
         assert 0.1 < entries[("laya", "sufficiency-v1")] <= 0.5
 
     def test_too_few_questions_write_no_file(self, tool, tmp_path, monkeypatch, capsys) -> None:

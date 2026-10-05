@@ -80,13 +80,13 @@ def test_export_is_deterministic_git_friendly_and_span_linked(tmp_path: Path) ->
     assert first["files"] == second["files"]
     facts = [
         json.loads(line)
-        for line in (tmp_path / "first/facts.jsonl").read_text().splitlines()
+        for line in (tmp_path / "first/facts.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert facts[0]["fact_id"] == "f1"
     assert "embedding" not in facts[0]
     spans = [
         json.loads(line)
-        for line in (tmp_path / "first/source_spans.jsonl").read_text().splitlines()
+        for line in (tmp_path / "first/source_spans.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert spans == [{
         "end": len("Alpha uses SQLite"),
@@ -196,7 +196,7 @@ def test_replace_requires_rollback_and_preserves_preimage(tmp_path: Path) -> Non
     rollback = tmp_path / "rollback"
     import_evidence_bundle(target, bundle, replace=True, rollback_dir=rollback)
     assert verify_evidence_bundle(rollback).valid is True
-    old = [json.loads(line) for line in (rollback / "facts.jsonl").read_text().splitlines()]
+    old = [json.loads(line) for line in (rollback / "facts.jsonl").read_text(encoding="utf-8").splitlines()]
     assert old[0]["content"] == "old value"
 
     # Rollback is executable, not merely an exported file: restore the preimage.

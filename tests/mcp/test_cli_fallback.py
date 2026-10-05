@@ -142,7 +142,7 @@ class TestArgvIsListNeverShell:
             / "src" / "superlocalmemory" / "mcp" / "cli_fallback.py"
         )
         assert cli_fallback_path.exists(), "cli_fallback.py not found"
-        source = cli_fallback_path.read_text()
+        source = cli_fallback_path.read_text(encoding="utf-8")
         assert "shell=True" not in source, (
             "cli_fallback.py contains 'shell=True' — this is forbidden. "
             "Use argv list with shell=False."

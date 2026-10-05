@@ -261,7 +261,7 @@ class TestNoScipy:
         """Test 9: turbo_quant.py does not import scipy."""
         import superlocalmemory.math.turbo_quant as tq_mod
 
-        source = Path(tq_mod.__file__).read_text()
+        source = Path(tq_mod.__file__).read_text(encoding="utf-8")
         # Check for actual import statements (not comments/docstrings)
         for line in source.splitlines():
             stripped = line.strip()

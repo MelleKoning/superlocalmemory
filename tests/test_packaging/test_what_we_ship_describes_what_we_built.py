@@ -49,7 +49,7 @@ def _real_tool_names() -> set[str]:
     mcp_dir = REPO / "src" / "superlocalmemory" / "mcp"
     for path in mcp_dir.glob("tools_*.py"):
         pending = False
-        for line in path.read_text().splitlines():
+        for line in path.read_text(encoding="utf-8").splitlines():
             stripped = line.strip()
             if stripped.startswith("@server.tool"):
                 # The decorator's own arguments can nest parentheses
@@ -83,7 +83,7 @@ class TestEveryToolWeTellAnAgentToUseExists:
         }
         problems: list[str] = []
         for path in SHIPPED_MARKDOWN:
-            for line in path.read_text().splitlines():
+            for line in path.read_text(encoding="utf-8").splitlines():
                 stripped = line.strip()
                 for key in ("tools:", "allowed-tools:"):
                     if not stripped.startswith(key):
@@ -118,7 +118,7 @@ class TestTheNumbersWeQuoteAreTheNumbersWeHave:
         skill = REPO / "plugin-src" / "skills" / "slm-profile" / "SKILL.md"
         if not skill.exists():
             pytest.skip("slm-profile skill not present")
-        text = skill.read_text()
+        text = skill.read_text(encoding="utf-8")
 
         wrong: list[str] = []
         for name in ("core", "code", "full", "power", "mesh"):
@@ -135,13 +135,13 @@ class TestTheNumbersWeQuoteAreTheNumbersWeHave:
         """Four register always, two more when their prerequisites are met."""
         wiring = (
             REPO / "src" / "superlocalmemory" / "core" / "engine_wiring.py"
-        ).read_text()
+        ).read_text(encoding="utf-8")
         assert '"spreading_activation"' in wiring and '"hopfield"' in wiring
 
         offenders = [
             str(p.relative_to(REPO))
             for p in SHIPPED_MARKDOWN
-            if re.search(r"all seven channels|seven retrieval channels", p.read_text())
+            if re.search(r"all seven channels|seven retrieval channels", p.read_text(encoding="utf-8"))
         ]
         assert not offenders, (
             f"these claim seven retrieval channels; there are at most six: {offenders}"
@@ -158,12 +158,12 @@ class TestTheVersionWeStampIsTheVersionWeAre:
         six releases behind for every user who installed that way.
         """
         version = tomllib.loads(
-            (REPO / "pyproject.toml").read_text()
+            (REPO / "pyproject.toml").read_text(encoding="utf-8")
         )["project"]["version"]
 
         stale: list[str] = []
         for path in sorted((REPO / "plugin-src").rglob("*.md")):
-            for found in re.findall(r"SuperLocalMemory v(\d+\.\d+\.\d+)", path.read_text()):
+            for found in re.findall(r"SuperLocalMemory v(\d+\.\d+\.\d+)", path.read_text(encoding="utf-8")):
                 if found != version:
                     stale.append(f"{path.relative_to(REPO)}: says v{found}")
         assert not stale, (

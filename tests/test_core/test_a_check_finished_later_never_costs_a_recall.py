@@ -74,7 +74,7 @@ def _wait(predicate, timeout: float = 15.0) -> bool:
 def _events(log: Path) -> list[dict]:
     if not log.exists():
         return []
-    return [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _starts(log: Path, query: str | None = None) -> list[dict]:
@@ -85,7 +85,7 @@ def _starts(log: Path, query: str | None = None) -> list[dict]:
 @pytest.fixture
 def laya(tmp_path, monkeypatch):
     worker = tmp_path / "fake_laya_worker.py"
-    worker.write_text(_WORKER)
+    worker.write_text(_WORKER, encoding="utf-8")
     log = tmp_path / "worker.log"
     monkeypatch.setenv("FAKE_LAYA_LOG", str(log))
     monkeypatch.setenv("FAKE_LAYA_DOC_S", str(DOC_S))

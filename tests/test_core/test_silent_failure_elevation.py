@@ -66,7 +66,7 @@ def test_no_silent_debug_swallows_in_shipped_paths():
     ]
     offences: list[str] = []
     for path in targets:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         for needle_logger, needle_context in forbidden_combos:
             if needle_logger in text and needle_context in text:
                 # Same-line correlation check.

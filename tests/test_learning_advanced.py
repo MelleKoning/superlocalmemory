@@ -63,7 +63,7 @@ def test_aggregator_no_source(aggregator):
 # -- Project Context --
 def test_project_context_detect(tmp_path):
     # Create a fake Python project
-    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'test'")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'test'", encoding="utf-8")
     ctx = ProjectContextManager()
     info = ctx.detect(tmp_path)
     assert info["project_name"] == "test" or "project_name" in info
@@ -74,7 +74,7 @@ def test_project_context_empty_dir(tmp_path):
     assert isinstance(info, dict)
 
 def test_project_context_node_project(tmp_path):
-    (tmp_path / "package.json").write_text('{"name": "my-app"}')
+    (tmp_path / "package.json").write_text('{"name": "my-app"}', encoding="utf-8")
     ctx = ProjectContextManager()
     info = ctx.detect(tmp_path)
     assert "my-app" in str(info.get("project_name", ""))

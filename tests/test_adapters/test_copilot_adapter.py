@@ -29,7 +29,7 @@ def test_writes_to_github_copilot_instructions_md(tmp_path, fake_recall):
     adapter.sync()
     path = tmp_path / TARGET_REL
     assert path.exists()
-    content = path.read_text()
+    content = path.read_text(encoding="utf-8")
     assert "# SLM Runtime Memory Protocol" in content
     assert content.startswith("<!-- SLM-START -->")
 
@@ -84,7 +84,7 @@ def test_disable(tmp_path, fake_recall):
     # Marker-bounded: disable() strips the SLM block but does not delete the
     # file — copilot-instructions.md is user-owned and may contain other content.
     assert path.exists()
-    assert "<!-- SLM-START -->" not in path.read_text()
+    assert "<!-- SLM-START -->" not in path.read_text(encoding="utf-8")
     assert adapter.is_active() is False
 
 

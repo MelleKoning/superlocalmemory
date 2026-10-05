@@ -70,7 +70,7 @@ class TestRetrievalConfigKeys:
                 "cross_encoder_model": MODEL,
                 "cross_encoder_backend": "openai",
             },
-        }))
+        }), encoding="utf-8")
 
         loaded = SLMConfig.load(path)
 
@@ -90,7 +90,7 @@ class TestRetrievalConfigKeys:
         cfg.retrieval.cross_encoder_timeout_seconds = 8.0
         cfg.save(path)
 
-        on_disk = json.loads(path.read_text())["retrieval"]
+        on_disk = json.loads(path.read_text(encoding="utf-8"))["retrieval"]
         assert on_disk["cross_encoder_endpoint"] == ENDPOINT
 
         loaded = SLMConfig.load(path)
@@ -107,7 +107,7 @@ class TestRetrievalConfigKeys:
 
         cfg.save(path)
 
-        on_disk = json.loads(path.read_text())
+        on_disk = json.loads(path.read_text(encoding="utf-8"))
         assert on_disk["retrieval"]["cross_encoder_api_key"] == "reranker-secret"
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
         assert SLMConfig.load(path).retrieval.cross_encoder_api_key == (
@@ -121,7 +121,7 @@ class TestRetrievalConfigKeys:
         path.write_text(json.dumps({
             "mode": "a",
             "retrieval": {"use_cross_encoder": True, "cross_encoder_backend": "onnx"},
-        }))
+        }), encoding="utf-8")
         loaded = SLMConfig.load(path)
         assert loaded.retrieval.cross_encoder_endpoint == ""
         assert loaded.retrieval.is_remote_cross_encoder is False

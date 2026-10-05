@@ -159,7 +159,7 @@ class TestNothingIsRiskedOnAGuess:
             _db(root / "memory-20260101-000000-pre-4.0.0.db.bak"),
             _db(root / "memory-pre-4.0.0.db"),
         ]
-        (root / "notes-20260101-000000-pre-4.0.0.txt").write_text("mine")
+        (root / "notes-20260101-000000-pre-4.0.0.txt").write_text("mine", encoding="utf-8")
         for day in ("01", "02", "03"):
             _current(root, f"202609{day}-080000-000001")
 

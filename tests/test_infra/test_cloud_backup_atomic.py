@@ -141,7 +141,7 @@ class TestAtomicReplace:
 
         # Pre-populate the store with a known credential
         cb._store_credential("existing_key", "existing_value")
-        original_content = store_path.read_text()
+        original_content = store_path.read_text(encoding="utf-8")
 
         # Simulate os.replace raising mid-operation
         real_replace = os.replace
@@ -160,7 +160,7 @@ class TestAtomicReplace:
 
         # The original store must be untouched
         assert store_path.exists(), "Original store was deleted — non-atomic write!"
-        assert store_path.read_text() == original_content, (
+        assert store_path.read_text(encoding="utf-8") == original_content, (
             "Original store was corrupted when os.replace failed — not atomic!"
         )
         # _store_credential should return False when replace fails
@@ -184,7 +184,7 @@ class TestCorruptJsonLogsWarning:
         cb, store_path = cred_store_env
 
         # Write corrupt JSON directly (bypassing _store_credential)
-        store_path.write_text("{not valid json!!!")
+        store_path.write_text("{not valid json!!!", encoding="utf-8")
         store_path.chmod(0o600)
 
         with caplog.at_level(logging.WARNING, logger="superlocalmemory.cloud_backup"):
@@ -205,7 +205,7 @@ class TestCorruptJsonLogsWarning:
     def test_corrupt_json_in_delete_logs_warning(self, cred_store_env, caplog):
         cb, store_path = cred_store_env
 
-        store_path.write_text("{bad json")
+        store_path.write_text("{bad json", encoding="utf-8")
         store_path.chmod(0o600)
 
         with caplog.at_level(logging.WARNING, logger="superlocalmemory.cloud_backup"):

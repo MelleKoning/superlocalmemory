@@ -21,7 +21,7 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def _write_config(base: Path, text: str) -> None:
-    (base / "config.toml").write_text(text)
+    (base / "config.toml").write_text(text, encoding="utf-8")
 
 
 def _mock_server() -> MagicMock:

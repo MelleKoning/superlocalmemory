@@ -29,7 +29,7 @@ from superlocalmemory.evaluation.answer_quality import (
 
 def _gold(tmp_path, rows):
     path = tmp_path / "gold.jsonl"
-    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
     return path
 
 
@@ -64,7 +64,7 @@ class TestGold:
         with pytest.raises(GoldFileError):
             load_gold(_gold(tmp_path, [ROWS[0], ROWS[0]]))
         empty = tmp_path / "e.jsonl"
-        empty.write_text("\n")
+        empty.write_text("\n", encoding="utf-8")
         with pytest.raises(GoldFileError):
             load_gold(empty)
 

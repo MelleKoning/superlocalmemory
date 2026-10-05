@@ -42,7 +42,7 @@ def test_connect_claude_code(tmp_path):
     connector = IDEConnector(home=tmp_path)
     success = connector.connect("claude_code")
     assert success
-    content = (tmp_path / ".claude" / "CLAUDE.md").read_text()
+    content = (tmp_path / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
     assert SLM_MARKER in content
 
 
@@ -51,7 +51,7 @@ def test_connect_cursor(tmp_path):
     connector = IDEConnector(home=tmp_path)
     success = connector.connect("cursor")
     assert success
-    content = (tmp_path / ".cursorrules").read_text()
+    content = (tmp_path / ".cursorrules").read_text(encoding="utf-8")
     assert SLM_MARKER in content
 
 
@@ -59,11 +59,11 @@ def test_connect_does_not_overwrite(tmp_path):
     claude_dir = tmp_path / ".claude"
     claude_dir.mkdir()
     claude_md = claude_dir / "CLAUDE.md"
-    claude_md.write_text("# My Custom Rules\nDo not touch this.\n")
+    claude_md.write_text("# My Custom Rules\nDo not touch this.\n", encoding="utf-8")
 
     connector = IDEConnector(home=tmp_path)
     connector.connect("claude_code")
-    content = claude_md.read_text()
+    content = claude_md.read_text(encoding="utf-8")
     assert "My Custom Rules" in content  # preserved
     assert SLM_MARKER in content  # appended
 
@@ -73,7 +73,7 @@ def test_connect_is_idempotent(tmp_path):
     connector = IDEConnector(home=tmp_path)
     connector.connect("cursor")
     connector.connect("cursor")  # run twice
-    content = (tmp_path / ".cursorrules").read_text()
+    content = (tmp_path / ".cursorrules").read_text(encoding="utf-8")
     # Should only have ONE SLM section
     assert content.count(SLM_MARKER) == 1
 
@@ -93,7 +93,7 @@ def test_connect_json_ide(tmp_path):
     connector = IDEConnector(home=tmp_path)
     success = connector.connect("continue_dev")
     assert success
-    config = json.loads((tmp_path / ".continue" / "config.json").read_text())
+    config = json.loads((tmp_path / ".continue" / "config.json").read_text(encoding="utf-8"))
     assert "superlocalmemory" in config.get("mcpServers", {})
 
 

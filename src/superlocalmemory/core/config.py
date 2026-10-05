@@ -1351,7 +1351,7 @@ class SLMConfig:
             try:
                 import json as _json
                 _disk_mode = str(
-                    _json.loads(path.read_text()).get("mode", "")
+                    _json.loads(path.read_text(encoding="utf-8")).get("mode", "")
                 ).lower()
                 _active_mode = cls.read_current_mode(path.parent)
                 if _disk_mode and _active_mode and _disk_mode != _active_mode:
@@ -1370,7 +1370,7 @@ class SLMConfig:
 
         import json
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as exc:
             # An already-corrupt/truncated config.json must NOT brick every `slm`
             # call — degrade to the Mode-A default and warn rather than raise.
@@ -1701,7 +1701,7 @@ class SLMConfig:
         existing = {}
         if path.exists():
             try:
-                existing = json.loads(path.read_text())
+                existing = json.loads(path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 pass
 

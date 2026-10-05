@@ -200,7 +200,7 @@ def _foreign_live_daemon(memory_db: Path) -> "int | None":
         pid_file = memory_db.parent / "daemon.pid"
         if not pid_file.is_file():
             return None
-        pid = int(pid_file.read_text().strip() or 0)
+        pid = int(pid_file.read_text(encoding="utf-8").strip() or 0)
         if pid <= 0 or pid == os.getpid():
             return None
         os.kill(pid, 0)          # signal 0 tests liveness without touching it

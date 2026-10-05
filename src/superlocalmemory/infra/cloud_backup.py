@@ -136,7 +136,7 @@ def _store_credential(key: str, value: str) -> bool:
         existing: dict = {}
         if store_path.exists():
             try:
-                existing = json.loads(store_path.read_text())
+                existing = json.loads(store_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError as exc:
                 logger.warning(
                     "Credential store corrupt (JSON decode error), starting fresh: %s", exc
@@ -167,7 +167,7 @@ def _get_credential(key: str) -> str | None:
         store_path = _get_credential_store()
         if store_path.exists():
             try:
-                data = json.loads(store_path.read_text())
+                data = json.loads(store_path.read_text(encoding="utf-8"))
                 return data.get(key)
             except json.JSONDecodeError as exc:
                 logger.warning(
@@ -200,7 +200,7 @@ def _delete_credential(key: str) -> bool:
         store_path = _get_credential_store()
         if store_path.exists():
             try:
-                data = json.loads(store_path.read_text())
+                data = json.loads(store_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError as exc:
                 logger.warning(
                     "Credential store corrupt (JSON decode error) during delete of '%s': %s",

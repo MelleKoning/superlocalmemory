@@ -31,7 +31,7 @@ LIGHT_ONLY = {"cmd_status"}
 
 
 def _engine_constructions() -> dict[str, list[ast.Call]]:
-    tree = ast.parse(Path(commands.__file__).read_text())
+    tree = ast.parse(Path(commands.__file__).read_text(encoding="utf-8"))
     found: dict[str, list[ast.Call]] = {}
     for fn in tree.body:
         if not isinstance(fn, ast.FunctionDef):

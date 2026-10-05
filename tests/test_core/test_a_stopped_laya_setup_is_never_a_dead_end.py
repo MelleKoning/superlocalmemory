@@ -44,7 +44,7 @@ def _clean(monkeypatch):
 
 def _write(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data) if not isinstance(data, str) else data)
+    path.write_text(json.dumps(data) if not isinstance(data, str) else data, encoding="utf-8")
 
 
 def _stopped_setup() -> Path:
@@ -67,7 +67,7 @@ def _external_install(tmp_path: Path) -> tuple[Path, Path]:
 def _fake_python(tmp_path: Path, body: str) -> Path:
     """An executable that stands in for the environment's python."""
     exe = tmp_path / "fakepy"
-    exe.write_text("#!/bin/sh\n" + body + "\n")
+    exe.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8")
     exe.chmod(0o755)
     return exe
 
@@ -137,7 +137,7 @@ def test_remove_keeps_a_valid_adopted_record(tmp_path):
     _write(run_dir / "adopted.json", adopted)
     assert lr.remove().state == lr.STATE_NOT_INSTALLED
     assert sorted(p.name for p in run_dir.iterdir()) == ["adopted.json"]
-    assert json.loads((run_dir / "adopted.json").read_text()) == adopted
+    assert json.loads((run_dir / "adopted.json").read_text(encoding="utf-8")) == adopted
     assert lr.detect().state == lr.STATE_READY
 
 

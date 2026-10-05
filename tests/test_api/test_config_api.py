@@ -68,12 +68,12 @@ def _read_config(tmp_path: Path) -> dict:
     p = tmp_path / "config.json"
     if not p.exists():
         return {}
-    return json.loads(p.read_text())
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def _write_config(tmp_path: Path, data: dict) -> None:
     p = tmp_path / "config.json"
-    p.write_text(json.dumps(data, indent=2))
+    p.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

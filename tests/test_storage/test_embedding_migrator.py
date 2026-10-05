@@ -147,21 +147,21 @@ class TestStoredSignature:
 
     def test_write_preserves_other_keys(self, tmp_path):
         config_path = tmp_path / "config.json"
-        config_path.write_text(json.dumps({"mode": "a", "active_profile": "default"}))
+        config_path.write_text(json.dumps({"mode": "a", "active_profile": "default"}), encoding="utf-8")
         _write_stored_signature(tmp_path, "my::sig::768")
-        data = json.loads(config_path.read_text())
+        data = json.loads(config_path.read_text(encoding="utf-8"))
         assert data["mode"] == "a"
         assert data["active_profile"] == "default"
         assert data["embedding_signature"] == "my::sig::768"
 
     def test_corrupt_json_returns_no_model(self, tmp_path):
         config_path = tmp_path / "config.json"
-        config_path.write_text("{invalid json!!!")
+        config_path.write_text("{invalid json!!!", encoding="utf-8")
         assert _read_stored_signature(tmp_path) == _NO_MODEL
 
     def test_missing_key_returns_no_model(self, tmp_path):
         config_path = tmp_path / "config.json"
-        config_path.write_text(json.dumps({"mode": "a"}))
+        config_path.write_text(json.dumps({"mode": "a"}), encoding="utf-8")
         assert _read_stored_signature(tmp_path) == _NO_MODEL
 
     def test_creates_parent_dirs(self, tmp_path):

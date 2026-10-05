@@ -38,7 +38,7 @@ def test_non_loopback_mcp_accepts_only_the_configured_api_key(tmp_path) -> None:
     from superlocalmemory.infra.auth_middleware import authorize_http_mcp_request
 
     key_file = tmp_path / "api_key"
-    key_file.write_text("correct-secret\n")
+    key_file.write_text("correct-secret\n", encoding="utf-8")
 
     assert authorize_http_mcp_request(
         {"x-slm-api-key": "wrong"},

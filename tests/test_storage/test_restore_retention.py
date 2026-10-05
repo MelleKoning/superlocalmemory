@@ -98,7 +98,7 @@ def test_pre_restore_copies_are_pruned_but_the_newest_two_stay(tmp_path) -> None
     safety.mkdir()
     copies = [_old_copy(safety, f"2026010{i}-120000", 60) for i in range(1, 5)]
     other = safety / "notes.txt"
-    other.write_text("not ours")
+    other.write_text("not ours", encoding="utf-8")
 
     removed = rr.prune_restore_artifacts(tmp_path)
 
@@ -129,13 +129,13 @@ def test_erasure_reaches_deltas_and_pre_restore_copies(tmp_path) -> None:
                        memory_db=memory_db)
     outcome = ur.perform_pending_restore(tmp_path, memory_db, learning_db)
     delta = Path(outcome.delta_dir)
-    assert "Elm St" in (delta / "memories.jsonl").read_text()
+    assert "Elm St" in (delta / "memories.jsonl").read_text(encoding="utf-8")
     counts: dict = {}
 
     GDPRCompliance._record_backup_obligations(None, data_root=tmp_path, profile_id="alice",
                                               erasure_id="e1", counts=counts)
 
-    rows = [json.loads(line) for line in (delta / "memories.jsonl").read_text().splitlines()]
+    rows = [json.loads(line) for line in (delta / "memories.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [r["memory_id"] for r in rows] == ["mb"], "alice's words are gone from the delta"
     assert counts["restore_delta_rows_erased"] == 1
     assert counts["pre_restore_copies_registered"] == 1
