@@ -812,6 +812,7 @@ async def search_memories(request: Request, body: SearchRequest):
                 response = None
             if response is not None:
                 elapsed_ms = round((_time.monotonic() - t0) * 1000, 1)
+                from superlocalmemory.core.kind_query import engine_display_min_confidence
                 from superlocalmemory.server.recall_serializer import (
                     recall_response_metadata,
                     serialize_recall_response,
@@ -821,6 +822,7 @@ async def search_memories(request: Request, body: SearchRequest):
                     limit=_search_limit,
                     per_fact_max=300,
                     total_max=max(300, body.limit * 300),
+                    display_min_confidence=engine_display_min_confidence(engine),
                 )
                 if parsed_kind:
                     results = [r for r in results

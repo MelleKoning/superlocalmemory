@@ -194,6 +194,19 @@ def _stage(response: Any, name: str) -> float | None:
     return _number(stages.get(name), 0.0, _MAX_MS)
 
 
+def stage_timings(response: Any) -> dict[str, float | None]:
+    """Where a recall's retrieval time went: waiting for the query's embedding,
+    then reordering. ``None`` for a stage that did not run or was not measured.
+
+    Public so every surface that reports timings for one recall — the saved
+    history (``event_from_response``, below) and the Try-it panel's live trace
+    (``server.routes.answer_check_history.answer_check_block``) — reads the
+    same two numbers off the same ``RecallResponse.stage_ms``, instead of each
+    keeping its own copy of the stage names to look up.
+    """
+    return {"embed_ms": _stage(response, "query_embedding"), "rerank_ms": _stage(response, "rerank")}
+
+
 def event_from_response(response: Any, profile_id: str, *, now_ms: int,
                         origin_name: str) -> VerdictEvent | None:
     """The record for one recall, every field validated. Pure; never raises."""
@@ -225,8 +238,7 @@ def event_from_response(response: Any, profile_id: str, *, now_ms: int,
             total_ms=_number(getattr(trace, "total_ms", None), 0.0, _MAX_MS),
             calibration_id=_matching(getattr(response, "calibration_id", "") or "",
                                      _CALIBRATION_RE),
-            embed_ms=_stage(response, "query_embedding"),
-            rerank_ms=_stage(response, "rerank"),
+            **stage_timings(response),
         )
     except Exception:  # noqa: BLE001 — a malformed response is simply not recorded
         return None
@@ -411,5 +423,5 @@ __all__ = [
     "call_as_dashboard", "counters", "enable", "erasure_known_at", "event_from_response",
     "forget_profile",
     "is_enabled", "mark_failed", "mark_saved", "origin", "recent", "record_recall_verdict",
-    "snapshot_unsaved", "unsaved_for", "wake_event",
+    "snapshot_unsaved", "stage_timings", "unsaved_for", "wake_event",
 ]

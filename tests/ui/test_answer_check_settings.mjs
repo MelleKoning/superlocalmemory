@@ -203,6 +203,29 @@ describe('Answer check settings', function () {
     assert.match(p.root.textContent, /Reordering needs the notice above ticked first/);
   });
 
+  it('ticking Jev reordering while On this Mac is chosen asks to switch — Yes switches and keeps the tick', async function () {
+    const p = await mount(status({ mode: 'laya', active: 'laya', laya: { state: 'ready', action: '', error: '' },
+      jev: { has_key: true, key_hint: '****abcd', consent: true } }));
+    assert.equal(p.ac('mode-laya').checked, true);
+    p.ac('jev-rerank').click();
+    await flushPromises();
+    assert.match(p.confirms[0], /Switch to Jev\?/);
+    assert.equal(p.ac('mode-jev').checked, true, 'the judge switched to Jev');
+    assert.equal(p.ac('jev-rerank').checked, true, 'the ticked option is kept');
+    assert.match(p.text('.ac-save-state'), /Unsaved changes/);
+  });
+
+  it('ticking Jev reordering while On this Mac is chosen asks to switch — No leaves Laya chosen and unticks', async function () {
+    const p = await mount(status({ mode: 'laya', active: 'laya', laya: { state: 'ready', action: '', error: '' },
+      jev: { has_key: true, key_hint: '****abcd', consent: true } }));
+    p.w.confirm = (m) => { p.confirms.push(m); return false; };
+    p.ac('jev-rerank').click();
+    await flushPromises();
+    assert.match(p.confirms[0], /Switch to Jev\?/);
+    assert.equal(p.ac('mode-laya').checked, true, 'Laya stays selected');
+    assert.equal(p.ac('jev-rerank').checked, false, 'the option is unticked, never silently on');
+  });
+
   it('no internal words outside Details', async function () {
     const p = await mount(status());
     const clone = p.root.cloneNode(true);

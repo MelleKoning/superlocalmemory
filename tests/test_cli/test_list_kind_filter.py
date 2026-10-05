@@ -20,18 +20,20 @@ from superlocalmemory.storage.models import AtomicFact, FactType, MemoryRecord
 
 
 class _FakeEngine:
-    def __init__(self, db) -> None:
+    def __init__(self, db, config=None) -> None:
         self._db = db
         self.profile_id = "default"
+        self._config = config
 
     def initialize(self) -> None:
         pass
 
 
-def _save(db, content, *, kind=None, source=None) -> str:
+def _save(db, content, *, kind=None, source=None, confidence=None) -> str:
     memory_id = db.store_memory(MemoryRecord(profile_id="default", content=content))
     fact = AtomicFact(profile_id="default", memory_id=memory_id, content=content,
-                      fact_type=FactType.SEMANTIC, memory_kind=kind, memory_kind_source=source)
+                      fact_type=FactType.SEMANTIC, memory_kind=kind, memory_kind_source=source,
+                      memory_kind_confidence=confidence)
     return db.store_fact(fact)
 
 
@@ -42,6 +44,32 @@ def fake_engine(tmp_path, monkeypatch):
     db = DatabaseManager(tmp_path / "memory.db")
     db.initialize(schema)
     engine = _FakeEngine(db)
+    monkeypatch.setattr(engine_mod, "MemoryEngine", lambda *a, **k: engine)
+    return engine
+
+
+@pytest.fixture()
+def fake_engine_with_strict_threshold(tmp_path, monkeypatch):
+    """Same engine, but with a configured ``display_min_confidence`` (0.50)
+    stricter than the module default (0.20) — so a test can tell whether a
+    surface reads the CONFIGURED value or silently keeps its own default."""
+    from dataclasses import dataclass
+    from superlocalmemory.core import engine as engine_mod
+
+    @dataclass
+    class _MemoryKindsCfg:
+        display_min_confidence: float = 0.50
+
+    @dataclass
+    class _Cfg:
+        memory_kinds: _MemoryKindsCfg = None
+        def __post_init__(self):
+            if self.memory_kinds is None:
+                self.memory_kinds = _MemoryKindsCfg()
+
+    db = DatabaseManager(tmp_path / "memory.db")
+    db.initialize(schema)
+    engine = _FakeEngine(db, config=_Cfg())
     monkeypatch.setattr(engine_mod, "MemoryEngine", lambda *a, **k: engine)
     return engine
 
@@ -84,6 +112,31 @@ def test_list_text_shows_id_and_kind_label(fake_engine, capsys) -> None:
     assert "Decision: We decided to ship on Fridays" in out
     assert "(semantic)" not in out
     assert "slm delete <id>" in out
+
+
+def test_list_displays_the_configured_threshold_not_a_hard_coded_one(
+    fake_engine_with_strict_threshold, capsys,
+) -> None:
+    """4.1.21 #16: ``slm list`` already reads the CONFIGURED
+    ``display_min_confidence`` to FILTER by ``--kind`` (``list_recent_facts``
+    above) — this pins that the same configured value is also used to LABEL
+    each item (``--json`` and the plain-text view), not a 0.20 hard-coded at
+    the display call regardless of what the filter call was given."""
+    _save(fake_engine_with_strict_threshold._db, "Ship on Fridays only with sign-off.",
+         kind="rule", source="model:llm", confidence=0.30)
+    commands.cmd_list(Namespace(json=True, limit=10, kind=""))
+    out = json.loads(capsys.readouterr().out)
+    item = out["data"]["results"][0]
+    # 0.30 clears the module default (0.20) but not the configured 0.50: a
+    # caller reading the live config must see this demoted to its legacy
+    # fact_type mapping, never shown as a "rule" suggestion.
+    assert item["memory_kind_state"] == "legacy"
+    assert item["memory_kind"] == "semantic"
+
+    commands.cmd_list(Namespace(json=False, limit=10, kind=""))
+    text = capsys.readouterr().out
+    assert "Fact: Ship on Fridays only with sign-off." in text
+    assert "Standing rule" not in text and "(suggested)" not in text
 
 
 def test_list_help_matches_what_text_mode_shows(tmp_path) -> None:

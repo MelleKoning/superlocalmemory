@@ -215,6 +215,7 @@ def _recall(engine: Any, view: model.SavedView, profile: str) -> Any:
 
 
 def _serialize(engine: Any, response: Any, limit: int, profile: str) -> dict[str, Any]:
+    from superlocalmemory.core.kind_query import engine_display_min_confidence
     from superlocalmemory.server.recall_serializer import (
         recall_response_metadata,
         serialize_recall_response,
@@ -226,6 +227,7 @@ def _serialize(engine: Any, response: Any, limit: int, profile: str) -> dict[str
         response, limit=limit,
         per_fact_max=getattr(retrieval, "recall_per_fact_max_chars", 2400),
         total_max=getattr(retrieval, "recall_total_max_chars", 12000),
+        display_min_confidence=engine_display_min_confidence(engine),
     )
     return {
         "profile": profile,

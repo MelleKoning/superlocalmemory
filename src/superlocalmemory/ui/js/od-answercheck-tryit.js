@@ -67,6 +67,23 @@
     return (typeof v === 'number' && isFinite(v)) ? Math.round(v).toLocaleString('en-US') + ' ms' : '—';
   }
 
+  function isMs(v) { return typeof v === 'number' && isFinite(v); }
+  // Mirrors od-answercheck.js's stageText, word for word: this panel and the
+  // Recent checks list read embed_ms/rerank_ms/retrieval_ms/judge_ms off the
+  // same server shape (answer_check_block / the saved history item), so they
+  // must describe the same recall the same way.
+  function stageText(retrieval, embed, rerank, judge) {
+    var parts = [];
+    if (isMs(retrieval)) {
+      var inner = [];
+      if (isMs(embed)) inner.push('waiting for the embedding model ' + ms(embed));
+      if (isMs(rerank)) inner.push('ranking ' + ms(rerank));
+      parts.push('Finding memories ' + ms(retrieval) + (inner.length ? ' (' + inner.join(', ') + ')' : ''));
+    }
+    if (isMs(judge)) parts.push('answer check ' + ms(judge));
+    return parts.join('; ');
+  }
+
   function judgeName(judge) {
     if (judge === 'laya') return 'Laya, on this Mac';
     if (judge === 'jev') return 'Jev, online';
@@ -99,6 +116,16 @@
       text: label })]);
   }
 
+  // Mirrors cli.commands._kind_display: a kind below the configured
+  // confidence threshold is never shown dressed up as confirmed — the
+  // server already demoted it to 'legacy'/'untyped' (storage.memory_kinds.
+  // kind_fields), and a model suggestion that cleared the threshold but
+  // was not yet confirmed says so, the same words as `slm list`.
+  function kindBadgeText(r) {
+    var label = r.memory_kind_label || r.memory_kind;
+    return r.memory_kind_state === 'suggested' ? label + ' (suggested)' : label;
+  }
+
   function renderFound(col, body) {
     col.textContent = '';
     col.appendChild(el('h4', { style: 'font-size:13px;margin:0 0 8px', text: 'What retrieval found' }));
@@ -117,7 +144,7 @@
       list.appendChild(el('li', { style: 'margin-bottom:6px' }, [
         el('span', { class: 'badge neutral', style: 'margin-right:6px', text: score || 'match' }),
         (r.memory_kind_label || r.memory_kind) ? el('span', { class: 'badge cyan', style: 'margin-right:6px',
-          text: String(r.memory_kind_label || r.memory_kind) }) : null,
+          text: kindBadgeText(r) }) : null,
         el('span', { class: 'ac-snippet', text: text }),
       ]));
     });
@@ -161,6 +188,14 @@
       col.appendChild(el('p', { style: 'font-size:12.5px;margin:0 0 4px', text: 'Reordered by Jev' }));
     }
     col.appendChild(latencyBar(block));
+    // Same stage breakdown as the Recent checks list, from the same fields
+    // (embed_ms, rerank_ms, retrieval_ms, judge_ms) — not just the two-segment
+    // bar above.
+    var split = stageText(block.retrieval_ms, block.embed_ms, block.rerank_ms, block.judge_ms);
+    if (split) {
+      col.appendChild(el('p', { class: 'ac-split', style: 'font-size:12px;color:var(--fg-2);margin:2px 0 0',
+                                text: split }));
+    }
     if (typeof body.retrieval_time_ms === 'number') {
       col.appendChild(el('p', { style: 'font-size:11.5px;color:var(--fg-3);margin:2px 0 0',
         text: 'Round trip including the request: ' + ms(body.retrieval_time_ms) }));

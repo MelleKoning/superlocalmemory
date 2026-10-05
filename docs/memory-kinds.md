@@ -57,6 +57,36 @@ Without `--kind`, questions shaped like "what did we decide", "how do I" or
 "what is the current state" favour the matching kind. Questions that ask for no
 particular kind are ranked exactly as before.
 
+## When a suggested kind is shown as "not sure"
+
+A kind a model suggested (as opposed to one you set with `--kind` or
+confirmed) carries a confidence. Below **`display_min_confidence`**
+(default **0.20**), the suggestion is never shown as the kind itself —
+instead the memory is shown under its old, pre-4.1.19 type (`fact_type`,
+mapped to the nearest kind) if it has one, or as untyped if it does not. A
+suggestion that clears the threshold is still shown as a *suggestion*, not a
+fact, until someone confirms it:
+
+| State | Shown as | When |
+|---|---|---|
+| `confirmed` | the kind, plain | you set it, or confirmed a suggestion |
+| `suggested` | the kind, marked "(suggested)" | a model's confidence ≥ `display_min_confidence` |
+| `legacy` | the nearest kind from the old `fact_type`, plain | no kind, or confidence < `display_min_confidence` |
+| `untyped` | nothing | no kind and no mappable `fact_type` |
+
+`display_min_confidence` is **one constant, read by every surface that shows
+a kind** — `slm list`, `slm recall` / `slm trace` (plain text and `--json`),
+the MCP tools, the HTTP API, and the dashboard's Answer Check "Try it" panel
+— rather than each one guessing its own cutoff. The single implementation is
+`storage.memory_kinds.kind_fields()`; every caller with a live config reads
+the configured value through `core.kind_query.engine_display_min_confidence`
+and passes it in, so a fact shows the same state everywhere regardless of
+which surface asked for it.
+
+It is part of the memory-kind settings (`memory_kinds.json`, alongside
+`backend` and `jev_consent`) rather than a CLI flag today — change it with
+`POST /api/v3/kinds/settings {"display_min_confidence": 0.35}` (0.0–1.0).
+
 ## Managing kinds
 
 | Command | What it does |

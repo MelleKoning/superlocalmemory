@@ -62,6 +62,21 @@ describe('Try it', function () {
     assert.match(p.root.textContent, /Judge: Laya, on this Mac/);
   });
 
+  it('shows the stage breakdown — finding memories, embedding, ranking, the check — same as Recent checks', async function () {
+    const p = mount({ status: 200, body: { result_count: 2, results: results(2),
+      answer_check: block({ retrieval_ms: 812.3, embed_ms: 45.5, rerank_ms: 120.0, judge_ms: 201 }) } });
+    await ask(p);
+    assert.match(p.d.querySelector('.ac-split').textContent,
+      /Finding memories 812 ms \(waiting for the embedding model 46 ms, ranking 120 ms\); answer check 201 ms/);
+  });
+
+  it('omits the breakdown when the server has no stage timings for it', async function () {
+    const p = mount({ status: 200, body: { result_count: 2, results: results(2),
+      answer_check: block({ embed_ms: null, rerank_ms: null }) } });
+    await ask(p);
+    assert.match(p.d.querySelector('.ac-split').textContent, /^Finding memories 812 ms; answer check 201 ms$/);
+  });
+
   it('not checked', async function () {
     const p = mount({ status: 200, body: { result_count: 2, results: results(2),
       answer_check: block({ status: 'off', judge: '', answer_confidence: null, threshold: null }) } });
@@ -86,6 +101,18 @@ describe('Try it', function () {
     assert.equal(label(p).dataset.outcome, 'answered');
     assert.equal(p.d.querySelector('.ac-note'), null);
     assert.match(p.d.querySelector('.ac-reused').textContent, /verdict from the earlier check was reused/);
+  });
+
+  it('a suggested kind below confirmation says so, like `slm list` does — never silently on', async function () {
+    const p = mount({ status: 200, body: { result_count: 2, results: [
+      { content: 'Always run the suite once.', score: 0.9, relevance_score: 0.9,
+        memory_kind_label: 'Standing rule', memory_kind: 'rule', memory_kind_state: 'suggested' },
+      { content: 'Staging DB is Postgres 16.', score: 0.8, relevance_score: 0.8,
+        memory_kind_label: 'Fact', memory_kind: 'semantic', memory_kind_state: 'confirmed' },
+    ], answer_check: block() } });
+    await ask(p);
+    const badges = Array.from(p.d.querySelectorAll('.ac-found .badge.cyan')).map((b) => b.textContent);
+    assert.deepEqual(badges, ['Standing rule (suggested)', 'Fact']);
   });
 
   it('zero results', async function () {

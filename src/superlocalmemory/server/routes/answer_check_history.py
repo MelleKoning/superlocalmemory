@@ -158,7 +158,12 @@ def _item(src: Any) -> dict[str, Any]:
 
 
 def answer_check_block(response: Any) -> dict[str, Any]:
-    """What ``POST /api/v3/recall/trace`` adds: this recall's check, with timings."""
+    """What ``POST /api/v3/recall/trace`` adds: this recall's check, with timings.
+
+    ``embed_ms``/``rerank_ms`` come from ``history.stage_timings`` — the same
+    helper the saved history uses — so the Try-it panel shows the same stage
+    breakdown as the Recent checks feed, from the same numbers (4.1.21 #5).
+    """
     trace = getattr(response, "answer_check_trace", None)
 
     def timing(name: str) -> float | None:
@@ -173,6 +178,7 @@ def answer_check_block(response: Any) -> dict[str, Any]:
         "threshold": timing("threshold"),
         "reordered": bool(timing("reordered")),
         "retrieval_ms": timing("retrieval_ms"), "judge_ms": timing("judge_ms"),
+        **history.stage_timings(response),
         "total_ms": timing("total_ms"), "ceiling_ms": CEILING_MS,
     }
 

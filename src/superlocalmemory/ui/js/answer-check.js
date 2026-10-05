@@ -500,6 +500,18 @@
       RERANK_CONSENT_TEXT.replace('{k}', String(k)).replace('{provider}', providerLabel(draft.provider)),
       draft.rerank, function (on) {
         if (on && !draft.consent) { draft.rerank = false; render(); toast('Tick the notice above first.'); return; }
+        // A Jev option must never look on while a different judge is chosen —
+        // that was a silent state where it could never actually run. Ticking
+        // it while e.g. On this Mac is selected offers the real fix: switch
+        // the judge. Declining leaves the previous judge selected and the box
+        // unticked; there is no middle state.
+        if (on && draft.mode !== 'jev') {
+          if (!window.confirm('Switch to Jev? ' + NAMES[draft.mode] +
+              ' would stop checking answers; Jev would take over, with reordering on.')) {
+            draft.rerank = false; render(); return;
+          }
+          draft.mode = 'jev';
+        }
         draft.rerank = on; savedNote = ''; render();
       });
     box.appendChild(reorder);
