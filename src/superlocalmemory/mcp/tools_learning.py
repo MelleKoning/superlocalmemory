@@ -28,6 +28,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
+from contextlib import closing
 
 from mcp.types import ToolAnnotations
 
@@ -62,7 +63,7 @@ def settle_pending_session_outcomes(
 
     path = Path(memory_db_path)
     try:
-        with sqlite3.connect(str(path), timeout=2.0) as conn:
+        with closing(sqlite3.connect(str(path), timeout=2.0)) as conn, conn:
             rows = conn.execute(
                 "SELECT outcome_id, signals_json FROM pending_outcomes "
                 "WHERE profile_id=? AND session_id=? AND status='pending'",
@@ -95,7 +96,7 @@ def settle_pending_session_outcomes(
     outcome_ids = [row[0] for row in rows]
     placeholders = ",".join("?" for _ in outcome_ids)
     try:
-        with sqlite3.connect(str(path), timeout=2.0) as conn:
+        with closing(sqlite3.connect(str(path), timeout=2.0)) as conn, conn:
             settled = conn.execute(
                 "SELECT COUNT(*) FROM pending_outcomes "
                 "WHERE profile_id=? AND session_id=? AND status='settled' "

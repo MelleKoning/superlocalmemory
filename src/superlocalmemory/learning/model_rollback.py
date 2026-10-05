@@ -33,6 +33,7 @@ import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Final
+from contextlib import closing
 
 from superlocalmemory.learning.model_cache import invalidate as invalidate_model_cache
 
@@ -169,7 +170,7 @@ class ModelRollback:
              ``retrain_disabled_until`` (+24h) and
              ``last_rollback_at``, counter reset.
         """
-        with sqlite3.connect(self._db, timeout=10) as conn:
+        with closing(sqlite3.connect(self._db, timeout=10)) as conn, conn:
             conn.row_factory = sqlite3.Row
             try:
                 conn.execute("BEGIN IMMEDIATE")
