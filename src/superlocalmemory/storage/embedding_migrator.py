@@ -261,7 +261,7 @@ def _read_stored_signature(config_dir: Path) -> str:
     if not config_path.exists():
         return _NO_MODEL
     try:
-        data = json.loads(config_path.read_text())
+        data = json.loads(config_path.read_text(encoding="utf-8"))
         return data.get("embedding_signature", _NO_MODEL)
     except (json.JSONDecodeError, OSError):
         return _NO_MODEL
@@ -273,12 +273,12 @@ def _write_stored_signature(config_dir: Path, signature: str) -> None:
     data: dict[str, Any] = {}
     if config_path.exists():
         try:
-            data = json.loads(config_path.read_text())
+            data = json.loads(config_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             pass
     data["embedding_signature"] = signature
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(data, indent=2))
+    config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def check_embedding_migration(config: SLMConfig) -> bool:

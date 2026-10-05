@@ -93,7 +93,7 @@ def _daemon_url() -> str:
         from superlocalmemory.infra.data_root import state_path
 
         port_file = state_path("daemon.port")
-        with open(port_file) as fh:
+        with open(port_file, encoding="utf-8") as fh:
             port = int(fh.read().strip())
     except Exception:
         pass
@@ -414,11 +414,11 @@ def _hook_start() -> None:
             pass
 
     # Record session start time
-    with open(_START_TIME, "w") as f:
+    with open(_START_TIME, "w", encoding="utf-8") as f:
         f.write(str(int(time.time())))
 
     # Initialize activity log
-    with open(_ACTIVITY_LOG, "w") as f:
+    with open(_ACTIVITY_LOG, "w", encoding="utf-8") as f:
         f.write("")
 
     # Reap orphan MCP processes (background, best-effort)
@@ -510,7 +510,7 @@ def _hook_gate() -> None:
 
 def _hook_init_done() -> None:
     """Create marker file to lift the gate for the rest of the session."""
-    with open(_MARKER, "w") as f:
+    with open(_MARKER, "w", encoding="utf-8") as f:
         f.write(str(int(time.time())))
     sys.exit(0)
 
@@ -566,7 +566,7 @@ def _hook_checkpoint() -> None:
 
             # Log to session activity
             try:
-                with open(_ACTIVITY_LOG, "a") as f:
+                with open(_ACTIVITY_LOG, "a", encoding="utf-8") as f:
                     f.write(f"{now}|{basename}\n")
             except Exception:
                 pass
@@ -646,7 +646,7 @@ def _hook_stop() -> None:
     modified = ""
     try:
         if os.path.exists(_ACTIVITY_LOG):
-            with open(_ACTIVITY_LOG) as f:
+            with open(_ACTIVITY_LOG, encoding="utf-8") as f:
                 files = sorted({line.split("|", 1)[1].strip()
                                 for line in f if "|" in line})
             modified = ", ".join(files[:20])
@@ -749,7 +749,7 @@ def _cooldown_elapsed(lock_file: str, interval: int, now: int) -> bool:
     """Check if enough time has passed since last timestamp in lock_file."""
     try:
         if os.path.exists(lock_file):
-            with open(lock_file) as f:
+            with open(lock_file, encoding="utf-8") as f:
                 last = int(f.read().strip())
             return (now - last) >= interval
     except (ValueError, OSError):
@@ -760,7 +760,7 @@ def _cooldown_elapsed(lock_file: str, interval: int, now: int) -> bool:
 def _write_timestamp(path: str, ts: int) -> None:
     """Write a unix timestamp to a file."""
     try:
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write(str(ts))
     except OSError:
         pass
@@ -806,7 +806,7 @@ def _maybe_consolidate() -> None:
         last_ts = 0
         last_consolidation = _last_consolidation_path()
         if os.path.exists(last_consolidation):
-            with open(last_consolidation) as f:
+            with open(last_consolidation, encoding="utf-8") as f:
                 last_ts = int(f.read().strip())
 
         now = int(time.time())
@@ -827,7 +827,7 @@ def _maybe_consolidate() -> None:
             return
 
         os.makedirs(os.path.dirname(last_consolidation), exist_ok=True)
-        with open(last_consolidation, "w") as f:
+        with open(last_consolidation, "w", encoding="utf-8") as f:
             f.write(str(now))
     except Exception as exc:
         print(f"slm: consolidation trigger failed: {exc}", file=sys.stderr)

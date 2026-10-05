@@ -109,7 +109,11 @@ class ProfileManager:
             self._save()
 
     def _save(self) -> None:
-        """Atomic write: temp file in same dir, then rename."""
+        """Atomic write: temp file in same dir, then rename.
+
+        The temp file is closed before the rename: Windows refuses to rename
+        a file that is still open (WinError 32).
+        """
         data = json.dumps(
             {"active": self._active_name,
              "profiles": [asdict(p) for p in self._profiles.values()]},
@@ -117,13 +121,14 @@ class ProfileManager:
         )
         fd, tmp = tempfile.mkstemp(dir=str(self._base_dir), suffix=".tmp")
         try:
-            Path(tmp).write_text(data, encoding="utf-8")
-            Path(tmp).replace(self._path)
-        finally:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, self._path)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
 
     # -- Event hook --------------------------------------------------------
 

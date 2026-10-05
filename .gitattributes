@@ -1,3 +1,14 @@
+# Line endings: every text file is checked out with LF on every platform, so a
+# Windows checkout holds the same bytes as the index. Without this, Git for
+# Windows (core.autocrlf=true) rewrote them to CRLF: shell scripts stopped
+# running under bash, pinned fixture hashes no longer matched, and generated
+# files looked out of date. These come first so the rules below override them.
+* text=auto eol=lf
+# Batch files keep the platform default (CRLF on Windows): cmd.exe can misread
+# labels in an LF-only batch file.
+*.bat text -eol
+*.cmd text -eol
+
 # Git LFS Configuration for SuperLocalMemory V2
 # Large visual assets are stored in LFS to keep repo lightweight
 # Videos (largest files)

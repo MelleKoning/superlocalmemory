@@ -38,12 +38,14 @@ def test_memory_dir_respects_slm_data_dir(tmp_path, monkeypatch):
     """MEMORY_DIR must point at $SLM_DATA_DIR, not ~/.superlocalmemory."""
     monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path))
     helpers = _reload_helpers()
-    assert str(helpers.MEMORY_DIR) == str(tmp_path), (
+    # Path equality, not string equality: the canonical root is
+    # case-normalised, and Windows paths compare case-insensitively.
+    assert Path(helpers.MEMORY_DIR) == tmp_path, (
         f"MEMORY_DIR resolved to {helpers.MEMORY_DIR!s}, expected {tmp_path}. "
         "Dashboard profile writes would land in the wrong directory."
     )
-    assert str(helpers.DB_PATH) == str(tmp_path / "memory.db")
-    assert str(helpers.PROFILES_DIR) == str(tmp_path / "profiles")
+    assert Path(helpers.DB_PATH) == tmp_path / "memory.db"
+    assert Path(helpers.PROFILES_DIR) == tmp_path / "profiles"
 
 
 def test_db_path_resolves_under_env_override(tmp_path, monkeypatch):
@@ -52,7 +54,7 @@ def test_db_path_resolves_under_env_override(tmp_path, monkeypatch):
     helpers = _reload_helpers()
     # The proxy must behave like a real Path for the operations the route
     # helpers perform: __fspath__ (sqlite3.connect(str(DB_PATH))), /, exists().
-    assert os_fspath(helpers.DB_PATH) == str(tmp_path / "memory.db")
+    assert Path(os_fspath(helpers.DB_PATH)) == tmp_path / "memory.db"
     derived = helpers.MEMORY_DIR / "profiles.json"
     assert isinstance(derived, Path)
     assert derived == tmp_path / "profiles.json"
@@ -71,7 +73,7 @@ def test_dashboard_and_cli_agree_on_profile_dir(tmp_path, monkeypatch):
     from superlocalmemory.storage import schema
 
     config = SLMConfig.load()
-    assert str(config.db_path) == str(tmp_path / "memory.db"), (
+    assert Path(config.db_path) == tmp_path / "memory.db", (
         "CLI config.db_path does not match env override — test premise broken"
     )
     db = DatabaseManager(config.db_path)

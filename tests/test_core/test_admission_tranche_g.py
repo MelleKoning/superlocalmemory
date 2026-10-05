@@ -33,7 +33,7 @@ def _load_server_module(monkeypatch, tmp_path):
     monkeypatch.setenv("SLM_MCP_ALL_TOOLS", "1")
     monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path))
     # Write a minimal personal config so SLMConfig.load() doesn't fail
-    (tmp_path / "config.toml").write_text("")
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
 
     import superlocalmemory.mcp.server as server_mod
     importlib.reload(server_mod)
@@ -140,7 +140,7 @@ def test_real_registry_completeness(monkeypatch, tmp_path):
     annotations every read-only tool carries readOnlyHint=True so the dynamic
     check in coverage_self_check finds zero ungated mutators.
     """
-    (tmp_path / "config.toml").write_text('[deployment]\nmode = "enterprise"\n')
+    (tmp_path / "config.toml").write_text('[deployment]\nmode = "enterprise"\n', encoding="utf-8")
     monkeypatch.setenv("SLM_MCP_CONFIG", str(tmp_path / "config.toml"))
     server_mod = _load_server_module(monkeypatch, tmp_path)
     real_server = server_mod.server

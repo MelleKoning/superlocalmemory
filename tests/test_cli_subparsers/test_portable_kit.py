@@ -70,10 +70,10 @@ def fake_agents_md_source(tmp_path: Path):
     content = "# SuperLocalMemory — Agent Rules\nUse recall + remember."
     agents_file = tmp_path / "_agents_src" / "AGENTS.md"
     agents_file.parent.mkdir(parents=True, exist_ok=True)
-    agents_file.write_text(content)
+    agents_file.write_text(content, encoding="utf-8")
 
     def _source() -> str:
-        return agents_file.read_text()
+        return agents_file.read_text(encoding="utf-8")
 
     return _source
 
@@ -104,7 +104,7 @@ def test_connect_writes_correct_key(ide_id: str, fake_home: Path):
 def _assert_slm_block_present(path: Path, desc: Any) -> None:
     """Parse config and assert SLM block exists under server_key."""
     if desc.fmt == "json":
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         if desc.ide_id == "opencode":
             # opencode uses top-level "mcp" → nested dict
             servers = data[desc.server_key]
@@ -115,12 +115,12 @@ def _assert_slm_block_present(path: Path, desc: Any) -> None:
         assert block["command"] == "slm"
     elif desc.fmt == "toml":
         import tomllib
-        data = tomllib.loads(path.read_text())
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
         servers = data[desc.server_key]
         assert "superlocalmemory" in servers
         assert servers["superlocalmemory"]["command"] == "slm"
     elif desc.fmt == "yaml":
-        data = yaml.safe_load(path.read_text()) or {}
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         # continue uses contextProviders list
         providers = data.get(desc.server_key, [])
         names = [p.get("params", {}).get("serverName") for p in providers]
@@ -165,7 +165,7 @@ def _write_other_server(config_path: Path, desc: Any) -> Any:
             data = {desc.server_key: copy.deepcopy(other)}
         else:
             data = {desc.server_key: copy.deepcopy(other)}
-        config_path.write_text(json.dumps(data, indent=2))
+        config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         return copy.deepcopy(other["othersrv"])
 
     elif desc.fmt == "toml":
@@ -192,7 +192,7 @@ def _write_other_server(config_path: Path, desc: Any) -> Any:
             },
         }
         data = {desc.server_key: [copy.deepcopy(other_entry)]}
-        config_path.write_text(yaml.safe_dump(data))
+        config_path.write_text(yaml.safe_dump(data), encoding="utf-8")
         return copy.deepcopy(other_entry)
 
     raise ValueError(f"Unknown fmt: {desc.fmt}")
@@ -203,7 +203,7 @@ def _assert_other_server_deep_equal(
 ) -> None:
     """Assert the non-SLM server in the config is DEEP-equal to snapshot."""
     if desc.fmt == "json":
-        data = json.loads(config_path.read_text())
+        data = json.loads(config_path.read_text(encoding="utf-8"))
         servers = data[desc.server_key]
         assert "othersrv" in servers, "othersrv was deleted!"
         assert servers["othersrv"] == snapshot, (
@@ -212,13 +212,13 @@ def _assert_other_server_deep_equal(
 
     elif desc.fmt == "toml":
         import tomllib
-        data = tomllib.loads(config_path.read_text())
+        data = tomllib.loads(config_path.read_text(encoding="utf-8"))
         servers = data[desc.server_key]
         assert "othersrv" in servers
         assert servers["othersrv"] == snapshot
 
     elif desc.fmt == "yaml":
-        data = yaml.safe_load(config_path.read_text()) or {}
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
         providers = data.get(desc.server_key, [])
         others = [p for p in providers if p.get("params", {}).get("serverName") != "superlocalmemory"]
         assert len(others) == 1, f"Expected 1 other provider, got {len(others)}"
@@ -263,7 +263,7 @@ def test_profile_env_injected(fake_home: Path):
 
     desc = IDE_MATRIX[ide_id]
     config_path = fake_home / desc.mcp_path_global
-    data = json.loads(config_path.read_text())
+    data = json.loads(config_path.read_text(encoding="utf-8"))
     block = data[desc.server_key]["superlocalmemory"]
     assert "env" in block
     assert block["env"]["SLM_MCP_PROFILE"] == "code"
@@ -305,11 +305,11 @@ def test_agents_md_placed(fake_home: Path, fake_agents_md_source):
     agents_path = fake_home / desc.agents_md_path
     agents_path.parent.mkdir(parents=True, exist_ok=True)
     user_content = "# My existing rules\nDo not touch this.\n"
-    agents_path.write_text(user_content)
+    agents_path.write_text(user_content, encoding="utf-8")
 
     connect_ide(ide_id, home=fake_home, agents_md_source=fake_agents_md_source)
 
-    final = agents_path.read_text()
+    final = agents_path.read_text(encoding="utf-8")
     assert "My existing rules" in final, "User content was clobbered!"
     assert "<!-- SLM-START -->" in final
     assert "<!-- SLM-END -->" in final
@@ -324,7 +324,7 @@ def test_agents_md_append_idempotent(fake_home: Path, fake_agents_md_source):
 
     desc = IDE_MATRIX[ide_id]
     agents_path = fake_home / desc.agents_md_path
-    content = agents_path.read_text()
+    content = agents_path.read_text(encoding="utf-8")
     assert content.count("<!-- SLM-START -->") == 1, "SLM section duplicated!"
 
 
@@ -423,7 +423,7 @@ def test_continue_list_dedupe(fake_home: Path):
 
     desc = IDE_MATRIX["continue"]
     config_path = fake_home / desc.mcp_path_global
-    data = yaml.safe_load(config_path.read_text()) or {}
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     providers = data.get(desc.server_key, [])
     slm_entries = [
         p for p in providers
@@ -448,7 +448,7 @@ def test_toml_codex_roundtrip(fake_home: Path):
     config_path = fake_home / desc.mcp_path_global
     assert config_path.exists()
 
-    data = tomllib.loads(config_path.read_text())
+    data = tomllib.loads(config_path.read_text(encoding="utf-8"))
     assert "superlocalmemory" in data[desc.server_key]
     block = data[desc.server_key]["superlocalmemory"]
     assert block["command"] == "slm"
@@ -516,7 +516,7 @@ def test_merged_status_when_slm_block_changes(fake_home: Path):
             }
         }
     }
-    config_path.write_text(json.dumps(old_data, indent=2))
+    config_path.write_text(json.dumps(old_data, indent=2), encoding="utf-8")
 
     result = connect_ide(ide_id, home=fake_home)
     # Old block existed but differs → merged
@@ -530,7 +530,7 @@ def test_continue_yaml_profile_injected(fake_home: Path):
 
     desc = IDE_MATRIX["continue"]
     config_path = fake_home / desc.mcp_path_global
-    data = yaml.safe_load(config_path.read_text()) or {}
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     providers = data.get(desc.server_key, [])
     slm = next(
         p for p in providers if p.get("params", {}).get("serverName") == "superlocalmemory"
@@ -560,7 +560,7 @@ def test_continue_yaml_merge_update(fake_home: Path):
             }
         ]
     }
-    config_path.write_text(_yaml.safe_dump(old_data))
+    config_path.write_text(_yaml.safe_dump(old_data), encoding="utf-8")
 
     result = connect_ide("continue", home=fake_home)
     assert result["mcp_config"] == "merged"
@@ -576,7 +576,7 @@ def test_continue_yaml_non_list_providers_recovered(fake_home: Path):
 
     # contextProviders is a dict instead of list — edge case
     bad_data = {desc.server_key: {"bad": "value"}}
-    config_path.write_text(_yaml.safe_dump(bad_data))
+    config_path.write_text(_yaml.safe_dump(bad_data), encoding="utf-8")
 
     result = connect_ide("continue", home=fake_home)
     assert result["error"] is None
@@ -639,7 +639,7 @@ def test_yaml_load_config_none_result(fake_home: Path, tmp_path: Path):
     from superlocalmemory.hooks.portable_kit import _load_config
 
     empty_yaml = tmp_path / "config.yaml"
-    empty_yaml.write_text("")  # empty file → yaml.safe_load returns None
+    empty_yaml.write_text("", encoding="utf-8")  # empty file → yaml.safe_load returns None
 
     result = _load_config(empty_yaml, "yaml")
     assert result == {}
@@ -651,7 +651,7 @@ def test_yaml_load_config_non_dict_result(tmp_path: Path):
     from superlocalmemory.hooks.portable_kit import _load_config
 
     scalar_yaml = tmp_path / "scalar.yaml"
-    scalar_yaml.write_text("just a string\n")
+    scalar_yaml.write_text("just a string\n", encoding="utf-8")
 
     result = _load_config(scalar_yaml, "yaml")
     assert result == {}
@@ -662,7 +662,7 @@ def test_load_config_unknown_fmt_returns_empty(tmp_path: Path):
     from superlocalmemory.hooks.portable_kit import _load_config
 
     dummy = tmp_path / "dummy.xyz"
-    dummy.write_text("anything")
+    dummy.write_text("anything", encoding="utf-8")
 
     result = _load_config(dummy, "unknown-fmt")
     assert result == {}

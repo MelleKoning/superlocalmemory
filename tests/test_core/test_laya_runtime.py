@@ -57,7 +57,7 @@ def _apple_silicon(monkeypatch):
 
 def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
 
 
 _FAKE_WORKER = r'''
@@ -96,7 +96,7 @@ for raw in sys.stdin:
 @pytest.fixture()
 def fake_worker(tmp_path, monkeypatch):
     path = tmp_path / "fake_laya_worker.py"
-    path.write_text(_FAKE_WORKER)
+    path.write_text(_FAKE_WORKER, encoding="utf-8")
     monkeypatch.setattr(lr, "WORKER_PATH", path)
     return path
 
@@ -323,7 +323,7 @@ class TestDetectOrder:
     def test_detect_never_raises_on_a_corrupt_marker(self):
         run_dir = lr.runtime_dir()
         run_dir.mkdir(parents=True)
-        (run_dir / ".slm-managed").write_text("{not json")
+        (run_dir / ".slm-managed").write_text("{not json", encoding="utf-8")
         status = lr.detect()
         assert status.state == lr.STATE_NOT_INSTALLED
 
@@ -348,7 +348,7 @@ class TestInstall:
         result = lr.install()
         assert result.state == lr.STATE_READY
         assert result.managed is True
-        marker = json.loads((lr.runtime_dir() / ".slm-managed").read_text())
+        marker = json.loads((lr.runtime_dir() / ".slm-managed").read_text(encoding="utf-8"))
         assert marker["verified"] is True
         assert marker["requirement"] == lr.LAYA_MLX_REQUIREMENT
         assert marker["revision"] == lr.LAYA_MODEL_REVISION
@@ -441,7 +441,7 @@ class TestInstall:
         result = lr.install()
         assert result.state == lr.STATE_FAILED
         assert result.step == "Needs repair — choose Repair."
-        marker = json.loads((lr.runtime_dir() / ".slm-managed").read_text())
+        marker = json.loads((lr.runtime_dir() / ".slm-managed").read_text(encoding="utf-8"))
         assert marker["verified"] is False
 
     @pytest.mark.skipif(
@@ -456,7 +456,7 @@ class TestInstall:
         run_dir = lr.runtime_dir()
         run_dir.mkdir(parents=True)
         lock_path = run_dir / "install.lock"
-        external_fh = open(lock_path, "w")
+        external_fh = open(lock_path, "w", encoding="utf-8")
         fcntl.flock(external_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
             result = lr.install()
@@ -553,11 +553,11 @@ class TestAdopt:
         python = self._venv(tmp_path)
         model = tmp_path / "model-snap"
         model.mkdir()
-        (model / "weights.bin").write_text("fake")
+        (model / "weights.bin").write_text("fake", encoding="utf-8")
 
         result = lr.adopt(str(python), "", str(model))
         assert result.state == lr.STATE_READY
-        adopted = json.loads((lr.runtime_dir() / "adopted.json").read_text())
+        adopted = json.loads((lr.runtime_dir() / "adopted.json").read_text(encoding="utf-8"))
         assert adopted["verified"] is True
         assert adopted["python"] == str(python)
         assert adopted["model_path"] == str(model)
@@ -572,7 +572,7 @@ class TestAdopt:
         result = lr.adopt(str(python), "", str(model))
         assert result.state == lr.STATE_FAILED
         assert result.step == "Needs a check — choose Check this install."
-        adopted = json.loads((lr.runtime_dir() / "adopted.json").read_text())
+        adopted = json.loads((lr.runtime_dir() / "adopted.json").read_text(encoding="utf-8"))
         assert adopted["verified"] is False
 
     def test_finds_the_pinned_snapshot_when_model_path_is_empty(
@@ -584,7 +584,7 @@ class TestAdopt:
         hf_home = tmp_path / "hf-home"
         snap = hf_home / "hub" / "models--aac6fef--laya-mlx" / "snapshots" / lr.LAYA_MODEL_REVISION
         snap.mkdir(parents=True)
-        (snap / "config.json").write_text("{}")
+        (snap / "config.json").write_text("{}", encoding="utf-8")
 
         result = lr.adopt(str(python), str(hf_home))
         assert result.state == lr.STATE_READY
@@ -599,7 +599,7 @@ class TestAdopt:
         commit = "deadbeef0000000000000000000000000000000"
         (model_dir / "snapshots" / commit).mkdir(parents=True)
         (model_dir / "refs").mkdir(parents=True)
-        (model_dir / "refs" / "main").write_text(commit)
+        (model_dir / "refs" / "main").write_text(commit, encoding="utf-8")
 
         result = lr.adopt(str(python), str(hf_home))
         assert result.state == lr.STATE_READY
@@ -644,9 +644,9 @@ class TestRemove:
     def _managed_install(self, tmp_path) -> Path:
         run_dir = tmp_path / "runtimes" / "laya"
         run_dir.mkdir(parents=True)
-        (run_dir / ".slm-managed").write_text("{}")
+        (run_dir / ".slm-managed").write_text("{}", encoding="utf-8")
         (run_dir / "venv").mkdir()
-        (run_dir / "adopted.json").write_text("{}")
+        (run_dir / "adopted.json").write_text("{}", encoding="utf-8")
         return run_dir
 
     def test_happy_path_removes_the_managed_install(self, tmp_path):
@@ -668,7 +668,7 @@ class TestRemove:
         try:
             real_dir = outside_root / "runtimes" / "laya"
             real_dir.mkdir(parents=True)
-            (real_dir / ".slm-managed").write_text("{}")
+            (real_dir / ".slm-managed").write_text("{}", encoding="utf-8")
             (tmp_path / "runtimes").symlink_to(outside_root / "runtimes")
 
             result = lr.remove(slm_home=tmp_path)
@@ -683,7 +683,7 @@ class TestRemove:
         (tmp_path / "runtimes").mkdir(parents=True)
         other = tmp_path / "other_name"
         other.mkdir()
-        (other / ".slm-managed").write_text("{}")
+        (other / ".slm-managed").write_text("{}", encoding="utf-8")
         (tmp_path / "runtimes" / "laya").symlink_to(other)
 
         result = lr.remove(slm_home=tmp_path)
@@ -694,7 +694,7 @@ class TestRemove:
     def test_guard_refuses_when_a_parent_is_a_symlink(self, tmp_path):
         actual = tmp_path / "actual" / "runtimes" / "laya"
         actual.mkdir(parents=True)
-        (actual / ".slm-managed").write_text("{}")
+        (actual / ".slm-managed").write_text("{}", encoding="utf-8")
         (tmp_path / "runtimes").symlink_to(tmp_path / "actual" / "runtimes")
 
         result = lr.remove(slm_home=tmp_path)

@@ -642,7 +642,7 @@ def _atomic_write(path: Path, data: dict[str, Any], fmt: str) -> None:
             tmp_path.write_text(tomli_w.dumps(data), encoding="utf-8")
         elif fmt == "yaml":
             import yaml
-            tmp_path.write_text(yaml.safe_dump(data, default_flow_style=False))
+            tmp_path.write_text(yaml.safe_dump(data, default_flow_style=False), encoding="utf-8")
         else:
             raise ValueError(f"Unknown format: {fmt}")
 

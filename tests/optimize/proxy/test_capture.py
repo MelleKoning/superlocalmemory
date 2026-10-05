@@ -144,7 +144,7 @@ class TestShadowCaptureRecord:
         assert cap.record({"a": 1}) is True
         assert cap.record({"b": 2}) is True
 
-        lines = (tmp_path / "cap.jsonl").read_text().strip().split("\n")
+        lines = (tmp_path / "cap.jsonl").read_text(encoding="utf-8").strip().split("\n")
         assert len(lines) == 2
         assert json.loads(lines[0]) == {"a": 1}
         assert json.loads(lines[1]) == {"b": 2}
@@ -597,14 +597,14 @@ class TestShadowCaptureRecord:
     def test_symlink_at_path_is_refused(self, tmp_path: Path) -> None:
         # Audit fix LOW-2: O_NOFOLLOW refuses a pre-placed symlink (symlink-append).
         target = tmp_path / "secret.txt"
-        target.write_text("original secret\n")
+        target.write_text("original secret\n", encoding="utf-8")
         link = tmp_path / "cap.jsonl"
         link.symlink_to(target)
         cap = ShadowCapture(path=link)
         ok = cap.record({"attack": "append"})
         assert ok is False, "write through a symlink must be refused (fail-open)"
         # The symlink target must be untouched.
-        assert target.read_text() == "original secret\n"
+        assert target.read_text(encoding="utf-8") == "original secret\n"
 
 
 # ---------------------------------------------------------------------------
@@ -735,7 +735,7 @@ async def test_anthropic_capture_records_and_passthrough(capture_to_tmp) -> None
     assert resp.json()["content"][0]["text"] == "hello"
 
     # recorded: one corpus line with correct usage + provider
-    lines = capture_to_tmp.path.read_text().strip().split("\n")
+    lines = capture_to_tmp.path.read_text(encoding="utf-8").strip().split("\n")
     assert len(lines) == 1
     entry = json.loads(lines[0])
     assert entry["provider"] == "anthropic"
@@ -770,7 +770,7 @@ async def test_openai_capture_records(capture_to_tmp) -> None:
     await proxy.http_client.aclose()
 
     assert resp.status_code == 200
-    entry = json.loads(capture_to_tmp.path.read_text().strip())
+    entry = json.loads(capture_to_tmp.path.read_text(encoding="utf-8").strip())
     assert entry["provider"] == "openai"
     assert entry["model"] == "gpt-4o"
     assert entry["input_tokens"] == 8
@@ -801,7 +801,7 @@ async def test_gemini_native_capture_records(capture_to_tmp) -> None:
     await proxy.http_client.aclose()
 
     assert resp.status_code == 200
-    entry = json.loads(capture_to_tmp.path.read_text().strip())
+    entry = json.loads(capture_to_tmp.path.read_text(encoding="utf-8").strip())
     assert entry["provider"] == "gemini"
     assert entry["model"] == "gemini-2.0-flash"
     assert entry["input_tokens"] == 5

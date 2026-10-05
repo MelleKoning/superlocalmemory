@@ -11,6 +11,7 @@ switch can never bring back a consent someone withdrew.
 
 from __future__ import annotations
 
+import os
 import copy
 import dataclasses
 import json
@@ -103,7 +104,8 @@ def test_save_is_private_and_merges(tmp_path: Path) -> None:
     cfg = save_memory_kind_settings(tmp_path, {"enabled": False})
     assert cfg.backend == "laya" and cfg.enabled is False
     path = tmp_path / STATE_FILE
-    assert path.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":  # POSIX mode bits; Windows has none
+        assert path.stat().st_mode & 0o777 == 0o600
     stored = json.loads(path.read_text(encoding="utf-8"))
     assert stored["backend"] == "laya" and stored["enabled"] is False
 

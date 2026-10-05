@@ -31,7 +31,7 @@ def _entry(**overrides) -> dict:
 
 def _write(root: Path, *entries: dict, schema: str = jcf.SCHEMA) -> Path:
     path = root / jcf.FILE_NAME
-    path.write_text(json.dumps({"schema": schema, "entries": list(entries)}))
+    path.write_text(json.dumps({"schema": schema, "entries": list(entries)}), encoding="utf-8")
     return path
 
 
@@ -106,7 +106,7 @@ class TestAFileWithoutARealMeasurementMovesNothing:
         assert calibration_for("laya") == CALIBRATIONS[("laya", RECIPE_V1.recipe_id)]
 
     def test_unreadable_json_is_refused_and_logged(self, data_dir, caplog) -> None:
-        (data_dir / jcf.FILE_NAME).write_text("{not json")
+        (data_dir / jcf.FILE_NAME).write_text("{not json", encoding="utf-8")
         with caplog.at_level("WARNING"):
             assert calibration_for("laya") == CALIBRATIONS[("laya", RECIPE_V1.recipe_id)]
         assert "built-in thresholds stay in force" in caplog.text

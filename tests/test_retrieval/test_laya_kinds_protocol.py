@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._portable import child_env_base
+
 WORKER = (Path(__file__).resolve().parents[2]
           / "src" / "superlocalmemory" / "core" / "laya_worker.py")
 
@@ -59,13 +61,14 @@ CRITERIA = {"semantic": "a lasting fact", "episodic": "something that happened",
 
 @pytest.fixture()
 def worker(tmp_path):
-    (tmp_path / "laya_mlx.py").write_text(_STUB)
+    (tmp_path / "laya_mlx.py").write_text(_STUB, encoding="utf-8")
     log = tmp_path / "seen.jsonl"
     proc = subprocess.Popen(
         [sys.executable, str(WORKER)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, bufsize=1, env={"PYTHONPATH": str(tmp_path), "PATH": "/usr/bin:/bin",
-                                   "LAYA_STUB_LOG": str(log), "HOME": str(tmp_path)},
+        text=True, bufsize=1, env={**child_env_base(tmp_path),  # Windows needs a few
+                                   "PYTHONPATH": str(tmp_path), "PATH": "/usr/bin:/bin",
+                                   "LAYA_STUB_LOG": str(log)},
     )
 
     def ask(request: dict) -> dict:
@@ -76,7 +79,7 @@ def worker(tmp_path):
     def seen() -> list[dict]:
         if not log.exists():
             return []
-        return [json.loads(line) for line in log.read_text().splitlines()]
+        return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
 
     yield ask, seen
     if proc.poll() is None:

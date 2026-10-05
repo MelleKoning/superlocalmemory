@@ -97,7 +97,7 @@ class TestDetectTier:
     def test_explicit_ics_tier_from_config(self, monkeypatch, tmp_path):
         cfg = tmp_path / "adapters.json"
         cfg.write_text(json.dumps(
-            {"calendar": {"tier": "ics", "ics_path": "/cal/export.ics"}}))
+            {"calendar": {"tier": "ics", "ics_path": "/cal/export.ics"}}), encoding="utf-8")
         monkeypatch.setattr(calendar_adapter, "_adapters_config_path", lambda: cfg)
 
         adapter = CalendarAdapter(tier="auto")
@@ -108,7 +108,7 @@ class TestDetectTier:
 
     def test_oauth_selected_when_gmail_refresh_token_present(self, monkeypatch, tmp_path):
         cfg = tmp_path / "adapters.json"
-        cfg.write_text(json.dumps({"calendar": {}}))
+        cfg.write_text(json.dumps({"calendar": {}}), encoding="utf-8")
         monkeypatch.setattr(calendar_adapter, "_adapters_config_path", lambda: cfg)
         monkeypatch.setattr(
             "superlocalmemory.ingestion.credentials.has_credential",

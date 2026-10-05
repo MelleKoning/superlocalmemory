@@ -96,7 +96,7 @@ def test_unreadable_settings_fall_back_to_local_and_all_skills(module) -> None:
 
     ctx = NoConfig(module)
     module.register(ctx)
-    inventory = json.loads((PLUGIN / "command-inventory.json").read_text())
+    inventory = json.loads((PLUGIN / "command-inventory.json").read_text(encoding="utf-8"))
     assert set(ctx.skills) == set(inventory["skills"])
 
 

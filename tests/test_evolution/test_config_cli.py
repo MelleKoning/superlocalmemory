@@ -39,7 +39,7 @@ def test_set_valid_model_persists_and_loads(isolated_data_dir: Path) -> None:
     _set("evolution.mutation_model", "sonnet")
 
     cfg_file = isolated_data_dir / "config.json"
-    raw = json.loads(cfg_file.read_text())
+    raw = json.loads(cfg_file.read_text(encoding="utf-8"))
     assert raw["evolution"]["mutation_model"] == "sonnet"
 
     # Round-trips through the loader into a typed EvolutionConfig.
@@ -49,7 +49,7 @@ def test_set_valid_model_persists_and_loads(isolated_data_dir: Path) -> None:
 
 def test_auto_normalises_to_empty_string(isolated_data_dir: Path) -> None:
     _set("evolution.verify_model", "auto")
-    raw = json.loads((isolated_data_dir / "config.json").read_text())
+    raw = json.loads((isolated_data_dir / "config.json").read_text(encoding="utf-8"))
     assert raw["evolution"]["verify_model"] == ""
 
 
@@ -60,7 +60,7 @@ def test_invalid_model_is_rejected(isolated_data_dir: Path) -> None:
     # Nothing persisted for the bad value.
     cfg_file = isolated_data_dir / "config.json"
     if cfg_file.exists():
-        raw = json.loads(cfg_file.read_text())
+        raw = json.loads(cfg_file.read_text(encoding="utf-8"))
         assert raw.get("evolution", {}).get("mutation_model") != "gpt-5-ultra"
 
 

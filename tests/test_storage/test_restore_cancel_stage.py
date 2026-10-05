@@ -57,10 +57,10 @@ def test_cancel_is_refused_once_writing_began(tmp_path, monkeypatch) -> None:
 
     assert "part-way through" in str(refused.value) and "Restart" in str(refused.value)
     assert (tmp_path / "restore-intent.json").exists()
-    assert "m_new" in (final / "memories.jsonl").read_text(), "the export is kept"
+    assert "m_new" in (final / "memories.jsonl").read_text(encoding="utf-8"), "the export is kept"
     outcome = ur.perform_pending_restore(tmp_path, memory_db, learning_db)
     assert outcome.status == "restored" and outcome.reimport_pending
-    assert "m_new" in (Path(outcome.delta_dir) / "memories.jsonl").read_text()
+    assert "m_new" in (Path(outcome.delta_dir) / "memories.jsonl").read_text(encoding="utf-8")
 
 
 def test_refusal_at_writing_stage_does_not_claim_nothing_changed(tmp_path, monkeypatch) -> None:
@@ -102,7 +102,7 @@ def test_a_copy_lost_mid_restore_hands_the_export_to_the_reimport(tmp_path, monk
     assert outcome.status == "snapshot_unusable"
     assert outcome.reimport_pending and Path(outcome.delta_dir) == final
     assert "not changed" not in outcome.message
-    assert "m_new" in (final / "memories.jsonl").read_text()
+    assert "m_new" in (final / "memories.jsonl").read_text(encoding="utf-8")
 
 
 def test_dashboard_and_cli_refuse_cancel_while_writing(tmp_path, monkeypatch, capsys) -> None:

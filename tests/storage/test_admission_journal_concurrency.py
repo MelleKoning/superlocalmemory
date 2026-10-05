@@ -299,16 +299,35 @@ def test_reader_pool_is_bounded_and_honours_the_deadline(tmp_path) -> None:
 _CRASH_BATCH = 8
 
 
+def _hard_kill_signal() -> int:
+    """The signal that ends a process at once, with no clean-up.
+
+    POSIX: SIGKILL. Windows has no SIGKILL; there ``os.kill`` with any other
+    value calls TerminateProcess, which is just as abrupt, and the value
+    becomes the process's exit code.
+    """
+    import signal
+
+    return getattr(signal, "SIGKILL", signal.SIGTERM)
+
+
+def _killed_exit_code() -> int:
+    """What ``Process.exitcode`` reads after ``_hard_kill_signal``."""
+    import sys
+
+    sig = _hard_kill_signal()
+    return sig if sys.platform == "win32" else -sig
+
+
 def _crash_child(path: str, when: str) -> None:
     import os
-    import signal
 
     journal = AdmissionJournal(Path(path), codec=_TestCodec())
     journal._writer._linger = 0.5  # every save below lands in one batch
 
     def kill(live) -> None:
         if len(live) == _CRASH_BATCH:
-            os.kill(os.getpid(), signal.SIGKILL)
+            os.kill(os.getpid(), _hard_kill_signal())
 
     if when == "before":
         journal._writer.before_commit = kill
@@ -327,8 +346,6 @@ def _crash_child(path: str, when: str) -> None:
 
 @pytest.mark.parametrize(("when", "expected"), [("before", 0), ("after", _CRASH_BATCH)])
 def test_kill_mid_batch_keeps_all_of_it_or_none(tmp_path, when, expected) -> None:
-    import signal
-
     path = tmp_path / "admission_journal.db"
     AdmissionJournal(path, codec=_TestCodec()).close()
     child = multiprocessing.get_context("spawn").Process(
@@ -336,7 +353,7 @@ def test_kill_mid_batch_keeps_all_of_it_or_none(tmp_path, when, expected) -> Non
     )
     child.start()
     child.join(30.0)
-    assert child.exitcode == -signal.SIGKILL
+    assert child.exitcode == _killed_exit_code()
     survivor = AdmissionJournal(path, codec=_TestCodec())
     try:
         assert survivor.count() == expected

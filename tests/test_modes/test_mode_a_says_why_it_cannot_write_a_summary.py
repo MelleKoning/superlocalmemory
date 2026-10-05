@@ -158,7 +158,7 @@ class TestTheSummaryRouteReturnsIt:
         js = (
             # 4.1.21: the Summaries pane moved to its own file.
             Path(superlocalmemory.__file__).parent / "ui" / "js" / "od-summaries.js"
-        ).read_text()
+        ).read_text(encoding="utf-8")
         assert "d.capability" in js or "capability" in js
         assert "cap.message" in js, (
             "the dashboard receives the explanation and does not show it"

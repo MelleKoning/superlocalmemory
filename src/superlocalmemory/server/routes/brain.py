@@ -537,6 +537,11 @@ def _compute_bandit_snapshot(profile_id: str,
         )
     except Exception as exc:  # pragma: no cover — defensive
         logger.debug("bandit snapshot: %s", exc)
+    finally:
+        # This runs on a worker thread; the bandit keeps one connection per
+        # thread, which would otherwise hold learning.db open for good.
+        from superlocalmemory.learning.bandit import close_threadlocal_conn
+        close_threadlocal_conn()
 
     return {
         "strata_active": strata_active,

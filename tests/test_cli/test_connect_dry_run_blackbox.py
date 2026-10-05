@@ -9,6 +9,8 @@ import sys
 
 import pytest
 
+from tests._portable import child_env_base
+
 
 ROOT = Path(__file__).resolve().parents[2]
 FORBIDDEN = (
@@ -21,7 +23,7 @@ FORBIDDEN = (
 
 def _run_connect(home: Path, *args: str) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env["HOME"] = str(home)
+    env.update(child_env_base(home))  # HOME, and USERPROFILE on Windows
     env["PYTHONPATH"] = str(ROOT / "src")
     for name in (
         "SLM_DATA_DIR",

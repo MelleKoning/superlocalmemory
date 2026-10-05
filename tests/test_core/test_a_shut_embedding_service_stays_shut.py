@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._portable import child_env_base
+
 from superlocalmemory.core import embeddings as emb_mod
 from superlocalmemory.core.config import EmbeddingConfig
 from superlocalmemory.core.embeddings import EmbeddingService
@@ -166,7 +168,7 @@ def test_interpreter_exit_is_not_held_by_an_embed_in_flight(tmp_path) -> None:
         "PYTHONPATH": REPO_SRC,
         "SLM_EMBED_RESPONSE_TIMEOUT": "120",
         "SLM_DATA_DIR": str(tmp_path),
-        "HOME": str(tmp_path),
+        **child_env_base(tmp_path),
     }
     t0 = time.monotonic()
     proc = subprocess.run(

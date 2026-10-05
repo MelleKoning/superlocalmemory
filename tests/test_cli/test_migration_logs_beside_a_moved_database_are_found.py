@@ -23,7 +23,7 @@ def test_a_log_beside_the_configured_database_is_found(tmp_path, monkeypatch) ->
     canonical.mkdir()
     moved.mkdir()
     log = moved / "migration-error-20261002.log"
-    log.write_text("boom")
+    log.write_text("boom", encoding="utf-8")
 
     from superlocalmemory.core import config as config_mod
     from superlocalmemory.infra import data_root
@@ -40,7 +40,7 @@ def test_the_canonical_folder_is_still_searched(tmp_path, monkeypatch) -> None:
     canonical = tmp_path / "canonical"
     canonical.mkdir()
     log = canonical / "migration-error-1.log"
-    log.write_text("boom")
+    log.write_text("boom", encoding="utf-8")
 
     from superlocalmemory.core import config as config_mod
     from superlocalmemory.infra import data_root

@@ -56,7 +56,7 @@ def test_it_arms_and_reports_where_the_dump_will_go(armed) -> None:
 def test_the_signal_actually_writes_a_stack(armed) -> None:
     """The whole point: a running process, asked, answers."""
     os.kill(os.getpid(), signal.SIGUSR1)
-    text = Path(armed).read_text()
+    text = Path(armed).read_text(encoding="utf-8")
     assert "Thread" in text or "File " in text, (
         f"SIGUSR1 produced no stack; dump was {text[:200]!r}"
     )
@@ -68,9 +68,9 @@ def test_the_signal_actually_writes_a_stack(armed) -> None:
 def test_it_can_be_asked_more_than_once(armed) -> None:
     """A CPU investigation is a sequence of samples, not one look."""
     os.kill(os.getpid(), signal.SIGUSR1)
-    first = Path(armed).read_text()
+    first = Path(armed).read_text(encoding="utf-8")
     os.kill(os.getpid(), signal.SIGUSR1)
-    second = Path(armed).read_text()
+    second = Path(armed).read_text(encoding="utf-8")
     assert len(second) > len(first), "the second dump did not append"
 
 

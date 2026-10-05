@@ -203,7 +203,7 @@ def test_an_unwritable_log_still_never_fails_the_hook(tmp_path):
     stubs = tmp_path / "stubs"
     stubs.mkdir()
     blocker = tmp_path / "slm-data"
-    blocker.write_text("a file where the data directory should be")
+    blocker.write_text("a file where the data directory should be", encoding="utf-8")
 
     result = run([str(SLM_RUN), "hook", "start"], sandbox_env(tmp_path, stubs))
 
@@ -216,7 +216,7 @@ def test_the_log_does_not_grow_without_bound(tmp_path):
     stubs.mkdir()
     log = _log(tmp_path)
     log.parent.mkdir(parents=True)
-    log.write_text("x" * (1024 * 1024 + 10))
+    log.write_text("x" * (1024 * 1024 + 10), encoding="utf-8")
 
     run([str(SLM_RUN), "hook", "start"], sandbox_env(tmp_path, stubs))
 

@@ -29,6 +29,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._portable import assert_owner_only
+
 
 # ---------------------------------------------------------------------------
 # Helpers — redirect MEMORY_DIR to a tmp path per test
@@ -106,20 +108,31 @@ class TestFileModeAtomicWrite:
         ok = cb._store_credential("test_key", "test_val")
         assert ok, "_store_credential should return True on success"
         assert store_path.exists(), "credential store file should exist"
-        file_mode = stat.S_IMODE(os.stat(store_path).st_mode)
-        assert file_mode == 0o600, (
-            f"Expected 0o600 but got 0o{file_mode:03o}. "
-            "File is world-readable — TOCTOU bug #10 still present."
-        )
+        assert_owner_only(store_path)  # TOCTOU bug #10 would leave it readable
+
+    def test_the_secret_goes_into_a_file_already_owner_only(self, cred_store_env, monkeypatch):
+        """Owner-only is applied through infra.owner_only_acl — on Windows an
+        access list, since 0o600 does nothing there — while the file is still
+        empty, so the secret is never readable by another account."""
+        from superlocalmemory.infra import owner_only_acl
+
+        cb, store_path = cred_store_env
+        sizes: list[int] = []
+        real = owner_only_acl.restrict_to_owner
+
+        def recording(path):
+            sizes.append(Path(path).stat().st_size)
+            real(path)
+
+        monkeypatch.setattr(owner_only_acl, "restrict_to_owner", recording)
+        assert cb._store_credential("test_key", "test_val")
+        assert sizes == [0]
 
     def test_mode_stays_0600_after_second_store(self, cred_store_env):
         cb, store_path = cred_store_env
         cb._store_credential("key1", "val1")
         cb._store_credential("key2", "val2")
-        file_mode = stat.S_IMODE(os.stat(store_path).st_mode)
-        assert file_mode == 0o600, (
-            f"Expected 0o600 after two stores but got 0o{file_mode:03o}."
-        )
+        assert_owner_only(store_path)
 
     def test_two_creds_stored_and_retrieved(self, cred_store_env):
         cb, store_path = cred_store_env
@@ -141,7 +154,7 @@ class TestAtomicReplace:
 
         # Pre-populate the store with a known credential
         cb._store_credential("existing_key", "existing_value")
-        original_content = store_path.read_text()
+        original_content = store_path.read_text(encoding="utf-8")
 
         # Simulate os.replace raising mid-operation
         real_replace = os.replace
@@ -160,7 +173,7 @@ class TestAtomicReplace:
 
         # The original store must be untouched
         assert store_path.exists(), "Original store was deleted — non-atomic write!"
-        assert store_path.read_text() == original_content, (
+        assert store_path.read_text(encoding="utf-8") == original_content, (
             "Original store was corrupted when os.replace failed — not atomic!"
         )
         # _store_credential should return False when replace fails
@@ -184,7 +197,7 @@ class TestCorruptJsonLogsWarning:
         cb, store_path = cred_store_env
 
         # Write corrupt JSON directly (bypassing _store_credential)
-        store_path.write_text("{not valid json!!!")
+        store_path.write_text("{not valid json!!!", encoding="utf-8")
         store_path.chmod(0o600)
 
         with caplog.at_level(logging.WARNING, logger="superlocalmemory.cloud_backup"):
@@ -205,7 +218,7 @@ class TestCorruptJsonLogsWarning:
     def test_corrupt_json_in_delete_logs_warning(self, cred_store_env, caplog):
         cb, store_path = cred_store_env
 
-        store_path.write_text("{bad json")
+        store_path.write_text("{bad json", encoding="utf-8")
         store_path.chmod(0o600)
 
         with caplog.at_level(logging.WARNING, logger="superlocalmemory.cloud_backup"):
@@ -256,10 +269,11 @@ class TestParentDirMode:
         ok = cb._store_credential("k", "v")
         assert ok
         assert new_dir.exists()
-        dir_mode = stat.S_IMODE(os.stat(new_dir).st_mode)
-        assert dir_mode == 0o700, (
-            f"Expected parent dir 0o700 but got 0o{dir_mode:03o}"
-        )
+        if os.name != "nt":  # folder mode bits do nothing on Windows
+            dir_mode = stat.S_IMODE(os.stat(new_dir).st_mode)
+            assert dir_mode == 0o700, (
+                f"Expected parent dir 0o700 but got 0o{dir_mode:03o}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -280,11 +294,8 @@ class TestDeleteCredentialAtomic:
         assert cb._get_credential("keep_me") == "keep_val"
         assert cb._get_credential("delete_me") is None
 
-        # File still 0600
-        file_mode = stat.S_IMODE(os.stat(store_path).st_mode)
-        assert file_mode == 0o600, (
-            f"File mode after delete should be 0o600, got 0o{file_mode:03o}"
-        )
+        # File still owner-only
+        assert_owner_only(store_path)
 
 
 # ---------------------------------------------------------------------------

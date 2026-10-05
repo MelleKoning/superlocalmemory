@@ -45,21 +45,29 @@ jobs:
   test:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.focused_windows }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 75
+    # The test step stops at 75 minutes and the job at 90, so the report and
+    # the artifact upload below always have time to run after a timeout.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-22.04, macos-14, windows-latest]
         python-version: ["3.12", "3.13", "3.14"]
-        # Windows runs the suite about 1.5x slower and reached only 81% of it in
-        # 70 minutes, so it runs in 3 fixed parts (tests/_shard_plugin.py): a
-        # part that times out cannot hide the failures of the others.
-        shard: [1, 2, 3]
+        # Windows runs the suite about 1.5x slower, so it runs in 6 fixed parts
+        # (tests/_shard_plugin.py): a part that times out cannot hide the
+        # failures of the others.
+        shard: [1, 2, 3, 4, 5, 6]
         exclude:
           - {os: ubuntu-22.04, shard: 2}
           - {os: ubuntu-22.04, shard: 3}
+          - {os: ubuntu-22.04, shard: 4}
+          - {os: ubuntu-22.04, shard: 5}
+          - {os: ubuntu-22.04, shard: 6}
           - {os: macos-14, shard: 2}
           - {os: macos-14, shard: 3}
+          - {os: macos-14, shard: 4}
+          - {os: macos-14, shard: 5}
+          - {os: macos-14, shard: 6}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -88,9 +96,9 @@ jobs:
       # cancelled or times out still names every test that ran and failed.
       - name: Run tests
         shell: bash
-        timeout-minutes: 70
+        timeout-minutes: 75
         env:
-          SHARD: ${{ matrix.os == 'windows-latest' && format('{0}/3', matrix.shard) || '1/1' }}
+          SHARD: ${{ matrix.os == 'windows-latest' && format('{0}/6', matrix.shard) || '1/1' }}
         run: |
           python -m pytest tests/ -q --tb=short -o faulthandler_timeout=300 \
             -p tests._shard_plugin --shard "$SHARD" \
@@ -103,8 +111,9 @@ jobs:
             --ignore=tests/graph/test_cozo_backend.py \
             --ignore=tests/vector/test_lancedb_backend.py
 
+      # always(): this must run after a failure, a step timeout and a cancel.
       - name: List every failed test
-        if: failure() || cancelled()
+        if: always()
         shell: bash
         run: |
           python - <<'EOF'
@@ -112,19 +121,33 @@ jobs:
           log = pathlib.Path("test-report.jsonl")
           if not log.exists():
               raise SystemExit("No test report: the run stopped before any test ran.")
-          bad = {}
+          bad, started, finished = {}, [], set()
+          # A run cut short leaves a half-written last line; every line before
+          # it is still a complete record.
           for line in log.read_text(encoding="utf-8").splitlines():
-              rec = json.loads(line)
-              if rec.get("$report_type") in ("TestReport", "CollectReport") \
-                      and rec.get("outcome") == "failed":
-                  bad.setdefault(rec["nodeid"] or "(collection)", rec.get("when", "collect"))
+              try:
+                  rec = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              kind, nodeid = rec.get("$report_type"), rec.get("nodeid")
+              if kind in ("TestReport", "CollectReport") and rec.get("outcome") == "failed":
+                  bad.setdefault(nodeid or "(collection)", rec.get("when", "collect"))
+              if kind == "TestReport" and rec.get("when") == "setup":
+                  started.append(nodeid)
+              if kind == "TestReport" and rec.get("when") == "teardown":
+                  finished.add(nodeid)
           print(f"{len(bad)} failed or errored:")
           for nodeid, when in bad.items():
               print(f"  {when:8} {nodeid}")
+          unfinished = [nodeid for nodeid in started if nodeid not in finished]
+          if unfinished:
+              print(f"{len(unfinished)} started and never finished (the run stopped here):")
+              for nodeid in unfinished:
+                  print(f"  {nodeid}")
           EOF
 
       - name: Upload the test report
-        if: failure() || cancelled()
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-report-${{ matrix.os }}-py${{ matrix.python-version }}-part${{ matrix.shard }}

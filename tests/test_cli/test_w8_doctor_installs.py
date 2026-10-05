@@ -127,7 +127,7 @@ class TestDoctorInstallVersions:
     def test_doctor_reports_migration_error_log(self, tmp_path):
         """doctor reports ERROR when migration-error-*.log exists."""
         error_log = tmp_path / "migration-error-20260819-120000.log"
-        error_log.write_text("migration failed: test error\n")
+        error_log.write_text("migration failed: test error\n", encoding="utf-8")
 
         from superlocalmemory.cli.commands import cmd_doctor
         from argparse import Namespace

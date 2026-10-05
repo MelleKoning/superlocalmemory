@@ -178,14 +178,13 @@ class PidManager:
         alive: list[PidRecord] = []
         removed = 0
 
+        from superlocalmemory.core.platform_utils import is_pid_alive
+
         for r in records:
-            try:
-                os.kill(r.pid, 0)
+            if is_pid_alive(r.pid):  # includes one owned by another user
                 alive.append(r)
-            except ProcessLookupError:
+            else:
                 removed += 1
-            except PermissionError:
-                alive.append(r)  # Exists but owned by another user
 
         if removed > 0:
             self._write_all(alive)

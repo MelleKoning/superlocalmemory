@@ -82,7 +82,7 @@ def test_restore_inline_stops_restores_and_starts(store) -> None:
     with closing(sqlite3.connect(memory_db)) as conn:
         assert conn.execute("SELECT content FROM atomic_facts").fetchone()[0] == \
             "Deploys go out on Tuesdays"
-    outcome = json.loads((root / "restore-outcome.json").read_text())
+    outcome = json.loads((root / "restore-outcome.json").read_text(encoding="utf-8"))
     assert outcome["status"] == "restored" and outcome["reimport_pending"] is True
 
 

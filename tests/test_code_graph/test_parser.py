@@ -45,9 +45,9 @@ def parser(config: CodeGraphConfig) -> CodeParser:
 # ---------------------------------------------------------------------------
 
 def test_discover_files_finds_python(parser: CodeParser, tmp_path: Path):
-    (tmp_path / "a.py").write_text("# a")
-    (tmp_path / "b.py").write_text("# b")
-    (tmp_path / "c.py").write_text("# c")
+    (tmp_path / "a.py").write_text("# a", encoding="utf-8")
+    (tmp_path / "b.py").write_text("# b", encoding="utf-8")
+    (tmp_path / "c.py").write_text("# c", encoding="utf-8")
     files = parser.discover_files(tmp_path)
     assert len(files) == 3
 
@@ -55,7 +55,7 @@ def test_discover_files_finds_python(parser: CodeParser, tmp_path: Path):
 def test_discover_files_ignores_node_modules(parser: CodeParser, tmp_path: Path):
     nm = tmp_path / "node_modules" / "pkg"
     nm.mkdir(parents=True)
-    (nm / "foo.js").write_text("// foo")
+    (nm / "foo.js").write_text("// foo", encoding="utf-8")
     files = parser.discover_files(tmp_path)
     assert len(files) == 0
 
@@ -67,8 +67,8 @@ def test_discover_files_ignores_large_files(tmp_path: Path):
         max_file_size_bytes=100,
     )
     parser = CodeParser(config)
-    (tmp_path / "big.py").write_text("x" * 200)
-    (tmp_path / "small.py").write_text("# ok")
+    (tmp_path / "big.py").write_text("x" * 200, encoding="utf-8")
+    (tmp_path / "small.py").write_text("# ok", encoding="utf-8")
     files = parser.discover_files(tmp_path)
     names = [f.name for f in files]
     assert "small.py" in names
@@ -76,9 +76,9 @@ def test_discover_files_ignores_large_files(tmp_path: Path):
 
 
 def test_discover_files_respects_language_map(parser: CodeParser, tmp_path: Path):
-    (tmp_path / "a.py").write_text("# py")
-    (tmp_path / "b.ts").write_text("// ts")
-    (tmp_path / "c.rb").write_text("# ruby")
+    (tmp_path / "a.py").write_text("# py", encoding="utf-8")
+    (tmp_path / "b.ts").write_text("// ts", encoding="utf-8")
+    (tmp_path / "c.rb").write_text("# ruby", encoding="utf-8")
     files = parser.discover_files(tmp_path)
     extensions = {f.suffix for f in files}
     assert ".py" in extensions
@@ -88,7 +88,7 @@ def test_discover_files_respects_language_map(parser: CodeParser, tmp_path: Path
 
 def test_discover_files_returns_relative_paths(parser: CodeParser, tmp_path: Path):
     (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "main.py").write_text("# main")
+    (tmp_path / "src" / "main.py").write_text("# main", encoding="utf-8")
     files = parser.discover_files(tmp_path)
     for f in files:
         assert not f.is_absolute()
@@ -177,7 +177,7 @@ def test_parse_all_parallel(tmp_path: Path):
     parser = CodeParser(config)
 
     for i in range(10):
-        (tmp_path / f"mod_{i}.py").write_text(f"def func_{i}():\n    pass\n")
+        (tmp_path / f"mod_{i}.py").write_text(f"def func_{i}():\n    pass\n", encoding="utf-8")
 
     nodes, edges, records = parser.parse_all(tmp_path)
     # Each file should produce at least File + function = 2 nodes
@@ -191,7 +191,7 @@ def test_parse_all_handles_errors_gracefully(tmp_path: Path):
 
     # 5 valid files
     for i in range(5):
-        (tmp_path / f"good_{i}.py").write_text(f"def func_{i}():\n    pass\n")
+        (tmp_path / f"good_{i}.py").write_text(f"def func_{i}():\n    pass\n", encoding="utf-8")
 
     # 1 binary file with .py extension
     (tmp_path / "bad.py").write_bytes(b"\x00\x01\x02\x03" * 100)
@@ -205,8 +205,8 @@ def test_parse_all_file_records(tmp_path: Path):
     config = CodeGraphConfig(enabled=True, repo_root=tmp_path)
     parser = CodeParser(config)
 
-    (tmp_path / "main.py").write_text("def main():\n    pass\n")
-    (tmp_path / "utils.py").write_text("def helper():\n    pass\n")
+    (tmp_path / "main.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    (tmp_path / "utils.py").write_text("def helper():\n    pass\n", encoding="utf-8")
 
     nodes, edges, records = parser.parse_all(tmp_path)
     assert len(records) == 2
@@ -254,7 +254,8 @@ def test_parse_all_workers_1_uses_sequential_path(tmp_path: Path):
     # 5 files — would normally trigger the parallel pool (len > 2)
     for i in range(5):
         (tmp_path / f"mod_{i}.py").write_text(
-            f"from os import path\ndef func_{i}():\n    path.join('x', 'y')\n"
+            f"from os import path\ndef func_{i}():\n    path.join('x', 'y')\n",
+            encoding="utf-8",
         )
 
     nodes, edges, records = p.parse_all(tmp_path)
@@ -286,7 +287,7 @@ def test_parse_all_raises_on_majority_pool_failure(tmp_path: Path, monkeypatch):
     )
     p = CodeParser(config)
     for i in range(6):
-        (tmp_path / f"mod_{i}.py").write_text(f"def func_{i}():\n    pass\n")
+        (tmp_path / f"mod_{i}.py").write_text(f"def func_{i}():\n    pass\n", encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="Parsing aborted"):
         p.parse_all(tmp_path)

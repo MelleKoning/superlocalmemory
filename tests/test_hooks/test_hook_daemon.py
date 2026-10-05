@@ -27,10 +27,20 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+#: The hook daemon serves a Unix socket. CPython on Windows has no AF_UNIX, so
+#: there the daemon never starts and hooks take the socket-free path, which
+#: test_without_unix_sockets_the_hook_falls_back checks on every platform.
+needs_unix_socket = pytest.mark.skipif(
+    getattr(socket, "AF_UNIX", None) is None,
+    reason="no Unix sockets in this Python (Windows); the hook uses its socket-free path",
+)
+
+
 @pytest.fixture
 def short_tmp(tmp_path: Path):
     """Short temp dir for Unix socket (macOS 104-char path limit)."""
-    d = Path(tempfile.mkdtemp(prefix="slm", dir="/tmp"))
+    short_root = "/tmp" if os.path.isdir("/tmp") else None  # None: the OS temp dir
+    d = Path(tempfile.mkdtemp(prefix="slm", dir=short_root))
     yield d
     import shutil
     shutil.rmtree(d, ignore_errors=True)
@@ -40,6 +50,7 @@ def short_tmp(tmp_path: Path):
 # Daemon lifecycle
 # -----------------------------------------------------------------------
 
+@needs_unix_socket
 def test_hook_daemon_starts_and_stops(short_tmp: Path) -> None:
     from superlocalmemory.hooks.hook_daemon import HookDaemon
     sock_path = short_tmp / "hook.sock"
@@ -52,6 +63,7 @@ def test_hook_daemon_starts_and_stops(short_tmp: Path) -> None:
     assert not sock_path.exists()
 
 
+@needs_unix_socket
 def test_hook_daemon_stop_is_idempotent(short_tmp: Path) -> None:
     from superlocalmemory.hooks.hook_daemon import HookDaemon
     sock_path = short_tmp / "hook.sock"
@@ -61,6 +73,7 @@ def test_hook_daemon_stop_is_idempotent(short_tmp: Path) -> None:
     daemon.stop()
 
 
+@needs_unix_socket
 def test_hook_daemon_cleans_stale_socket(short_tmp: Path) -> None:
     """If a stale socket file exists from a crashed daemon, new daemon cleans it."""
     from superlocalmemory.hooks.hook_daemon import HookDaemon
@@ -76,6 +89,7 @@ def test_hook_daemon_cleans_stale_socket(short_tmp: Path) -> None:
 # Socket communication
 # -----------------------------------------------------------------------
 
+@needs_unix_socket
 def test_hook_daemon_responds_to_recall_request(short_tmp: Path) -> None:
     """Client sends recall request via socket, gets response (even empty)."""
     from superlocalmemory.hooks.hook_daemon import HookDaemon
@@ -115,6 +129,7 @@ def test_hook_daemon_responds_to_recall_request(short_tmp: Path) -> None:
         daemon.stop()
 
 
+@needs_unix_socket
 def test_hook_daemon_ack_returns_empty(short_tmp: Path) -> None:
     """Ack prompts through socket return empty dict."""
     from superlocalmemory.hooks.hook_daemon import HookDaemon
@@ -150,6 +165,7 @@ def test_hook_daemon_ack_returns_empty(short_tmp: Path) -> None:
 # Watchdog: auto-restart
 # -----------------------------------------------------------------------
 
+@needs_unix_socket
 def test_ensure_hook_daemon_starts_if_not_running(short_tmp: Path) -> None:
     """ensure_hook_daemon() starts daemon if socket doesn't exist."""
     from superlocalmemory.hooks.hook_daemon import ensure_hook_daemon
@@ -162,6 +178,7 @@ def test_ensure_hook_daemon_starts_if_not_running(short_tmp: Path) -> None:
     daemon.stop()
 
 
+@needs_unix_socket
 def test_ensure_hook_daemon_reuses_existing(short_tmp: Path) -> None:
     """ensure_hook_daemon() reuses existing running daemon."""
     from superlocalmemory.hooks.hook_daemon import HookDaemon, ensure_hook_daemon
@@ -208,3 +225,17 @@ def test_hook_daemon_never_imports_engine() -> None:
     mod = importlib.import_module(mod_name)
     assert not hasattr(mod, "MemoryEngine"), \
         "hook_daemon must NOT import MemoryEngine"
+
+
+def test_without_unix_sockets_the_hook_falls_back(short_tmp: Path, monkeypatch) -> None:
+    """Where AF_UNIX does not exist (Windows), no daemon is started and the
+    socket client reports "unavailable", so the hook runs its fallback."""
+    from superlocalmemory.hooks import hook_daemon
+
+    monkeypatch.setattr(hook_daemon, "_AF_UNIX", None)
+    sock_path = short_tmp / "hook.sock"
+    assert hook_daemon.ensure_hook_daemon(sock_path=sock_path,
+                                          queue_db_path=short_tmp / "q.db") is None
+    assert hook_daemon.try_socket_recall(sock_path=sock_path, prompt="p",
+                                         session_id="s", timeout=1.0) is None
+    assert not sock_path.exists()

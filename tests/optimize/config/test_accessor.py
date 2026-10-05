@@ -30,7 +30,7 @@ def test_get_optimize_config_returns_default_when_no_store() -> None:
 def test_set_store_makes_it_canonical(tmp_path: Path) -> None:
     from superlocalmemory.optimize.config.store import ConfigStore
     p = tmp_path / "optimize.json"
-    p.write_text(json.dumps({"proxy_enabled": True}))
+    p.write_text(json.dumps({"proxy_enabled": True}), encoding="utf-8")
     store = ConfigStore(config_path=p)
     _set_config_store(store)
     cfg = get_optimize_config()

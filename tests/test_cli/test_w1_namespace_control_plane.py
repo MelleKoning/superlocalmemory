@@ -55,7 +55,7 @@ def test_config_command_reads_and_writes_selected_namespace(monkeypatch, tmp_pat
     selected, home = _select_root(monkeypatch, tmp_path)
     cmd_config(Namespace(action="set", key="mesh_enabled", value="false", json=False))
 
-    payload = json.loads((selected / "config.json").read_text())
+    payload = json.loads((selected / "config.json").read_text(encoding="utf-8"))
     assert payload["mesh_enabled"] is False
     assert not (home / ".superlocalmemory" / "config.json").exists()
 
@@ -217,7 +217,7 @@ def test_noninteractive_first_use_writes_config_to_selected_namespace(
     setup_wizard.check_first_use("status")
 
     assert (selected / "config.json").exists()
-    assert json.loads((selected / "config.json").read_text()) == existing
+    assert json.loads((selected / "config.json").read_text(encoding="utf-8")) == existing
     assert (selected / ".setup-complete").exists()
     assert not (home / ".superlocalmemory" / "config.json").exists()
 

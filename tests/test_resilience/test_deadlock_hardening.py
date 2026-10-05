@@ -317,6 +317,10 @@ class TestStalePlainPidFiles:
             "Fresh worker can write its PID after stale file is cleared"
         )
 
+    @pytest.mark.skipif(
+        getattr(socket, "AF_UNIX", None) is None,
+        reason="no Unix socket files on this platform (Windows Python has no AF_UNIX)",
+    )
     def test_stale_socket_with_no_listener_removed(self):
         """A socket file with no active listener is removed by self-heal.
 

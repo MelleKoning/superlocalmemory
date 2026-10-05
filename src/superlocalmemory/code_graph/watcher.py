@@ -147,7 +147,7 @@ class CodeGraphWatcher:
                 root = Path(self._repo_root)
                 for p in paths:
                     try:
-                        rel = str(Path(p).relative_to(root))
+                        rel = Path(p).relative_to(root).as_posix()
                         rel_paths.append(rel)
                     except ValueError:
                         rel_paths.append(p)

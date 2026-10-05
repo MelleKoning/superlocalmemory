@@ -29,7 +29,8 @@ class TestParsers:
         srt_file.write_text(
             "1\n00:00:01,000 --> 00:00:03,000\nAlice: Hello everyone\n\n"
             "2\n00:00:04,000 --> 00:00:06,000\nBob: Hi Alice\n\n"
-            "3\n00:00:07,000 --> 00:00:10,000\nSome text without speaker\n"
+            "3\n00:00:07,000 --> 00:00:10,000\nSome text without speaker\n",
+            encoding="utf-8",
         )
         from superlocalmemory.ingestion.parsers import parse_srt
         utterances = parse_srt(srt_file)
@@ -45,7 +46,8 @@ class TestParsers:
             "00:00:01.000 --> 00:00:03.000\n"
             "Alice: First utterance\n\n"
             "00:00:04.000 --> 00:00:06.000\n"
-            "Bob: Second utterance\n"
+            "Bob: Second utterance\n",
+            encoding="utf-8",
         )
         from superlocalmemory.ingestion.parsers import parse_vtt
         utterances = parse_vtt(vtt_file)
@@ -57,7 +59,8 @@ class TestParsers:
         srt_file = tmp_path / "meeting.srt"
         srt_file.write_text(
             "1\n00:00:01,000 --> 00:00:03,000\nAlice: Let's discuss the plan\n\n"
-            "2\n00:00:04,000 --> 00:00:06,000\nBob: I agree\n"
+            "2\n00:00:04,000 --> 00:00:06,000\nBob: I agree\n",
+            encoding="utf-8",
         )
         from superlocalmemory.ingestion.parsers import parse_transcript_file
         text, speakers = parse_transcript_file(srt_file)
@@ -71,8 +74,8 @@ class TestParsers:
         f1.parent.mkdir()
         f2.parent.mkdir()
         content = "identical content for hashing"
-        f1.write_text(content)
-        f2.write_text(content)
+        f1.write_text(content, encoding="utf-8")
+        f2.write_text(content, encoding="utf-8")
 
         from superlocalmemory.ingestion.parsers import content_hash
         assert content_hash(f1) == content_hash(f2)
@@ -80,8 +83,8 @@ class TestParsers:
     def test_content_hash_differs_for_different_content(self, tmp_path):
         f1 = tmp_path / "a.txt"
         f2 = tmp_path / "b.txt"
-        f1.write_text("content A")
-        f2.write_text("content B")
+        f1.write_text("content A", encoding="utf-8")
+        f2.write_text("content B", encoding="utf-8")
 
         from superlocalmemory.ingestion.parsers import content_hash
         assert content_hash(f1) != content_hash(f2)
@@ -129,7 +132,7 @@ class TestAdapterManager:
             "gmail": {"enabled": True},
             "calendar": {"enabled": False},
             "transcript": {"enabled": False},
-        }))
+        }), encoding="utf-8")
 
         with patch("superlocalmemory.ingestion.adapter_manager._ADAPTERS_CONFIG", config_file):
             from superlocalmemory.ingestion.adapter_manager import list_adapters
@@ -140,14 +143,14 @@ class TestAdapterManager:
 
     def test_enable_adapter(self, tmp_path):
         config_file = tmp_path / "adapters.json"
-        config_file.write_text(json.dumps({"gmail": {"enabled": False}}))
+        config_file.write_text(json.dumps({"gmail": {"enabled": False}}), encoding="utf-8")
 
         with patch("superlocalmemory.ingestion.adapter_manager._ADAPTERS_CONFIG", config_file):
             from superlocalmemory.ingestion.adapter_manager import enable_adapter
             result = enable_adapter("gmail")
             assert result["ok"] is True
 
-            data = json.loads(config_file.read_text())
+            data = json.loads(config_file.read_text(encoding="utf-8"))
             assert data["gmail"]["enabled"] is True
 
     def test_enable_invalid_adapter(self):
@@ -157,7 +160,7 @@ class TestAdapterManager:
 
     def test_disable_adapter(self, tmp_path):
         config_file = tmp_path / "adapters.json"
-        config_file.write_text(json.dumps({"gmail": {"enabled": True}}))
+        config_file.write_text(json.dumps({"gmail": {"enabled": True}}), encoding="utf-8")
 
         with patch("superlocalmemory.ingestion.adapter_manager._ADAPTERS_CONFIG", config_file):
             with patch("superlocalmemory.ingestion.adapter_manager._is_running", return_value=(False, None)):

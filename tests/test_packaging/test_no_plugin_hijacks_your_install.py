@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import sys
 
 import pytest
 
@@ -133,6 +134,11 @@ class TestAttributionIsStillSet:
         assert reader().get("SLM_AGENT_ID") == expected
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX launcher: on Windows the plugin entry runs cmd.exe and the installed "
+    "slm instead (tests/test_plugin/test_windows_mcp_starts_installed_slm.py)",
+)
 class TestLaunchersPreferWhatIsAlreadyInstalled:
     """Both install orders converge on one environment.
 

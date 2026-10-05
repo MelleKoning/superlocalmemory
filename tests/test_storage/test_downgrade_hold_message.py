@@ -26,7 +26,7 @@ from ._upgrade_store import current_store
 @pytest.fixture()
 def store(tmp_path, monkeypatch):
     learning_db, memory_db = current_store(tmp_path)
-    (tmp_path / ".last_version").write_text("4.1.19")
+    (tmp_path / ".last_version").write_text("4.1.19", encoding="utf-8")
     monkeypatch.setattr(sm, "package_version", lambda: "4.1.19")
     monkeypatch.setattr(sv, "_detect_all_installs", lambda: [])
     return tmp_path, learning_db, memory_db

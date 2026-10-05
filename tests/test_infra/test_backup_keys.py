@@ -70,7 +70,7 @@ def test_key_is_created_once_and_kept_in_the_credential_store(key_env) -> None:
     again, created_again = bk.ensure_backup_key(origin="backup")
     assert created is True and created_again is False
     assert again == key and len(key) == 32
-    store = json.loads((key_env / ".credentials.json").read_text())
+    store = json.loads((key_env / ".credentials.json").read_text(encoding="utf-8"))
     assert bk.CREDENTIAL_NAME in store
     assert bk.load_backup_key() == key
 

@@ -110,7 +110,7 @@ class TestExistingInstallsAreSwitchedOffOnce:
     def _write(self, tmp_path, math: dict):
         import json
         path = tmp_path / "config.json"
-        path.write_text(json.dumps({"mode": "a", "math": math}))
+        path.write_text(json.dumps({"mode": "a", "math": math}), encoding="utf-8")
         return path
 
     #: What every 4.1.0-4.1.17 save() wrote for ``math``: all eleven keys.
@@ -137,7 +137,7 @@ class TestExistingInstallsAreSwitchedOffOnce:
         path = self._write(tmp_path, dict(self._OLD_DUMP))
         config = SLMConfig.load(path)
         config.save(path)
-        saved = json.loads(path.read_text())["math"]
+        saved = json.loads(path.read_text(encoding="utf-8"))["math"]
         assert saved["sheaf_default_reviewed"] is True
         assert saved["sheaf_at_encoding"] is False
         reloaded = SLMConfig.load(path)

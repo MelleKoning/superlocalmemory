@@ -70,11 +70,8 @@ def _is_pid_alive(pid: int) -> bool:
         import psutil
         return psutil.pid_exists(pid)
     except ImportError:
-        try:
-            os.kill(pid, 0)
-            return True
-        except (ProcessLookupError, PermissionError):
-            return False
+        from superlocalmemory.core.platform_utils import is_pid_alive
+        return is_pid_alive(pid)
 
 
 _CREATE_TIME_TOLERANCE_SECONDS = 1.0
@@ -303,16 +300,30 @@ def _process_is_this_account(process) -> bool:
     """The process runs as the account running this code.
 
     On a computer shared by several accounts, another account's daemon can
-    hold a PID a stale ``daemon.pid`` here still names. Windows has no uid;
-    its per-account isolation is the descriptor and the health identity.
+    hold a PID a stale ``daemon.pid`` here still names. Windows has no uid,
+    so there the account is the user name the process runs as. A process
+    whose account cannot be read is not counted as this account's.
     """
     getuid = getattr(os, "getuid", None)
-    if getuid is None:
-        return True
     try:
-        return int(process.uids().real) == int(getuid())
+        if getuid is not None:
+            return int(process.uids().real) == int(getuid())
+        return str(process.username()).casefold() == _this_windows_account().casefold()
     except Exception:
         return False
+
+
+def _this_windows_account() -> str:
+    """This process's account as psutil names one on Windows: ``DOMAIN\\user``.
+
+    Read from this process's own environment, not from psutil, so it does not
+    depend on looking up the very PID being checked.
+    """
+    import getpass
+
+    user = getpass.getuser()
+    domain = os.environ.get("USERDOMAIN", "")
+    return f"{domain}\\{user}" if domain else user
 
 
 def _is_verified_legacy_process(pid: int) -> bool:
@@ -336,8 +347,8 @@ def _verified_legacy_health() -> dict | None:
     pid_file = descriptor_path().with_name("daemon.pid")
     port_file = descriptor_path().with_name("daemon.port")
     try:
-        pid = int(pid_file.read_text().strip())
-        port = int(port_file.read_text().strip()) if port_file.exists() else _DEFAULT_PORT
+        pid = int(pid_file.read_text(encoding="utf-8").strip())
+        port = int(port_file.read_text(encoding="utf-8").strip()) if port_file.exists() else _DEFAULT_PORT
     except (OSError, ValueError):
         return None
     if not _is_verified_legacy_process(pid):
@@ -713,7 +724,7 @@ def _start_daemon_subprocess(*, port: int | None = None) -> bool:
     daemon_env["SLM_DAEMON_CAPABILITY"] = bootstrap_descriptor.capability
     kwargs["env"] = daemon_env
 
-    with open(log_file, "a") as lf:
+    with open(log_file, "a", encoding="utf-8") as lf:
         proc = subprocess.Popen(cmd, stdout=lf, stderr=lf, **kwargs)
 
     # Publish the exact child identity immediately so concurrent callers know
@@ -735,8 +746,8 @@ def _start_daemon_subprocess(*, port: int | None = None) -> bool:
         write_descriptor(child_descriptor)
 
     # One-release compatibility mirrors; never sufficient for ownership.
-    _pid_file_path().write_text(str(proc.pid))
-    _port_file_path().write_text(str(_target_port))
+    _pid_file_path().write_text(str(proc.pid), encoding="utf-8")
+    _port_file_path().write_text(str(_target_port), encoding="utf-8")
 
     return _wait_for_daemon(timeout=60)
 
@@ -776,7 +787,7 @@ def ensure_daemon(*, port: int | None = None) -> bool:
     try:
         lock_file = _lock_file_path()
         lock_file.parent.mkdir(parents=True, exist_ok=True)
-        lock_fd = open(lock_file, "w")
+        lock_fd = open(lock_file, "w", encoding="utf-8")
 
         # Cross-platform file locking
         if sys.platform == "win32":
@@ -833,7 +844,7 @@ def ensure_daemon(*, port: int | None = None) -> bool:
                 _stale_hint = ""
                 try:
                     _pid_text = (
-                        descriptor_path().with_name("daemon.pid").read_text().strip()
+                        descriptor_path().with_name("daemon.pid").read_text(encoding="utf-8").strip()
                     )
                     if _pid_text and str(occupant.get("pid")) == _pid_text:
                         _stale_hint = (

@@ -46,7 +46,7 @@ def _run(*statuses: dict) -> list[dict]:
     proc = subprocess.run(
         [_NODE, "-e", _HARNESS, str(_UI / "dashboard.js"), str(_UI / "answer-check.js"),
          json.dumps(list(statuses))],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
 

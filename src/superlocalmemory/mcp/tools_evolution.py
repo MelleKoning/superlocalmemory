@@ -61,7 +61,7 @@ def register_evolution_tools(server, get_engine: Callable) -> None:
             config_path = state_path("config.json")
             evo_cfg = {}
             if config_path.exists():
-                with open(config_path) as f:
+                with open(config_path, encoding="utf-8") as f:
                     cfg = json.load(f)
                 evo_cfg = cfg.get("evolution", {})
 

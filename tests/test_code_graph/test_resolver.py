@@ -27,7 +27,7 @@ def config() -> CodeGraphConfig:
 def test_resolve_python_relative_import(tmp_path: Path, config: CodeGraphConfig):
     """Resolve dotted path to .py file."""
     (tmp_path / "src" / "utils").mkdir(parents=True)
-    (tmp_path / "src" / "utils" / "helpers.py").write_text("# helpers")
+    (tmp_path / "src" / "utils" / "helpers.py").write_text("# helpers", encoding="utf-8")
     resolver = ImportResolver(tmp_path, config)
     result = resolver.resolve("src.utils.helpers", "main.py", "python")
     assert result is not None
@@ -37,7 +37,7 @@ def test_resolve_python_relative_import(tmp_path: Path, config: CodeGraphConfig)
 def test_resolve_python_package_init(tmp_path: Path, config: CodeGraphConfig):
     """Resolve package import to __init__.py."""
     (tmp_path / "src" / "utils").mkdir(parents=True)
-    (tmp_path / "src" / "utils" / "__init__.py").write_text("# pkg")
+    (tmp_path / "src" / "utils" / "__init__.py").write_text("# pkg", encoding="utf-8")
     resolver = ImportResolver(tmp_path, config)
     result = resolver.resolve("src.utils", "main.py", "python")
     assert result is not None
@@ -58,7 +58,7 @@ def test_resolve_python_external_package(tmp_path: Path, config: CodeGraphConfig
 def test_resolve_ts_relative_import(tmp_path: Path, config: CodeGraphConfig):
     """Resolve relative TS import."""
     (tmp_path / "src" / "auth").mkdir(parents=True)
-    (tmp_path / "src" / "auth" / "validator.ts").write_text("// validator")
+    (tmp_path / "src" / "auth" / "validator.ts").write_text("// validator", encoding="utf-8")
     resolver = ImportResolver(tmp_path, config)
     result = resolver.resolve("./auth/validator", "src/main.ts", "typescript")
     assert result is not None
@@ -68,7 +68,7 @@ def test_resolve_ts_relative_import(tmp_path: Path, config: CodeGraphConfig):
 def test_resolve_ts_index_file(tmp_path: Path, config: CodeGraphConfig):
     """Resolve directory import to index.ts."""
     (tmp_path / "src" / "auth").mkdir(parents=True)
-    (tmp_path / "src" / "auth" / "index.ts").write_text("// index")
+    (tmp_path / "src" / "auth" / "index.ts").write_text("// index", encoding="utf-8")
     resolver = ImportResolver(tmp_path, config)
     result = resolver.resolve("./auth", "src/main.ts", "typescript")
     assert result is not None
@@ -78,8 +78,8 @@ def test_resolve_ts_index_file(tmp_path: Path, config: CodeGraphConfig):
 def test_resolve_ts_extension_priority(tmp_path: Path, config: CodeGraphConfig):
     """TS extension should be preferred over JS."""
     (tmp_path / "src").mkdir(parents=True)
-    (tmp_path / "src" / "utils.ts").write_text("// ts")
-    (tmp_path / "src" / "utils.js").write_text("// js")
+    (tmp_path / "src" / "utils.ts").write_text("// ts", encoding="utf-8")
+    (tmp_path / "src" / "utils.js").write_text("// js", encoding="utf-8")
     resolver = ImportResolver(tmp_path, config)
     result = resolver.resolve("./utils", "src/main.ts", "typescript")
     assert result is not None
@@ -96,7 +96,7 @@ def test_resolve_ts_external_package(tmp_path: Path, config: CodeGraphConfig):
 def test_resolve_ts_alias(tmp_path: Path, config: CodeGraphConfig):
     """Resolve @/ alias via tsconfig.json paths."""
     (tmp_path / "src" / "auth").mkdir(parents=True)
-    (tmp_path / "src" / "auth" / "validator.ts").write_text("// val")
+    (tmp_path / "src" / "auth" / "validator.ts").write_text("// val", encoding="utf-8")
     tsconfig = {
         "compilerOptions": {
             "paths": {
@@ -104,7 +104,7 @@ def test_resolve_ts_alias(tmp_path: Path, config: CodeGraphConfig):
             }
         }
     }
-    (tmp_path / "tsconfig.json").write_text(json.dumps(tsconfig))
+    (tmp_path / "tsconfig.json").write_text(json.dumps(tsconfig), encoding="utf-8")
     resolver = ImportResolver(tmp_path, config)
     result = resolver.resolve("@/auth/validator", "src/main.ts", "typescript")
     assert result is not None
@@ -136,7 +136,7 @@ def test_build_symbol_table(config: CodeGraphConfig, tmp_path: Path):
 
 def test_resolve_call_targets_import_resolved(tmp_path: Path, config: CodeGraphConfig):
     """Import-resolved call should have confidence=1.0."""
-    (tmp_path / "b.py").write_text("# b")
+    (tmp_path / "b.py").write_text("# b", encoding="utf-8")
     resolver = ImportResolver(tmp_path, config)
 
     nodes = [
@@ -246,7 +246,7 @@ class TestResolverWiredToParseAll:
         for name, content in files.items():
             p = d / name
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content)
+            p.write_text(content, encoding="utf-8")
 
     def test_single_file_no_dangling_after_parse_all(self, tmp_path: Path) -> None:
         """Single-file repo: every edge endpoint must be in the returned nodes."""
@@ -416,8 +416,8 @@ class TestIncrementalResolution:
         repo = tmp_path / "repo"
         repo.mkdir()
 
-        (repo / "b.py").write_text("def bar():\n    pass\n")
-        (repo / "a.py").write_text("def foo():\n    bar()\n")
+        (repo / "b.py").write_text("def bar():\n    pass\n", encoding="utf-8")
+        (repo / "a.py").write_text("def foo():\n    bar()\n", encoding="utf-8")
 
         cfg = CodeGraphConfig(enabled=True, repo_root=repo, db_path=tmp_path / "g.db")
         parser_instance = CodeParser(cfg)

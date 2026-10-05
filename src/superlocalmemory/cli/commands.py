@@ -865,7 +865,7 @@ def cmd_restart(args: Namespace) -> None:
     _LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
     restart_lock_fd = None
     try:
-        restart_lock_fd = open(_LOCK_FILE, "w")
+        restart_lock_fd = open(_LOCK_FILE, "w", encoding="utf-8")
         if sys.platform != "win32":
             import fcntl
             fcntl.flock(restart_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1069,7 +1069,7 @@ def cmd_config(args: Namespace) -> None:
     cfg: dict = {}
     if config_path.exists():
         try:
-            cfg = json.loads(config_path.read_text())
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -1237,7 +1237,7 @@ def cmd_config(args: Namespace) -> None:
 
         # Write back
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(json.dumps(cfg, indent=2) + "\n")
+        config_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
 
         if use_json:
             from superlocalmemory.cli.json_output import json_print
@@ -1295,7 +1295,7 @@ def cmd_evolve(args: Namespace) -> None:
     # Check if evolution is enabled via config.json
     config_path = state_path("config.json")
     try:
-        cfg = json.loads(config_path.read_text()) if config_path.exists() else {}
+        cfg = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
     except (json.JSONDecodeError, OSError):
         return  # Config unreadable — silent exit
 
@@ -4379,7 +4379,8 @@ def _cmd_init_auto(
             f"setup_completed={_time.strftime('%Y-%m-%dT%H:%M:%S')}\n"
             f"python={sys.executable}\n"
             f"platform={platform.system()}\n"
-            f"version={platform.python_version()}\n"
+            f"version={platform.python_version()}\n",
+            encoding="utf-8",
         )
     except Exception:
         pass  # best-effort — sentinel is advisory only

@@ -90,7 +90,7 @@ def test_the_api_key_is_a_network_credential(app) -> None:
 
     key_file = Path(API_KEY_FILE)
     key_file.parent.mkdir(parents=True, exist_ok=True)
-    key_file.write_text("lan-reader-key-0123456789")
+    key_file.write_text("lan-reader-key-0123456789", encoding="utf-8")
     try:
         client = _lan(app)
         assert not _refused(client.get("/api/memories",

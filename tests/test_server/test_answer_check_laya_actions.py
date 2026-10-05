@@ -14,6 +14,7 @@ record). Every worker is a local fake; nothing loads a model or downloads.
 from __future__ import annotations
 
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -61,16 +62,16 @@ def _varuns_machine(tmp_path: Path) -> tuple[str, str]:
     run_dir = lr.runtime_dir()
     (run_dir / "venv" / "bin").mkdir(parents=True)
     (run_dir / "hf-cache" / "model").mkdir(parents=True)
-    (run_dir / ".install-steps.json").write_text('{"venv": true, "pip": true, "weights": true}')
+    (run_dir / ".install-steps.json").write_text('{"venv": true, "pip": true, "weights": true}', encoding="utf-8")
     (run_dir / ".slm-managed").write_text(json.dumps({
         "verified": False, "python": str(run_dir / "venv/bin/python"),
-        "model_path": str(run_dir / "hf-cache/hub/x")}))
+        "model_path": str(run_dir / "hf-cache/hub/x")}), encoding="utf-8")
     (run_dir / "adopted.json").write_text(json.dumps({
         "python": "/private/var/folders/pytest-of-ghost/venv/bin/python",
-        "model_path": "/private/var/folders/pytest-of-ghost/model", "verified": True}))
+        "model_path": "/private/var/folders/pytest-of-ghost/model", "verified": True}), encoding="utf-8")
     (tmp_path / "config.json").write_text(json.dumps({"retrieval": {
         "sufficiency_judge": "auto", "sufficiency_python": python,
-        "sufficiency_model": model, "sufficiency_jev_provider": "typesafe"}}))
+        "sufficiency_model": model, "sufficiency_jev_provider": "typesafe"}}), encoding="utf-8")
     return python, model
 
 
@@ -134,11 +135,11 @@ def test_remove_clears_a_half_made_setup_but_keeps_someone_elses(client, tmp_pat
     python, model = _external(tmp_path)
     run_dir = lr.runtime_dir()
     run_dir.mkdir(parents=True)
-    (run_dir / ".install-steps.json").write_text('{"venv": true}')
-    (run_dir / "install.lock").write_text("")
+    (run_dir / ".install-steps.json").write_text('{"venv": true}', encoding="utf-8")
+    (run_dir / "install.lock").write_text("", encoding="utf-8")
     (run_dir / "venv").mkdir()
     (run_dir / "adopted.json").write_text(json.dumps(
-        {"python": python, "model_path": model, "verified": True}))
+        {"python": python, "model_path": model, "verified": True}), encoding="utf-8")
     assert client.get(API).json()["laya"]["state"] == "ready"   # the adopted one wins
     # The half-made setup is still SLM's to clear:
     assert lr.remove().state == lr.STATE_NOT_INSTALLED
@@ -148,8 +149,8 @@ def test_remove_clears_a_half_made_setup_but_keeps_someone_elses(client, tmp_pat
 def test_remove_on_a_half_made_setup_via_the_dashboard(client, tmp_path):
     run_dir = lr.runtime_dir()
     run_dir.mkdir(parents=True)
-    (run_dir / ".install-steps.json").write_text('{"venv": true, "pip": true}')
-    (run_dir / "install.lock").write_text("")
+    (run_dir / ".install-steps.json").write_text('{"venv": true, "pip": true}', encoding="utf-8")
+    (run_dir / "install.lock").write_text("", encoding="utf-8")
     (run_dir / "hf-cache").mkdir()
     laya = client.get(API).json()["laya"]
     assert (laya["state"], laya["action"]) == ("failed", "setup")
@@ -169,12 +170,14 @@ def test_forget_an_install_made_elsewhere_leaves_its_files(client, tmp_path):
     assert status["laya"]["state"] == "not_installed"
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="the stand-in interpreter is a shell script; Laya runs only on Apple silicon")
 def test_cancel_stops_a_running_setup(client, tmp_path, monkeypatch):
     monkeypatch.setattr(lr, "_check_disk_space", lambda p: True)
     monkeypatch.setattr(lr, "_create_venv", lambda *a, **k: (True, "", ""))
     monkeypatch.setattr(lr, "_pip_install", lambda *a, **k: (True, "", ""))
     exe = tmp_path / "fakepy"
-    exe.write_text("#!/bin/sh\nsleep 60\n")
+    exe.write_text("#!/bin/sh\nsleep 60\n", encoding="utf-8")
     exe.chmod(0o755)
     real = lr._download_weights
     monkeypatch.setattr(lr, "_download_weights", lambda python, *a, **k: real(exe, *a, **k))

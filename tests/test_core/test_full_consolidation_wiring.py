@@ -176,7 +176,7 @@ class TestHookNoLongerLiesAboutSuccess:
 
         src = _code_of(hook_handlers._maybe_consolidate)
         post_at = src.index("_daemon_post")
-        write_at = src.index("open(last_consolidation, w)")
+        write_at = src.index("open(last_consolidation, w")  # + encoding=...
         assert post_at < write_at, (
             "timestamp written before the request — a failed run would buy "
             "24h of silence, which is the original bug"

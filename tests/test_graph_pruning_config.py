@@ -81,7 +81,7 @@ class TestGraphPruningConfigRoundTrip:
         cfg.graph_pruning = GraphPruningConfig(max_degree_per_node=50, min_edge_weight=0.3)
         cfg.save(tmp_path / "config.json")
 
-        raw = json.loads((tmp_path / "config.json").read_text())
+        raw = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
         assert "graph_pruning" in raw
         assert raw["graph_pruning"]["max_degree_per_node"] == 50
         assert raw["graph_pruning"]["min_edge_weight"] == pytest.approx(0.3)
@@ -118,7 +118,7 @@ class TestGraphPruningConfigOldConfigCompat:
 
         # Write a minimal config.json without graph_pruning
         config_path = tmp_path / "config.json"
-        config_path.write_text(json.dumps({"mode": "a"}))
+        config_path.write_text(json.dumps({"mode": "a"}), encoding="utf-8")
 
         loaded = SLMConfig.load(config_path)
         assert loaded.graph_pruning.max_degree_per_node == 100
@@ -136,7 +136,7 @@ class TestGraphPruningConfigValidation:
         config_path.write_text(json.dumps({
             "mode": "a",
             "graph_pruning": {"max_degree_per_node": 100, "min_edge_weight": -0.5, "enabled": True}
-        }))
+        }), encoding="utf-8")
         loaded = SLMConfig.load(config_path)
         assert loaded.graph_pruning.min_edge_weight == pytest.approx(0.0)
 
@@ -147,7 +147,7 @@ class TestGraphPruningConfigValidation:
         config_path.write_text(json.dumps({
             "mode": "a",
             "graph_pruning": {"max_degree_per_node": 100, "min_edge_weight": 1.5, "enabled": True}
-        }))
+        }), encoding="utf-8")
         loaded = SLMConfig.load(config_path)
         assert loaded.graph_pruning.min_edge_weight == pytest.approx(1.0)
 
@@ -158,7 +158,7 @@ class TestGraphPruningConfigValidation:
         config_path.write_text(json.dumps({
             "mode": "a",
             "graph_pruning": {"max_degree_per_node": 0, "min_edge_weight": 0.0, "enabled": True}
-        }))
+        }), encoding="utf-8")
         loaded = SLMConfig.load(config_path)
         assert loaded.graph_pruning.max_degree_per_node == 100
 
@@ -344,11 +344,11 @@ def _read_raw(tmp_path: Path) -> dict:
     p = tmp_path / "config.json"
     if not p.exists():
         return {}
-    return json.loads(p.read_text())
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def _write_raw(tmp_path: Path, data: dict) -> None:
-    (tmp_path / "config.json").write_text(json.dumps(data, indent=2))
+    (tmp_path / "config.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 class TestGraphConfigGet:

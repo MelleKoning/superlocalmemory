@@ -63,7 +63,7 @@ def _read_toml_kv(path: Path) -> dict:
     """
     result: dict = {}
     section = None
-    for raw in path.read_text().splitlines():
+    for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
@@ -175,7 +175,7 @@ def test_custom_profile_writes_config_toml(tmp_path: Path) -> None:
         "evolution_llm": "haiku",
         "online_retrain_cadence": "50_outcomes",
         "consolidation_cadence": "6h_nightly",
-    }))
+    }), encoding="utf-8")
     # No --dry-run: must actually write the file.
     result = _run(
         [
@@ -209,7 +209,7 @@ def test_reconfigure_preserves_config_bak(tmp_path: Path) -> None:
     slm_dir.mkdir(parents=True)
     prior = slm_dir / "config.toml"
     prior_content = '# prior user config\nprofile = "light"\n'
-    prior.write_text(prior_content)
+    prior.write_text(prior_content, encoding="utf-8")
 
     # First: without --reconfigure, should NOT overwrite.
     result_skip = _run(
@@ -217,7 +217,7 @@ def test_reconfigure_preserves_config_bak(tmp_path: Path) -> None:
         env={"CI": "true"},
     )
     assert result_skip.returncode == 0, result_skip.stderr
-    assert prior.read_text() == prior_content, (
+    assert prior.read_text(encoding="utf-8") == prior_content, (
         "installer must not overwrite existing config without --reconfigure"
     )
 
@@ -229,7 +229,7 @@ def test_reconfigure_preserves_config_bak(tmp_path: Path) -> None:
     assert result_rc.returncode == 0, result_rc.stderr
     bak = slm_dir / "config.toml.bak"
     assert bak.exists(), "config.toml.bak must exist after --reconfigure"
-    assert bak.read_text() == prior_content, (
+    assert bak.read_text(encoding="utf-8") == prior_content, (
         "config.toml.bak must contain the prior config verbatim"
     )
     new_cfg = _read_toml_kv(prior)
@@ -289,7 +289,7 @@ def test_no_opus_in_model_choices() -> None:
     expected choices are present.
     """
     assert SCRIPT.exists(), f"installer not found at {SCRIPT}"
-    src = SCRIPT.read_text()
+    src = SCRIPT.read_text(encoding="utf-8")
     low = src.lower()
     # Absolute ban — the stage5b gate also scans for this, but we enforce
     # here for a local, fast signal.

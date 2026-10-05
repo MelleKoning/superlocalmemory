@@ -17,7 +17,7 @@ from superlocalmemory.core.config import Mode, SLMConfig
 def test_load_recovers_to_mode_a_on_corrupt_config():
     d = Path(tempfile.mkdtemp())
     cfg = d / "config.json"
-    cfg.write_text('{\n  "mode')  # truncated mid-write (the crash scenario)
+    cfg.write_text('{\n  "mode', encoding="utf-8")  # truncated mid-write (the crash scenario)
     loaded = SLMConfig.load(config_path=cfg)  # must NOT raise
     assert loaded.mode == Mode.A
 
@@ -25,7 +25,7 @@ def test_load_recovers_to_mode_a_on_corrupt_config():
 def test_load_recovers_on_empty_config():
     d = Path(tempfile.mkdtemp())
     cfg = d / "config.json"
-    cfg.write_text("")  # zero-byte file from a crash after truncate
+    cfg.write_text("", encoding="utf-8")  # zero-byte file from a crash after truncate
     assert SLMConfig.load(config_path=cfg).mode == Mode.A
 
 
@@ -33,5 +33,5 @@ def test_save_is_atomic_valid_json_no_leftover_tmp():
     d = Path(tempfile.mkdtemp())
     cfg = d / "config.json"
     SLMConfig.for_mode(Mode.A).save(config_path=cfg)
-    json.loads(cfg.read_text())  # valid JSON, no partial write
+    json.loads(cfg.read_text(encoding="utf-8"))  # valid JSON, no partial write
     assert not (d / "config.json.tmp").exists()  # tmp cleaned up by os.replace

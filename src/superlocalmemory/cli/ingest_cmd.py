@@ -124,7 +124,7 @@ def _ingest_ecc(file_path: str, *, dry_run: bool = False) -> dict:
 
     for fpath in files:
         try:
-            with open(fpath) as f:
+            with open(fpath, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -244,7 +244,7 @@ def _ingest_jsonl(file_path: str, *, dry_run: bool = False) -> dict:
         return result
 
     events = []
-    with open(fpath) as f:
+    with open(fpath, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:

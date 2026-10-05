@@ -91,7 +91,7 @@ def _get_ram_gb() -> float:
             pass
     # Fallback: Linux
     try:
-        with open("/proc/meminfo") as f:
+        with open("/proc/meminfo", encoding="utf-8") as f:
             for line in f:
                 if line.startswith("MemTotal:"):
                     return int(line.split()[1]) / (1024 ** 2)
@@ -541,7 +541,8 @@ def _mark_complete() -> None:
         f"setup_completed={time.strftime('%Y-%m-%dT%H:%M:%S')}\n"
         f"python={sys.executable}\n"
         f"platform={platform.system()}\n"
-        f"version={platform.python_version()}\n"
+        f"version={platform.python_version()}\n",
+        encoding="utf-8",
     )
 
 
@@ -701,7 +702,7 @@ def run_wizard(auto: bool = False) -> None:
     cg_config_path = slm_root / "code_graph_config.json"
     import json
     cg_config_data = {"enabled": code_graph_enabled, "bridge_enabled": code_graph_enabled}
-    cg_config_path.write_text(json.dumps(cg_config_data, indent=2))
+    cg_config_path.write_text(json.dumps(cg_config_data, indent=2), encoding="utf-8")
 
     if code_graph_enabled:
         print(f"\n  ✓ CodeGraph enabled")
@@ -869,7 +870,7 @@ def run_wizard(auto: bool = False) -> None:
     adapters_path.write_text(_json.dumps(
         {k: {"enabled": v, "tier": "polling"} for k, v in adapters_config.items()},
         indent=2,
-    ))
+    ), encoding="utf-8")
 
     enabled_adapters = [k for k, v in adapters_config.items() if v]
     if enabled_adapters:
@@ -930,14 +931,14 @@ def run_wizard(auto: bool = False) -> None:
     evo_cfg: dict = {}
     if evo_config_path.exists():
         try:
-            evo_cfg = json.loads(evo_config_path.read_text())
+            evo_cfg = json.loads(evo_config_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             pass
     evo_cfg["evolution"] = {
         "enabled": evolution_enabled,
         "backend": "auto",
     }
-    evo_config_path.write_text(json.dumps(evo_cfg, indent=2) + "\n")
+    evo_config_path.write_text(json.dumps(evo_cfg, indent=2) + "\n", encoding="utf-8")
 
     if evolution_enabled:
         print(f"\n  ✓ Skill Evolution enabled (backend: auto-detect)")

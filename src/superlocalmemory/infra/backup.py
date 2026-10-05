@@ -249,7 +249,8 @@ class BackupCoordinator:
         staging_dir.rename(final_dir)
         create_private_file(final_dir / "manifest.json")
         (final_dir / "manifest.json").write_text(
-            json.dumps(asdict(manifest), indent=2)
+            json.dumps(asdict(manifest), indent=2),
+            encoding="utf-8",
         )
 
         return manifest
@@ -580,7 +581,7 @@ class BackupManager:
     def _load_config(self) -> Dict:
         if self._config_file.exists():
             try:
-                raw = json.loads(self._config_file.read_text())
+                raw = json.loads(self._config_file.read_text(encoding="utf-8"))
                 defaults = self._default_config()
                 for k in defaults:
                     raw.setdefault(k, defaults[k])
@@ -602,7 +603,7 @@ class BackupManager:
     def _save_config(self) -> None:
         try:
             self._config_file.parent.mkdir(parents=True, exist_ok=True)
-            self._config_file.write_text(json.dumps(self.config, indent=2))
+            self._config_file.write_text(json.dumps(self.config, indent=2), encoding="utf-8")
         except IOError as exc:
             logger.error("Failed to save backup config: %s", exc)
 

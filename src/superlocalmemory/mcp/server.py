@@ -416,10 +416,10 @@ def _parent_watchdog() -> None:
             if current_ppid != initial_ppid or current_ppid <= 1:
                 _wlog.info("Parent PID changed (%d→%d), self-terminating", initial_ppid, current_ppid)
                 _os_wd._exit(0)
-            _os_wd.kill(initial_ppid, 0)  # Raises ProcessLookupError if dead
-        except ProcessLookupError:
-            _wlog.info("Parent PID %d gone, self-terminating", initial_ppid)
-            _os_wd._exit(0)
+            from superlocalmemory.core.platform_utils import is_pid_alive
+            if not is_pid_alive(initial_ppid):
+                _wlog.info("Parent PID %d gone, self-terminating", initial_ppid)
+                _os_wd._exit(0)
         except Exception:
             pass  # Transient errors — keep watching
 
