@@ -186,15 +186,7 @@ def test_same_key_in_two_profiles_is_two_memories(runtime, data_dir):
     ) == 1
 
 
-def test_crash_between_accept_and_commit_replays_exactly_once(data_dir, monkeypatch):
-    from superlocalmemory.core import remember_runtime
-
-    # The writer sits in SQLite's busy wait for one deferred attempt (5 s) and
-    # stop() gives it 2 s once that attempt's caller has gone. SQLite counts
-    # the sleeps it asks for, not the time that passes, so on a VM whose sleeps
-    # overrun the wait can outlast stop() (most likely what failed on a GitHub
-    # macOS runner). This test is about replay after a crash, not that wait.
-    monkeypatch.setattr(remember_runtime, "_DEFERRED_COMMIT_WAIT_MS", 500)
+def test_crash_between_accept_and_commit_replays_exactly_once(data_dir):
     db_path = data_dir / "memory.db"
     first = _build(data_dir, owner="before-crash")
     first.start()
