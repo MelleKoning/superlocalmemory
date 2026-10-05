@@ -37,6 +37,20 @@
   --ng-accent-glow: rgba(124, 106, 239, 0.18);
   --ng-accent-strong: rgba(124, 106, 239, 0.28);
   --ng-accent-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  /* Solid fill BEHIND white text ONLY (.ng-dark .btn-primary and, via
+     --bs-primary-rgb below, Bootstrap's own opaque .bg-primary/.progress-
+     bar.bg-primary utilities) — #7C6AEF (124,106,239) measures 4.07:1
+     white-on-fill, under WCAG AA (4.5:1). #6D59ED (109,89,237) is the same
+     hue/saturation darker (L64% vs L67.6%): 4.88:1.
+     NOT folded into --ng-accent itself: .ng-dark .badge.bg-primary pairs
+     --ng-accent as TEXT on --ng-accent-muted as its own tinted BACKGROUND
+     (both derived from the same base) — darkening that shared base moves
+     foreground and background together and measurably LOSES contrast
+     there (real-rendered dark-theme badge: 3.97:1 -> 3.36:1 when this was
+     tried as a single shared token). That self-colored-badge pattern
+     already fails AA before and after this change; it is a separate,
+     pre-existing defect this fill-only token deliberately does not touch. */
+  --ng-accent-fill: #6D59ED;
 
   /* --- Status Colors --- */
   --ng-status-success: #10b981;
@@ -578,8 +592,8 @@
 
 /* Bootstrap button overrides */
 .ng-dark .btn-primary {
-  background: var(--ng-accent) !important;
-  border-color: var(--ng-accent) !important;
+  background: var(--ng-accent-fill) !important;
+  border-color: var(--ng-accent-fill) !important;
   color: var(--ng-text-on-accent) !important;
 }
 
@@ -947,7 +961,12 @@
   --bs-tertiary-bg: var(--ng-bg-glass);
   --bs-emphasis-color: var(--ng-text-primary);
   --bs-primary: var(--ng-accent);
-  --bs-primary-rgb: 124, 106, 239;
+  /* --ng-accent-fill's RGB triple, not --ng-accent's: Bootstrap's opaque
+     .bg-primary/.progress-bar.bg-primary utilities (solid fill + white
+     text) read this; .text-primary/.btn-outline-primary read --bs-primary
+     above, which stays the lighter --ng-accent on purpose (see its
+     comment). */
+  --bs-primary-rgb: 109, 89, 237;
 }
 
 /* Override navbar — we use sidebar now, but keep it in light mode for now */
@@ -1143,22 +1162,34 @@ body.ng-dark #memory-timeline-chart {
   color: #111827 !important;
 }
 
-/* :not(.badge)/:not(.progress-bar) matter: both set their own explicit
-   text color (Bootstrap's --bs-badge-color / --bs-progress-bar-color,
-   usually #fff) so they stay readable against their own colored
-   background regardless of theme. A plain element selector here has the
-   same specificity as those component class rules (0,1,0 each), so
-   without this exclusion the rule below — loaded later — wins and
-   replaces the component's own color with whatever text color it
+/* :not(:where(.badge))/:not(:where(.progress-bar)) matter: both set their
+   own explicit text color (Bootstrap's --bs-badge-color /
+   --bs-progress-bar-color, usually #fff) so they stay readable against
+   their own colored background regardless of theme. A plain element
+   selector here has the same specificity as those component class rules
+   (0,1,0 each), so without this exclusion the rule below — loaded later —
+   wins and replaces the component's own color with whatever text color it
    inherits from its container. On a .bg-success/.bg-secondary/etc.
    badge, or a .bg-primary/.bg-success progress bar, that inherited
    color is frequently near-identical to the component's own background
    (e.g. the Recall Lab channel-status chips) or simply under WCAG AA
    against it (e.g. the per-result Semantic/BM25 score bars) — an
-   unreadable-contrast regression, not a stylistic choice. */
+   unreadable-contrast regression, not a stylistic choice.
+   The exclusion class is wrapped in :where() so it contributes ZERO
+   specificity (a bare :not(.badge) is (0,1,1), same as :not(.progress-bar)
+   — higher than a plain element selector's own (0,1,0) exclusion target —
+   and that extra specificity point is what broke .msg.q (two classes,
+   (0,2,0)): it used to lose to this rule's ORIGINAL (0,1,1) [no :not()],
+   fine, since .msg.q's own (0,2,0) still won; adding a bare :not(.X) here
+   pushed this rule to (0,2,1), which started beating .msg.q too. Measured
+   real regression while verifying the dark-theme accent-token fix below:
+   .msg.q's chat-bubble text silently went from its own #fff to inherited
+   near-black in light theme. :where() keeps the exclusion working with
+   NO specificity cost, so this rule stays exactly as weak as it always
+   was for every two-class component already relying on that. */
 [data-bs-theme="light"] p,
-[data-bs-theme="light"] span:not(.badge),
-[data-bs-theme="light"] div:not(.progress-bar),
+[data-bs-theme="light"] span:not(:where(.badge)),
+[data-bs-theme="light"] div:not(:where(.progress-bar)),
 [data-bs-theme="light"] label,
 [data-bs-theme="light"] td,
 [data-bs-theme="light"] th {

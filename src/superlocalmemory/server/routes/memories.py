@@ -1037,7 +1037,16 @@ async def search_memories(request: Request, body: SearchRequest):
         apply_kind_filter = bool(parsed_kind) and has_kind_columns
         kind_clause = " AND memory_kind = ?" if apply_kind_filter else ""
         kind_params = (parsed_kind,) if apply_kind_filter else ()
-        kind_select = ", memory_kind" if has_kind_columns else ""
+        # memory_kind_source/_confidence and the bare fact_type (selected
+        # again, alongside the existing "fact_type as category" alias) are
+        # what kind_fields() below needs for its confirmed/suggested/legacy
+        # precedence — the same five fields the primary (engine) path's
+        # serialize_recall_response() already attaches. Without them this
+        # fallback could only ever show the raw memory_kind column, with no
+        # legacy-fact_type fallback for the ~pre-4.1.19 majority of rows
+        # that have none, and degraded mode would show kinds differently
+        # from — not "the same way as" — normal recall.
+        kind_select = ", memory_kind, memory_kind_source, memory_kind_confidence, fact_type" if has_kind_columns else ""
         # Same word-based match as the daemon's /recall fallback, so the
         # dashboard, CLI and MCP find the same rows (server/recall_fallback.py).
         from superlocalmemory.server.recall_fallback import (
@@ -1050,6 +1059,14 @@ async def search_memories(request: Request, body: SearchRequest):
             ORDER BY {sql[2]}, confidence DESC LIMIT ?
         """, (active_profile, *sql[1], *kind_params, *sql[3], body.limit)).fetchall()
         conn.close()
+
+        if has_kind_columns:
+            from superlocalmemory.core.kind_query import engine_display_min_confidence
+            from superlocalmemory.storage.memory_kinds import kind_fields
+
+            _threshold = engine_display_min_confidence(engine)
+            for row in rows:
+                row.update(kind_fields(row, display_min_confidence=_threshold))
 
         results = [{
             **row, "score": None, "relevance_score": None, "ranking_score": None,
