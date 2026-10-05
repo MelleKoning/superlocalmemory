@@ -128,3 +128,18 @@ def emulate_windows_file_sharing(monkeypatch) -> None:
     monkeypatch.setattr(os, "rename", rename)
     monkeypatch.setattr(os, "unlink", unlink)
     monkeypatch.setattr(os, "remove", unlink)
+
+
+def assert_owner_only(path: Path, posix_mode: int = 0o600) -> None:
+    """``path`` can be read by its owner only.
+
+    POSIX: exactly ``posix_mode``. Windows, where mode bits do nothing: the
+    protected owner-only access list SLM applies (infra.owner_only_acl).
+    """
+    if os.name != "nt":
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        assert mode == posix_mode, f"{path.name}: mode 0o{mode:03o}, expected 0o{posix_mode:03o}"
+        return
+    from superlocalmemory.infra.owner_only_acl import is_owner_only
+
+    assert is_owner_only(path), f"{path.name} can be read by other accounts"

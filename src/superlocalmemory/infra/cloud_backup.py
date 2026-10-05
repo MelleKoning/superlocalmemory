@@ -97,6 +97,11 @@ def _atomic_write_creds(store_path: Path, data: dict) -> None:
         # Re-open with 0o600; mkstemp already creates with 0o600 on POSIX.
         # Use os.open with O_NOFOLLOW on the temp name to refuse symlink tricks.
         os.close(tmp_fd)
+        # 0o600 means nothing on Windows: there the owner-only access list
+        # is applied, before a single byte of the secret is written.
+        from superlocalmemory.infra.owner_only_acl import restrict_to_owner
+
+        restrict_to_owner(Path(tmp_name))
         flags = os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
         fd = os.open(tmp_name, flags, 0o600)
         try:
