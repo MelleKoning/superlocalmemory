@@ -68,10 +68,15 @@
   }
 
   /** Return the CSS var color for a status class. */
+  // The -text variants (not the plain status colors): --warn in particular
+  // measured 2.33:1 for the "Unreachable" daemon-status value on this
+  // card's plain --card background — under WCAG AA (4.5:1). The -text
+  // tokens (design-system.css) are tuned for exactly this "status color as
+  // readable text" pairing.
   function statusColor(cls) {
-    if (cls === 'ok')     return 'var(--ok)';
-    if (cls === 'warn')   return 'var(--warn)';
-    if (cls === 'danger') return 'var(--danger)';
+    if (cls === 'ok')     return 'var(--ok-text)';
+    if (cls === 'warn')   return 'var(--warn-text)';
+    if (cls === 'danger') return 'var(--danger-text)';
     return 'var(--fg-2)';
   }
 

@@ -122,10 +122,15 @@ html {
   padding: 5px 0;
 }
 
-/* .muted inside dashboard → use the OD fg-3 token */
-#dashboard-pane .muted {
-  color: var(--fg-3);
-}
+/* This used to pin .muted inside the dashboard to --fg-3 specifically
+   (one tier lighter than every other pane's plain .muted, which design-
+   system.css leaves at --fg-2). --fg-3 measures 2.97:1 (light) / 3.89:1
+   (dark) for real content here — "Mode", "LLM Provider", chart
+   subtitles — under WCAG AA (4.5:1) in both themes, where --fg-2
+   (used by .muted everywhere else in the app) passes. Dropped so
+   #dashboard-pane .muted matches every other pane instead of being its
+   own, less accessible, special case. */
+
 
 /* ================================================================
    5. Light-mode adaptation for dashboard OD tokens

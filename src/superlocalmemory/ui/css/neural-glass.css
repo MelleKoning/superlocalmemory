@@ -46,11 +46,27 @@
      --ng-accent as TEXT on --ng-accent-muted as its own tinted BACKGROUND
      (both derived from the same base) — darkening that shared base moves
      foreground and background together and measurably LOSES contrast
-     there (real-rendered dark-theme badge: 3.97:1 -> 3.36:1 when this was
-     tried as a single shared token). That self-colored-badge pattern
-     already fails AA before and after this change; it is a separate,
-     pre-existing defect this fill-only token deliberately does not touch. */
+     there (real-rendered dark-theme badge: 4.16:1 -> 3.36:1 when this was
+     tried as a single shared token). That self-colored-badge pattern, and
+     every sibling that shares its shape, now has its OWN dedicated text
+     token (--ng-accent-text, below) instead. */
   --ng-accent-fill: #6D59ED;
+  /* The OTHER direction: text color for every self-colored accent badge/
+     chip (text=itself, bg=--ng-accent-muted, a 10% tint of the SAME base)
+     — .ng-dark .badge.bg-primary, .ng-sidebar-item.active (+ its icon),
+     .ng-sidebar-badge, .ng-badge-accent, .ng-dark .mode-btn.active/:hover,
+     .ng-dark .btn-outline-primary:hover. #7C6AEF (124,106,239) measured
+     4.16:1 against the real rendered tint (screenshot-sampled: .card's
+     own translucency layers over the page, not flat alpha-over-black
+     math) for .badge.bg-primary specifically — under AA, and every other
+     listed consumer shares the identical text-on-own-tint shape so the
+     same number applies. #8A79F1 (138,121,241), same hue/saturation,
+     lighter (L71% vs L67.6%): 4.90:1. This is dark-theme only — unlike
+     --ng-accent-fill, none of these selectors have a light-theme
+     equivalent built on --ng-accent (light theme's sidebar-active/badge
+     styles use the separate #667eea family in the LIGHT MODE OVERRIDES
+     section below), so there is no light value to define here. */
+  --ng-accent-text: #8A79F1;
 
   /* --- Status Colors --- */
   --ng-status-success: #10b981;
@@ -215,13 +231,21 @@
   color: var(--ng-accent);
 }
 
-.ng-dark a {
+/* :not(:where(.star-cta)) — not a bare :not(.star-cta), for the same
+   reason as the recall-lab badge fix elsewhere in this file: this blanket
+   rule (0,1,1) was beating .star-cta's own color:#fff (design-system.css,
+   0,1,0) purely on specificity, which design-system.css's author had no
+   way to see coming — the "Star us on GitHub" link (<a class="star-cta">,
+   present in every pane's topbar) rendered as --ng-accent (124,106,239)
+   on its own pill background (21,30,50): 4.09:1, under WCAG AA (4.5:1),
+   instead of the intended white. */
+.ng-dark a:not(:where(.star-cta)) {
   color: var(--ng-accent);
   text-decoration: none;
   transition: color var(--ng-transition-fast);
 }
 
-.ng-dark a:hover {
+.ng-dark a:hover:not(:where(.star-cta)) {
   color: var(--ng-accent-hover);
 }
 
@@ -408,13 +432,13 @@
 
 .ng-sidebar-item.active {
   background: var(--ng-accent-muted);
-  color: var(--ng-accent);
+  color: var(--ng-accent-text);
   border-color: var(--ng-border-accent);
   box-shadow: var(--ng-shadow-glow);
 }
 
 .ng-sidebar-item.active .ng-sidebar-icon {
-  color: var(--ng-accent);
+  color: var(--ng-accent-text);
 }
 
 .ng-sidebar-icon {
@@ -437,7 +461,7 @@
   padding: 1px 6px;
   border-radius: var(--ng-radius-pill);
   background: var(--ng-accent-muted);
-  color: var(--ng-accent);
+  color: var(--ng-accent-text);
 }
 
 /* Sidebar footer */
@@ -610,11 +634,18 @@
 
 .ng-dark .btn-outline-primary:hover {
   background: var(--ng-accent-muted) !important;
-  color: var(--ng-accent) !important;
+  color: var(--ng-accent-text) !important;
   border-color: var(--ng-accent) !important;
 }
 
-.ng-dark .btn-success { background: var(--ng-status-success) !important; border-color: var(--ng-status-success) !important; }
+/* #10b981/--ng-status-success (16,185,129) measured 2.33-2.54:1 white-on-
+   fill here — badly under WCAG AA (4.5:1); it's a fine accent for low-
+   opacity badge tints and status dots (not a text-contrast pairing there)
+   but too light/saturated for solid fill behind white button text.
+   #198754 is Bootstrap's own default success green (same family, this
+   file just never needed to override it for buttons) at 4.53:1 — reused
+   rather than inventing a third green. */
+.ng-dark .btn-success { background: #198754 !important; border-color: #198754 !important; color: #fff !important; }
 .ng-dark .btn-outline-success { color: var(--ng-status-success) !important; border-color: var(--ng-status-success) !important; }
 .ng-dark .btn-outline-secondary {
   color: var(--ng-text-secondary) !important;
@@ -757,7 +788,7 @@
 .ng-badge-warning { background: var(--ng-status-warning-bg); color: var(--ng-status-warning); }
 .ng-badge-error { background: var(--ng-status-error-bg); color: var(--ng-status-error); }
 .ng-badge-info { background: var(--ng-status-info-bg); color: var(--ng-status-info); }
-.ng-badge-accent { background: var(--ng-accent-muted); color: var(--ng-accent); }
+.ng-badge-accent { background: var(--ng-accent-muted); color: var(--ng-accent-text); }
 .ng-badge-neutral { background: var(--ng-bg-glass-active); color: var(--ng-text-secondary); }
 
 /* Status dot */
@@ -779,7 +810,7 @@
 }
 
 /* Bootstrap badge overrides */
-.ng-dark .badge.bg-primary { background: var(--ng-accent-muted) !important; color: var(--ng-accent) !important; }
+.ng-dark .badge.bg-primary { background: var(--ng-accent-muted) !important; color: var(--ng-accent-text) !important; }
 .ng-dark .badge.bg-success { background: var(--ng-status-success-bg) !important; color: var(--ng-status-success) !important; }
 .ng-dark .badge.bg-warning { background: var(--ng-status-warning-bg) !important; color: var(--ng-status-warning) !important; }
 .ng-dark .badge.bg-danger { background: var(--ng-status-error-bg) !important; color: var(--ng-status-error) !important; }
@@ -1052,7 +1083,7 @@ body.ng-dark #memory-timeline-chart {
 .ng-dark .mode-btn.active,
 .ng-dark .mode-btn:hover {
   background: var(--ng-accent-muted) !important;
-  color: var(--ng-accent) !important;
+  color: var(--ng-accent-text) !important;
   border-color: var(--ng-accent) !important;
 }
 
@@ -1128,11 +1159,22 @@ body.ng-dark #memory-timeline-chart {
 
 [data-bs-theme="light"] .ng-sidebar-item.active {
   background: rgba(124, 106, 239, 0.10);
-  color: #667eea;
+  /* #667eea (102,126,234) measured 3.2-3.7:1 against this tint and
+     against plain page backgrounds elsewhere in this file — under WCAG
+     AA (4.5:1) either way. #3e5ce5 (62,92,229), same hue darker (L57%
+     vs L65.9%): 4.77:1 on-page, 4.77:1 on-this-own-tint too (both
+     directions pass at once here, unlike the violet/ng-accent badges,
+     because the background in BOTH cases is already very close to
+     white — darkening the text only ever helps). Used everywhere this
+     file sets `color: #667eea` (sidebar active item + icon, footer
+     links, .btn-outline-primary, .stat-icon, .ng-sidebar-badge/
+     .ng-badge-accent, .badge.bg-light) — border-color: #667eea (focus
+     rings, not text) is intentionally left alone. */
+  color: #3e5ce5;
   border-color: rgba(124, 106, 239, 0.25);
 }
 
-[data-bs-theme="light"] .ng-sidebar-item.active .ng-sidebar-icon { color: #667eea; }
+[data-bs-theme="light"] .ng-sidebar-item.active .ng-sidebar-icon { color: #3e5ce5; }
 [data-bs-theme="light"] .ng-sidebar-icon { color: #9ca3af; }
 [data-bs-theme="light"] .ng-sidebar-footer { border-top-color: #e5e7eb; }
 
@@ -1225,7 +1267,7 @@ body.ng-dark #memory-timeline-chart {
 }
 
 [data-bs-theme="light"] .stat-card .stat-icon {
-  color: #667eea !important;
+  color: #3e5ce5 !important;
 }
 
 [data-bs-theme="light"] .table {
@@ -1263,20 +1305,29 @@ body.ng-dark #memory-timeline-chart {
   color: #111827 !important;
 }
 
+/* #667eea (102,126,234) measured 3.66:1 white-on-fill, under WCAG AA
+   (4.5:1). #4c68e6 (76,104,230) is the same hue/saturation darker
+   (L60% vs L65.9%): 4.74:1. color:#fff is the only pairing here — unlike
+   .badge.violet/.ng-dark .badge.bg-primary, this selector has no
+   self-colored-text-on-its-own-tint sibling, so there is no second
+   direction to protect and no dedicated token is needed. (This rule is
+   duplicated verbatim elsewhere in this file's LIGHT MODE OVERRIDES
+   section — both copies were updated.) */
 [data-bs-theme="light"] .btn-primary {
-  background: #667eea !important;
-  border-color: #667eea !important;
+  background: #4c68e6 !important;
+  border-color: #4c68e6 !important;
   color: #fff !important;
 }
 
 [data-bs-theme="light"] .btn-success {
-  background: #10b981 !important;
-  border-color: #10b981 !important;
+  /* See the .ng-dark .btn-success comment above — same fix, same reason. */
+  background: #198754 !important;
+  border-color: #198754 !important;
 }
 
 [data-bs-theme="light"] .btn-outline-primary {
-  color: #667eea !important;
-  border-color: #667eea !important;
+  color: #3e5ce5 !important;
+  border-color: #3e5ce5 !important;
 }
 
 [data-bs-theme="light"] .btn-outline-secondary {
@@ -1350,7 +1401,7 @@ body.ng-dark #memory-timeline-chart {
   border-top-color: #e5e7eb;
 }
 
-[data-bs-theme="light"] footer a { color: #667eea; }
+[data-bs-theme="light"] footer a { color: #3e5ce5; }
 
 /* Light mode: sidebar profile select */
 [data-bs-theme="light"] .profile-select {
@@ -1373,12 +1424,12 @@ body.ng-dark #memory-timeline-chart {
 
 [data-bs-theme="light"] .ng-sidebar-badge {
   background: rgba(102, 126, 234, 0.12);
-  color: #667eea;
+  color: #3e5ce5;
 }
 
 [data-bs-theme="light"] .ng-badge-accent {
   background: rgba(102, 126, 234, 0.10);
-  color: #667eea;
+  color: #3e5ce5;
 }
 
 [data-bs-theme="light"] .ng-progress-bar {
@@ -1426,7 +1477,7 @@ body.ng-dark #memory-timeline-chart {
 }
 
 [data-bs-theme="light"] .stat-icon {
-  color: #667eea !important;
+  color: #3e5ce5 !important;
 }
 
 [data-bs-theme="light"] .form-control,
@@ -1446,21 +1497,30 @@ body.ng-dark #memory-timeline-chart {
   color: #1a1a2e !important;
 }
 
+/* #667eea (102,126,234) measured 3.66:1 white-on-fill, under WCAG AA
+   (4.5:1). #4c68e6 (76,104,230) is the same hue/saturation darker
+   (L60% vs L65.9%): 4.74:1. color:#fff is the only pairing here — unlike
+   .badge.violet/.ng-dark .badge.bg-primary, this selector has no
+   self-colored-text-on-its-own-tint sibling, so there is no second
+   direction to protect and no dedicated token is needed. (This rule is
+   duplicated verbatim elsewhere in this file's LIGHT MODE OVERRIDES
+   section — both copies were updated.) */
 [data-bs-theme="light"] .btn-primary {
-  background: #667eea !important;
-  border-color: #667eea !important;
+  background: #4c68e6 !important;
+  border-color: #4c68e6 !important;
   color: #fff !important;
 }
 
 [data-bs-theme="light"] .btn-success {
-  background: #10b981 !important;
-  border-color: #10b981 !important;
+  /* See the .ng-dark .btn-success comment above — same fix, same reason. */
+  background: #198754 !important;
+  border-color: #198754 !important;
   color: #fff !important;
 }
 
 [data-bs-theme="light"] .badge.bg-light {
   background: rgba(124, 106, 239, 0.10) !important;
-  color: #667eea !important;
+  color: #3e5ce5 !important;
 }
 
 [data-bs-theme="light"] footer {
@@ -1469,7 +1529,7 @@ body.ng-dark #memory-timeline-chart {
 }
 
 [data-bs-theme="light"] footer a {
-  color: #667eea;
+  color: #3e5ce5;
 }
 
 

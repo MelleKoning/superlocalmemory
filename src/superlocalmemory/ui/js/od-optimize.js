@@ -184,13 +184,13 @@
           ' style="display:none;background:var(--warn-soft);border:1px solid var(--warn);' +
                   'border-radius:var(--r-md);padding:12px 16px;margin-bottom:16px;' +
                   'align-items:center;justify-content:space-between;gap:12px">' +
-          '<span style="color:var(--warn);font-size:13.5px" id="od-opt-sav-err-msg">' +
+          '<span style="color:var(--warn-text);font-size:13.5px" id="od-opt-sav-err-msg">' +
             'Service unavailable' +
           '</span>' +
           '<button id="od-opt-sav-retry"' +
             ' style="padding:5px 12px;font-size:12.5px;border-radius:var(--r-md);' +
                     'border:1px solid var(--warn);background:transparent;' +
-                    'color:var(--warn);cursor:pointer;font-weight:600">' +
+                    'color:var(--warn-text);cursor:pointer;font-weight:600">' +
             'Retry' +
           '</button>' +
         '</div>' +
@@ -285,7 +285,7 @@
               // CRIT C1: restart hint for master + proxy (shared, shown on either toggle)
               '<div id="od-opt-restart-hint"' +
                 ' style="display:none;padding:8px 12px;background:var(--warn-soft);' +
-                        'border-radius:var(--r-sm);font-size:12.5px;color:var(--warn);margin:6px 0">' +
+                        'border-radius:var(--r-sm);font-size:12.5px;color:var(--warn-text);margin:6px 0">' +
                 'Restart required — run <code>slm restart</code> to apply this change.' +
               '</div>' +
 

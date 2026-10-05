@@ -17,7 +17,13 @@
 
   /* text */
   --fg:              hsl(222 47% 11%);
-  --fg-2:            hsl(215 16% 47%);
+  /* 47% measured 4.38:1 against --card-2 (.badge.neutral's background) —
+     just under WCAG AA (4.5:1); it already passed against plain --card/
+     white (4.70:1), which is most of where this token is used. 45% is a
+     ~2-point darkening (barely perceptible) that clears both: 4.71:1
+     against --card-2, ~4.9:1 against white. Dark theme's --fg-2 (below)
+     already clears AA everywhere it was checked (5.8:1+) and is unchanged. */
+  --fg-2:            hsl(215 16% 45%);
   --fg-3:            hsl(215 14% 60%);
   --on-sidebar:      hsl(220 14% 92%);
   --on-sidebar-2:    hsl(220 10% 62%);
@@ -56,16 +62,37 @@
      Light theme's 58% already clears AA (5.67:1) against white, so the
      fill token only needs its OWN dark-theme value below. */
   --violet-fill:     var(--violet);
+  /* The OTHER direction: text color for .badge.violet (text=itself,
+     bg=--violet-soft, a translucent tint of the SAME hue). Measured
+     against the real rendered tint (screenshot-sampled, not just the
+     raw hsl alpha math — .card itself is semi-transparent, so the true
+     backdrop is layered): light theme's plain --violet (58%) already
+     passes at 4.73:1 against its own tint; 52% (darker, same hue/
+     saturation) widens that margin to 5.85:1, matching this token's
+     "darker in light theme" shape even though 58% was not actually
+     broken here — only dark theme (3.85:1) was. */
+  --violet-text:     hsl(262 83% 52%);
   --cyan:            hsl(196 94% 48%);
   --cyan-soft:       hsl(196 94% 48% / 0.12);
+  /* .badge.cyan text (same self-colored-on-own-tint shape as .badge.violet
+     above): --cyan measured 2.22:1 against its real rendered --cyan-soft
+     tint (audit: docs/screenshots walk, light theme). 30% (darker, same
+     hue/sat) is 5.13:1. */
+  --cyan-text:       hsl(196 94% 30%);
 
   /* semantics */
   --ok:              hsl(142 71% 42%);
   --ok-soft:         hsl(142 71% 42% / 0.13);
+  /* .badge.ok: 2.33:1 -> 27% (darker) = 5.06:1. */
+  --ok-text:         hsl(142 71% 27%);
   --warn:            hsl(38 92% 48%);
   --warn-soft:       hsl(38 92% 48% / 0.14);
+  /* .badge.warn: 1.95:1 -> 28% (darker) = 5.03:1. */
+  --warn-text:       hsl(38 92% 28%);
   --danger:          hsl(0 78% 55%);
   --danger-soft:     hsl(0 78% 55% / 0.12);
+  /* .badge.danger: 3.38:1 -> 43% (darker) = 4.76:1. */
+  --danger-text:     hsl(0 78% 43%);
 
   /* graph node families */
   --node-episode:    hsl(196 94% 48%);
@@ -117,17 +144,34 @@
      why --badge.violet (text=--violet, bg=--violet-soft, both derived from
      --violet) needs the ORIGINAL brighter value instead. */
   --violet-fill:     hsl(262 83% 62%);
+  /* --badge.violet's own text, dark theme: --violet itself (66%) measures
+     3.85:1 against its own --violet-soft tint (real rendered, screenshot-
+     sampled background — the tint composites over .card's own translucent
+     layers, not a flat hsl-alpha-over-black). 70% (lighter, same hue/
+     saturation) is 4.63:1. Lighter here, darker in the light-theme block
+     above — opposite directions from --violet-fill on purpose: a fill
+     needs to beat WHITE text, this needs to beat its OWN pale tint. */
+  --violet-text:     hsl(262 83% 70%);
   --violet-soft:     hsl(262 83% 66% / 0.18);
   --violet-line:     hsl(262 83% 66% / 0.5);
   --cyan:            hsl(196 94% 56%);
   --cyan-soft:       hsl(196 94% 56% / 0.16);
+  /* Dark theme's .badge.cyan/.ok/.warn already clear AA against their own
+     tint (audit confirmed — not in the failing set), so their -text
+     tokens are just an alias; only light theme needed a darker value. */
+  --cyan-text:       var(--cyan);
 
   --ok:              hsl(142 65% 55%);
   --ok-soft:         hsl(142 65% 45% / 0.18);
+  --ok-text:         var(--ok);
   --warn:            hsl(38 92% 60%);
   --warn-soft:       hsl(38 92% 55% / 0.18);
+  --warn-text:       var(--warn);
   --danger:          hsl(0 82% 66%);
   --danger-soft:     hsl(0 82% 60% / 0.18);
+  /* .badge.danger IS marginally under AA here (4.34:1) — 68% (lighter,
+     same hue/sat) is 4.63:1. */
+  --danger-text:     hsl(0 82% 68%);
 
   --node-episode:    hsl(196 94% 60%);
   --node-entity:     hsl(262 83% 68%);
@@ -300,7 +344,13 @@ button { font-family: inherit; }
   background: #fff; box-shadow: inset 0 0 0 1px var(--border); }
 .foot-logo svg { width: 18px; height: 18px; color: #fff; }
 .foot-logo img { width: 22px; height: 22px; display: block; }
-.foot-brand b { display: block; font-size: 13.5px; }
+/* Explicit color, not inherited: neural-glass.css's .ng-dark footer sets
+   an ambient color: var(--ng-text-quaternary) (#545250) on the whole
+   footer — a faint fourth text tier meant for barely-visible chrome, not
+   the product's own name. Without its own color this <b> inherited that:
+   2.54:1 on the dark footer background, under WCAG AA (4.5:1). --fg is
+   this file's main, always-AA-passing text color in both themes. */
+.foot-brand b { display: block; font-size: 13.5px; color: var(--fg); }
 .foot-brand span { font-size: 12px; color: var(--fg-2); }
 .foot-links { display: flex; align-items: center; gap: 6px 18px; flex-wrap: wrap; margin-left: auto; }
 .foot-links a { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--fg-2); }
@@ -366,11 +416,11 @@ button { font-family: inherit; }
   border-radius: var(--r-pill); line-height: 1.4;
 }
 .badge .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.badge.ok      { color: var(--ok);     background: var(--ok-soft); }
-.badge.warn    { color: var(--warn);   background: var(--warn-soft); }
-.badge.danger  { color: var(--danger); background: var(--danger-soft); }
-.badge.violet  { color: var(--violet); background: var(--violet-soft); }
-.badge.cyan    { color: var(--cyan);   background: var(--cyan-soft); }
+.badge.ok      { color: var(--ok-text);     background: var(--ok-soft); }
+.badge.warn    { color: var(--warn-text);   background: var(--warn-soft); }
+.badge.danger  { color: var(--danger-text); background: var(--danger-soft); }
+.badge.violet  { color: var(--violet-text); background: var(--violet-soft); }
+.badge.cyan    { color: var(--cyan-text);   background: var(--cyan-soft); }
 .badge.neutral { color: var(--fg-2);   background: var(--card-2); border: 1px solid var(--border); }
 
 .badge-local {                    /* LOCAL ONLY trust badge */
@@ -390,7 +440,7 @@ button { font-family: inherit; }
   transition: all .15s;
 }
 .chip:hover { border-color: var(--border-strong); }
-.chip.on { background: var(--violet-soft); border-color: var(--violet-line); color: var(--violet); }
+.chip.on { background: var(--violet-soft); border-color: var(--violet-line); color: var(--violet-text); }
 .chip .cnt { color: var(--fg-3); font-variant-numeric: tabular-nums; }
 
 /* ============================================================
@@ -459,7 +509,15 @@ button { font-family: inherit; }
    how it was reported. Keeping the scroll inside the card makes the clipped
    edge belong to the table, where a horizontal scrollbar is expected. */
 .tbl { width: 100%; border-collapse: collapse; font-size: 13px; display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
-.tbl th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-3); font-weight: 600; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+/* --fg-3 measured 2.97:1 (light) / 4.07:1 (dark) here — under WCAG AA
+   (4.5:1) in both themes. Column headers are meaningful navigational
+   text (e.g. Health/Governance/Optimize's "Agent"/"State"/"Provider"
+   tables), not decoration, so this moves to --fg-2 (which passes
+   comfortably in both themes — see its own definition above) rather
+   than adjusting --fg-3 itself, which backs many other, genuinely
+   decorative/tertiary uses across the app that this fix does not
+   touch. */
+.tbl th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-2); font-weight: 600; padding: 10px 14px; border-bottom: 1px solid var(--border); }
 .tbl td { padding: 12px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .tbl tr:last-child td { border-bottom: 0; }
 .tbl tbody tr:hover, .tbl tr.row:hover { background: var(--card-2); }
@@ -576,7 +634,7 @@ button { font-family: inherit; }
 .launch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; }
 .launch-card { padding: 20px; cursor: pointer; transition: transform .18s, box-shadow .18s, border-color .18s; text-decoration: none; color: inherit; display: block; }
 .launch-card:hover { transform: translateY(-3px); box-shadow: var(--sh-lg); border-color: var(--violet-line); text-decoration: none; }
-.launch-card .ic { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; background: var(--violet-soft); color: var(--violet); margin-bottom: 14px; }
+.launch-card .ic { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; background: var(--violet-soft); color: var(--violet-text); margin-bottom: 14px; }
 .launch-card .ic svg { width: 21px; height: 21px; }
 .launch-card.hero .ic { background: linear-gradient(140deg, var(--violet), var(--cyan)); color: #fff; }
 .launch-card h3 { font-size: 15px; }
@@ -706,7 +764,7 @@ button { font-family: inherit; }
     cursor: pointer;
     transition: background .15s, color .15s;
   }
-  .odg-back-btn:hover { background: var(--violet-soft); color: var(--violet); }
+  .odg-back-btn:hover { background: var(--violet-soft); color: var(--violet-text); }
   .odg-back-btn:focus-visible { outline: 2px solid var(--violet); outline-offset: -2px; }
 }
 
