@@ -19,6 +19,7 @@ from mcp.types import ToolAnnotations
 
 from superlocalmemory.core.admission import admits
 from superlocalmemory.core.operation_request import OperationKind
+from superlocalmemory.mcp.request_profile import tool_profile
 from superlocalmemory.mcp.shared import authorize_mcp_mutation
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ def register_v28_tools(server, get_engine: Callable) -> None:
         outcome: str,
         context: str = "",
         recall_query_id: str = "",
+        profile_id: str = "",
     ) -> dict:
         """Report outcome of using recalled memories.
 
@@ -51,13 +53,19 @@ def register_v28_tools(server, get_engine: Callable) -> None:
                 this report is about. Passing it ties the report to that exact
                 answer; leaving it out falls back to matching on which memories
                 overlap, within a time window.
+            profile_id: The profile the recall was made in (empty = the active
+                one).
         """
         try:
             engine = get_engine()
+            pid, refused = tool_profile(engine, profile_id)
+            if refused:
+                return refused
             authorization = authorize_mcp_mutation(
                 engine,
                 "update",
                 mutation_source="mcp-report-outcome",
+                profile_id=pid,
             )
             from superlocalmemory.learning.outcomes import (
                 VALID_OUTCOMES,
@@ -80,7 +88,7 @@ def register_v28_tools(server, get_engine: Callable) -> None:
                 query="[mcp_feedback]",
                 fact_ids=ids,
                 outcome=outcome,
-                profile_id=engine.profile_id,
+                profile_id=pid,
                 context=ctx,
                 recall_query_id=str(recall_query_id or "").strip(),
             )
@@ -98,7 +106,7 @@ def register_v28_tools(server, get_engine: Callable) -> None:
                 sig_type, sig_val = signal_map.get(outcome, ("user_correction", 0.5))
                 for fid in ids:
                     collector.record_explicit(
-                        profile_id=engine.profile_id,
+                        profile_id=pid,
                         fact_id=fid,
                         signal_type=sig_type,
                         value=sig_val,
@@ -116,7 +124,7 @@ def register_v28_tools(server, get_engine: Callable) -> None:
     # 2. get_lifecycle_status
     # ------------------------------------------------------------------
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
-    async def get_lifecycle_status(limit: int = 50) -> dict:
+    async def get_lifecycle_status(limit: int = 50, profile_id: str = "") -> dict:
         """Get lifecycle state distribution for stored memories.
 
         Shows counts per lifecycle state (active, warm, cold, archived)
@@ -124,10 +132,13 @@ def register_v28_tools(server, get_engine: Callable) -> None:
 
         Args:
             limit: Maximum facts to inspect (default 50).
+            profile_id: The profile to inspect (empty = the active one).
         """
         try:
             engine = get_engine()
-            pid = engine.profile_id
+            pid, refused = tool_profile(engine, profile_id)
+            if refused:
+                return refused
             facts = engine._db.get_all_facts(pid)[:limit]
             states: dict[str, list[dict]] = {
                 "active": [], "warm": [], "cold": [], "archived": [],
@@ -239,8 +250,8 @@ def register_v28_tools(server, get_engine: Callable) -> None:
     # 5. get_behavioral_patterns
     # ------------------------------------------------------------------
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
-    async def get_behavioral_patterns(limit: int = 20) -> dict:
-        """Get detected behavioral patterns for the active profile.
+    async def get_behavioral_patterns(limit: int = 20, profile_id: str = "") -> dict:
+        """Get detected behavioral patterns for the active profile (or ``profile_id``).
 
         Returns patterns such as topic interests, refinement habits,
         and time-of-day usage with confidence scores.
@@ -250,10 +261,13 @@ def register_v28_tools(server, get_engine: Callable) -> None:
         """
         try:
             engine = get_engine()
+            pid, refused = tool_profile(engine, profile_id)
+            if refused:
+                return refused
             from superlocalmemory.learning.behavioral import BehavioralPatternStore
             store = BehavioralPatternStore(engine._db.db_path)
-            patterns = store.get_patterns(engine.profile_id, limit=limit)
-            summary = store.get_summary(engine.profile_id)
+            patterns = store.get_patterns(pid, limit=limit)
+            summary = store.get_summary(pid)
             return {
                 "success": True,
                 "patterns": patterns,

@@ -11,10 +11,12 @@ kind is listed in ``ROUTABLE_MUTATIONS`` and the profile exists.
 
 A kind is listed only together with the route that authorizes the routed
 profile for it -- the caller's role on THAT profile, checked before the
-profile's existence is revealed. ``replaces`` (POST /remember) and correction
-review (/api/corrections) do; nothing else does yet, so a route that forwards a
-client's ``profile_id`` into delete, merge, scope or kind by mistake is still
-refused by the writer.
+profile's existence is revealed. ``replaces`` (POST /remember), correction
+review (/api/corrections), deleting or correcting one memory (DELETE and PATCH
+/api/memories/{id}) and setting a memory's kind (/api/memory-kinds) do. Nothing
+else does, so a route that forwards a client's ``profile_id`` into a content
+rewrite, archive, merge or scope change by mistake is still refused by the
+writer.
 """
 
 from __future__ import annotations
@@ -29,6 +31,11 @@ ROUTABLE_MUTATIONS: frozenset[CommandKind] = frozenset({
     CommandKind.APPLY_CORRECTION,
     CommandKind.REJECT_CORRECTION,
     CommandKind.ROLLBACK_CORRECTION,
+    # 4.1.21: what a remote key bound to one profile needs to manage its own
+    # memories while this computer uses another profile.
+    CommandKind.DELETE_FACT,
+    CommandKind.PROPOSE_CORRECTION,
+    CommandKind.SET_FACT_KIND,
 })
 
 

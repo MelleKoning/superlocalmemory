@@ -1143,9 +1143,22 @@ body.ng-dark #memory-timeline-chart {
   color: #111827 !important;
 }
 
+/* :not(.badge)/:not(.progress-bar) matter: both set their own explicit
+   text color (Bootstrap's --bs-badge-color / --bs-progress-bar-color,
+   usually #fff) so they stay readable against their own colored
+   background regardless of theme. A plain element selector here has the
+   same specificity as those component class rules (0,1,0 each), so
+   without this exclusion the rule below — loaded later — wins and
+   replaces the component's own color with whatever text color it
+   inherits from its container. On a .bg-success/.bg-secondary/etc.
+   badge, or a .bg-primary/.bg-success progress bar, that inherited
+   color is frequently near-identical to the component's own background
+   (e.g. the Recall Lab channel-status chips) or simply under WCAG AA
+   against it (e.g. the per-result Semantic/BM25 score bars) — an
+   unreadable-contrast regression, not a stylistic choice. */
 [data-bs-theme="light"] p,
-[data-bs-theme="light"] span,
-[data-bs-theme="light"] div,
+[data-bs-theme="light"] span:not(.badge),
+[data-bs-theme="light"] div:not(.progress-bar),
 [data-bs-theme="light"] label,
 [data-bs-theme="light"] td,
 [data-bs-theme="light"] th {
@@ -1257,6 +1270,29 @@ body.ng-dark #memory-timeline-chart {
 [data-bs-theme="light"] .badge.bg-light {
   background: #f3f4f6 !important;
   color: #111827 !important;
+}
+
+/* Bootstrap's own default badge text is white (--bs-badge-color), which
+   is fine on .bg-success/.bg-secondary/.bg-danger but fails WCAG AA
+   (1.6:1) on .bg-warning's bright yellow — e.g. the Recall Lab channel
+   chip for a timed-out channel (recall-lab.js CHANNEL_STATUS_STYLE.timeout
+   -> "bg-warning"). Dark text is required for that background specifically. */
+[data-bs-theme="light"] .badge.bg-warning {
+  color: #111827 !important;
+}
+
+/* Not theme-scoped: Bootstrap's own --bs-progress-bar-color default is a
+   flat white for every .bg-* variant, same as badges, but .progress-bar
+   has no per-variant text color at all (badges at least get the
+   .bg-warning carve-out above). .bg-info (cyan #0dcaf0) and .bg-warning
+   (yellow #ffc107) are light backgrounds in BOTH themes — identical to
+   why Bootstrap's own .btn-info/.btn-warning already ship with
+   --bs-btn-color:#000 instead of white. recall-lab.js's buildChannelBar
+   renders the Entity channel as .bg-info and Temporal as .bg-warning on
+   every search result, so this is reachable on every Recall Lab query. */
+.progress-bar.bg-info,
+.progress-bar.bg-warning {
+  color: #111827;
 }
 
 [data-bs-theme="light"] .score-bar { background: #e5e7eb; }

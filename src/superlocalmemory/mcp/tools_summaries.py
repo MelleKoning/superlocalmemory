@@ -78,6 +78,7 @@ def register_summary_tools(server: Any, get_engine: Callable[[], Any]) -> None:
     async def get_memory_summary(
         kind: str = "day",
         target: str = "",
+        profile_id: str = "",
     ) -> dict[str, Any]:
         """Summarise your memories: a day, a project, or one session.
 
@@ -87,6 +88,7 @@ def register_summary_tools(server: Any, get_engine: Callable[[], Any]) -> None:
                 today, in this computer's time zone). For "project", a directory
                 path (default: none — supply one). For "session", the session
                 id; leave it empty to get ``recent_sessions`` to choose from.
+            profile_id: The profile to summarise (empty = the active one).
 
         Returns a summary plus ``coverage`` and ``source_fact_ids``. Coverage is
         not decoration: session data is sparse — roughly 4% of facts carry a
@@ -102,8 +104,19 @@ def register_summary_tools(server: Any, get_engine: Callable[[], Any]) -> None:
                 f"unknown summary kind {kind!r}; expected one of {', '.join(_KINDS)}"
             )
 
+        from superlocalmemory.mcp.request_profile import requested_profile, tool_profile
+
         engine = get_engine()
-        profile_id = getattr(engine, "profile_id", "default")
+        try:
+            named = requested_profile(profile_id)
+        except ValueError as exc:
+            return _error(str(exc))
+        if named:
+            profile_id, refused = tool_profile(engine, named)
+            if refused:
+                return refused
+        else:
+            profile_id = getattr(engine, "profile_id", "default")
         db_path = state_path("memory.db")
         if not db_path.exists():
             return _error("no memory database found", db_path=str(db_path))

@@ -22,10 +22,13 @@ def _context(
     trusted_actor_id: str,
     source_agent_id: str,
     content_preview: str = "",
+    profile_id: str | None = None,
 ) -> tuple[str, dict[str, str]]:
     if not trusted_actor_id:
         raise ValueError("trusted actor identity is required")
-    profile_id = engine.profile_id
+    # A routed caller names the profile (already authorized on it); every
+    # other caller works on the engine's active profile.
+    profile_id = profile_id or engine.profile_id
     context = {
         "operation": operation,
         "agent_id": trusted_actor_id,
@@ -450,8 +453,12 @@ def delete_fact_authorized(
     source_agent_id: str,
     canonical_runtime: Any | None = None,
     idempotency_key: str | None = None,
+    profile_id: str | None = None,
 ) -> dict[str, Any]:
-    """Authorize, delete one profile-owned fact, then emit post hooks."""
+    """Authorize, delete one profile-owned fact, then emit post hooks.
+
+    ``profile_id`` is the profile the fact belongs to; ``None`` = the active one.
+    """
     import time as _time
     import uuid
 
@@ -471,6 +478,7 @@ def delete_fact_authorized(
         fact_id,
         trusted_actor_id=trusted_actor_id,
         source_agent_id=source_agent_id,
+        profile_id=profile_id,
     )
 
     rows = engine._db.execute(
@@ -599,8 +607,12 @@ def update_fact_authorized(
     source_agent_id: str,
     canonical_runtime: Any | None = None,
     idempotency_key: str | None = None,
+    profile_id: str | None = None,
 ) -> dict[str, Any]:
-    """Create a review-required correction successor without rewriting history."""
+    """Create a review-required correction successor without rewriting history.
+
+    ``profile_id`` is the profile the fact belongs to; ``None`` = the active one.
+    """
     if not content or not content.strip():
         return {"ok": False, "error": "content cannot be empty"}
     content = content.strip()
@@ -611,6 +623,7 @@ def update_fact_authorized(
         trusted_actor_id=trusted_actor_id,
         source_agent_id=source_agent_id,
         content_preview=content,
+        profile_id=profile_id,
     )
     rows = engine._db.execute(
         "SELECT content FROM atomic_facts "

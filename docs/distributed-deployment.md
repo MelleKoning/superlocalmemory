@@ -111,19 +111,16 @@ never reaches another profile:
 - a `profile_id` other than the key's profile, in any tool's arguments
   (including inside structured ones such as `payload`), is refused with
   `remote_profile_not_allowed` — never quietly redirected;
-- `recall`, `remember`, `list_corrections` and `review_correction` are served
-  for the key's profile whatever profile this computer is using; the host's
-  active profile is never moved. Tools that only exist for the cache, the
-  compression store and the version (`slm_cache_*`, `slm_compress`,
-  `slm_retrieve`, `slm_optimize_stats`, `get_version`) always work;
-- **limitation in this release:** every other tool (`search`, `fetch`,
-  `list_recent`, `update_memory`, `delete_memory`, `session_init`, `observe`,
-  status, kinds, assertions and the rest) works only on the profile this
-  computer is using. While it is using a different one, those calls are refused
-  with `remote_profile_not_active`: "the host is using another workspace right
-  now; try again later or ask the host owner" (the answer does not name that
-  workspace). While one of them runs, a profile switch on this computer waits
-  for it to finish;
+- every tool that reads or writes memory (`recall`, `remember`, `search`,
+  `fetch`, `list_recent`, `update_memory`, `delete_memory`, `session_init`,
+  `observe`, status, kinds, views, assertions and the rest) is served for the
+  key's profile whatever profile this computer is using; the host's active
+  profile is never moved. A write is checked exactly as a write on this
+  computer to that profile is (a write key, the role on that profile, the
+  writer's own profile check) and is logged with the key's id and profile.
+  Tools that touch no profile's memory (`slm_cache_*`, `slm_compress`,
+  `slm_retrieve`, `slm_optimize_stats`, `get_version`, `get_mode`,
+  `get_attribution`) always work;
 - a remote save always stays in the key's profile: `scope` must be `personal`
   (a save that names no scope is made `personal`, whatever this computer's
   default), and `shared_with` is refused. Share a memory from this computer.

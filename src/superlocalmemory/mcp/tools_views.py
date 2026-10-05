@@ -13,10 +13,11 @@ run views but never edit them (``server/remote_tool_policy.py``):
   memory's id.
 * ``manage_view`` (write) — create, rename or delete a view.
 
-Both work on the active profile and take no profile argument; over remote
-access they run only while the key's own profile is active (they are not in
-``ROUTED_TOOLS``), so a key bound to one profile only ever sees that
-profile's views. Inputs are validated by ``views.model`` with the same codes
+Both work on the active profile, or on ``profile_id`` when one is named (it
+must exist; the active profile is not moved). Remote access always names the
+key's own profile (``server/remote_profile_binding``), so a key bound to one
+profile sees and edits only that profile's views, whatever profile this
+computer is using. Inputs are validated by ``views.model`` with the same codes
 the CLI and HTTP routes return.
 """
 
@@ -41,13 +42,14 @@ def _refused(exc: ViewError) -> dict[str, Any]:
     return {"success": False, "retryable": False, **exc.as_dict(), "error": exc.message}
 
 
-async def _profile(get_engine: Callable[[], Any]) -> str:
-    from superlocalmemory.mcp.tools_core import _runtime_profile
+async def _profile(get_engine: Callable[[], Any],
+                   profile_id: str) -> tuple[str, dict[str, Any] | None]:
+    from superlocalmemory.mcp.tools_core import _call_profile
 
-    return await _runtime_profile(get_engine)
+    return await _call_profile(get_engine, profile_id)
 
 
-def _run_through_daemon(name: str) -> dict[str, Any]:
+def _run_through_daemon(name: str, profile_id: str = "") -> dict[str, Any]:
     """Run a view through the daemon's own run route — the one run path.
 
     The dashboard and ``slm view run`` call ``GET /api/v3/views/run`` too, and
@@ -65,9 +67,12 @@ def _run_through_daemon(name: str) -> dict[str, Any]:
     )
     from superlocalmemory.mcp._daemon_proxy import daemon_unavailable_error
 
+    path = f"/api/v3/views/run?name={quote(name, safe='')}&via=mcp"
+    if profile_id:
+        path += f"&profile_id={quote(profile_id, safe='')}"
     try:
         data = daemon_request(
-            "GET", f"/api/v3/views/run?name={quote(name, safe='')}&via=mcp",
+            "GET", path,
             timeout_seconds=60.0, preserve_conflict=True, preserve_not_found=True,
             preserve_unprocessable=True)
     except DaemonNotFound as exc:
@@ -91,7 +96,7 @@ def register_view_tools(server: Any, get_engine: Callable[[], Any]) -> None:
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
     @admits(OperationKind.RECALL)
-    async def run_view(name: str = "") -> dict[str, Any]:
+    async def run_view(name: str = "", profile_id: str = "") -> dict[str, Any]:
         """Run one of your saved views, or list them.
 
         A saved view is a named recall query the person saved (e.g. "Work log":
@@ -99,16 +104,20 @@ def register_view_tools(server: Any, get_engine: Callable[[], Any]) -> None:
         the views in this profile. With a name, the view's query runs through
         the normal recall path and the answer comes back in recall's order;
         every result carries ``fact_id``, the id ``fetch`` takes. Honour
-        ``no_confident_match`` exactly as for ``recall``.
+        ``no_confident_match`` exactly as for ``recall``. ``profile_id`` lists
+        or runs another profile's views (empty = the active profile).
         """
         try:
-            profile = await _profile(get_engine)
+            profile, refused = await _profile(get_engine, profile_id)
+            if refused:
+                return refused
             store = default_store()
             if not (name or "").strip():
                 views = await asyncio.to_thread(store.list, profile)
                 return {"success": True, "profile": profile, "count": len(views),
                         "views": [v.to_dict() for v in views]}
-            return await asyncio.to_thread(_run_through_daemon, name.strip())
+            named = (profile_id or "").strip()
+            return await asyncio.to_thread(_run_through_daemon, name.strip(), named)
         except ViewError as exc:
             return _refused(exc)
         except Exception as exc:  # noqa: BLE001 — reported, never a traceback
@@ -124,6 +133,7 @@ def register_view_tools(server: Any, get_engine: Callable[[], Any]) -> None:
         filters: dict[str, str] | None = None,
         limit: int | None = None,
         new_name: str = "",
+        profile_id: str = "",
     ) -> dict[str, Any]:
         """Create, rename or delete a saved view. No memory is ever changed.
 
@@ -137,13 +147,16 @@ def register_view_tools(server: Any, get_engine: Callable[[], Any]) -> None:
                 ``as_of`` (ISO-8601). Anything else is refused.
             limit: for "create": results to show, 1-50 (default 10).
             new_name: for "rename": the new name.
+            profile_id: the profile whose views change (empty = the active one).
         """
         verb = (action or "").strip().lower()
         if verb not in _ACTIONS:
             return {"success": False, "code": "invalid_view_action", "retryable": False,
                     "error": f"action must be one of: {', '.join(_ACTIONS)}"}
         try:
-            profile = await _profile(get_engine)
+            profile, refused = await _profile(get_engine, profile_id)
+            if refused:
+                return refused
             store = default_store()
             if verb == "create":
                 view = await asyncio.to_thread(

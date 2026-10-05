@@ -65,12 +65,11 @@ create the key. Hermes recalls from and saves into that profile and cannot
 name another one; saves stay private to it. Whoever holds the key can read the
 full text of every memory in that profile, including any paths or pasted output
 written into them, so give Hermes a profile that holds only what it should see.
-Recall and saves keep working whatever profile the server is using; other
-tools (search, list, update, delete, session and lifecycle capture) work only
-while the server is using the key's profile, and otherwise answer
-`remote_profile_not_active` ("try again later or ask the host owner"). A key made before
-4.1.20 is bound to the profile active when the server is upgraded; `slm remote
-keys list` shows which.
+Every tool Hermes can call (recall, saves, search, list, update, delete,
+session and lifecycle capture, status, kinds and the rest) works on the key's
+profile whatever profile the server is using, and never moves the server's
+active profile. A key made before 4.1.20 is bound to the profile active when
+the server is upgraded; `slm remote keys list` shows which.
 
 **On the Hermes computer**, put the key in your Hermes secrets as
 `SLM_REMOTE_KEY`, then in `~/.hermes/config.yaml`:
