@@ -162,8 +162,12 @@ class _EngineLedgerStore:
     ``store_fast``.
     """
 
-    def __init__(self, engine: Any, *, owns_engine: bool = True) -> None:
+    def __init__(self, engine: Any, *, owns_engine: bool = True,
+                 profile_id: str | None = None) -> None:
         self._engine = engine
+        # Reads serve this profile when one is named (a routed MCP read), else
+        # the engine's own. Writes always go to the engine's profile.
+        self._read_profile = profile_id
         # When False, this store does NOT own the engine's lifecycle (the
         # caller — e.g. the MCP daemon — keeps it), so close() must not tear
         # down a shared engine. open_engine_store() passes True (it built the
@@ -202,7 +206,7 @@ class _EngineLedgerStore:
             "SELECT content, created_at FROM memories "
             "WHERE profile_id=? AND session_id=? "
             "ORDER BY created_at ASC, rowid ASC LIMIT 5000",
-            (self._engine.profile_id, session_id),
+            (self._read_profile or self._engine.profile_id, session_id),
         )
         return [dict(row) for row in rows]
 
@@ -214,7 +218,7 @@ class _EngineLedgerStore:
             "SELECT content, created_at FROM memories "
             "WHERE profile_id=? AND session_id LIKE ? ESCAPE '\\' "
             "ORDER BY created_at DESC, rowid DESC LIMIT 5000",
-            (self._engine.profile_id, escaped + "%"),
+            (self._read_profile or self._engine.profile_id, escaped + "%"),
         )
         return [dict(row) for row in rows]
 
@@ -253,7 +257,7 @@ class _PoolLedgerStore(_EngineLedgerStore):
             )
 
 
-def engine_backed_ledger(engine: Any) -> SLMMemoryLedger:
+def engine_backed_ledger(engine: Any, profile_id: str | None = None) -> SLMMemoryLedger:
     """Build an SLM-backed ledger over an ALREADY-OPEN engine.
 
     Unlike :func:`open_engine_store`, this neither creates nor owns the engine —
@@ -261,9 +265,11 @@ def engine_backed_ledger(engine: Any) -> SLMMemoryLedger:
     profile) retains full ownership and lifecycle. The returned ledger never
     closes the engine, so it is safe to build one per tool call. The engine's
     per-call, WAL-mode connection model makes the ledger's reads/writes safe
-    from a worker thread.
+    from a worker thread. ``profile_id`` makes its reads serve that profile
+    instead of the engine's (the MCP loop history tools, routed).
     """
-    return SLMMemoryLedger(_EngineLedgerStore(engine, owns_engine=False))
+    return SLMMemoryLedger(_EngineLedgerStore(engine, owns_engine=False,
+                                              profile_id=profile_id))
 
 
 def pool_backed_ledger(pool: Any, reader_engine: Any) -> SLMMemoryLedger:

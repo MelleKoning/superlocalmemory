@@ -289,16 +289,21 @@ def register_v33_tools(server, get_engine: Callable) -> None:
     # 4. get_soft_prompts — Retrieve active soft prompts
     # ------------------------------------------------------------------
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
-    async def get_soft_prompts() -> dict:
+    async def get_soft_prompts(profile_id: str = "") -> dict:
         """Get active soft prompts (auto-learned user patterns).
 
         Returns soft prompt templates generated from behavioral
         patterns. These are injected into conversation context to
-        personalize AI responses.
+        personalize AI responses. ``profile_id`` reads another profile's
+        (empty = the active one).
         """
         try:
+            from superlocalmemory.mcp.request_profile import tool_profile
+
             engine = get_engine()
-            pid = engine.profile_id
+            pid, refused = tool_profile(engine, profile_id)
+            if refused:
+                return refused
 
             rows = engine._db.execute(
                 "SELECT prompt_id, category, content, confidence, "
@@ -388,16 +393,21 @@ def register_v33_tools(server, get_engine: Callable) -> None:
     # 6. get_retention_stats — Memory retention zone distribution
     # ------------------------------------------------------------------
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
-    async def get_retention_stats() -> dict:
+    async def get_retention_stats(profile_id: str = "") -> dict:
         """Get memory retention statistics (zone distribution, decay rates).
 
         Queries the fact_retention table for zone counts and average
         retention scores per zone. Shows how memories are distributed
-        across the Ebbinghaus decay lifecycle.
+        across the Ebbinghaus decay lifecycle. ``profile_id`` reads another
+        profile's (empty = the active one).
         """
         try:
+            from superlocalmemory.mcp.request_profile import tool_profile
+
             engine = get_engine()
-            pid = engine.profile_id
+            pid, refused = tool_profile(engine, profile_id)
+            if refused:
+                return refused
 
             # Zone distribution counts
             rows = engine._db.execute(

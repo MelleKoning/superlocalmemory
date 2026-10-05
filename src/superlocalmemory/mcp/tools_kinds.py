@@ -13,6 +13,10 @@ touches a database directly: the canonical mutation writer and its RBAC
 gates (READ/WRITE/MANAGE) are the single place a kind is ever written, so
 MCP, CLI and HTTP cannot disagree about what a kind is or who may set one.
 
+Every tool takes an optional ``profile_id``: that profile is served for this
+one call (the daemon authorizes it on THAT profile) and the active profile is
+not moved. Empty = the active profile, the request unchanged.
+
 Part of Qualixar | Author: Varun Pratap Bhardwaj
 """
 
@@ -100,6 +104,20 @@ async def _kinds_request(method: str, path: str, body: dict | None = None) -> di
     return {"success": True, **result}
 
 
+def _with_profile(path: str, profile_id: str) -> str:
+    """``path`` with ``profile_id`` in its query string, only when one is named."""
+    named = (profile_id or "").strip()
+    if not named:
+        return path
+    joiner = "&" if "?" in path else "?"
+    return f"{path}{joiner}profile_id={urllib.parse.quote(named, safe='')}"
+
+
+def _body_with_profile(body: dict, profile_id: str) -> dict:
+    named = (profile_id or "").strip()
+    return {**body, "profile_id": named} if named else body
+
+
 def register_kind_tools(server, get_engine: Callable) -> None:
     """Register the 4 memory-kind MCP tools on *server*.
 
@@ -111,13 +129,14 @@ def register_kind_tools(server, get_engine: Callable) -> None:
 
     @server.tool()
     @admits(OperationKind.CORRECT)
-    async def set_memory_kind(fact_id: str, kind: str) -> dict:
+    async def set_memory_kind(fact_id: str, kind: str, profile_id: str = "") -> dict:
         """Set (confirm) the kind of one memory you already know the type of.
 
         ``kind`` is one of the nine memory kinds — the same values
         ``remember``'s ``kind`` parameter takes — or a known alias. Refused
         (``INVALID_KIND``) before any request reaches the daemon if it does
-        not parse. The fact must belong to the active profile.
+        not parse. The fact must belong to the profile changed: ``profile_id``,
+        or the active profile when it is empty.
 
         Returns the fact's kind_fields — the same five fields every surface
         shows (``memory_kind``, ``memory_kind_label``, ``memory_kind_state``,
@@ -131,21 +150,23 @@ def register_kind_tools(server, get_engine: Callable) -> None:
         if parse_kind(kind) is None:
             return _invalid_kind_error()
         path = "/fact/" + urllib.parse.quote(fact_id, safe="")
-        result = await _kinds_request("PATCH", path, {"kind": kind})
+        result = await _kinds_request("PATCH", path,
+                                      _body_with_profile({"kind": kind}, profile_id))
         if result.get("success") and not result.get("ok", True):
             return {"success": False, "code": "NOT_FOUND", "retryable": False,
                     "error": result.get("error", "Memory not found.")}
         return result
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
-    async def memory_kinds_status() -> dict:
-        """Memory-kind status for the active profile: counts per kind
-        (confirmed/suggested), which backend classifies new memories, and any
-        classification run in progress."""
-        return await _kinds_request("GET", "/status")
+    async def memory_kinds_status(profile_id: str = "") -> dict:
+        """Memory-kind status for the active profile (or ``profile_id``): counts
+        per kind (confirmed/suggested), which backend classifies new memories,
+        and any classification run in progress."""
+        return await _kinds_request("GET", _with_profile("/status", profile_id))
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
-    async def review_memory_kinds(kind: str = "", limit: int = 20) -> dict:
+    async def review_memory_kinds(kind: str = "", limit: int = 20,
+                                  profile_id: str = "") -> dict:
         """List memory-kind suggestions awaiting confirmation.
 
         ``kind`` (optional) narrows to suggestions of one kind; empty lists
@@ -162,11 +183,11 @@ def register_kind_tools(server, get_engine: Callable) -> None:
         qs = f"?limit={int(limit)}"
         if kind:
             qs += f"&kind={urllib.parse.quote(kind)}"
-        return await _kinds_request("GET", "/suggestions" + qs)
+        return await _kinds_request("GET", _with_profile("/suggestions" + qs, profile_id))
 
     @server.tool()
     @admits(OperationKind.CORRECT)
-    async def confirm_memory_kinds(items: list[dict]) -> dict:
+    async def confirm_memory_kinds(items: list[dict], profile_id: str = "") -> dict:
         """Confirm kinds for 1-200 facts at once.
 
         Each item is ``{"fact_id": "...", "kind": "..."}``; omit ``kind`` (or
@@ -191,7 +212,8 @@ def register_kind_tools(server, get_engine: Callable) -> None:
             if raw.get("kind") is not None:
                 entry["kind"] = raw["kind"]
             cleaned.append(entry)
-        return await _kinds_request("POST", "/confirm", {"items": cleaned})
+        return await _kinds_request("POST", "/confirm",
+                                    _body_with_profile({"items": cleaned}, profile_id))
 
 
 __all__ = ["register_kind_tools"]

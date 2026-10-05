@@ -287,7 +287,8 @@ _SCHEDULED_HORIZON_DAYS = 14
 _SCHEDULED_LIMIT = 5
 
 
-def _upcoming_scheduled_facts(engine, now: datetime.datetime) -> list[dict]:
+def _upcoming_scheduled_facts(engine, now: datetime.datetime,
+                              profile_id: str | None = None) -> list[dict]:
     """Facts scheduled from today through the horizon, soonest first.
 
     Bounded and index-backed, because this runs on every session start. Returns
@@ -333,7 +334,7 @@ def _upcoming_scheduled_facts(engine, now: datetime.datetime) -> list[dict]:
             f"   {current}"
             " ORDER BY referenced_date ASC"
             f" LIMIT {_SCHEDULED_LIMIT}",
-            (engine.profile_id, start, end),
+            (profile_id or engine.profile_id, start, end),
         )
         return [
             {"fact_id": r["fact_id"], "content": r["content"],
@@ -343,6 +344,24 @@ def _upcoming_scheduled_facts(engine, now: datetime.datetime) -> list[dict]:
     except Exception as exc:
         logger.warning("scheduled-fact surface failed: %s", exc)
         return []
+
+
+def _owns_fact(db, profile_id: str, fact_id: str) -> bool:
+    return bool(db.execute(
+        "SELECT 1 AS one FROM atomic_facts WHERE fact_id = ? AND profile_id = ?",
+        (fact_id, profile_id)))
+
+
+def _soft_prompt_for(engine, profile_id: str) -> str:
+    """The behavioral soft prompt for ``profile_id`` ("" = the engine's own)."""
+    invoker = getattr(engine, "_auto_invoker", None)
+    if not profile_id:
+        getter = getattr(invoker, "_get_soft_prompt_text", None)
+        return getter() if callable(getter) else ""
+    injector = getattr(invoker, "_prompt_injector", None)
+    if injector is None:
+        return ""
+    return injector.get_injection_context(profile_id) or ""
 
 
 def register_active_tools(server, get_engine: Callable) -> None:
@@ -360,6 +379,7 @@ def register_active_tools(server, get_engine: Callable) -> None:
         max_age_days: int = 30,
         session_id: str = "",
         agent_id: str = "",
+        profile_id: str = "",
     ) -> dict:
         """Initialize session with relevant memory context.
 
@@ -382,6 +402,8 @@ def register_active_tools(server, get_engine: Callable) -> None:
                 relevance score is ≥ 0.70 (architectural decisions that remain
                 permanently relevant still surface). Default: 30.
                 Set to 0 to disable the age gate entirely.
+            profile_id: Load another profile's context (empty = the active
+                one). The active profile is not moved.
         """
         try:
             from superlocalmemory.core.answer_check_scope import skip_answer_check
@@ -389,7 +411,13 @@ def register_active_tools(server, get_engine: Callable) -> None:
             from superlocalmemory.mcp._pool_adapter import pool_recall
             from superlocalmemory.mcp._recall_metadata import forward_recall_metadata
 
+            from superlocalmemory.mcp.request_profile import requested_profile, tool_profile
+
             engine = get_engine()
+            named = requested_profile(profile_id)
+            pid, refused = tool_profile(engine, named)
+            if refused:
+                return refused
             rules = RulesEngine(config_path=state_path("config.json"))
 
             if not rules.should_recall("session_start"):
@@ -412,6 +440,8 @@ def register_active_tools(server, get_engine: Callable) -> None:
             _project_kwargs = (
                 {"prefer_project": project_path.strip()} if (project_path or "").strip() else {}
             )
+            if named:
+                _project_kwargs = {**_project_kwargs, "profile_id": named}
 
             # 2-tier recall (industry pattern: Hindsight / Zep / Supermemory):
             # PRIMARY: full recall via daemon — five candidate producers (semantic
@@ -447,7 +477,7 @@ def register_active_tools(server, get_engine: Callable) -> None:
                 )
                 response = _sqlite_emergency_recall(
                     search_query, max_results,
-                    profile_id=engine.profile_id,
+                    profile_id=pid,
                     max_age_days=max_age_days,
                 )
                 degraded_mode = True
@@ -492,8 +522,6 @@ def register_active_tools(server, get_engine: Callable) -> None:
                 render_context,
                 sanitize_untrusted_content,
             )
-
-            pid = engine.profile_id
 
             # Merge pinned facts (Q3: Core Memory explicit pins).
             # Pinned facts surface even if the query didn't retrieve them.
@@ -577,11 +605,7 @@ def register_active_tools(server, get_engine: Callable) -> None:
             # soft prompt so it reaches the session_init context agents actually
             # consume (same engine->AutoInvoker bridge AutoRecall uses). Fail-soft.
             try:
-                _sp_getter = getattr(
-                    getattr(engine, "_auto_invoker", None),
-                    "_get_soft_prompt_text", None,
-                )
-                _soft_prompt = _sp_getter() if callable(_sp_getter) else ""
+                _soft_prompt = _soft_prompt_for(engine, named)
                 if _soft_prompt:
                     context = f"{_soft_prompt}\n\n{context}" if context else _soft_prompt
             except Exception as exc:
@@ -663,9 +687,12 @@ def register_active_tools(server, get_engine: Callable) -> None:
             effective_agent_id = agent_id.strip() or _get_agent_id()
             # Backward-compatible default for legacy close_session() callers;
             # native hosts must pass their explicit id when sessions overlap.
-            engine._last_session_id = effective_session_id
+            # A session opened for a named profile is not recorded here: this
+            # shared value belongs to the active profile's callers.
+            if not named:
+                engine._last_session_id = effective_session_id
 
-            _upcoming_events = _upcoming_scheduled_facts(engine, _now)
+            _upcoming_events = _upcoming_scheduled_facts(engine, _now, pid)
 
             return {
                 "success": True,
@@ -724,6 +751,7 @@ def register_active_tools(server, get_engine: Callable) -> None:
         content: str,
         agent_id: str | None = None,
         session_id: str = "",
+        profile_id: str = "",
     ) -> dict:
         """Observe conversation content for automatic memory capture.
 
@@ -737,10 +765,21 @@ def register_active_tools(server, get_engine: Callable) -> None:
         v3.4.39: ``agent_id`` now defaults to the ``SLM_AGENT_ID`` env var
         (set by each MCP client's config) so observations carry proper
         per-agent attribution.
+
+        ``profile_id`` captures into another profile (empty = the active one);
+        such a capture is saved ``personal`` to that profile, never shared,
+        and the active profile is not moved.
         """
         if agent_id is None:
             agent_id = _get_agent_id()
         try:
+            from superlocalmemory.mcp.request_profile import requested_profile, tool_profile
+
+            named = requested_profile(profile_id)
+            if named:
+                _pid, refused = tool_profile(get_engine(), named)
+                if refused:
+                    return {"captured": False, **refused}
             from superlocalmemory.hooks.auto_capture import AutoCapture
             from superlocalmemory.hooks.rules_engine import RulesEngine
             from superlocalmemory.mcp._pool_adapter import pool_store
@@ -778,12 +817,16 @@ def register_active_tools(server, get_engine: Callable) -> None:
             effective_session_id = resolve_session_id(
                 session_id, agent_id=agent_id, allow_agent_fallback=False,
             )
+            capture_meta = {"agent_id": agent_id, "session_id": effective_session_id,
+                            "source": "auto-observe"}
+            if named:
+                # DaemonPoolProxy.store sends both as /remember request fields.
+                capture_meta = {**capture_meta, "profile_id": named, "scope": "personal"}
             stored = await asyncio.to_thread(
                 auto.capture,
                 content,
                 category=decision.category,
-                metadata={"agent_id": agent_id, "session_id": effective_session_id,
-                          "source": "auto-observe"},
+                metadata=capture_meta,
             )
 
             if stored:
@@ -814,6 +857,7 @@ def register_active_tools(server, get_engine: Callable) -> None:
         fact_id: str,
         feedback: str = "relevant",
         query: str = "",
+        profile_id: str = "",
     ) -> dict:
         """Report whether a recalled memory was useful.
 
@@ -822,10 +866,16 @@ def register_active_tools(server, get_engine: Callable) -> None:
 
         This feedback trains the adaptive ranker to return better results
         over time. The more feedback, the smarter the system gets.
+        ``profile_id``: the profile the memory was recalled from (empty = the
+        active one).
         """
         try:
+            from superlocalmemory.mcp.request_profile import tool_profile
+
             engine = get_engine()
-            pid = engine.profile_id
+            pid, refused = tool_profile(engine, profile_id)
+            if refused:
+                return refused
 
             if feedback not in ("relevant", "irrelevant", "partial"):
                 return {
@@ -926,7 +976,7 @@ def register_active_tools(server, get_engine: Callable) -> None:
 
     @server.tool()
     @admits(OperationKind.CONSOLIDATE)
-    async def close_session(session_id: str = "") -> dict:
+    async def close_session(session_id: str = "", profile_id: str = "") -> dict:
         """Close the current session and create temporal summary events.
 
         Aggregates facts from the session into per-entity temporal summaries,
@@ -934,10 +984,20 @@ def register_active_tools(server, get_engine: Callable) -> None:
 
         Args:
             session_id: Session to close. Defaults to the most recent session.
+            profile_id: The profile the session belongs to (empty = the
+                active one). The active profile is not moved.
         """
         try:
+            from superlocalmemory.mcp.request_profile import requested_profile, tool_profile
+
             engine = get_engine()
-            sid = session_id or getattr(engine, '_last_session_id', '')
+            named = requested_profile(profile_id)
+            pid, refused = tool_profile(engine, named)
+            if refused:
+                return refused
+            # The remembered last session belongs to the active profile's
+            # callers, so a named profile falls back to its own latest one.
+            sid = session_id or ("" if named else getattr(engine, '_last_session_id', ''))
             # v3.6.9 (#35): _last_session_id was never assigned — fall back to
             # querying the DB for the most recent session_id instead of silently
             # returning summary_events_created: 0.
@@ -947,8 +1007,9 @@ def register_active_tools(server, get_engine: Callable) -> None:
                     if db and hasattr(db, 'execute'):
                         rows = db.execute(
                             "SELECT session_id FROM memories "
-                            "WHERE session_id != '' ORDER BY created_at DESC LIMIT 1",
-                            ()
+                            "WHERE profile_id = ? AND session_id != '' "
+                            "ORDER BY created_at DESC LIMIT 1",
+                            (pid,)
                         )
                         if rows:
                             sid = str(rows[0][0])
@@ -960,10 +1021,11 @@ def register_active_tools(server, get_engine: Callable) -> None:
                 engine,
                 "update",
                 mutation_source="mcp-session-close",
-                profile_id=engine.profile_id,
+                profile_id=pid,
                 content_preview=sid,
             )
-            count = engine.close_session(sid)
+            count = (engine.close_session(sid, profile_id=named) if named
+                     else engine.close_session(sid))
             authorization.complete()
             return {
                 "success": True,
@@ -983,24 +1045,34 @@ def register_active_tools(server, get_engine: Callable) -> None:
     async def core_memory(
         action: str,
         fact_id: str = "",
+        profile_id: str = "",
     ) -> dict:
         """Manage the explicit Core Memory pin set (v3.4.65).
 
         - pin:   mark a fact as always-injected
         - unpin: clear the pin
         - list:  return currently pinned facts
+
+        ``profile_id``: the profile whose pins these are (empty = the active
+        one). A pin or unpin changes only a fact that profile owns.
         """
         try:
+            from superlocalmemory.mcp.request_profile import tool_profile
+
             engine = get_engine()
             db = engine.db
-            # Isolation: the tenant is ALWAYS the engine's active profile. The
-            # caller-supplied profile_id is ignored — honoring it let any MCP
-            # client read/pin another profile's facts by passing profile_id.
-            pid = engine.profile_id
+            # Isolation: the tenant is the active profile, or the profile this
+            # call names (it must exist). A fact another profile owns is "not
+            # found": before 4.1.21 a pin could reach any fact by id.
+            pid, refused = tool_profile(engine, profile_id)
+            if refused:
+                return refused
 
             if action == "pin":
                 if not fact_id:
                     return {"success": False, "error": "fact_id required for pin"}
+                if not _owns_fact(db, pid, fact_id):
+                    return {"success": False, "error": f"Memory {fact_id} not found"}
                 authorization = authorize_mcp_mutation(
                     engine,
                     "update",
@@ -1015,6 +1087,8 @@ def register_active_tools(server, get_engine: Callable) -> None:
             if action == "unpin":
                 if not fact_id:
                     return {"success": False, "error": "fact_id required for unpin"}
+                if not _owns_fact(db, pid, fact_id):
+                    return {"success": False, "error": f"Memory {fact_id} not found"}
                 authorization = authorize_mcp_mutation(
                     engine,
                     "update",

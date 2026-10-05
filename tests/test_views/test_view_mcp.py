@@ -170,27 +170,31 @@ class TestRemoteKeys:
         assert policy.tool_allowed("write", "manage_view")
         assert "read-only" in policy.denial_message("manage_view", "viewer", "read")
 
-    def test_views_are_not_routed_so_they_follow_the_keys_profile(self) -> None:
-        assert "run_view" not in binding.ROUTED_TOOLS
-        assert "manage_view" not in binding.ROUTED_TOOLS
+    def test_views_are_routed_to_the_keys_profile(self) -> None:
+        """4.1.21: a key's views are its own profile's, whatever the host uses."""
+        assert {"run_view", "manage_view"} <= binding.ROUTED_TOOLS
 
     def test_a_read_key_is_refused_manage_view_at_the_door(self) -> None:
         status, answer, stub, _ = _run("manage_view", {"action": "delete", "name": "x"},
                                        READ_KEY)
         assert answer["result"]["isError"] is True and stub.reached == []
 
-    def test_while_another_profile_is_active_a_key_sees_no_views(self) -> None:
+    def test_while_another_profile_is_active_a_key_uses_its_own_views(self) -> None:
         for principal, tool, args in ((READ_KEY, "run_view", {}),
                                       (READ_KEY, "run_view", {"name": "Work"}),
                                       (WRITE_KEY, "manage_view",
                                        {"action": "create", "name": "x", "query": "q"})):
-            _, answer, stub, _ = _run(tool, args, principal, active="secret-client")
-            assert answer["result"]["isError"] is True and stub.reached == [], tool
-            assert answer["result"]["structuredContent"]["error"] == binding.INACTIVE_DENIAL
+            _, answer, stub, runtime = _run(tool, args, principal, active="secret-client")
+            assert answer["result"]["isError"] is False, tool
+            assert stub.reached[0]["params"]["arguments"]["profile_id"] == "work", tool
+            assert stub.leases_during_call == [0]
+            assert runtime.snapshot.profile_id == "secret-client"
 
-    def test_on_its_own_profile_the_call_goes_through_under_a_lease(self) -> None:
-        _, answer, stub, _ = _run("run_view", {"name": "Work"}, READ_KEY, active="work")
-        assert answer["result"]["isError"] is False and stub.leases_during_call == [1]
+    def test_a_key_cannot_name_another_profiles_views(self) -> None:
+        _, answer, stub, _ = _run("run_view", {"name": "Work", "profile_id": "secret-client"},
+                                  READ_KEY, active="work")
+        assert answer["result"]["isError"] is True and stub.reached == []
+        assert answer["result"]["structuredContent"]["error"] == binding.PROFILE_DENIAL
 
     def test_a_profile_hidden_in_filters_is_refused(self) -> None:
         _, answer, stub, _ = _run(

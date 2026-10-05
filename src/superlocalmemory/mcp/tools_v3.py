@@ -158,15 +158,21 @@ def register_v3_tools(server, get_engine: Callable) -> None:
     # 3. health
     # ------------------------------------------------------------------
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
-    async def health() -> dict:
+    async def health(profile_id: str = "") -> dict:
         """Get system health including math layer status.
 
         Reports on Fisher-Rao, Sheaf consistency, and Langevin dynamics
         health. Also includes database integrity and component status.
+        ``profile_id`` counts another profile's memories (empty = the active
+        one).
         """
         try:
+            from superlocalmemory.mcp.request_profile import tool_profile
+
             engine = get_engine()
-            pid = engine.profile_id
+            pid, refused = tool_profile(engine, profile_id)
+            if refused:
+                return refused
 
             status: dict = {
                 "success": True,
@@ -308,6 +314,7 @@ def register_v3_tools(server, get_engine: Callable) -> None:
         include_unknown: bool = False,
         project: str = "",
         prefer_project: str = "",
+        profile_id: str = "",
     ) -> dict:
         """Recall with per-channel score breakdown.
 
@@ -323,6 +330,8 @@ def register_v3_tools(server, get_engine: Callable) -> None:
                 order explained here is the order recall returns for the same
                 arguments. A preferred memory's evidence names
                 ``same_project``; ``project_scope`` says what was applied.
+            profile_id: recall another profile (empty = the active one), as
+                ``recall`` takes it; the active profile is not moved.
         """
         try:
             import asyncio
@@ -354,10 +363,18 @@ def register_v3_tools(server, get_engine: Callable) -> None:
                     # #150: sent only when set, as recall does, so a trace of a
                     # project recall explains that recall and not another one.
                     **{k: v.strip() for k, v in (("project", project),
-                                                 ("prefer_project", prefer_project))
+                                                 ("prefer_project", prefer_project),
+                                                 ("profile_id", profile_id))
                        if (v or "").strip()},
                 )
             )
+            if ((profile_id or "").strip() and isinstance(raw, dict)
+                    and raw.get("ok") is False and raw.get("code")):
+                # For a named profile a refusal (no such profile) is an
+                # answer, never an empty recall.
+                return {"success": False, "code": raw["code"],
+                        "retryable": bool(raw.get("retryable", False)),
+                        "error": raw.get("error", "")}
             items = raw.get("results", []) if isinstance(raw, dict) else []
             results = []
             for item in items[:limit]:
