@@ -130,3 +130,32 @@ def test_erasures_of_every_profile_share_one_bounded_pass(engine) -> None:
     states = {r["state"] for n in range(3) for op in (f"erase-work-{n}", f"erase-personal-{n}")
               for r in _rows(engine, op)}
     assert states == {"erased"}
+
+
+def test_the_reconcile_action_proves_an_erasure_in_its_own_profile(engine) -> None:
+    """``slm ops`` lists every profile's unfinished erasures, so Reconcile on
+    one of "work"'s must prove it in "work", not report it as not this
+    profile's while "personal" is active."""
+    from superlocalmemory.core.ops_remediation import resolve_operation
+
+    _seed(engine, "erase-work-reconcile", OTHER, "gone-work-fact")
+
+    result = resolve_operation(engine._db.db_path, engine, "erase-work-reconcile",
+                               "force_reconcile")
+
+    assert result["success"] is True, result
+    assert {r["state"] for r in _rows(engine, "erase-work-reconcile")} == {"erased"}
+    assert engine._profile_id == ACTIVE
+
+
+def test_the_reconcile_action_still_refuses_an_erasure_it_cannot_prove(engine) -> None:
+    from superlocalmemory.core.ops_remediation import resolve_operation
+
+    fact_id = _store_in(engine, OTHER, "The work vendor contract renews on 2026-03-01.")
+    _seed(engine, "erase-work-still-stored", OTHER, fact_id)
+
+    result = resolve_operation(engine._db.db_path, engine, "erase-work-still-stored",
+                               "force_reconcile")
+
+    assert result["success"] is False and "still stored" in result["reason"], result
+    assert {r["state"] for r in _rows(engine, "erase-work-still-stored")} == {"failed"}

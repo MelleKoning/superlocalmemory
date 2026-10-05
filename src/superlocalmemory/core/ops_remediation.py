@@ -528,13 +528,32 @@ def _has_erase_obligations(db_obj: Any, operation_id: str) -> bool:
     ))
 
 
+def _erasure_profiles(db_obj: Any, operation_id: str) -> list[str]:
+    """The profiles an erasure's obligations belong to (normally exactly one)."""
+    rows = db_obj.execute(
+        "SELECT DISTINCT profile_id FROM projection_obligations "
+        "WHERE operation_id = ? AND kind = 'erase' ORDER BY profile_id",
+        (operation_id,),
+    )
+    return [dict(row)["profile_id"] for row in rows]
+
+
 def _force_reconcile_erasure(engine: Any, operation_id: str) -> dict:
-    """Re-prove an erasure now. It closes only if nothing of the memory remains."""
+    """Re-prove an erasure now. It closes only if nothing of the memory remains.
+
+    Proven in the erasure's own profile, which need not be the active one:
+    ``slm ops`` lists every profile's unfinished erasures, and the background
+    redrive re-proves them all (core/transactions/erase_redrive).
+    """
     from superlocalmemory.core.transactions.erase_redrive import (
         reconcile_erase_operation,
     )
 
-    outcome = reconcile_erase_operation(engine, operation_id)
+    outcomes = [
+        reconcile_erase_operation(engine, operation_id, profile_id=profile_id)
+        for profile_id in _erasure_profiles(engine._db, operation_id)
+    ] or [reconcile_erase_operation(engine, operation_id)]
+    outcome = next((o for o in outcomes if not o.closed), outcomes[0])
     if outcome.closed:
         return {
             "success": True,
