@@ -1059,6 +1059,11 @@ def create_all_tables(conn: sqlite3.Connection) -> None:
     for ddl in V32_DDL:
         conn.executescript(ddl)
 
+    # The graph's change counter, part of the activation-cache key. After the
+    # V32 DDL: its triggers sit on association_edges and empty activation_cache.
+    from superlocalmemory.storage import graph_generation
+    conn.executescript(graph_generation.DDL)
+
     # Additive columns on tables that predate them.
     #
     # CREATE TABLE IF NOT EXISTS cannot add a column to a table that already
@@ -1094,6 +1099,12 @@ def drop_all_tables(conn: sqlite3.Connection) -> None:
     Args:
         conn: An open SQLite connection. Caller manages commit.
     """
+    # The graph counter's triggers reference V32 tables: drop them first.
+    from superlocalmemory.storage import graph_generation
+    for trigger in graph_generation.trigger_names():
+        conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+    conn.execute(f"DROP TABLE IF EXISTS {graph_generation.TABLE}")
+
     # V32 tables first (they may FK to base tables)
     from superlocalmemory.storage.schema_v32 import V32_ROLLBACK
     for sql in V32_ROLLBACK:

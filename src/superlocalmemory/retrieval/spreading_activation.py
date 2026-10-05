@@ -30,6 +30,7 @@ from superlocalmemory.retrieval.scope_policy import (
     filter_authorized_results,
 )
 from superlocalmemory.storage.database import _scope_where
+from superlocalmemory.storage.graph_generation import graph_version
 from superlocalmemory.storage.models import _new_id
 
 logger = logging.getLogger(__name__)
@@ -139,6 +140,7 @@ class SpreadingActivation:
         self._pr_profile: str = ""
         self._comm_cache: dict[str, int | None] = {}
         self._comm_profile: str = ""
+        self._graph_version_warned = False
 
     def search(
         self,
@@ -194,15 +196,24 @@ class SpreadingActivation:
             # Check cache first
             # Keyed by the seeds too: a memory saved since the entry was
             # written that now seeds this question must be walked, not hidden
-            # behind an hour-old answer.
-            query_hash = self._compute_query_hash(
+            # behind an hour-old answer. And by the graph's generation, read
+            # BEFORE the walk: a link written during or after the walk moves
+            # the generation, so the entry stored below is never read again.
+            graph = self._graph_version(
+                profile_id, cross_scope=include_global or include_shared,
+            )
+            query_hash = None if graph is None else self._compute_query_hash(
                 query,
                 profile_id,
                 include_global=include_global,
                 include_shared=include_shared,
                 seeds=seed_results,
+                graph=graph,
             )
-            cached = self._get_cached_results(query_hash, profile_id)
+            cached = (
+                None if query_hash is None
+                else self._get_cached_results(query_hash, profile_id)
+            )
             if cached:
                 # A hit is answered exactly as the propagation that stored it
                 # was: same order, same fail-closed filter, for EVERY scope.
@@ -234,10 +245,14 @@ class SpreadingActivation:
             # Cache results — DEFERRED so recall stays READ-ONLY on its hot
             # path.  This is a perf cache for FUTURE recalls, not needed to
             # return the current results.
-            from superlocalmemory.storage.deferred_writes import submit_background
-            submit_background(
-                lambda: self._cache_results(query_hash, profile_id, activations)
-            )
+            if query_hash is not None:
+                from superlocalmemory.storage.deferred_writes import (
+                    submit_background,
+                )
+                submit_background(
+                    lambda: self._cache_results(
+                        query_hash, profile_id, activations)
+                )
 
             # Return top-K sorted by activation
             results = sorted(
@@ -257,6 +272,24 @@ class SpreadingActivation:
                 profile_id, exc,
             )
             return []
+
+    def _graph_version(self, profile_id: str, *, cross_scope: bool) -> str | None:
+        """The graph generation for the cache key, or None to skip the cache.
+
+        None when the store cannot say it (no ``graph_generation`` table): an
+        entry could then be older than a link, so the cache is neither read nor
+        written and every recall walks the graph. Logged once per channel.
+        """
+        try:
+            return graph_version(self._db, profile_id, cross_scope=cross_scope)
+        except Exception as exc:
+            if not self._graph_version_warned:
+                self._graph_version_warned = True
+                logger.warning(
+                    "Spreading-activation cache off: the graph generation "
+                    "is unreadable (%s); every recall walks the graph.", exc,
+                )
+            return None
 
     def _uses_vector_seeds(self) -> bool:
         """Whether ``_seed_search`` takes the vec0 path (else the SQL scan)."""
@@ -588,6 +621,7 @@ class SpreadingActivation:
         include_global: bool = False,
         include_shared: bool = False,
         seeds: list[tuple[str, float]] | None = None,
+        graph: str | None = None,
     ) -> str:
         """Deterministic hash for cache key.
 
@@ -596,6 +630,10 @@ class SpreadingActivation:
         memory saved after a question was asked — even the best match, seeding
         first — stayed invisible to that question for the cache's full hour.
         Scores are rounded so float noise cannot defeat the cache.
+
+        ``graph`` is the graph generation (``storage.graph_generation``). The
+        activations are a function of the links too: before 4.1.21 a link that
+        changed the walk without changing the seeds stayed hidden the same way.
         """
         scope_bytes = f"|g={int(include_global)}|s={int(include_shared)}".encode()
         if include_global or include_shared:
@@ -608,6 +646,8 @@ class SpreadingActivation:
             scope_bytes += (
                 b"|path=vec" if self._uses_vector_seeds() else b"|path=sql"
             )
+        if graph is not None:
+            scope_bytes += graph.encode()
         if isinstance(query, np.ndarray):
             data = query.tobytes() + profile_id.encode() + scope_bytes
         elif isinstance(query, list):
