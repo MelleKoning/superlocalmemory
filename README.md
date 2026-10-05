@@ -18,6 +18,8 @@ In Mode A, core remember and recall make no model-provider call. Anything that s
 [![arXiv V4](https://img.shields.io/badge/arXiv-2608.08253-b31b1b)](https://arxiv.org/abs/2608.08253)
 [![arXiv V3](https://img.shields.io/badge/arXiv-2603.14588-b31b1b)](https://arxiv.org/abs/2603.14588)
 
+**[Install](https://www.superlocalmemory.com/install)** · **[Product walkthrough](https://www.superlocalmemory.com/demo)** · **[Demo video](https://www.youtube.com/watch?v=PMWW_ypsL60)** · **[CLI proof](docs/QUICK_PROOF.md)** · **[Release notes](CHANGELOG.md)**
+
 ```bash
 npm install -g superlocalmemory   # primary route (Node 18+, Python 3.12+); or: pipx install superlocalmemory
 slm setup                         # pick Mode A to keep everything on this machine
@@ -52,11 +54,17 @@ $ slm recall "which port does staging postgres use"
   1. [0.68] Staging DB moved to Postgres 17 on port 5434.
 ```
 
-Real output from a fresh Mode A install, trimmed; ids come from `slm recall --json`. Scores rank, they are not probabilities. While the embedding model loads, recall answers from keyword and time channels and says `Incomplete search`.
+Real output from a fresh Mode A install, trimmed. Scores rank; they are not probabilities. While the embedding model loads, recall says `Incomplete search`.
+
+### Watch the product walkthrough
+
+[![Watch the SuperLocalMemory demo](https://img.youtube.com/vi/PMWW_ypsL60/hqdefault.jpg)](https://www.youtube.com/watch?v=PMWW_ypsL60)
+
+Five minutes: install, setup, recall, cache and compression.
 
 ## Why SuperLocalMemory: the moats
 
-A vector store answers "what is similar". AI agent memory must also answer: is this still true, who may see it, can it be erased with proof, and does the agent actually have the answer? Each claim points to code, a doc or a paper.
+A vector store answers "what is similar". AI agent memory must also answer: is this still true, who may see it, can it be erased with proof, and does the agent actually have the answer?
 
 **1. Governed memory, not a vector store.** Roles per workspace, personal / shared / global scopes with default-deny cross-profile recall, GDPR erasure with HMAC-verifiable receipts, retention rules and a hash-chained audit log. The [V4 paper](https://arxiv.org/abs/2608.08253) measures what the governed write path costs. Code: `src/superlocalmemory/access/`, `compliance/`.
 
@@ -66,7 +74,7 @@ A vector store answers "what is similar". AI agent memory must also answer: is t
 
 **4. Memory that learns, and cannot quietly get worse.** A Thompson-sampling bandit tunes channel weights and a LightGBM ranker learns from reported outcomes. A retrained ranker is promoted only after a shadow A/B test on live recalls, and rolled back automatically if NDCG@10 drops 2% or more. Code: `learning/shadow_test.py`, `learning/model_rollback.py`.
 
-**5. Memory with a sense of time.** Every fact records when it happened and when SLM learned it: ask what was true last month (`--valid-at`) or what SLM knew before a date (`--known-as-of`). Unused memories fade and lose vector precision ([V3.3 paper](https://arxiv.org/abs/2604.04514)).
+**5. Memory with a sense of time.** Every fact records when it happened and when SLM learned it. Ask what was true last month (`--valid-at`) or what SLM knew before a date (`--known-as-of`). Unused memories fade and lose vector precision ([V3.3 paper](https://arxiv.org/abs/2604.04514)).
 
 **6. Many agents, one coordinated memory.** Every write records its agent, with Bayesian trust scores against poisoning ([V2 paper](https://arxiv.org/abs/2603.02240)). SLM-Mesh gives parallel sessions messages, locks and shared state.
 
@@ -81,13 +89,19 @@ SLM is part of Qualixar's AI Reliability Engineering work: agent memory that is 
 | Surface | What you get | Docs |
 |---|---|---|
 | Editor plugins | Claude Code, Codex, VS Code / Copilot, Antigravity, Hermes. Each ships 12 skills, 4 sub-agents and session hooks | [IDE setup](docs/ide-setup.md), [Hermes](docs/hermes.md) |
-| `slm connect <ide>` | Writes the MCP config for 12 IDEs: Antigravity, Claude Code, Claude Desktop, Codex, Continue, Cursor, Gemini CLI, JetBrains, OpenCode, VS Code / Copilot, Windsurf, Zed | [IDE setup](docs/ide-setup.md) |
+| `slm connect <ide>` | Writes the MCP config for 12 IDEs, including Cursor, Windsurf, Zed, JetBrains, Gemini CLI and Claude Desktop | [IDE setup](docs/ide-setup.md) |
 | MCP | stdio (`slm mcp`) or HTTP at `http://127.0.0.1:8765/mcp/`; profiles from 8 to 103 tools | [MCP tools](docs/mcp-tools.md) |
 | Framework adapters | LangGraph, LangChain, LlamaIndex, CrewAI, AutoGen, Semantic Kernel, Microsoft Agent Framework, Google ADK, OpenAI Agents | [Framework adapters](docs/framework-adapters.md) |
 | Python SDK and HTTP API | `MemoryEngine` in your code; the local REST API | [API reference](docs/api-reference.md) |
 | Auto-capture hooks | `slm hooks install` for Claude Code, `--agent codex` for Codex | [Auto-memory](docs/auto-memory.md) |
 
 Claude Code memory in two commands: `claude plugin marketplace add qualixar/superlocalmemory`, then `claude plugin install superlocalmemory@qualixar`.
+
+## Architecture
+
+![SuperLocalMemory capability architecture: modes, seven operating layers, Scale Engine, SLM-Mesh, delivery surfaces and opt-in adapters](docs/assets/slm-v37-capability-architecture.png)
+
+*SQLite + sqlite-vec are canonical; CozoDB and LanceDB are parity-gated projections; SLM-Mesh coordinates trusted peers rather than replicating a distributed database; connectors are opt-in.* [Architecture docs](docs/ARCHITECTURE.md).
 
 ## Everything SLM does
 
@@ -131,15 +145,15 @@ Recalled text is untrusted evidence: before it reaches a prompt, secrets are red
 | Evidence export | Checksummed JSONL bundles: `slm evidence export`, `verify`, `import` | [CLI reference](docs/cli-reference.md#data-and-evidence) |
 | Backup and restore | Cloud backup to GitHub or Google Drive, encrypted before upload. A restore point before each store update | [Cloud backup](docs/cloud-backup.md), [Restore points](docs/restore-points.md) |
 
-These are engineering features that can support a compliance program; they are not a certification.
+Engineering controls that support a compliance program, not a certification.
 
 ### Multi-agent: SLM-Mesh and bounded loops
 
-**Shared memory with attribution.** Claude Code, Codex, Cursor and Hermes share one store. Each memory records its agent (`SLM_AGENT_ID`, or `/mcp/{agent_id}` over HTTP), and the dashboard shows per-agent activity.
+**Shared memory with attribution.** Claude Code, Codex, Cursor and Hermes share one store; each memory records its agent (`SLM_AGENT_ID`) and the dashboard shows per-agent activity.
 
-**SLM-Mesh** coordinates sessions on one machine, or several machines with a shared secret: `mesh_peers`, `mesh_send`, `mesh_inbox`, `mesh_state`, `mesh_lock`, `mesh_events`, `mesh_status`, `mesh_summary`. Messages route across machines; locks and state are per machine. Mesh coordinates; it does not replicate memory. [Multi-machine](docs/multi-machine.md)
+**SLM-Mesh** coordinates sessions on one machine, or several machines with a shared secret: `mesh_peers`, `mesh_send`, `mesh_inbox`, `mesh_state`, `mesh_lock`, `mesh_events`, `mesh_status`, `mesh_summary`. Messages route across machines; locks and state are per machine. [Multi-machine](docs/multi-machine.md)
 
-**Bounded loops** end only when an independent gate passes (tests, a linter, a schema, a recall condition), never because the agent says it is done. Runs end DONE, HALT, PAUSE, KILLED or ERROR, with each lap stored under `loop:<name>`. Use `slm loop demo`, `history` and `show`, the `slm_loop_*` MCP tools or `/slm-loop`. With the separate Bounded Loops product installed, `observe_bounded_loop_evidence` stores its finished runs as read-only evidence. [CLI reference](docs/cli-reference.md#bounded-loops-v380), [Bounded Loops bridge](docs/bounded-loops-bridge.md)
+**Bounded loops** end only when an independent gate passes (tests, a linter, a schema, a recall condition), never because the agent says it is done. Runs end DONE, HALT, PAUSE, KILLED or ERROR, with each lap stored under `loop:<name>`. Run `slm loop demo`, the `slm_loop_*` MCP tools or `/slm-loop`; the separate Bounded Loops product can store its finished runs here as read-only evidence. [CLI reference](docs/cli-reference.md#bounded-loops-v380), [Bounded Loops bridge](docs/bounded-loops-bridge.md)
 
 ### Answer check: Laya and Jev
 
@@ -149,7 +163,7 @@ Answer check adds a second step after ranking; choose one in **Settings → Answ
 - **Online with Jev:** TypeSafe or OpenRouter, with your own key and an explicit consent box. Sends the question and the top 3 memories.
 - **Off.**
 
-Only one runs at a time, and nothing turns the online option on by itself. Results are never hidden: recall returns them with `abstained` and `abstention_reason`, and your agent decides. A repeat question gets the same verdict. The **Answer Check** tab shows verdicts, timing against the 3-second recall ceiling and the "I don't have that" rate; it never stores questions or memory text. [Answer check](docs/answer-check.md)
+Only one runs at a time and the online option never turns itself on. Results are never hidden: recall marks them `abstained` and your agent decides. A repeat question gets the same verdict. The **Answer Check** tab shows verdicts, timing against the 3-second recall ceiling and the "I don't have that" rate; it never stores questions or memory text. [Answer check](docs/answer-check.md)
 
 ### Context optimisation: cache and compression
 
@@ -165,7 +179,7 @@ All of it fails open. [Optimize](docs/optimize-overview.md), [Proxy setup](docs/
 
 ### Remote access and teams
 
-`slm remote` serves memory to other computers over TLS only. Each client gets one named key, bound to one profile, read-only or read-write; `slm remote keys revoke <name>` applies on the next request. Remote callers must authenticate to read, and never see this computer's paths, account or environment. [Remote access](docs/distributed-deployment.md#remote-access-over-tls-4120), [Deployment tiers](docs/deployment-tiers.md)
+`slm remote` serves memory to other computers over TLS only. Each client gets one named key, bound to one profile, read-only or read-write; `slm remote keys revoke <name>` applies on the next request. Remote callers authenticate to read and never see this computer's paths or account. [Remote access](docs/distributed-deployment.md#remote-access-over-tls-4120), [Deployment tiers](docs/deployment-tiers.md)
 
 ### Scale and operations
 
@@ -205,7 +219,7 @@ What leaves your machine, and when:
 | Encrypted backup files | You connect GitHub or Google Drive backup. Files are encrypted before upload |
 | Mesh messages | You configure SLM-Mesh peers |
 
-Model downloads send no memory content. Credentials in memory text are redacted on every outbound path, and a provider's key goes only to that provider. Outbound requests never follow redirects, and forwarded-for headers count only from a proxy you name. See [Security policy](SECURITY.md) and [encryption at rest](docs/SECURITY-encryption-at-rest.md).
+Model downloads send no memory content. Credentials in memory text are redacted on every outbound path. Outbound requests never follow redirects, and forwarded-for headers count only from a proxy you name. See [Security policy](SECURITY.md) and [encryption at rest](docs/SECURITY-encryption-at-rest.md).
 
 ## Benchmarks (V3)
 
