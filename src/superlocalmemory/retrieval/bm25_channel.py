@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 from rank_bm25 import BM25Plus
 
 from superlocalmemory.storage.database import _scope_where
+from superlocalmemory.storage.fts_terms import version_match_phrases, version_terms
 
 if TYPE_CHECKING:
     from superlocalmemory.storage.database import DatabaseManager
@@ -52,6 +53,16 @@ def tokenize(text: str) -> list[str]:
     """
     tokens = _TOKEN_RE.findall(text.lower())
     return [t for t in tokens if t not in _STOPWORDS]
+
+
+def _with_version_terms(tokens: list[str], text: str) -> list[str]:
+    """``tokens`` plus each whole dotted version in ``text``, for the in-memory index.
+
+    Only the in-memory corpus and query get these. The persisted
+    ``bm25_tokens`` rows stay exactly ``tokenize(content)``, so no stored row
+    changes meaning and nothing on disk needs rewriting.
+    """
+    return [*tokens, *version_terms(text)]
 
 
 #: Saturation constant for the BM25 -> [0,1) transform. Chosen from measurement,
@@ -188,7 +199,7 @@ class BM25Channel:
                     continue
                 tokens = tokenize(fact.content)
                 if tokens:
-                    self._corpus.append(tokens)
+                    self._corpus.append(_with_version_terms(tokens, fact.content))
                     self._fact_ids.append(fact.fact_id)
                     self._fact_id_set.add(fact.fact_id)
                     self._raw_texts.append(fact.content)
@@ -209,10 +220,11 @@ class BM25Channel:
             for fid, tokens in token_map.items():
                 if fid in self._fact_id_set:
                     continue
-                self._corpus.append(tokens)
+                raw_text = fact_content_map.get(fid, "")
+                self._corpus.append(_with_version_terms(tokens, raw_text))
                 self._fact_ids.append(fid)
                 self._fact_id_set.add(fid)
-                self._raw_texts.append(fact_content_map.get(fid, ""))
+                self._raw_texts.append(raw_text)
 
         self._dirty = True
         self._loaded_profiles.add(profile_id)
@@ -234,7 +246,7 @@ class BM25Channel:
         if not tokens:
             return
 
-        self._corpus.append(tokens)
+        self._corpus.append(_with_version_terms(tokens, content))
         self._fact_ids.append(fact_id)
         self._fact_id_set.add(fact_id)
         if not hasattr(self, '_raw_texts'):
@@ -269,11 +281,21 @@ class BM25Channel:
         if include_shared is None:
             include_shared = bool(getattr(self, "include_shared", False))
         tokens = tokenize(query)
-        if not tokens:
+        versions = version_terms(query)
+        phrases = version_match_phrases(query)
+        if not tokens and not phrases:
             return []
         # Quote each token so query punctuation can't break FTS5 MATCH syntax;
-        # OR-join for high recall (any token may match).
-        match_expr = " OR ".join('"' + t.replace('"', "") + '"' for t in tokens)
+        # OR-join for high recall (any token may match). A dotted version is
+        # also offered whole, as a phrase (see storage.fts_terms): its single
+        # numbers are too common to tell one release from another.
+        match_expr = " OR ".join([
+            *('"' + t.replace('"', "") + '"' for t in tokens), *phrases,
+        ])
+        # Rows that only matched a version phrase inside a longer number lose
+        # that share below and can fall out of the top_k, so fetch room for
+        # the rows that move up into their place.
+        fetch_k = int(top_k) * 2 if versions else int(top_k)
         where, params = _scope_where(
             profile_id,
             include_global=include_global,
@@ -285,20 +307,22 @@ class BM25Channel:
         # slots; the shared clause keeps the definition in one place.
         archive_clause = self._db.visible_fact_clause("af")
         sql = (
-            "SELECT af.fact_id AS fact_id, bm25(atomic_facts_fts) AS rank "
+            "SELECT af.fact_id AS fact_id, bm25(atomic_facts_fts) AS rank, "
+            "af.rowid AS fts_rowid, af.content AS content "
             "FROM atomic_facts_fts "
             "JOIN atomic_facts af ON af.rowid = atomic_facts_fts.rowid "
             f"WHERE atomic_facts_fts MATCH ? AND {where}{archive_clause} "
             "ORDER BY rank LIMIT ?"
         )
-        rows = self._db.execute(sql, (match_expr, *params, int(top_k)))
+        rows = [dict(r) for r in self._db.execute(sql, (match_expr, *params, fetch_k))]
         out: list[tuple[str, float]] = []
-        for r in rows:
-            d = dict(r)
+        for d in rows:
             fid = d.get("fact_id")
             if not fid:
                 continue
             out.append((fid, -float(d.get("rank", 0.0))))
+        if versions:
+            out = self._without_partial_version_credit(out, rows, versions, phrases)
 
         # T3b: UNION fact-expansion (alias / paraphrase) matches so a query for
         # a synonym matches a fact that only used the canonical term. Additive —
@@ -324,6 +348,50 @@ class BM25Channel:
 
         out.sort(key=lambda x: (-x[1], x[0]))
         return out[:top_k]
+
+    def _without_partial_version_credit(
+        self,
+        scored: list[tuple[str, float]],
+        rows: list[dict],
+        versions: tuple[str, ...],
+        phrases: tuple[str, ...],
+    ) -> list[tuple[str, float]]:
+        """Take the version phrase's BM25 share back from rows that are not that version.
+
+        The phrase ``"4.1.20"`` also matches inside ``4.1.20.1``, ``3.4.1.20``
+        or a date written ``4/1/20``. Those rows should keep what their single
+        numbers earned, a partial match, and lose only the phrase's share.
+
+        FTS5's ``bm25()`` is a sum over the query's phrases, and each phrase's
+        IDF is counted over the whole table whatever else the statement
+        filters on. So scoring the version phrases alone, for just these rows,
+        yields exactly the share the combined query gave them, and subtracting
+        it leaves exactly the score the rest of the query earned. A row that
+        does not match a phrase is not returned and keeps its score.
+        """
+        wanted = set(versions)
+        partial_rowids = [
+            int(d["fts_rowid"]) for d in rows
+            if d.get("fact_id") and d.get("fts_rowid") is not None
+            and not wanted.intersection(version_terms(d.get("content") or ""))
+        ]
+        if not partial_rowids:
+            return scored
+        placeholders = ",".join("?" * len(partial_rowids))
+        share_sql = (
+            "SELECT af.fact_id AS fact_id, bm25(atomic_facts_fts) AS rank "
+            "FROM atomic_facts_fts "
+            "JOIN atomic_facts af ON af.rowid = atomic_facts_fts.rowid "
+            "WHERE atomic_facts_fts MATCH ? "
+            f"AND atomic_facts_fts.rowid IN ({placeholders})"
+        )
+        share = {
+            dict(r)["fact_id"]: -float(dict(r).get("rank", 0.0))
+            for r in self._db.execute(
+                share_sql, (" OR ".join(phrases), *partial_rowids),
+            )
+        }
+        return [(fid, max(0.0, s - share.get(fid, 0.0))) for fid, s in scored]
 
     def search(
         self,
@@ -373,7 +441,7 @@ class BM25Channel:
         if not self._corpus:
             return []
 
-        query_tokens = tokenize(query)
+        query_tokens = _with_version_terms(tokenize(query), query)
         if not query_tokens:
             return []
 

@@ -81,11 +81,16 @@ def _sqlite_emergency_recall(
         # that confuse the parser (/, :, ., etc), and join with OR for
         # broadest matching. Wrap each term in quotes to escape any
         # remaining special-meaning chars.
+        from superlocalmemory.storage.fts_terms import version_match_phrases
+
         tokens = re.findall(r"[A-Za-z0-9]+", query)
         tokens = [t for t in tokens if len(t) >= 2]
-        if not tokens:
+        # Dotted versions are matched whole too (storage.fts_terms); the
+        # length filter above would otherwise drop the "4" and "1" of 4.1.20.
+        terms = [*(f'"{t}"' for t in tokens), *version_match_phrases(query)]
+        if not terms:
             return PoolRecallResponse()
-        safe_query = " OR ".join(f'"{t}"' for t in tokens)
+        safe_query = " OR ".join(terms)
         age_clause = (
             f"AND f.created_at >= datetime('now', '-{int(max_age_days)} days') "
             if max_age_days > 0 else ""
