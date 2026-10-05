@@ -62,6 +62,35 @@ async def _runtime_profile(get_engine: Callable, explicit: str = "") -> str:
         logger.debug("daemon profile resolution failed: %s", exc)
     return str(get_engine().profile_id)
 
+
+async def _call_profile(get_engine: Callable, profile_id: object) -> tuple[str, dict | None]:
+    """``(profile, refusal)``: the named profile (it must exist), else the active one.
+
+    The active profile is resolved exactly as before ``profile_id`` existed
+    (:func:`_runtime_profile`), so an unnamed call is unchanged.
+    """
+    from superlocalmemory.mcp.request_profile import tool_profile
+
+    if profile_id is None or (isinstance(profile_id, str) and not profile_id.strip()):
+        return await _runtime_profile(get_engine), None
+    return tool_profile(get_engine(), profile_id)
+
+
+def _routed_daemon_call(method: str, path: str, body: dict | None = None) -> dict | None:
+    """A daemon mutation for a named profile.
+
+    The daemon's 404 for a profile that does not exist (or a memory that is
+    not in it) is an answer, returned with its code so the caller does not
+    retry it; ``None`` still means the daemon did not answer.
+    """
+    from superlocalmemory.cli.daemon import DaemonNotFound, daemon_request
+
+    try:
+        return daemon_request(method, path, body, preserve_not_found=True)
+    except DaemonNotFound as exc:
+        return {"success": False, "code": exc.code, "retryable": False,
+                "error": exc.message}
+
 def _emit_event(event_type: str, payload: dict | None = None,
                 source_agent: str = "mcp_client") -> None:
     """Emit an event to the EventBus (best-effort, never raises)."""
@@ -880,8 +909,12 @@ def register_core_tools(server, get_engine: Callable) -> None:
             return {"success": False, "error": str(exc)}
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
-    async def get_status() -> dict:
-        """Get memory system status: fact count, entity count, mode, profile, db size."""
+    async def get_status(profile_id: str = "") -> dict:
+        """Get memory system status: fact count, entity count, mode, profile, db size.
+
+        ``profile_id`` reports another profile (empty = the active one); the
+        counts are then that profile's, read from the store.
+        """
         try:
             # Same source the HTTP surface reads, imported here rather than at
             # module scope: that module costs ~260ms and MCP starts over stdio.
@@ -894,8 +927,12 @@ def register_core_tools(server, get_engine: Callable) -> None:
                 daemon_request,
                 is_daemon_running,
             )
+            from superlocalmemory.mcp.request_profile import tool_profile
 
-            if await asyncio.to_thread(is_daemon_running):
+            # The daemon's /status describes its active profile, so a named
+            # profile is counted from the store below instead.
+            named = not isinstance(profile_id, str) or bool(profile_id.strip())
+            if not named and await asyncio.to_thread(is_daemon_running):
                 daemon_status = await asyncio.to_thread(
                     daemon_request,
                     "GET",
@@ -923,7 +960,9 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     }
 
             engine = get_engine()
-            pid = engine.profile_id
+            pid, refused = tool_profile(engine, profile_id)
+            if refused:
+                return refused
             fact_count = engine._db.get_fact_count(pid)
             entities = engine._db.execute(
                 "SELECT COUNT(*) AS c FROM canonical_entities WHERE profile_id = ?",
@@ -1134,11 +1173,16 @@ def register_core_tools(server, get_engine: Callable) -> None:
             return {"success": False, "error": str(exc)}
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
-    async def memory_used() -> dict:
-        """Get memory usage breakdown by fact type and lifecycle state."""
+    async def memory_used(profile_id: str = "") -> dict:
+        """Get memory usage breakdown by fact type and lifecycle state.
+
+        ``profile_id`` reports another profile (empty = the active one).
+        """
         try:
             engine = get_engine()
-            pid = await _runtime_profile(get_engine)
+            pid, refused = await _call_profile(get_engine, profile_id)
+            if refused:
+                return refused
             facts = engine._db.get_all_facts(pid)
             by_type: dict[str, int] = {}
             by_lifecycle: dict[str, int] = {}
@@ -1159,11 +1203,17 @@ def register_core_tools(server, get_engine: Callable) -> None:
             return {"success": False, "error": str(exc)}
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
-    async def get_learned_patterns(pattern_type: str = "", limit: int = 20) -> dict:
-        """Get learned behavioral patterns (interests, refinements, archival habits)."""
+    async def get_learned_patterns(pattern_type: str = "", limit: int = 20,
+                                   profile_id: str = "") -> dict:
+        """Get learned behavioral patterns (interests, refinements, archival habits).
+
+        ``profile_id`` reads another profile (empty = the active one).
+        """
         try:
             engine = get_engine()
-            pid = await _runtime_profile(get_engine)
+            pid, refused = await _call_profile(get_engine, profile_id)
+            if refused:
+                return refused
             from superlocalmemory.learning.behavioral import BehavioralPatternStore
             store = BehavioralPatternStore(engine._db.db_path)
             ptype = pattern_type if pattern_type else None
@@ -1177,11 +1227,16 @@ def register_core_tools(server, get_engine: Callable) -> None:
 
     @server.tool()
     @admits(OperationKind.CORRECT)
-    async def correct_pattern(pattern_id: str, correction: str) -> dict:
-        """Correct or annotate a learned behavioral pattern to improve retrieval."""
+    async def correct_pattern(pattern_id: str, correction: str, profile_id: str = "") -> dict:
+        """Correct or annotate a learned behavioral pattern to improve retrieval.
+
+        ``profile_id`` corrects another profile's pattern (empty = the active one).
+        """
         try:
             engine = get_engine()
-            pid = await _runtime_profile(get_engine)
+            pid, refused = await _call_profile(get_engine, profile_id)
+            if refused:
+                return refused
             authorization = authorize_mcp_mutation(
                 engine,
                 "update",
@@ -1192,11 +1247,13 @@ def register_core_tools(server, get_engine: Callable) -> None:
             )
             from superlocalmemory.learning.behavioral import BehavioralPatternStore
             store = BehavioralPatternStore(engine._db.db_path)
-            store.record(
+            # The store's write is record_pattern; the pattern key travels in
+            # its data. (Before 4.1.21 this called a method the store does not
+            # have, so every correction failed.)
+            store.record_pattern(
                 pid,
                 pattern_type="correction",
-                pattern_key=pattern_id,
-                metadata={"correction": correction},
+                data={"pattern_key": pattern_id, "correction": correction},
             )
             authorization.complete()
             return {"success": True, "pattern_id": pattern_id}
@@ -1206,7 +1263,8 @@ def register_core_tools(server, get_engine: Callable) -> None:
 
     @server.tool(annotations=ToolAnnotations(destructiveHint=True))
     @admits(OperationKind.FORGET)
-    async def delete_memory(fact_id: str, agent_id: str = "mcp_client") -> dict:
+    async def delete_memory(fact_id: str, agent_id: str = "mcp_client",
+                            profile_id: str = "") -> dict:
         """Delete a specific memory by exact fact ID.
 
         Security note: This is a destructive operation. All deletions are
@@ -1216,6 +1274,8 @@ def register_core_tools(server, get_engine: Callable) -> None:
         Args:
             fact_id: Exact fact ID to delete (from recall or list_recent results).
             agent_id: Identifier of the calling agent (logged for audit).
+            profile_id: The profile the memory belongs to (empty = the active
+                one). The active profile is not moved.
         """
         # v3.6.10: resolve "mcp_client" sentinel → URL path (HTTP) or env var (stdio)
         if agent_id == "mcp_client":
@@ -1229,12 +1289,23 @@ def register_core_tools(server, get_engine: Callable) -> None:
                 daemon_request,
                 is_daemon_running,
             )
+            from superlocalmemory.mcp.request_profile import (
+                requested_profile,
+                routing_needs_daemon_error,
+            )
 
+            named = requested_profile(profile_id)
             if await asyncio.to_thread(is_daemon_running):
                 path = "/api/memories/" + urllib.parse.quote(fact_id, safe="")
-                result = await asyncio.to_thread(
-                    daemon_request, "DELETE", path,
-                )
+                if named:
+                    path += "?profile_id=" + urllib.parse.quote(named, safe="")
+                    result = await asyncio.to_thread(_routed_daemon_call, "DELETE", path)
+                else:
+                    result = await asyncio.to_thread(
+                        daemon_request, "DELETE", path,
+                    )
+                if named and isinstance(result, dict) and result.get("code"):
+                    return result
                 if isinstance(result, dict) and result.get("success"):
                     _emit_event("memory.deleted", {
                         "fact_id": fact_id,
@@ -1249,6 +1320,9 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     "retryable": True,
                     "error": "resident daemon rejected the delete operation",
                 }
+            if named:
+                # The local worker serves only the active profile.
+                return routing_needs_daemon_error()
 
             from superlocalmemory.core.worker_pool import WorkerPool
             pool = WorkerPool.shared()
@@ -1275,11 +1349,13 @@ def register_core_tools(server, get_engine: Callable) -> None:
     @admits(OperationKind.CORRECT)
     async def update_memory(
         fact_id: str, content: str, agent_id: str = "mcp_client",
+        profile_id: str = "",
     ) -> dict:
         """Update the content of a specific memory by exact fact ID.
 
         Security note: All updates are logged with the calling agent_id.
-        The fact_id must belong to the active profile.
+        The fact_id must belong to the profile updated: ``profile_id``, or the
+        active profile when it is empty. The active profile is not moved.
 
         Args:
             fact_id: Exact fact ID to update.
@@ -1300,15 +1376,28 @@ def register_core_tools(server, get_engine: Callable) -> None:
                 daemon_request,
                 is_daemon_running,
             )
+            from superlocalmemory.mcp.request_profile import (
+                requested_profile,
+                routing_needs_daemon_error,
+            )
 
+            named = requested_profile(profile_id)
             if await asyncio.to_thread(is_daemon_running):
                 path = "/api/memories/" + urllib.parse.quote(fact_id, safe="")
-                result = await asyncio.to_thread(
-                    daemon_request,
-                    "PATCH",
-                    path,
-                    {"content": content.strip()},
-                )
+                if named:
+                    result = await asyncio.to_thread(
+                        _routed_daemon_call, "PATCH", path,
+                        {"content": content.strip(), "profile_id": named},
+                    )
+                else:
+                    result = await asyncio.to_thread(
+                        daemon_request,
+                        "PATCH",
+                        path,
+                        {"content": content.strip()},
+                    )
+                if named and isinstance(result, dict) and result.get("code"):
+                    return result
                 if isinstance(result, dict) and result.get("success"):
                     return {
                         "success": True,
@@ -1322,6 +1411,9 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     "retryable": True,
                     "error": "resident daemon rejected the update operation",
                 }
+            if named:
+                # The local worker serves only the active profile.
+                return routing_needs_daemon_error()
 
             from superlocalmemory.core.worker_pool import WorkerPool
             pool = WorkerPool.shared()

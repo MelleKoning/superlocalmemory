@@ -20,8 +20,12 @@ Reads (list, show, run) need READ on the workspace — the same permission as
 recall — and are listed as sensitive reads in ``server/read_gates.py``.
 Writes need a credential this product issued (``require_write_actor``) and
 WRITE on the workspace, so a viewer can run views but not change them. Every
-call is scoped to the active profile; nothing here takes a profile from the
-caller.
+call is scoped to the active profile, except ``run``, which takes an optional
+``profile_id``: that profile's view is run against that profile's memories,
+READ is checked on THAT profile before its existence is revealed, and the
+active profile is not moved. (The MCP ``run_view`` tool uses it for a remote
+key bound to another profile; listing and editing views there read the store
+directly.)
 
 RUNNING IS RECALL
 -----------------
@@ -163,13 +167,37 @@ def show_view(request: Request, name: _Name):
         return _internal_error()
 
 
+def _run_profile(request: Request, profile_id: str) -> str:
+    """The profile a run serves: the named one (READ on it, then it must
+    exist), else the active one."""
+    from superlocalmemory.server.rbac_enforce import require_permission
+    from superlocalmemory.server.routed_profile import RoutedProfileError, routed_profile_id
+    from superlocalmemory.server.routes.helpers import get_engine_lazy
+    from superlocalmemory.server.routes.memories import _UnknownRoutedProfile
+
+    try:
+        named = routed_profile_id(profile_id)
+    except RoutedProfileError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+    if named is None:
+        return _read_gate(request)
+    require_permission(request, Permission.READ, profile=named)
+    engine = get_engine_lazy(request.app.state)
+    if engine is None:
+        raise HTTPException(503, detail="The memory engine is starting; try again shortly.")
+    if not engine._db.execute("SELECT 1 AS one FROM profiles WHERE profile_id = ?", (named,)):
+        raise _UnknownRoutedProfile(named)
+    return named
+
+
 #: Where a view was run from, for the Answer Check history. A label only: it
 #: changes nothing about the recall, so a closed set is all it needs.
 _VIA = Annotated[str, Query(pattern="^(dashboard|cli|mcp)$")]
 
 
 @router.get("/run")
-async def run_view(request: Request, name: _Name, via: _VIA = "dashboard"):
+async def run_view(request: Request, name: _Name, via: _VIA = "dashboard",
+                   profile_id: Annotated[str, Query(max_length=200)] = ""):
     """Run a view: the recall ``GET /recall`` runs, with the view's arguments.
 
     The dashboard, ``slm view run`` and the MCP ``run_view`` tool all land here,
@@ -177,7 +205,15 @@ async def run_view(request: Request, name: _Name, via: _VIA = "dashboard"):
     function ``/recall`` calls — so a view gives the same answer on every
     surface, keyword fallback included.
     """
-    profile = _read_gate(request)
+    from superlocalmemory.server.routes.memories import (
+        _UnknownRoutedProfile,
+        _unknown_profile_response,
+    )
+
+    try:
+        profile = _run_profile(request, profile_id)
+    except _UnknownRoutedProfile as exc:
+        return _unknown_profile_response(exc.profile_id)
     try:
         view = _store().get(profile, name)
     except ViewError as exc:

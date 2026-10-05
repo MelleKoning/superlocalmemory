@@ -90,6 +90,15 @@ def _gate_recall_kwargs(recall: Callable) -> dict:
     return {"answer_check": REQUEST_NO_REORDER} if takes_it else {}
 
 
+def _loop_profile(engine: Any, profile_id: str) -> tuple[str | None, dict | None]:
+    """``(profile, refusal)`` for a loop read; ``None`` = the engine's own."""
+    from superlocalmemory.mcp.request_profile import requested_profile, tool_profile
+
+    if not requested_profile(profile_id):
+        return None, None
+    return tool_profile(engine, profile_id)
+
+
 def register_loop_tools(
     server,
     get_engine: Callable,
@@ -300,7 +309,7 @@ def register_loop_tools(
             return {"ok": False, "error": str(exc)}
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
-    async def slm_loop_history(name: str, limit: int = 20) -> dict:
+    async def slm_loop_history(name: str, limit: int = 20, profile_id: str = "") -> dict:
         """List recorded bounded-loop runs for a loop name, newest laps summarised.
 
         Reads the durable SLM-backed ledger (the same rows ``slm loop history``
@@ -309,6 +318,7 @@ def register_loop_tools(
         Args:
             name: Loop name to list runs for.
             limit: Maximum runs to return (1–200).
+            profile_id: The profile whose runs to list (empty = the active one).
         """
         try:
             name = (name or "").strip()
@@ -316,7 +326,10 @@ def register_loop_tools(
                 return {"ok": False, "error": "name is required"}
             lim = max(1, min(int(limit), 200))
             engine = get_engine()
-            ledger = engine_backed_ledger(engine)
+            pid, refused = _loop_profile(engine, profile_id)
+            if refused:
+                return {"ok": False, **refused}
+            ledger = engine_backed_ledger(engine, pid)
 
             def _collect() -> list[dict]:
                 run_ids = ledger.runs(name)[:lim]
@@ -341,7 +354,7 @@ def register_loop_tools(
             return {"ok": False, "error": str(exc)}
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
-    async def slm_loop_show(run_id: str, limit: int = 200) -> dict:
+    async def slm_loop_show(run_id: str, limit: int = 200, profile_id: str = "") -> dict:
         """Show every lap of one bounded-loop run, in order, from SLM memory.
 
         Read-only. Each lap carries the gate verdict plus the agent's recorded
@@ -350,6 +363,7 @@ def register_loop_tools(
         Args:
             run_id: Run identifier returned by ``slm_loop_run``.
             limit: Maximum laps to return (1–1000).
+            profile_id: The profile the run was recorded in (empty = the active one).
         """
         try:
             run_id = (run_id or "").strip()
@@ -357,7 +371,10 @@ def register_loop_tools(
                 return {"ok": False, "error": "run_id is required"}
             lim = max(1, min(int(limit), 1000))
             engine = get_engine()
-            ledger = engine_backed_ledger(engine)
+            pid, refused = _loop_profile(engine, profile_id)
+            if refused:
+                return {"ok": False, **refused}
+            ledger = engine_backed_ledger(engine, pid)
 
             def _collect() -> list[dict]:
                 return [

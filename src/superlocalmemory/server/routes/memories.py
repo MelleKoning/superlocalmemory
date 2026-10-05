@@ -213,6 +213,17 @@ def _unknown_profile_response(profile_id: str):
     return JSONResponse(unknown_profile_body(profile_id), status_code=404)
 
 
+def _routed_mutation_error(exc: Exception, profile: str | None, detail: str):
+    """The answer to a failed routed mutation: the routed profile was deleted
+    between the route's check and the writer's own is an unknown profile, not
+    a server error. Anything else maps as for an active-profile mutation."""
+    from superlocalmemory.core.remember_runtime import UnknownMutationProfile
+
+    if profile is not None and isinstance(exc, (UnknownMutationProfile, _UnknownRoutedProfile)):
+        return _unknown_profile_response(profile)
+    raise _canonical_mutation_error(exc, detail)
+
+
 def _routed_profile(value) -> str | None:
     """A request's ``profile_id``: None means the active profile; not text is a 422."""
     from superlocalmemory.server.routed_profile import RoutedProfileError, routed_profile_id
@@ -1278,11 +1289,20 @@ def _code_links_for_fact(fact_id: str) -> list[dict]:
 
 
 @router.delete("/api/memories/{fact_id}")
-async def delete_memory(request: Request, fact_id: str):
-    """Delete a specific memory (atomic fact) by ID."""
-    engine, _active_profile, hook_context = _authorize_memory_mutation(
-        request, "delete", fact_id, run_pre_hook=False,
-    )
+async def delete_memory(request: Request, fact_id: str, profile_id: str = ""):
+    """Delete a specific memory (atomic fact) by ID.
+
+    ``profile_id`` names the profile the memory belongs to, authorized like a
+    routed remember (role and policy on THAT profile, before its existence is
+    revealed); without it, the active profile.
+    """
+    profile = _routed_profile(profile_id)
+    try:
+        engine, target_profile, hook_context = _authorize_memory_mutation(
+            request, "delete", fact_id, run_pre_hook=False, profile=profile,
+        )
+    except _UnknownRoutedProfile as exc:
+        return _unknown_profile_response(exc.profile_id)
     try:
         from superlocalmemory.core.mutations import delete_fact_authorized
 
@@ -1292,9 +1312,10 @@ async def delete_memory(request: Request, fact_id: str):
             trusted_actor_id=hook_context["agent_id"],
             source_agent_id="dashboard",
             canonical_runtime=_mutation_runtime_or_missing_fact(
-                request, engine, _active_profile, fact_id,
+                request, engine, target_profile, fact_id,
             ),
             idempotency_key=_mutation_idempotency_key(request),
+            profile_id=target_profile,
         )
         if not result.get("ok"):
             if result.get("retryable"):
@@ -1312,7 +1333,7 @@ async def delete_memory(request: Request, fact_id: str):
     except HTTPException:
         raise
     except Exception as exc:
-        raise _canonical_mutation_error(exc, "Delete error")
+        return _routed_mutation_error(exc, profile, "Delete error")
 
 
 @router.post("/api/memories/{fact_id}/forget")
@@ -1393,18 +1414,25 @@ async def merge_memory(request: Request, fact_id: str):
 
 @router.patch("/api/memories/{fact_id}", status_code=202)
 async def edit_memory(request: Request, fact_id: str):
-    """Propose an immutable, review-required correction for one memory."""
+    """Propose an immutable, review-required correction for one memory.
+
+    A ``profile_id`` in the body names the profile the memory belongs to,
+    authorized like a routed remember; without it, the active profile.
+    """
+    profile = None
     try:
         body = await request.json()
         new_content = (body.get("content") or "").strip()
         if not new_content:
             raise HTTPException(status_code=400, detail="content is required")
-        engine, _active_profile, hook_context = _authorize_memory_mutation(
+        profile = _routed_profile(body.get("profile_id"))
+        engine, target_profile, hook_context = _authorize_memory_mutation(
             request,
             "update",
             fact_id,
             content_preview=new_content,
             run_pre_hook=False,
+            profile=profile,
         )
         from superlocalmemory.core.mutations import update_fact_authorized
 
@@ -1416,6 +1444,7 @@ async def edit_memory(request: Request, fact_id: str):
             source_agent_id="dashboard",
             canonical_runtime=_canonical_mutation_runtime(request),
             idempotency_key=_mutation_idempotency_key(request),
+            profile_id=target_profile,
         )
         if not result.get("ok"):
             raise HTTPException(status_code=404, detail="Memory not found")
@@ -1434,7 +1463,7 @@ async def edit_memory(request: Request, fact_id: str):
     except HTTPException:
         raise
     except Exception as exc:
-        raise _canonical_mutation_error(exc, "Edit error")
+        return _routed_mutation_error(exc, profile, "Edit error")
 
 
 @router.post("/api/corrections/{case_id}/{action}")

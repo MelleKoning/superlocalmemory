@@ -26,6 +26,16 @@ from superlocalmemory.storage.read_connection import ReadConnectionFactory
 
 logger = logging.getLogger(__name__)
 
+def _skill_profile(engine, profile_id: str) -> tuple[str, dict | None]:
+    """The named profile (it must exist), else the active one ("default"
+    when there is no engine, as before)."""
+    from superlocalmemory.mcp.request_profile import requested_profile, tool_profile
+
+    if engine is None or not requested_profile(profile_id):
+        return (engine.profile_id if engine else "default"), None
+    return tool_profile(engine, profile_id)
+
+
 def register_evolution_tools(server, get_engine: Callable) -> None:
     """Register evolution MCP tools for skill evolution intelligence."""
 
@@ -133,6 +143,7 @@ def register_evolution_tools(server, get_engine: Callable) -> None:
     async def skill_health(
         skill_name: str = "",
         include_history: bool = False,
+        profile_id: str = "",
     ) -> dict:
         """Get health metrics for a skill or all skills.
 
@@ -143,10 +154,13 @@ def register_evolution_tools(server, get_engine: Callable) -> None:
         Args:
             skill_name: Specific skill name (empty = all skills)
             include_history: Include recent tool event history per skill
+            profile_id: The profile to read (empty = the active one)
         """
         try:
             engine = get_engine()
-            profile_id = engine.profile_id if engine else "default"
+            profile_id, refused = _skill_profile(engine, profile_id)
+            if refused:
+                return {"skills": [], "skill_count": 0, **refused}
             db_path = state_path("memory.db")
             conn = ReadConnectionFactory(db_path).open()
 
@@ -263,6 +277,7 @@ def register_evolution_tools(server, get_engine: Callable) -> None:
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
     async def skill_lineage(
         skill_name: str = "",
+        profile_id: str = "",
     ) -> dict:
         """Get evolution lineage for a skill.
 
@@ -271,10 +286,13 @@ def register_evolution_tools(server, get_engine: Callable) -> None:
 
         Args:
             skill_name: Specific skill name (empty = all skills)
+            profile_id: The profile to read (empty = the active one)
         """
         try:
             engine = get_engine()
-            profile_id = engine.profile_id if engine else "default"
+            profile_id, refused = _skill_profile(engine, profile_id)
+            if refused:
+                return {"lineage": [], "lineage_count": 0, "tree": {}, **refused}
             db_path = state_path("memory.db")
             conn = ReadConnectionFactory(db_path).open()
 
