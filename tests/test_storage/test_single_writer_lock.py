@@ -266,14 +266,20 @@ N_ADAPTER_OPS_PER_THREAD = 30
 N_USER_OPS = 20
 
 
-def test_realistic_concurrent_writes(tmp_path: Path) -> None:
+def test_realistic_concurrent_writes(tmp_path: Path, caplog) -> None:
     """Zero 'database is locked' errors under realistic concurrent write load.
 
     Asserts:
       1. No thread encounters a SQLITE_BUSY / 'database is locked' error.
       2. All N_USER_OPS user-store writes complete.
-      3. Total wall-clock time for the user-store sequence is < 2 s.
+      3. DatabaseManager's busy-retry loop never fires: the writers are
+         serialised, not retried. This used to be inferred from the run
+         taking under 2 s, which measured the disk instead: a Windows runner
+         commits slowly enough to take 2.7 s with no contention at all.
     """
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="superlocalmemory.storage.database")
     from superlocalmemory.hooks.adapter_base import sync_log_record, path_sha256
 
     db_path = _fresh_db(tmp_path)
@@ -385,9 +391,10 @@ def test_realistic_concurrent_writes(tmp_path: Path) -> None:
         f"Only {len(user_store_times)}/{N_USER_OPS} user-store ops completed "
         f"(user_thread may have hung or been killed)."
     )
-    # Wall-clock: {N_USER_OPS} × 5 ms sleep + overhead must be well under 2 s.
-    assert total_user_time < 2.0, (
-        f"User-store sequence took {total_user_time:.2f}s — expected < 2.0s. "
-        f"This suggests contention still exists between adapter threads and "
-        f"the user-store thread (DatabaseManager retry loop is firing)."
+    # The retry loop logs each busy retry before it backs off (0.1 s and up).
+    retries = [r.getMessage() for r in caplog.records if "DB busy" in r.getMessage()]
+    assert not retries, (
+        f"DatabaseManager retried {len(retries)} busy writes in "
+        f"{total_user_time:.2f}s: the adapter threads and the user-store thread "
+        f"still contend. First: {retries[0]}"
     )
