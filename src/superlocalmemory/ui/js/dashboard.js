@@ -408,7 +408,8 @@ async function loadDashboard() {
         clearPaneError(PANE_ID, true);
 
         setTextById('dashboard-mode',     'Mode ' + data.mode.toUpperCase());
-        setTextById('dashboard-mode-desc', data.mode_name + (data.provider !== 'none' ? ' — ' + data.provider : ''));
+        // #112: the mode's own wording; the provider has its own row below.
+        setTextById('dashboard-mode-desc', data.mode_tagline || data.mode_name);
         setTextById('dashboard-memory-count', data.fact_count || data.memory_count || '0');
         setTextById('dashboard-provider', data.provider === 'none' ? 'None' : data.provider);
         setTextById('dashboard-model',    data.model || '');

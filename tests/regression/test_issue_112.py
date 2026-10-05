@@ -214,3 +214,24 @@ class TestModeWordingIsVendorNeutral:
 
         text = _HELP_EPILOG.lower()
         assert "own endpoint" in text or "custom endpoint" in text
+
+
+class TestDashboardDescribesTheModeNotTheVendor:
+    """The dashboard's System panel showed "Smart Local — ollama": the mode
+    named after a vendor, on the one surface #112's rewording missed."""
+
+    def test_dashboard_payload_carries_the_mode_tagline(self) -> None:
+        import inspect
+
+        from superlocalmemory.server.routes import v3_api
+
+        source = inspect.getsource(v3_api)
+        assert '"mode_tagline": mode_tagline(config.mode)' in source
+
+    def test_dashboard_script_shows_the_tagline_not_the_provider(self) -> None:
+        from pathlib import Path
+
+        js = (Path(__file__).resolve().parents[2] / "src" / "superlocalmemory"
+              / "ui" / "js" / "dashboard.js").read_text(encoding="utf-8")
+        line = next(l for l in js.splitlines() if "'dashboard-mode-desc'" in l)
+        assert "mode_tagline" in line and "provider" not in line

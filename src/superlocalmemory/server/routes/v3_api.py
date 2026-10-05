@@ -161,12 +161,18 @@ async def dashboard(request: Request):
             except Exception:
                 pass
 
-        from superlocalmemory.core.modes import dashboard_mode_fields, mode_short_name
+        from superlocalmemory.core.modes import (
+            dashboard_mode_fields,
+            mode_short_name,
+            mode_tagline,
+        )
 
         # Mode record is the single source of truth for locality claims (F-03).
         payload = {
             "mode": config.mode.value,
             "mode_name": mode_short_name(config.mode),
+            # #112: what the mode gives you, in the one wording every surface uses.
+            "mode_tagline": mode_tagline(config.mode),
             "provider": config.llm.provider or "none",
             "model": config.llm.model or "",
             "memory_count": memory_count,
