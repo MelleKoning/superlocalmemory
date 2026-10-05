@@ -90,12 +90,14 @@ def _is_embedding_worker_alive() -> bool:
         if not pid_file.exists():
             return False
         pid = int(pid_file.read_text(encoding="utf-8").strip())
-        os.kill(pid, 0)  # Signal 0 = check if alive
+    except (ValueError, OSError):
+        pid = 0  # PID file unreadable or invalid: treat as stale
+    from superlocalmemory.core.platform_utils import is_pid_alive
+
+    if is_pid_alive(pid):
         return True
-    except (ValueError, OSError, ProcessLookupError):
-        # PID file invalid or process dead — clean up stale file
-        _embedding_pid_file().unlink(missing_ok=True)
-        return False
+    _embedding_pid_file().unlink(missing_ok=True)  # stale file
+    return False
 
 
 def register_embedding_worker_pid(pid: int) -> None:

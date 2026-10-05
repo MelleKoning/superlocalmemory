@@ -65,14 +65,8 @@ def _is_pid_alive(pid: int) -> bool:
         import psutil
         return psutil.pid_exists(pid)
     except ImportError:
-        try:
-            os.kill(pid, 0)
-            return True
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            # Process exists but we lack permission to signal it — treat as alive.
-            return True
+        from superlocalmemory.core.platform_utils import is_pid_alive
+        return is_pid_alive(pid)  # one owned by another user counts as alive
 
 
 def _pid_create_time(pid: int) -> float | None:

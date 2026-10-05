@@ -142,6 +142,9 @@ def test_a_stale_pid_file_naming_another_accounts_process_is_not_adopted(
         def uids(self):
             return psutil._common.puids(4242424, 4242424, 4242424)
 
+        def username(self):  # what Windows, with no uid, compares
+            return "OTHER-PC\\someone-else"
+
     monkeypatch.setattr(psutil, "Process", _OtherAccountsDaemon)
     assert cli_daemon._verified_legacy_health() is None
     assert not cli_daemon.is_daemon_running()

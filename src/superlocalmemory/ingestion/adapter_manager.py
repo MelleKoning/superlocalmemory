@@ -78,8 +78,8 @@ def _is_running(name: str) -> tuple[bool, int | None]:
             import psutil
             return psutil.pid_exists(pid), pid
         except ImportError:
-            os.kill(pid, 0)
-            return True, pid
+            from superlocalmemory.core.platform_utils import is_pid_alive
+            return is_pid_alive(pid), pid
     except (ValueError, ProcessLookupError, PermissionError):
         pf.unlink(missing_ok=True)
         return False, None

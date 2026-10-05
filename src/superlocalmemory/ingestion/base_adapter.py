@@ -75,9 +75,8 @@ class BaseAdapter:
                     logger.info("Parent daemon died, adapter exiting")
                     break
             except ImportError:
-                try:
-                    os.kill(self._parent_pid, 0)
-                except (ProcessLookupError, PermissionError):
+                from superlocalmemory.core.platform_utils import is_pid_alive
+                if not is_pid_alive(self._parent_pid):
                     logger.info("Parent daemon died, adapter exiting")
                     break
 

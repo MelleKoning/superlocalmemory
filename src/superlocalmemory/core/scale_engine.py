@@ -751,15 +751,16 @@ class ScaleEngineManager:
         try:
             owner = json.loads(lock_path.read_text(encoding="utf-8"))
             pid = owner.get("pid")
-            if not isinstance(pid, int) or pid <= 0:
-                return False
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            lock_path.unlink(missing_ok=True)
-            return True
         except (OSError, ValueError, json.JSONDecodeError):
             return False
-        return False
+        if not isinstance(pid, int) or pid <= 0:
+            return False
+        from superlocalmemory.core.platform_utils import is_pid_alive
+
+        if is_pid_alive(pid):
+            return False
+        lock_path.unlink(missing_ok=True)
+        return True
 
     def recover_interrupted_promotion(self) -> str | None:
         """Recover a durable promotion journal before opening projection paths."""

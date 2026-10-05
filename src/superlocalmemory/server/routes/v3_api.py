@@ -2688,13 +2688,11 @@ async def process_health(request: Request):
         }
 
         # Check parent process
+        from superlocalmemory.core.platform_utils import is_pid_alive
+
         try:
-            _os.kill(_os.getppid(), 0)
-            processes["parent"]["status"] = "running"
-        except ProcessLookupError:
-            processes["parent"]["status"] = "dead"
-        except PermissionError:
-            processes["parent"]["status"] = "running"
+            alive = is_pid_alive(_os.getppid())
+            processes["parent"]["status"] = "running" if alive else "dead"
         except OSError:
             processes["parent"]["status"] = "unknown"
 
@@ -3003,11 +3001,10 @@ async def v33_overview(request: Request, profile: str = ""):
         # Process health
         try:
             import os as _os
-            _os.kill(_os.getppid(), 0)
-            overview["process_health"] = {"healthy": True}
-        except ProcessLookupError:
-            overview["process_health"] = {"healthy": False}
-        except (PermissionError, OSError):
+
+            from superlocalmemory.core.platform_utils import is_pid_alive
+            overview["process_health"] = {"healthy": is_pid_alive(_os.getppid())}
+        except OSError:
             overview["process_health"] = {"healthy": True}
 
         conn.close()

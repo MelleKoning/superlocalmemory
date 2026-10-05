@@ -203,10 +203,11 @@ def _foreign_live_daemon(memory_db: Path) -> "int | None":
         pid = int(pid_file.read_text(encoding="utf-8").strip() or 0)
         if pid <= 0 or pid == os.getpid():
             return None
-        os.kill(pid, 0)          # signal 0 tests liveness without touching it
-        return pid
     except (OSError, ValueError):
         return None
+    from superlocalmemory.core.platform_utils import is_pid_alive
+
+    return pid if is_pid_alive(pid) else None
 
 
 def _downgrade_hold_active(data_root: Path) -> bool:

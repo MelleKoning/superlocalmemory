@@ -20,6 +20,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# Everything here drives the POSIX reaper (ps, signals, parent PIDs). On Windows
+# process_reaper.py defines no-op stubs instead, by design; their contract is
+# checked on every platform in test_process_reaper_windows_stubs.py.
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32", reason="the process reaper is POSIX-only; Windows has no-op stubs",
+)
+
 
 # ---------------------------------------------------------------------------
 # T1: test_detect_orphan_process

@@ -49,11 +49,14 @@ def _is_reranker_worker_alive() -> bool:
         if not pid_file.exists():
             return False
         pid = int(pid_file.read_text(encoding="utf-8").strip())
-        os.kill(pid, 0)
+    except (ValueError, OSError):
+        pid = 0  # PID file unreadable or invalid: treat as stale
+    from superlocalmemory.core.platform_utils import is_pid_alive
+
+    if is_pid_alive(pid):
         return True
-    except (ValueError, OSError, ProcessLookupError):
-        _reranker_pid_file().unlink(missing_ok=True)
-        return False
+    _reranker_pid_file().unlink(missing_ok=True)
+    return False
 
 # Track all live reranker instances for atexit cleanup
 _live_rerankers: set[weakref.ref] = set()

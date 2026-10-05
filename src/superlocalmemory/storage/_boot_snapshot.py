@@ -175,13 +175,9 @@ def lease_holder(memory_db: Path) -> int | None:
         return None
     if pid <= 0 or pid == os.getpid():
         return None
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return None
-    except OSError:
-        return pid    # alive, owned by someone else
-    return pid
+    from superlocalmemory.core.platform_utils import is_pid_alive
+
+    return pid if is_pid_alive(pid) else None  # alive includes another owner
 
 
 def still_on_disk(copy: BootCopy) -> bool:
