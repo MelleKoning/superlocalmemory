@@ -153,22 +153,35 @@ class TestEnforceReadScope:
 # ---------------------------------------------------------------------------
 
 class TestTrancheCEnterpriseRecallDenied:
-    """In enterprise mode, anonymous caller must be denied for recall/search."""
+    """In enterprise mode, anonymous caller must be denied by the REAL
+    recall tool — not a hand-built stand-in that merely shares the same
+    OperationKind. A stand-in only proves @admits works in general; it
+    says nothing about whether `recall` itself actually carries it.
+    """
 
-    def _enterprise_fake_result(self, tmp_path, monkeypatch) -> dict:
+    def _capture_real_recall(self, tmp_path, monkeypatch):
         monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path))
         _write_config(tmp_path, '[deployment]\nmode = "enterprise"\nrequire_login = true\n')
 
-        from superlocalmemory.core.admission import admits
-        from superlocalmemory.core.operation_request import OperationKind
+        from superlocalmemory.mcp.tools_core import register_core_tools
 
-        @admits(OperationKind.RECALL)
-        async def fake_recall(query: str) -> dict:
-            return {"success": True, "results": []}
+        registered: dict = {}
 
-        return asyncio.run(fake_recall("test query"))
+        def capturing_tool(*_args, **_kwargs):
+            def decorator(fn):
+                registered[fn.__name__] = fn
+                return fn
+            return decorator
+
+        mock_server = MagicMock()
+        mock_server.tool.side_effect = capturing_tool
+        register_core_tools(mock_server, _mock_get_engine())
+        recall = registered.get("recall")
+        assert recall is not None, "recall was not registered by register_core_tools"
+        return recall
 
     def test_recall_enterprise_anonymous_denied(self, tmp_path, monkeypatch):
-        result = self._enterprise_fake_result(tmp_path, monkeypatch)
+        recall = self._capture_real_recall(tmp_path, monkeypatch)
+        result = asyncio.run(recall(query="test query"))
         assert result.get("success") is False
         assert result.get("error") == "not_authorized"

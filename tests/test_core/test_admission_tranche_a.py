@@ -156,6 +156,33 @@ class TestDestructiveMcpGated:
         mock_get_engine = MagicMock()
         register_core_tools(mock_server, mock_get_engine)
 
+    @staticmethod
+    def _capture_real_tool(tool_name: str):
+        """Register the real core tools and return the actual function
+        registered under *tool_name* (not a hand-built stand-in).
+
+        A stand-in decorated with the same OperationKind only proves the
+        @admits decorator denies anonymous callers in general — it does not
+        prove THIS tool carries the decorator at all.
+        """
+        from unittest.mock import MagicMock
+        from superlocalmemory.mcp.tools_core import register_core_tools
+
+        registered: dict = {}
+
+        def capturing_tool(*_args, **_kwargs):
+            def decorator(fn):
+                registered[fn.__name__] = fn
+                return fn
+            return decorator
+
+        mock_server = MagicMock()
+        mock_server.tool.side_effect = capturing_tool
+        register_core_tools(mock_server, MagicMock())
+        tool = registered.get(tool_name)
+        assert tool is not None, f"{tool_name!r} was not registered by register_core_tools"
+        return tool
+
     def test_delete_memory_has_admits_decorator(self):
         """delete_memory must be decorated with @admits → in _GATED_MCP_TOOLS."""
         self._trigger_core_tools_registration()
@@ -178,15 +205,9 @@ class TestDestructiveMcpGated:
         _write_config(tmp_path, '[deployment]\nmode = "enterprise"\nrequire_login = true\n')
         # No importlib.reload needed: _resolve_deployment() reads SLM_DATA_DIR at call time.
 
-        from superlocalmemory.core.admission import admits
-        from superlocalmemory.core.operation_request import OperationKind
-
-        @admits(OperationKind.FORGET)
-        async def fake_delete_memory(fact_id: str) -> dict:
-            return {"success": True, "deleted": fact_id}
-
         import asyncio
-        result = asyncio.run(fake_delete_memory("fact-123"))
+        delete_memory = self._capture_real_tool("delete_memory")
+        result = asyncio.run(delete_memory(fact_id="fact-123"))
         assert result.get("success") is False
         assert result.get("error") == "not_authorized"
 
@@ -195,15 +216,9 @@ class TestDestructiveMcpGated:
         monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path))
         _write_config(tmp_path, '[deployment]\nmode = "enterprise"\nrequire_login = true\n')
 
-        from superlocalmemory.core.admission import admits
-        from superlocalmemory.core.operation_request import OperationKind
-
-        @admits(OperationKind.CORRECT)
-        async def fake_update_memory(fact_id: str, content: str) -> dict:
-            return {"success": True}
-
         import asyncio
-        result = asyncio.run(fake_update_memory("fact-123", "new content"))
+        update_memory = self._capture_real_tool("update_memory")
+        result = asyncio.run(update_memory(fact_id="fact-123", content="new content"))
         assert result.get("success") is False
         assert result.get("error") == "not_authorized"
 

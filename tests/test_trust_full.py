@@ -3,8 +3,15 @@
 # Part of SuperLocalMemory V3 | https://qualixar.com | https://varunpratap.com
 """Tests for V3 Trust System — Task 5 of V3 build.
 
-Covers TrustScorer (Beta distribution), SignalRecorder (burst detection),
-TrustGate (pre-operation checks), and TrustError.
+Covers TrustScorer (Beta distribution) via record_signal/propagate_recall_trust/
+set_trust, SignalRecorder (burst detection), TrustGate (pre-operation checks),
+and TrustError, all against a hand-rolled MockDB.
+
+update_on_confirmation / update_on_contradiction / update_on_access and the
+default-lookup paths (get_fact_trust, get_entity_trust, generic get_trust,
+empty get_all_scores) are NOT re-tested here — they are covered against a
+real DatabaseManager in tests/test_trust/test_scorer.py, which is the
+canonical copy for that behavior.
 """
 from __future__ import annotations
 import pytest
@@ -85,19 +92,17 @@ def signals(db: MockDB) -> SignalRecorder:
 
 
 # -- TrustScorer: defaults --
+#
+# Defaults for get_fact_trust / get_entity_trust / the generic get_trust are
+# covered by tests/test_trust/test_scorer.py (TestConvenience, TestGetTrust)
+# against a real DatabaseManager, which is the more faithful double. Only
+# get_agent_trust's default stays here: it is the one lookup with its own
+# code path (the is_anonymous short-circuit in scorer.py), not exercised by
+# that file.
 
 class TestScorerDefaults:
     def test_new_agent_default(self, scorer: TrustScorer) -> None:
         assert scorer.get_agent_trust("agent-1", "p1") == pytest.approx(0.5, abs=0.01)
-
-    def test_new_fact_default(self, scorer: TrustScorer) -> None:
-        assert scorer.get_fact_trust("fact-1", "p1") == pytest.approx(0.5, abs=0.01)
-
-    def test_new_entity_default(self, scorer: TrustScorer) -> None:
-        assert scorer.get_entity_trust("entity-1", "p1") == pytest.approx(0.5, abs=0.01)
-
-    def test_generic_get_trust(self, scorer: TrustScorer) -> None:
-        assert scorer.get_trust("agent", "unknown", "p1") == pytest.approx(0.5, abs=0.01)
 
 
 # -- TrustScorer: signal recording --
@@ -138,37 +143,15 @@ class TestPropagation:
 
 
 # -- TrustScorer: backward compat --
-
-class TestBackwardCompat:
-    def test_confirmation_increases(self, scorer: TrustScorer) -> None:
-        assert scorer.update_on_confirmation("entity", "e1", "default") > 0.5
-
-    def test_contradiction_decreases(self, scorer: TrustScorer) -> None:
-        assert scorer.update_on_contradiction("entity", "e2", "default") < 0.5
-
-    def test_access_small_boost(self, scorer: TrustScorer) -> None:
-        score = scorer.update_on_access("entity", "e3", "default")
-        assert 0.5 < score < 0.7
-
-    def test_repeated_confirmations_approach_one(self, scorer: TrustScorer) -> None:
-        for _ in range(100):
-            score = scorer.update_on_confirmation("entity", "e_r", "default")
-        assert score > 0.95
-
-    def test_repeated_contradictions_approach_zero(self, scorer: TrustScorer) -> None:
-        for _ in range(50):
-            score = scorer.update_on_contradiction("entity", "e_b", "default")
-        assert score < 0.05
-
-    def test_confirmation_never_exceeds_one(self, scorer: TrustScorer) -> None:
-        for _ in range(500):
-            score = scorer.update_on_confirmation("fact", "f_max", "default")
-        assert score <= 1.0
-
-    def test_contradiction_never_below_zero(self, scorer: TrustScorer) -> None:
-        for _ in range(500):
-            score = scorer.update_on_contradiction("source", "s_f", "default")
-        assert score >= 0.0
+#
+# update_on_confirmation / update_on_contradiction / update_on_access are
+# fully covered against a real DatabaseManager by tests/test_trust/
+# test_scorer.py (TestConfirmation, TestContradiction, TestAccess) — same
+# methods, same bounds (single-update direction, convergence toward 0/1,
+# clamping at the 0.0/1.0 edges). That suite is the better double (real
+# schema, not a hand-rolled MockDB) so it is the canonical copy; this class
+# duplicated it line for line and is removed rather than kept as a second
+# copy of the same assertions.
 
 
 # -- TrustScorer: set_trust --
@@ -186,11 +169,12 @@ class TestSetTrust:
 
 
 # -- TrustScorer: get_all_scores --
+#
+# The empty-profile case is covered by test_trust/test_scorer.py::
+# TestGetAllScores.test_empty_profile_returns_empty_list against a real
+# DatabaseManager — same call, same assertion, removed here as a duplicate.
 
 class TestGetAllScores:
-    def test_empty(self, scorer: TrustScorer) -> None:
-        assert scorer.get_all_scores("default") == []
-
     def test_returns_dicts_with_beta(self, scorer: TrustScorer) -> None:
         scorer.record_signal("a1", "p1", "store_success")
         scores = scorer.get_all_scores("p1")

@@ -9,7 +9,8 @@ after the fixes are applied.
 
 Test coverage:
   1. Lock-storm regression: 8 concurrent writers, zero "database is locked".
-  2. Graph-pruner batched lock: concurrent writer never waits > 100 ms per batch.
+  2. Graph-pruner batched lock: each delete strategy commits in bounded
+     batches (<= _BATCH_SIZE rows) instead of one transaction for the run.
   3. Legacy pending.db dead-letter: items transition after _MAX_RETRY_COUNT retries.
   4. M018 dead-letter table: exhausted operations moved to dead_letter_operations.
   5. EventBus resilience: emit() never raises on a briefly locked database.
@@ -21,8 +22,10 @@ import sqlite3
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -188,63 +191,57 @@ class TestGraphPrunerBatchedLock:
             f"Stats show no removal: {stats}. Pruner ran on wrong DB."
         )
 
-    def test_prune_graph_batched_lock_hold(self, tmp_path: Path) -> None:
-        """Concurrent writer never waits > 200 ms per write while prune runs.
+    def test_prune_graph_batches_deletes_into_bounded_transactions(
+        self, tmp_path: Path
+    ) -> None:
+        """Each delete strategy commits in batches of at most _BATCH_SIZE rows
+        instead of holding one transaction for the whole prune.
 
-        This is a best-effort timing test — it passes even without Fix A on
-        fast hardware.  The primary correctness test is above.  This verifies
-        the batching doesn't introduce a regression.
+        Deterministic replacement for a previous wall-clock race: it used a
+        background thread writing on a 1 ms sleep loop and asserted the
+        slowest write observed during a concurrent prune stayed under a
+        latency ceiling (relative to the measured prune duration). That
+        depended on real elapsed time and machine load for both the writer
+        and the prune, so it could pass or fail independent of whether the
+        lock was actually held longer than one batch — exactly the kind of
+        flake a stopwatch assertion produces. The claim that actually
+        matters is structural, not timed: prune_graph must open more than
+        one short transaction instead of one long one. This counts the
+        transactions `_batch_delete_by_ids` opens directly, which is exact
+        and has no timing dependency.
         """
         db = DatabaseManager(tmp_path / "memory.db")
         _init_db(db)
         _insert_orphan_edges(db, "default", 3_000)
 
-        write_latencies: list[float] = []
-        stop_event = threading.Event()
-        writer_errors: list[str] = []
+        from superlocalmemory.core import graph_pruner
 
-        def concurrent_writer() -> None:
-            idx = 0
-            while not stop_event.is_set():
-                t0 = time.perf_counter()
-                try:
-                    db.execute(
-                        "INSERT OR REPLACE INTO memories "
-                        "(memory_id, profile_id, content, created_at) "
-                        "VALUES (?,?,?,?)",
-                        (f"probe-{idx}", "default", "probe", "2026-01-01T00:00:00"),
-                    )
-                except Exception as exc:
-                    writer_errors.append(str(exc))
-                write_latencies.append(time.perf_counter() - t0)
-                idx += 1
-                time.sleep(0.001)
+        opened_transactions: list[None] = []
+        real_transaction = db.transaction
 
-        wt = threading.Thread(target=concurrent_writer, daemon=True)
-        wt.start()
-        time.sleep(0.02)
+        @contextmanager
+        def counting_transaction():
+            opened_transactions.append(None)
+            with real_transaction():
+                yield
 
-        from superlocalmemory.core.graph_pruner import prune_graph
-        prune_started = time.perf_counter()
-        prune_graph(db, "default")
-        prune_ms = (time.perf_counter() - prune_started) * 1000
+        # The inter-batch yield (time.sleep(_BATCH_YIELD_S)) is how the
+        # production code gives other writers a turn on a real clock; it is
+        # not what this test is checking, so it is patched to a no-op rather
+        # than waited out.
+        with patch.object(db, "transaction", counting_transaction), \
+             patch.object(graph_pruner.time, "sleep", lambda _seconds: None):
+            stats = graph_pruner.prune_graph(db, "default")
 
-        stop_event.set()
-        wt.join(timeout=10)
-
-        assert not writer_errors, f"Writer errors during prune: {writer_errors[:3]}"
-        assert write_latencies, "Writer never ran"
-        max_ms = max(write_latencies) * 1000
-        # The regression this guards is a prune that holds the write lock for
-        # its whole run, which stalls one write for about the whole prune. A
-        # batched prune stalls a write for one batch at most. The limit is
-        # relative so a slow disk sync on a loaded machine — which slows the
-        # prune and the write alike — cannot fail it, while an unbatched
-        # prune still does.
-        limit_ms = max(200.0, 0.5 * prune_ms)
-        assert max_ms < limit_ms, (
-            f"Write stall during prune: {max_ms:.1f} ms "
-            f"(limit {limit_ms:.1f} ms, prune took {prune_ms:.1f} ms)"
+        assert stats.get("orphans_removed", 0) == 3_000, (
+            f"expected all 3000 orphan edges removed, got stats={stats}"
+        )
+        expected_batches = -(-3_000 // graph_pruner._BATCH_SIZE)  # ceil division
+        assert len(opened_transactions) >= expected_batches, (
+            f"expected at least {expected_batches} separate transactions for "
+            f"3000 orphan edges at _BATCH_SIZE={graph_pruner._BATCH_SIZE} rows "
+            f"each, got {len(opened_transactions)} — prune_graph may be "
+            "holding a single lock for the whole run instead of batching"
         )
 
 

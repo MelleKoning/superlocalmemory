@@ -133,38 +133,27 @@ class TestModeJson:
 
 
 class TestBackwardCompatibility:
-    """Verify --json flag doesn't break existing human-readable output."""
+    """Verify --json flag doesn't break existing human-readable output.
 
-    def test_no_args_still_exits_zero(self):
-        with pytest.raises(SystemExit) as exc_info:
-            with patch("sys.argv", ["slm"]):
-                main()
-        assert exc_info.value.code == 0
+    No-args exit code, the "SuperLocalMemory V4" banner on `status`, the
+    "mode" text on `mode`, and dispatch's importability are already asserted
+    without --json in tests/test_cli_core.py (test_main_no_args,
+    test_main_status, test_main_mode_get, test_commands_dispatch_importable)
+    — duplicating those assertions here added no coverage. What's left is
+    the one thing specific to the --json feature: a human-mode invocation
+    must NOT emit JSON, and --version must still work.
+    """
 
-    def test_status_human_unchanged(self, capsys):
-        """status without --json still produces human text, not JSON."""
+    def test_status_human_output_is_not_json(self, capsys):
+        """status without --json produces human text, not a JSON envelope."""
         with patch("sys.argv", ["slm", "status"]):
             main()
         captured = capsys.readouterr()
-        assert "SuperLocalMemory V4" in captured.out
-        # Must NOT be valid JSON (it's human-readable text)
         with pytest.raises(json.JSONDecodeError):
             json.loads(captured.out)
-
-    def test_mode_human_unchanged(self, capsys):
-        """mode without --json still produces human text."""
-        with patch("sys.argv", ["slm", "mode"]):
-            main()
-        captured = capsys.readouterr()
-        assert "mode" in captured.out.lower()
 
     def test_version_flag_still_works(self):
         """--version flag still works."""
         with pytest.raises(SystemExit):
             with patch("sys.argv", ["slm", "--version"]):
                 main()
-
-    def test_dispatch_importable(self):
-        """dispatch function unchanged."""
-        from superlocalmemory.cli.commands import dispatch
-        assert callable(dispatch)
