@@ -72,20 +72,42 @@ describe('neural-glass.css — light-mode text-color reset does not swallow badg
             /\[data-bs-theme="light"\]\s*p,\s*\n\[data-bs-theme="light"\]\s*span([^,]*),/,
         );
         assert.ok(m, 'could not find the light-mode span color:inherit rule at all');
-        assert.match(m[1], /:not\(\.badge\)/,
+        assert.match(m[1], /:not\(:where\(\.badge\)\)/,
             'the light-mode span reset no longer excludes .badge — Bootstrap badges ' +
             '(Recall Lab\'s channel-status chips) will lose their own text color to ' +
             'whatever they inherit, which is frequently near-invisible against their ' +
-            'own colored background');
+            'own colored background. (Must be :not(:where(.badge)), not a bare ' +
+            ':not(.badge) — the bare form adds specificity that broke .msg.q\'s own ' +
+            'white chat-bubble text; see the comment above this rule in neural-glass.css.)');
     });
 
     it('excludes .progress-bar from the div color:inherit reset', function () {
         const m = css.match(/\[data-bs-theme="light"\]\s*div([^,]*),/);
         assert.ok(m, 'could not find the light-mode div color:inherit rule at all');
-        assert.match(m[1], /:not\(\.progress-bar\)/,
+        assert.match(m[1], /:not\(:where\(\.progress-bar\)\)/,
             'the light-mode div reset no longer excludes .progress-bar — the per-result ' +
             'Semantic/BM25/Entity/Temporal score bars in Recall Lab will lose their own ' +
             'text color the same way the badges did');
+    });
+
+    it('the exclusion costs ZERO specificity, so it never outranks a two-class component', function () {
+        // Real regression, found while verifying an unrelated dark-theme token
+        // fix: a bare `:not(.badge)` has specificity (0,1,1) per branch — ONE
+        // MORE than a plain element selector's (0,1,0) — because :not()'s
+        // specificity is that of its argument. That extra point pushed this
+        // whole rule from (0,1,1) to (0,2,1), which started beating
+        // .msg.q { color: #fff } (two classes, (0,2,0)) — a component this
+        // rule was never meant to touch. :where(.badge) has ZERO specificity
+        // by spec, so :not(:where(.badge)) keeps the overall rule at its
+        // original (0,1,1): exactly as weak as it always was for every
+        // two-class (or higher) component already relying on that, while
+        // still excluding .badge/.progress-bar functionally.
+        assert.doesNotMatch(css.slice(css.indexOf('[data-bs-theme="light"] p,'),
+                                      css.indexOf('[data-bs-theme="light"] p,') + 400),
+            /:not\((?!:where\()/,
+            'a :not(...) in this rule is not wrapped in :where(...) — it will ' +
+            'cost specificity and can silently outrank a two-class component ' +
+            '(e.g. .msg.q) that this rule was never meant to touch');
     });
 });
 

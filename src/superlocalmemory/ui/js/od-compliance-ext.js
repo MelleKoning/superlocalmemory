@@ -155,8 +155,11 @@
             '<th>Requested</th>' +
             '<th></th>' +
           '</tr></thead>' +
+          // Every "dim" in this file was .dim (--fg-3, under WCAG AA
+          // 4.5:1 here) — loading/error/empty-state text and timestamps
+          // are informational, so .muted-info (--fg-2) throughout instead.
           '<tbody id="od-receipts-body">' +
-            '<tr><td colspan="7" class="dim" style="text-align:center;padding:20px">Loading…</td></tr>' +
+            '<tr><td colspan="7" class="muted-info" style="text-align:center;padding:20px">Loading…</td></tr>' +
           '</tbody>' +
         '</table>' +
       '</div>';
@@ -166,17 +169,17 @@
   function loadReceiptsPanel() {
     var tbody = document.getElementById('od-receipts-body');
     if (!tbody) return;
-    tbody.innerHTML = '<tr><td colspan="7" class="dim" style="text-align:center;padding:16px">Loading…</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="muted-info" style="text-align:center;padding:16px">Loading…</td></tr>';
     fetch('/api/compliance/receipts?limit=50')
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
         if (!d || !d.available) {
-          tbody.innerHTML = '<tr><td colspan="7" class="dim" style="text-align:center;padding:16px">Receipts unavailable.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="7" class="muted-info" style="text-align:center;padding:16px">Receipts unavailable.</td></tr>';
           return;
         }
         var receipts = d.receipts || [];
         if (receipts.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="7" class="dim" style="text-align:center;padding:16px">No erasure receipts yet.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="7" class="muted-info" style="text-align:center;padding:16px">No erasure receipts yet.</td></tr>';
           return;
         }
         tbody.innerHTML = receipts.map(function (r) {
@@ -187,12 +190,12 @@
             '<tr>' +
               '<td class="mono dim" style="font-size:11px" title="' + esc(r.erasure_id || '') + '">' + shortId + '</td>' +
               '<td><span class="badge neutral">' + esc(r.subject_type || '') + '</span></td>' +
-              '<td class="dim" style="font-size:12px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+              '<td class="muted-info" style="font-size:12px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
                 esc(r.subject_id || '') +
               '</td>' +
               '<td><span class="badge ' + stateClass + '">' + esc(r.state || '') + '</span></td>' +
               '<td class="num dim">' + esc(String(r.fact_count || 0)) + '</td>' +
-              '<td class="dim" style="font-size:11px">' + esc(fmtTime(r.requested_at)) + '</td>' +
+              '<td class="muted-info" style="font-size:11px">' + esc(fmtTime(r.requested_at)) + '</td>' +
               '<td><button class="btn sm ghost" data-verify-id="' + esc(r.erasure_id || '') + '">Verify</button></td>' +
             '</tr>'
           );
@@ -223,7 +226,7 @@
       })
       .catch(function () {
         var tb = document.getElementById('od-receipts-body');
-        if (tb) tb.innerHTML = '<tr><td colspan="7" class="dim" style="text-align:center;padding:16px">Failed to load receipts.</td></tr>';
+        if (tb) tb.innerHTML = '<tr><td colspan="7" class="muted-info" style="text-align:center;padding:16px">Failed to load receipts.</td></tr>';
       });
   }
 
