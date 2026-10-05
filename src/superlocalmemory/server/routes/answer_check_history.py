@@ -256,13 +256,24 @@ def _parse_cursor(cursor: str | None) -> tuple[int, str] | None | JSONResponse:
     return int(match.group(1)), match.group(2)
 
 
-def _first_page(profile: str, rows: list[dict], *, status: str | None, since_ms: int,
-                limit: int, more: bool) -> tuple[list[dict], str | None]:
+def _with_unsaved(profile: str, rows: list[dict], *, cursor: tuple[int, str] | None,
+                  status: str | None, since_ms: int, limit: int,
+                  more: bool) -> tuple[list[dict], str | None]:
+    """One page of saved ``rows`` merged with the checks not saved yet.
+
+    Every page, not only the first: unsaved checks are usually the newest, but
+    one recorded in the same millisecond as saved ones sorts among them by id,
+    and more unsaved checks than one page holds run past the first page.
+    ``rows`` are the first ``limit`` saved rows after ``cursor``, so the first
+    ``limit`` of the merge are the first ``limit`` of everything after it.
+    """
     seen = {row["event_id"] for row in rows}
     merged = list(rows)
     for ev in history.unsaved_for(profile):
         if ev.event_id in seen or ev.occurred_ms < since_ms or (status and ev.status != status):
             continue
+        if cursor is not None and (ev.occurred_ms, ev.event_id) >= cursor:
+            continue  # on an earlier page
         merged.append(dict(store.event_as_row(ev)))
     merged.sort(key=lambda r: (r["occurred_ms"], r["event_id"]), reverse=True)
     page = merged[:limit]
@@ -290,9 +301,9 @@ def history_page(request: Request, limit: int = Query(50, ge=1, le=200),
     try:
         rows, next_cursor = store.read_page(_learning_db(), profile, cursor=parsed,
                                             limit=limit, status=status, since_ms=since_ms)
-        if parsed is None:
-            rows, next_cursor = _first_page(profile, rows, status=status, since_ms=since_ms,
-                                            limit=limit, more=next_cursor is not None)
+        rows, next_cursor = _with_unsaved(profile, rows, cursor=parsed, status=status,
+                                          since_ms=since_ms, limit=limit,
+                                          more=next_cursor is not None)
     except Exception as exc:  # noqa: BLE001
         logger.warning("answer-check history read failed: %s", type(exc).__name__)
         return JSONResponse({"error": _READ_FAILED}, status_code=500)
