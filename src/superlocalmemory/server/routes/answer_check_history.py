@@ -137,6 +137,14 @@ def _iso(ms: int | None) -> str | None:
         timespec="milliseconds").replace("+00:00", "Z")
 
 
+def _origin_label(stored: str) -> str:
+    """Who asked, from a closed set: a dashboard test, a saved view run (and
+    where from), or "other" for every ordinary recall."""
+    if stored == history.ORIGIN_DASHBOARD or stored in history.VIEW_ORIGINS:
+        return stored
+    return "other"
+
+
 def _item(src: Any) -> dict[str, Any]:
     """The only shape any route emits for a check. A fixed field list."""
     row = src if isinstance(src, dict) else store.event_as_row(src)
@@ -146,7 +154,7 @@ def _item(src: Any) -> dict[str, Any]:
         "outcome": outcome_key(row["status"], row["detail"], bool(row["abstained"]),
                                int(row["result_count"] or 0)),
         "status": row["status"], "detail": row["detail"], "judge": row["backend"],
-        "origin": "dashboard" if row["origin"] == history.ORIGIN_DASHBOARD else "other",
+        "origin": _origin_label(row["origin"]),
         "abstained": bool(row["abstained"]), "abstention_reason": row["abstention_reason"],
         "answer_confidence": row["answer_confidence"], "threshold": row["threshold"],
         "reordered": bool(row["reordered"]), "result_count": int(row["result_count"] or 0),

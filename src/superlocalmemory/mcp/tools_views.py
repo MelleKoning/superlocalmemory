@@ -8,8 +8,9 @@ Two tools, split by what they may change, because a remote read-only key may
 run views but never edit them (``server/remote_tool_policy.py``):
 
 * ``run_view`` (read) — no name: list the profile's views. A name: run that
-  view through the same recall the ``recall`` tool uses, and return recall's
-  answer in recall's order, with every memory's id.
+  view through the daemon's run route, the one run path the dashboard and the
+  CLI use too, and return recall's answer in recall's order, with every
+  memory's id.
 * ``manage_view`` (write) — create, rename or delete a view.
 
 Both work on the active profile and take no profile argument; over remote
@@ -29,13 +30,7 @@ from mcp.types import ToolAnnotations
 
 from superlocalmemory.core.admission import admits
 from superlocalmemory.core.operation_request import OperationKind
-from superlocalmemory.views import (
-    ViewError,
-    default_store,
-    recall_arguments,
-    shape_run,
-    view_session_id,
-)
+from superlocalmemory.views import ViewError, default_store
 
 logger = logging.getLogger("superlocalmemory.mcp.views")
 
@@ -52,21 +47,43 @@ async def _profile(get_engine: Callable[[], Any]) -> str:
     return await _runtime_profile(get_engine)
 
 
-def _recall(profile: str, view: Any) -> dict[str, Any]:
-    """The ``recall`` tool's own path: the daemon pool, the view's arguments.
+def _run_through_daemon(name: str) -> dict[str, Any]:
+    """Run a view through the daemon's own run route — the one run path.
 
-    The session id is synthetic (``view:``), so continuity ignores it: a
-    conversation's working set would bias a view's second run toward what its
-    first run showed.
+    The dashboard and ``slm view run`` call ``GET /api/v3/views/run`` too, and
+    that route hands the view to the recall core ``GET /recall`` uses, so a
+    view gives the same answer here as on every other surface.
     """
-    from superlocalmemory.mcp._daemon_proxy import choose_pool
+    from urllib.parse import quote
 
-    args = recall_arguments(view)
-    return choose_pool().recall(
-        args["query"], limit=args["limit"], session_id=view_session_id(view),
-        profile_id=profile,
-        **{k: args[k] for k in ("window", "as_of", "kind") if k in args},
+    from superlocalmemory.cli.daemon import (
+        DaemonConflict,
+        DaemonNotFound,
+        DaemonRefused,
+        DaemonUnprocessable,
+        daemon_request,
     )
+    from superlocalmemory.mcp._daemon_proxy import daemon_unavailable_error
+
+    try:
+        data = daemon_request(
+            "GET", f"/api/v3/views/run?name={quote(name, safe='')}&via=mcp",
+            timeout_seconds=60.0, preserve_conflict=True, preserve_not_found=True,
+            preserve_unprocessable=True)
+    except DaemonNotFound as exc:
+        return {"success": False, "retryable": False, "code": exc.code, "error": exc.message}
+    except DaemonUnprocessable as exc:
+        return {"success": False, "retryable": False, "code": exc.code, "error": exc.message}
+    except DaemonConflict as exc:
+        return {"success": False, "retryable": False, "code": "view_refused",
+                "error": exc.detail}
+    except DaemonRefused as exc:
+        return {"success": False, "retryable": False, "code": "not_allowed",
+                "error": str(exc)}
+    if not isinstance(data, dict):
+        return {"success": False, "retryable": True, "code": "DAEMON_UNAVAILABLE",
+                "error": daemon_unavailable_error()}
+    return data
 
 
 def register_view_tools(server: Any, get_engine: Callable[[], Any]) -> None:
@@ -91,18 +108,12 @@ def register_view_tools(server: Any, get_engine: Callable[[], Any]) -> None:
                 views = await asyncio.to_thread(store.list, profile)
                 return {"success": True, "profile": profile, "count": len(views),
                         "views": [v.to_dict() for v in views]}
-            view = await asyncio.to_thread(store.get, profile, name)
-            response = await asyncio.to_thread(_recall, profile, view)
+            return await asyncio.to_thread(_run_through_daemon, name.strip())
         except ViewError as exc:
             return _refused(exc)
         except Exception as exc:  # noqa: BLE001 — reported, never a traceback
             logger.exception("run_view failed")
             return {"success": False, "error": f"run_view failed: {exc}"}
-        if not response.get("ok", False):
-            return {"success": False, "code": response.get("code", ""),
-                    "retryable": bool(response.get("retryable", False)),
-                    "error": response.get("error", "recall failed")}
-        return shape_run(view, response)
 
     @server.tool(annotations=ToolAnnotations(destructiveHint=True))
     @admits(OperationKind.REMEMBER)

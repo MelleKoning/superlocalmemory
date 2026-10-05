@@ -64,7 +64,13 @@ RING_CAPACITY = 2048
 WAKE_AT_UNSAVED = 128
 
 ORIGIN_DASHBOARD = "dashboard"
-_ORIGINS = frozenset({"", ORIGIN_DASHBOARD})
+#: A saved view run, by the surface it was run from (4.1.21, #113). A view run
+#: is a real question, so unlike a dashboard test it counts in the summaries.
+ORIGIN_VIEW_DASHBOARD = "view-dashboard"
+ORIGIN_VIEW_CLI = "view-cli"
+ORIGIN_VIEW_MCP = "view-mcp"
+VIEW_ORIGINS = frozenset({ORIGIN_VIEW_DASHBOARD, ORIGIN_VIEW_CLI, ORIGIN_VIEW_MCP})
+_ORIGINS = frozenset({"", ORIGIN_DASHBOARD}) | VIEW_ORIGINS
 _ORIGIN: ContextVar[str] = ContextVar("slm_answer_check_origin", default="")
 
 _BACKENDS = frozenset({"", "laya", "jev"})
@@ -126,12 +132,12 @@ _ERASURE_PROFILES_MAX = 4096
 
 @contextmanager
 def origin(name: str) -> Iterator[None]:
-    """Tag recalls made inside this block (only ``"dashboard"`` is accepted).
+    """Tag recalls made inside this block: a dashboard test, or a view run.
 
     Must be entered in the thread that runs the recall: context variables do
     not follow work handed to a plain thread pool.
     """
-    if name != ORIGIN_DASHBOARD:
+    if not name or name not in _ORIGINS:
         raise ValueError(f"unknown answer-check origin {name!r}")
     token = _ORIGIN.set(name)
     try:
@@ -407,7 +413,8 @@ def _reset_for_testing() -> None:
 
 
 __all__ = [
-    "ORIGIN_DASHBOARD", "RING_CAPACITY", "VerdictEvent", "WAKE_AT_UNSAVED", "boot_id",
+    "ORIGIN_DASHBOARD", "ORIGIN_VIEW_CLI", "ORIGIN_VIEW_DASHBOARD", "ORIGIN_VIEW_MCP",
+    "RING_CAPACITY", "VIEW_ORIGINS", "VerdictEvent", "WAKE_AT_UNSAVED", "boot_id",
     "call_as_dashboard", "counters", "enable", "erasure_known_at", "event_from_response",
     "forget_profile",
     "is_enabled", "mark_failed", "mark_saved", "origin", "recent", "record_recall_verdict",

@@ -216,6 +216,28 @@ def test_summary_excludes_dashboard_by_default(app) -> None:
     assert sum(1 for i in live["items"] if i["origin"] == "dashboard") == 7
 
 
+def test_saved_view_runs_are_labelled_by_surface_and_counted(app) -> None:
+    """4.1.21 (#113): a view run says where it came from. Unlike a dashboard
+    test it is a real question, so it counts in the summary."""
+    _record(2)
+    for origin, n in (("view-dashboard", 1), ("view-cli", 2), ("view-mcp", 3)):
+        with h.origin(origin):
+            _record(n)
+    store.flush_once()
+    with h.origin("view-mcp"):
+        _record(1)                                        # unsaved, in the ring
+    client = _client(app)
+    live = client.get("/api/v3/answer-check/history/live").json()["items"]
+    page = client.get("/api/v3/answer-check/history").json()["items"]
+    for items in (live, page):
+        labels = sorted(i["origin"] for i in items)
+        assert labels.count("view-dashboard") == 1 and labels.count("view-cli") == 2
+        assert labels.count("other") == 2
+    assert sorted(i["origin"] for i in live).count("view-mcp") == 4
+    summary = client.get("/api/v3/answer-check/history/summary").json()
+    assert summary["counts"]["total"] == 9
+
+
 def test_summary_shape_and_recording(app) -> None:
     _record(25)
     _record(5, status="judged", abstained=True)

@@ -25,17 +25,18 @@ caller.
 
 RUNNING IS RECALL
 -----------------
-``run`` calls ``engine.recall`` with exactly the arguments
-``views.runner.recall_arguments`` derives — the same call the Recall Lab makes —
-and serialises the answer with the shared recall serializer. Each run is its
-recall under a synthetic ``view:`` session id, which continuity ignores, so one
-run never biases the next: the same view on an unchanged store returns the same
-memories in the same order.
+``run`` is the one run path for every surface: the dashboard calls it, ``slm
+view run`` calls it, and the MCP ``run_view`` tool calls it through the daemon.
+It hands the view's arguments to ``server.recall_core.run_recall`` — the
+function ``GET /recall`` itself calls — so ranking, the answer check, the
+budget and the keyword fallback are those of recall, and the same view on an
+unchanged store returns the same memories in the same order everywhere. The
+recall runs under a synthetic ``view:`` session, which continuity ignores, and
+is labelled in the Answer Check history by where it was run from (``via``).
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Annotated, Any
 
@@ -162,8 +163,20 @@ def show_view(request: Request, name: _Name):
         return _internal_error()
 
 
+#: Where a view was run from, for the Answer Check history. A label only: it
+#: changes nothing about the recall, so a closed set is all it needs.
+_VIA = Annotated[str, Query(pattern="^(dashboard|cli|mcp)$")]
+
+
 @router.get("/run")
-async def run_view(request: Request, name: _Name):
+async def run_view(request: Request, name: _Name, via: _VIA = "dashboard"):
+    """Run a view: the recall ``GET /recall`` runs, with the view's arguments.
+
+    The dashboard, ``slm view run`` and the MCP ``run_view`` tool all land here,
+    and from here on the path is ``server.recall_core.run_recall`` — the same
+    function ``/recall`` calls — so a view gives the same answer on every
+    surface, keyword fallback included.
+    """
     profile = _read_gate(request)
     try:
         view = _store().get(profile, name)
@@ -172,70 +185,50 @@ async def run_view(request: Request, name: _Name):
     except Exception:  # noqa: BLE001
         return _internal_error()
 
+    from superlocalmemory.server.recall_core import run_recall
     from superlocalmemory.server.routes.helpers import get_engine_lazy
+    from superlocalmemory.server.write_identity import require_http_mutation_actor
 
     engine = get_engine_lazy(request.app.state)
     if engine is None:
         raise HTTPException(503, detail="The memory engine is starting; try again shortly.")
+    # The same principal rule /recall applies: a recall records outcomes.
+    actor = require_http_mutation_actor(
+        request, getattr(request.app.state, "daemon_descriptor", None),
+        actor_kind="saved-view")
     try:
-        response = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: _recall(engine, view, profile))
-        return shape_run(view, _serialize(engine, response, view.limit, profile))
+        call = view_recall_call(engine, view, profile, actor=actor, via=via)
+        return shape_run(view, await run_recall(engine, call, app_state=request.app.state))
     except Exception:  # noqa: BLE001
         return _internal_error()
 
 
-def _recall(engine: Any, view: model.SavedView, profile: str) -> Any:
-    """``engine.recall`` with the view's arguments, outside any conversation.
+def view_recall_call(engine: Any, view: model.SavedView, profile: str, *,
+                     actor: str, via: str) -> Any:
+    """The ``RecallCall`` for a view: its arguments, resolved as ``/recall`` would.
 
     ``profile_id`` is the profile the view was read from, named explicitly so a
     profile switch between reading the view and running it cannot run one
-    profile's view against another profile's memories.
+    profile's view against another profile's memories. The session id is
+    synthetic (``view:``), so continuity ignores it.
     """
-    from superlocalmemory.core.recall_gate import begin_recall, end_recall
+    from superlocalmemory.core.admission import enforce_read_scope
+    from superlocalmemory.core.answer_check_history import ORIGIN_VIEW_DASHBOARD
     from superlocalmemory.core.recall_pipeline import resolve_hot_path_fast
     from superlocalmemory.retrieval.facets import Facets
+    from superlocalmemory.server.recall_core import RecallCall
 
     args = recall_arguments(view)
     facets = Facets.of(kind=args.get("kind"))
-    begin_recall()
-    try:
-        return engine.recall(
-            args["query"], profile_id=profile, limit=args["limit"],
-            # Synthetic, so continuity ignores it: a conversation's working set
-            # would bias a view's second run toward what its first run showed.
-            session_id=view_session_id(view),
-            agent_id="saved-view",
-            fast=resolve_hot_path_fast(None, getattr(engine, "_config", None)),
-            window=args.get("window"), as_of=args.get("as_of"),
-            **({} if facets.empty else {"facets": facets}),
-        )
-    finally:
-        end_recall()
-
-
-def _serialize(engine: Any, response: Any, limit: int, profile: str) -> dict[str, Any]:
-    from superlocalmemory.server.recall_serializer import (
-        recall_response_metadata,
-        serialize_recall_response,
+    include_global, include_shared = enforce_read_scope(None, None)
+    return RecallCall(
+        query=args["query"], limit=args["limit"], session_id=view_session_id(view),
+        agent_id=actor, fast=resolve_hot_path_fast(None, getattr(engine, "_config", None)),
+        profile_id=profile, include_global=include_global, include_shared=include_shared,
+        window=args.get("window", ""), as_of=args.get("as_of", ""),
+        facets=None if facets.empty else facets,
+        origin=f"view-{via}" if via in ("cli", "mcp") else ORIGIN_VIEW_DASHBOARD,
     )
-    from superlocalmemory.server.routes.answer_check_history import answer_check_block
-
-    retrieval = getattr(getattr(engine, "_config", None), "retrieval", None)
-    results, no_confident_match = serialize_recall_response(
-        response, limit=limit,
-        per_fact_max=getattr(retrieval, "recall_per_fact_max_chars", 2400),
-        total_max=getattr(retrieval, "recall_total_max_chars", 12000),
-    )
-    return {
-        "profile": profile,
-        "results": results,
-        "no_confident_match": no_confident_match,
-        "query_type": getattr(response, "query_type", ""),
-        "retrieval_time_ms": round(float(getattr(response, "retrieval_time_ms", 0) or 0), 1),
-        **recall_response_metadata(response),
-        "answer_check": answer_check_block(response),
-    }
 
 
 def _limits() -> dict[str, Any]:
