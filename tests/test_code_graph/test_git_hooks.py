@@ -53,9 +53,10 @@ class TestInstallHook:
         assert _HOOK_MARKER in content
         assert "#!/bin/sh" in content
 
-        # Verify executable
-        mode = hook_path.stat().st_mode
-        assert mode & stat.S_IXUSR
+        # Verify executable. Windows files have no executable bit (Git for
+        # Windows runs a hook by its #! line), so there is nothing to check.
+        if os.name != "nt":
+            assert hook_path.stat().st_mode & stat.S_IXUSR
 
     def test_install_idempotent(self, git_repo: Path) -> None:
         """Second install should detect existing and return already_present."""

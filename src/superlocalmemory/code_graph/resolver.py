@@ -184,12 +184,12 @@ class ImportResolver:
         # Try direct file
         candidate = self._repo_root / f"{parts}.py"
         if candidate.exists():
-            return str(candidate.relative_to(self._repo_root))
+            return candidate.relative_to(self._repo_root).as_posix()
 
         # Try package __init__.py
         candidate = self._repo_root / parts / "__init__.py"
         if candidate.exists():
-            return str(candidate.relative_to(self._repo_root))
+            return candidate.relative_to(self._repo_root).as_posix()
 
         # Walk up from importer directory
         importer_dir = (self._repo_root / importer_file).parent
@@ -197,10 +197,10 @@ class ImportResolver:
         while current >= self._repo_root:
             candidate = current / f"{parts}.py"
             if candidate.exists():
-                return str(candidate.relative_to(self._repo_root))
+                return candidate.relative_to(self._repo_root).as_posix()
             candidate = current / parts / "__init__.py"
             if candidate.exists():
-                return str(candidate.relative_to(self._repo_root))
+                return candidate.relative_to(self._repo_root).as_posix()
             if current == self._repo_root:
                 break
             current = current.parent
@@ -234,7 +234,7 @@ class ImportResolver:
             candidate = base.with_suffix(ext)
             if candidate.exists():
                 try:
-                    return str(candidate.relative_to(self._repo_root))
+                    return candidate.relative_to(self._repo_root).as_posix()
                 except ValueError:
                     continue
 
@@ -244,7 +244,7 @@ class ImportResolver:
                 candidate = base / f"index{ext}"
                 if candidate.exists():
                     try:
-                        return str(candidate.relative_to(self._repo_root))
+                        return candidate.relative_to(self._repo_root).as_posix()
                     except ValueError:
                         continue
 
@@ -253,7 +253,7 @@ class ImportResolver:
             candidate = Path(str(base)) / f"index{ext}"
             if candidate.exists():
                 try:
-                    return str(candidate.relative_to(self._repo_root))
+                    return candidate.relative_to(self._repo_root).as_posix()
                 except ValueError:
                     continue
 
@@ -283,11 +283,11 @@ class ImportResolver:
                     for ext in extensions:
                         candidate = self._repo_root / f"{resolved_path}{ext}"
                         if candidate.exists():
-                            return str(candidate.relative_to(self._repo_root))
+                            return candidate.relative_to(self._repo_root).as_posix()
                     # Try as-is
                     candidate = self._repo_root / resolved_path
                     if candidate.exists():
-                        return str(candidate.relative_to(self._repo_root))
+                        return candidate.relative_to(self._repo_root).as_posix()
 
         return None
 
