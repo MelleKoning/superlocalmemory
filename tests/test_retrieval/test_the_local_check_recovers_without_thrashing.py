@@ -148,14 +148,24 @@ class TestTransientFailuresBackOffAcrossCycles:
     def test_each_failed_cycle_waits_longer_before_the_next(self, fake, monkeypatch) -> None:
         monkeypatch.setenv("FAKE_MODE", "fail_transient")
         monkeypatch.setattr(mod, "_COOLDOWN_BASE_S", 0.3)
-        judge = fake()
+        # The wait each failed cycle chose, measured from the moment it failed:
+        # reading what is left when this thread next wakes would also measure
+        # how late it woke, which on a loaded CI machine is over 0.1 s.
         waits: list[float] = []
-        for _ in range(3):
-            assert _wait(lambda: not judge.loading)
-            waits.append(judge._next_attempt_at - time.monotonic())
+        note_failure = LayaSufficiencyJudge._note_failure
+
+        def timed_note_failure(judge_self) -> None:
+            failed_at = time.monotonic()
+            note_failure(judge_self)
+            waits.append(judge_self._next_attempt_at - failed_at)
+
+        monkeypatch.setattr(LayaSufficiencyJudge, "_note_failure", timed_note_failure)
+        judge = fake()
+        for cycle in range(3):
+            assert _wait(lambda: not judge.loading and len(waits) > cycle)
             assert _wait(lambda: time.monotonic() >= judge._next_attempt_at, timeout=5)
             judge.assess("q", _docs("the answer"))  # a recall starts the next cycle
-            assert _wait(lambda: judge.loading or fake.events("load") >= 3 * (len(waits) + 1))
+            assert _wait(lambda: judge.loading or fake.events("load") >= 3 * (cycle + 2))
         assert waits[1] > waits[0] + 0.1 and waits[2] > waits[1] + 0.2, waits
 
     def test_no_recall_starts_a_cycle_during_the_cooldown(self, fake, monkeypatch) -> None:

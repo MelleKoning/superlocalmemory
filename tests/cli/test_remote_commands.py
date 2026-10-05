@@ -20,6 +20,8 @@ import pytest
 from superlocalmemory.cli import remote_commands
 
 REPO = Path(__file__).resolve().parents[2]
+#: What ssl.create_default_context() adds on Python 3.13 and later.
+STRICT_FLAGS = ssl.VERIFY_X509_STRICT | ssl.VERIFY_X509_PARTIAL_CHAIN
 
 
 def _slm(tmp_path: Path, *argv: str) -> subprocess.CompletedProcess:
@@ -58,7 +60,10 @@ def test_tls_init_produces_a_chain_that_verifies_under_strict_flags() -> None:
     server, thread, port = _serve_tls(info["server_cert"], info["server_key"])
     try:
         context = ssl.create_default_context(cafile=info["ca"])
-        assert context.verify_flags & ssl.VERIFY_X509_STRICT
+        # Python 3.13+ clients verify strictly by default; 3.12 does not, so
+        # ask for the same checks explicitly and test every version alike.
+        context.verify_flags |= STRICT_FLAGS
+        assert context.verify_flags & STRICT_FLAGS == STRICT_FLAGS
         for host in ("localhost", "127.0.0.1"):
             with socket.create_connection(("127.0.0.1", port), timeout=5) as raw:
                 with context.wrap_socket(raw, server_hostname=host) as tls:

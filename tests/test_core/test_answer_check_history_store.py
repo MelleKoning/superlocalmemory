@@ -179,17 +179,26 @@ def test_writer_flushes_on_interval_and_on_wake(learning_db) -> None:
     assert time.monotonic() - started < 1.5, "woken early, not on the 2 s timer"
 
 
-def test_writer_survives_locked_db(learning_db) -> None:
+def test_writer_survives_locked_db(learning_db, monkeypatch) -> None:
+    # What is tested is surviving a lock, not how long SQLite waits for one. At
+    # the real 5 s busy wait the first failure lands at ~7 s, and SQLite counts
+    # the sleeps it asks for, not the time that passes, so on a VM whose sleeps
+    # overrun that lands past this test's 10 s deadline (most likely why it
+    # failed on every GitHub macOS runner).
+    monkeypatch.setattr(store, "BUSY_TIMEOUT_MS", 200)
+    monkeypatch.setattr(store, "CONNECT_TIMEOUT_S", 0.2)
     store.start_writer(learning_db)
     h.record_recall_verdict(make_response(), profile_id="default")
     blocker = sqlite3.connect(learning_db, isolation_level=None)
     blocker.execute("BEGIN IMMEDIATE")
-    deadline = time.monotonic() + 10   # first try at <= 2 s, gives up after the 5 s busy wait
-    while h.counters()["save_failures"] < 1 and time.monotonic() < deadline:
-        time.sleep(0.1)
-    assert h.counters()["save_failures"] >= 1
-    blocker.execute("ROLLBACK")
-    blocker.close()
+    try:
+        deadline = time.monotonic() + 10   # first try at <= 2 s, gives up after 0.2 s
+        while h.counters()["save_failures"] < 1 and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert h.counters()["save_failures"] >= 1
+    finally:
+        blocker.execute("ROLLBACK")
+        blocker.close()
     deadline = time.monotonic() + 6
     while _count(learning_db) < 1 and time.monotonic() < deadline:
         time.sleep(0.1)

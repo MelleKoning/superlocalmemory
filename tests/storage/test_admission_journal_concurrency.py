@@ -196,7 +196,10 @@ def test_deadline_refusal_is_never_written_later(tmp_path) -> None:
         started = time.monotonic()
         with pytest.raises(AdmissionJournalUnavailable, match="busy"):
             journal.prepare(_request("blocked"), _ACTOR, deadline=started + 0.05)
-        assert time.monotonic() - started < 0.05 + 0.05
+        # Ignoring the deadline means waiting out the writer's own busy wait
+        # (5 s). A fifth of that proves the deadline was kept without asking a
+        # shared CI machine to wake within 50 ms of being told to.
+        assert time.monotonic() - started < journal_writer._UNBOUNDED_BUSY_SECONDS / 5
     finally:
         blocker.rollback()
         blocker.close()
