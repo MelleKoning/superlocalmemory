@@ -190,7 +190,17 @@ class LanceDBVectorBackend:
             return -1
 
     def close(self) -> None:
-        """Release this backend's native table and connection references."""
+        """Release this backend's native table and connection references.
+
+        LanceDB keeps one process-wide background event loop that no public
+        call can stop (lancedb/lancedb#2133; a release API is proposed in
+        #4031 / PR #4032, not merged as of 2026-10-05). Its thread is a daemon
+        thread (``LanceDBBackgroundEventLoop``, daemon=True in the pinned
+        0.30.2), so it never keeps SLM from exiting; upstream #4175 (merged
+        2026-09-15, after our pin) also shuts the runtime down at interpreter
+        exit. This method drops every reference SLM holds; the
+        shared loop itself outlives it by design of the library.
+        """
         for resource in (self._table, self._db):
             close = getattr(resource, "close", None)
             if callable(close):
