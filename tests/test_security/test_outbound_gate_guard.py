@@ -53,10 +53,10 @@ REVIEWED: dict[tuple[str, str, str], tuple[int, str]] = {
             "listener (configured host:port), verified with its CA; sends no data"),
     (_S + "cli/daemon.py", "_fetch_health", "urllib.request.urlopen"):
         (1, "PROBE: GET /health on 127.0.0.1, no body; identity checked after"),
-    (_S + "cli/optimize_cmd.py", "cmd_optimize_status", "urllib.request.urlopen"):
-        (1, "PROBE: GET proxy status on loopback, no body"),
-    (_S + "cli/proxy_cmd.py", "_ensure_running", "urllib.request.urlopen"):
-        (1, "PROBE: GET proxy health on loopback, no body"),
+    # cli/optimize_cmd.py, cli/proxy_cmd.py and optimize/proxy/lifecycle.py have
+    # no entry: since 4.1.21 their loopback probes go through
+    # cli.daemon.owned_daemon_answers (the _fetch_health probe above), so a port
+    # answered by another account's SuperLocalMemory is not taken for this one.
     (_S + "cli/setup_wizard.py", "_ollama_available", "httpx.get"):
         (1, "PROBE: is a local Ollama running (GET /api/tags)"),
     (_S + "core/component_registry.py", "probe_ollama", "httpx.get"):
@@ -113,8 +113,6 @@ REVIEWED: dict[tuple[str, str, str], tuple[int, str]] = {
             "gate everywhere else."),
     (_S + "mesh/remote_sync.py", "_get_cert_sha256", "socket.create_connection"):
         (1, "MESH: reads the peer's TLS certificate for pinning; sends nothing"),
-    (_S + "optimize/proxy/lifecycle.py", "ensure_proxy_running", "urllib.request.urlopen"):
-        (1, "PROBE: GET proxy health on loopback, no body"),
     (_S + "optimize/proxy/server.py", "ProxyApp.startup", "httpx.AsyncClient"):
         (1, "PROXY: forwards the agent's own LLM requests; never opens the store"),
     (_S + "server/routes/backup.py", "github_oauth_callback", "httpx.post"):

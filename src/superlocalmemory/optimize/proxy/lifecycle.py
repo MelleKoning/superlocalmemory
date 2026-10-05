@@ -110,13 +110,12 @@ def ensure_proxy_running() -> bool:
         return False
 
     # Liveness probe — confirm the daemon is actually listening.
+    # Liveness, and that it is this account's own daemon: on a shared
+    # computer the proxy port may be another account's SuperLocalMemory.
     try:
-        import urllib.request
-        port = proxy_port()
-        url = f"http://127.0.0.1:{port}/health"
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=1) as resp:
-            return resp.status == 200
+        from superlocalmemory.cli.daemon import owned_daemon_answers
+
+        return owned_daemon_answers(proxy_port())
     except Exception:
         return False
 

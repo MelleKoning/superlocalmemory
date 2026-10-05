@@ -63,9 +63,32 @@ def _get_daemon_port() -> int:
         return 8765
 
 
+def _owned_daemon_port() -> int:
+    """The port of this account's own daemon, or exit with a plain message.
+
+    On a computer shared by several accounts the port may be answered by
+    another account's SuperLocalMemory; nothing is sent until the daemon
+    proves it is this account's.
+    """
+    port = _get_daemon_port()
+    try:
+        from superlocalmemory.cli.daemon import owned_daemon_answers
+
+        owned = owned_daemon_answers(port)
+    except Exception:
+        owned = False
+    if not owned:
+        _die(
+            f"Your SLM daemon is not answering on port {port} (if something "
+            "answers there, it is not your SuperLocalMemory).\n"
+            "Make sure the daemon is running: slm serve"
+        )
+    return port
+
+
 def _daemon_get(path: str, timeout_s: float = 10.0) -> dict | None:
     """HTTP GET to the daemon; return parsed JSON or None on failure."""
-    port = _get_daemon_port()
+    port = _owned_daemon_port()
     url = f"http://127.0.0.1:{port}{path}"
     try:
         # Only the connect+send phase is wrapped: this is where
@@ -103,7 +126,7 @@ def _daemon_get(path: str, timeout_s: float = 10.0) -> dict | None:
 
 def _daemon_post(path: str, body: dict, timeout_s: float = 10.0) -> dict | None:
     """HTTP POST to the daemon; return parsed JSON or None on failure."""
-    port = _get_daemon_port()
+    port = _owned_daemon_port()
     url = f"http://127.0.0.1:{port}{path}"
     try:
         req = _urq.Request(

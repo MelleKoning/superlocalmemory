@@ -39,14 +39,21 @@ class _FakeDaemon(BaseHTTPRequestHandler):
     seen_paths: list[str] = []
     response_body: bytes = b'{"success": true, "message": "cancelled"}'
     response_status: int = 200
+    #: The identity this account's daemon proves on /health (4.1.21: the CLI
+    #: sends nothing to a port until the daemon there proves it is this
+    #: account's own).
+    health_body: bytes = b"{}"
 
     def _answer(self) -> None:
-        type(self).seen_paths.append(self.path)
         length = int(self.headers.get("Content-Length") or 0)
         if length:
             self.rfile.read(length)
-        body = type(self).response_body
-        self.send_response(type(self).response_status)
+        if self.path == "/health":
+            body, status = type(self).health_body, 200
+        else:
+            type(self).seen_paths.append(self.path)
+            body, status = type(self).response_body, type(self).response_status
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -65,7 +72,9 @@ def _ephemeral_port() -> int:
 
 
 @pytest.fixture()
-def fake_daemon():
+def fake_daemon(tmp_path):
+    from superlocalmemory.infra.daemon_identity import build_descriptor, write_descriptor
+
     _FakeDaemon.seen_paths = []
     _FakeDaemon.response_body = b'{"success": true, "message": "cancelled"}'
     _FakeDaemon.response_status = 200
@@ -73,6 +82,13 @@ def fake_daemon():
     server.daemon_threads = True
     port = int(server.server_address[1])
     assert port != 8765, "must never bind the live daemon port"
+    data = tmp_path / "data"
+    data.mkdir(parents=True, exist_ok=True)
+    descriptor = build_descriptor(data_root=data, port=port, version="test",
+                                  pid=os.getpid(), state="ready")
+    write_descriptor(descriptor, data_root=data)
+    _FakeDaemon.health_body = json.dumps(
+        {"status": "ok", **descriptor.public_health_fields()}).encode()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:

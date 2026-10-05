@@ -215,16 +215,28 @@ def _get_daemon_port() -> int:
 
 
 def _slm_health_check(port: int) -> bool:
-    """Return True iff a healthy SLM daemon responds on *port* within 2 s."""
+    """Return True iff an SLM daemon of this account and data folder answers
+    on *port* within 2 s.
+
+    Any healthy answer used to count: on a computer shared by several
+    accounts, another account's daemon on the default port made this daemon
+    conclude its own namespace was already served, and exit.
+    """
+    import json
     import urllib.request
+
+    from superlocalmemory.infra.daemon_identity import health_is_same_account
 
     try:
         with urllib.request.urlopen(
             f"http://127.0.0.1:{port}/health", timeout=2
         ) as resp:
-            return int(resp.status) == 200
+            if int(resp.status) != 200:
+                return False
+            health = json.loads(resp.read().decode("utf-8"))
     except Exception:
         return False
+    return isinstance(health, dict) and health_is_same_account(health)
 
 
 def _boot_self_heal(data_dir: Path) -> None:
