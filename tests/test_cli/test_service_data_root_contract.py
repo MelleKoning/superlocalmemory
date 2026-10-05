@@ -1,9 +1,19 @@
-"""OS service definitions must preserve the selected SLM namespace."""
+"""OS service definitions must preserve the selected SLM namespace.
+
+The canonical data root is case-normalised (``os.path.normcase``), so on
+Windows, where paths are case-insensitive, it is written in lower case. The
+expected values below are canonicalised the same way.
+"""
 
 from __future__ import annotations
 
+import os
 import plistlib
 from pathlib import Path
+
+
+def _canonical(path: Path) -> str:
+    return os.path.normcase(str(path.resolve()))
 
 
 def test_macos_service_propagates_canonical_root_and_port(
@@ -18,7 +28,7 @@ def test_macos_service_propagates_canonical_root_and_port(
 
     payload = plistlib.loads(service_installer._macos_plist_content().encode())
 
-    assert payload["EnvironmentVariables"]["SLM_DATA_DIR"] == str(selected.resolve())
+    assert payload["EnvironmentVariables"]["SLM_DATA_DIR"] == _canonical(selected)
     assert payload["EnvironmentVariables"]["SLM_DAEMON_PORT"] == "19123"
     assert "--port=19123" in payload["ProgramArguments"]
     assert Path(payload["StandardOutPath"]).is_relative_to(selected.resolve())
@@ -36,10 +46,10 @@ def test_linux_service_propagates_canonical_root_and_port(
 
     content = service_installer._linux_service_content()
 
-    assert f'Environment="SLM_DATA_DIR={selected.resolve()}"' in content
+    assert f'Environment="SLM_DATA_DIR={_canonical(selected)}"' in content
     assert 'Environment="SLM_DAEMON_PORT=19124"' in content
     assert "--port=19124" in content
-    assert str(selected.resolve() / "logs" / "daemon.log") in content
+    assert os.path.join(_canonical(selected), "logs", "daemon.log") in content
 
 
 def test_windows_wrapper_propagates_canonical_root_and_port(
@@ -53,7 +63,7 @@ def test_windows_wrapper_propagates_canonical_root_and_port(
 
     content = service_installer._windows_vbs_content()
 
-    assert f'SLM_DATA_DIR") = "{selected.resolve()}"' in content
+    assert f'SLM_DATA_DIR") = "{_canonical(selected)}"' in content
     assert 'SLM_DAEMON_PORT") = "19125"' in content
     assert "--port=19125" in content
 
