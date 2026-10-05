@@ -830,7 +830,7 @@ def register_active_tools(server, get_engine: Callable) -> None:
             )
 
             if stored:
-                _emit_event("memory.created", {
+                _emit_event("memory.captured", {
                     "agent_id": agent_id,
                     "category": decision.category,
                     "content_preview": content[:80],
