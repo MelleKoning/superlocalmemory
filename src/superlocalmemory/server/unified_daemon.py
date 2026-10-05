@@ -6296,24 +6296,49 @@ def _reconcile_pending_projections(
     if not force and now - _last_redrive_ts < _REDRIVE_INTERVAL_S:
         return 0
     _last_redrive_ts = now
+    # Erasures first, and on their own feed: an erasure id has no ingestion
+    # row by design, so it must never reach the ingestion reconciler below.
+    done = _reconcile_pending_erasures(engine, limit=limit)
+    return done + _reconcile_pending_ingestions(engine, limit=limit)
+
+
+def _reconcile_pending_erasures(engine, *, limit: int) -> int:
+    try:
+        from superlocalmemory.core.transactions.erase_redrive import (
+            reconcile_pending_erasures,
+        )
+
+        return reconcile_pending_erasures(engine, limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("erase redrive pass skipped: %s", exc)
+        return 0
+
+
+def _reconcile_pending_ingestions(engine, *, limit: int) -> int:
     try:
         from superlocalmemory.core.transactions.concrete_owners import (
             build_transaction_service,
         )
         from superlocalmemory.core.transactions.obligations import ObligationLedger
+        from superlocalmemory.core.transactions.owners import ObligationKind
 
         db = getattr(engine, "_db", None)
         profile_id = getattr(engine, "_profile_id", None)
         if db is None or not profile_id:
             return 0
         ledger = ObligationLedger()
+        apply_kind = ObligationKind.APPLY
         with db.raw_connection() as conn:
             op_ids = set(
-                ledger.pending_operation_ids(conn, profile_id=profile_id, limit=limit)
+                ledger.pending_operation_ids(
+                    conn, profile_id=profile_id, limit=limit, kind=apply_kind,
+                )
             )
+            # Manifests describe ingestions; a finished erasure never gets one,
+            # so it must not hold a slot in this feed.
             op_ids.update(
                 ledger.operations_missing_manifest(
-                    conn, profile_id=profile_id, limit=limit,
+                    conn, profile_id=profile_id, limit=limit, kind=apply_kind,
                 )
             )
         if not op_ids:
@@ -6340,7 +6365,7 @@ def _reconcile_pending_projections(
 
 def _terminalize_orphan_operation(engine, operation_id: str) -> None:
     from superlocalmemory.core.transactions.obligations import ObligationLedger
-    from superlocalmemory.core.transactions.owners import ObligationState
+    from superlocalmemory.core.transactions.owners import ObligationKind, ObligationState
     from superlocalmemory.core.transactions.reconciler import Reconciler
     from superlocalmemory.core.transactions.service import MAX_APPLY_ATTEMPTS
 
@@ -6351,12 +6376,17 @@ def _terminalize_orphan_operation(engine, operation_id: str) -> None:
     ledger = ObligationLedger()
     with db.raw_connection() as conn:
         for obligation in ledger.fetch(conn, operation_id):
+            if obligation.kind != ObligationKind.APPLY:
+                # Erase obligations have no ingestion row by design; the
+                # erase reconciler above owns them. Failing them here as
+                # orphans is the bug this guard removes.
+                continue
             if obligation.attempts >= MAX_APPLY_ATTEMPTS:
                 continue
             ledger.mark(
                 conn, operation_id, obligation.owner, obligation.kind,
                 ObligationState.FAILED,
-                detail={"phase": "orphan", "error": "canonical record missing"},
+                detail={"phase": "orphan", "error": "ingestion record missing"},
                 bump_attempts=True,
             )
         Reconciler(ledger).reconcile(

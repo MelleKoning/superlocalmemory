@@ -55,7 +55,10 @@ const HASHED = ['od-brain.js', 'od-graph.js', 'fact-detail.js', 'od-memories.js'
                 // state lived in files a browser could keep serving from cache.
                 'dashboard.js', 'answer-check.js',
                 // 4.1.21 (#113): the Summaries and Saved views panes.
-                'od-summaries.js', 'od-views.js'];
+                'od-summaries.js', 'od-views.js',
+                // 4.1.21: the Ops Health table now explains an unconfirmed deletion;
+                // a stale copy would keep showing a bare "Exhausted" row.
+                'od-ops-health.js'];
 
 describe('cache-bust params match file content', function () {
   const html = readFileSync(join(UI, 'index.html'), 'utf8');

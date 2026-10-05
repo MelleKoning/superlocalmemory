@@ -281,6 +281,22 @@
     return { dead_letter: 'Dead-letter', degraded_manifest: 'Degraded', exhausted_obligation: 'Exhausted' }[cat] || cat;
   }
 
+  /* Error cell: the recorded reason and what happened, as `slm ops list`
+   * prints them. Long ingestion errors stay clipped (full text on hover); an
+   * erasure's reason is a short plain-English sentence and is shown whole. */
+  function _detailHtml(e) {
+    var parts = [];
+    if (e.error) {
+      var full = String(e.error);
+      var shown = (e.kind === 'erase' || full.length <= 60) ? full : full.slice(0, 60) + '…';
+      parts.push('<span style="color:#f66;font-size:12px" title="' + _esc(full) + '">' + _esc(shown) + '</span>');
+    }
+    if (e.what_happened) {
+      parts.push('<div style="font-size:12px;opacity:0.75;margin-top:2px">' + _esc(e.what_happened) + '</div>');
+    }
+    return parts.join('');
+  }
+
   function _renderTable(entries) {
     if (!entries || entries.length === 0) {
       return '<p style="opacity:0.5;font-size:13px">No failed operations.</p>';
@@ -293,13 +309,15 @@
       var cat = _esc(_catLabel(e.category));
       var profile = _esc(e.profile_id || '-');
       var attempts = e.attempts !== undefined ? e.attempts : '-';
-      var err = e.error ? ('<span style="color:#f66;font-size:12px">' + _esc(e.error.slice(0, 60)) + '</span>') : '';
+      var kind = _esc(e.kind || '-');
+      var err = _detailHtml(e);
       var btns =
         '<button class="oh-action" data-op="' + opId + '" data-act="retry" style="margin-right:4px;padding:3px 8px;border-radius:4px;border:1px solid;cursor:pointer;font-size:12px">Retry</button>' +
         '<button class="oh-action" data-op="' + opId + '" data-act="force_reconcile" style="margin-right:4px;padding:3px 8px;border-radius:4px;border:1px solid;cursor:pointer;font-size:12px">Reconcile</button>' +
         '<button class="oh-action" data-op="' + opId + '" data-act="cancel" style="padding:3px 8px;border-radius:4px;border:1px solid rgba(220,53,69,0.5);color:#f66;cursor:pointer;font-size:12px">Cancel</button>';
       return '<tr><td style="' + tdStyle + '"><code style="font-size:11px">' + opId + '</code></td>' +
         '<td style="' + tdStyle + '">' + cat + '</td>' +
+        '<td style="' + tdStyle + '">' + kind + '</td>' +
         '<td style="' + tdStyle + '">' + profile + '</td>' +
         '<td style="' + tdStyle + '">' + attempts + '</td>' +
         '<td style="' + tdStyle + '">' + err + '</td>' +
@@ -307,7 +325,7 @@
     }).join('');
 
     return '<table style="' + style + '"><thead><tr>' +
-      ['Operation ID', 'Category', 'Profile', 'Attempts', 'Error', 'Actions'].map(function (h) {
+      ['Operation ID', 'Category', 'Kind', 'Profile', 'Attempts', 'Error', 'Actions'].map(function (h) {
         return '<th style="' + thStyle + '">' + h + '</th>';
       }).join('') +
       '</tr></thead><tbody>' + rows + '</tbody></table>';

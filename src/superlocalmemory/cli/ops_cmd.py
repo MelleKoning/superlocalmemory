@@ -217,6 +217,10 @@ def _cmd_ops_list(args: Namespace) -> None:
                 f"attempts={entry.get('attempts', '?')} "
                 f"profile={entry.get('profile_id', '?')}"
             )
+            if entry.get("error"):
+                print(f"    error: {entry['error']}")
+            if entry.get("what_happened"):
+                print(f"    {entry['what_happened']}")
         print()
 
     print("Use `slm ops resolve <id> --action cancel|retry|force_reconcile` to remediate.")
