@@ -99,7 +99,7 @@ Claude Code memory in two commands: `claude plugin marketplace add qualixar/supe
 
 ## Architecture
 
-![SuperLocalMemory 4.1.21 architecture: three modes, an eight-layer local pipeline with governed admission and the answer check, governance and compliance, Scale Engine, SLM-Mesh, bounded loops, delivery surfaces and opt-in adapters](docs/assets/slm-4.1.21-architecture.svg)
+![SuperLocalMemory 4.1.21 architecture: modes, eight-layer pipeline, governance, Scale Engine, SLM-Mesh, bounded loops](docs/assets/slm-4.1.21-architecture.svg)
 
 *SQLite + sqlite-vec are canonical; CozoDB and LanceDB are parity-gated projections; SLM-Mesh coordinates trusted peers rather than replicating a distributed database; connectors are opt-in.* [Architecture docs](docs/ARCHITECTURE.md).
 
