@@ -27,7 +27,6 @@ import argparse
 import contextlib
 import json
 import os
-import pwd
 import shutil
 import subprocess
 import sys
@@ -38,9 +37,16 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Iterator
 
+try:
+    import pwd
+except ImportError:  # Windows: no account database, and no on-device check
+    pwd = None
+
 FIXTURE = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "answer_check_demo.json"
 _ENV_ROOTS = ("SLM_DATA_DIR", "SL_MEMORY_PATH", "SLM_HOME")
 NOT_READY = "Set up the on-device check first: Settings → Answer check → On this Mac."
+NOT_HERE = ("The on-device check (Laya) runs only on Apple silicon Macs, "
+            "so this demo can't run on this computer.")
 
 
 class DemoError(Exception):
@@ -69,6 +75,10 @@ def owner_roots() -> list[Path]:
     """Every place the owner's real store could be: never a demo folder."""
     from superlocalmemory.infra.data_root import canonical_data_root
 
+    if pwd is None:
+        # No account database to find the owner's real store by: refuse before
+        # any folder is made. Laya cannot run here anyway.
+        raise DemoError(3, NOT_HERE)
     account_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
     with data_root(None):
         roots = {canonical_data_root().resolve(),
