@@ -287,6 +287,27 @@ class TestFactExtractorModeLLM:
         assert facts[0].fact_type == FactType.SEMANTIC
         assert "Alice" in facts[0].entities
 
+    def test_llm_extraction_requests_content_only_answer(self) -> None:
+        # Issue #128 bug 1: structured extraction must ask Ollama for
+        # content-only answers (think=False) so thinking models don't
+        # burn the token budget on chain-of-thought and return a
+        # truncated trace with empty content.
+        response = json.dumps([
+            {"text": "Alice works at Google", "fact_type": "semantic",
+             "entities": ["Alice", "Google"], "importance": 7,
+             "confidence": 0.9},
+        ])
+        llm = self._mock_llm(response)
+        ext = FactExtractor(config=EncodingConfig(), llm=llm, mode=Mode.C)
+
+        ext.extract_facts(
+            ["Alice works at Google"], session_id="s1", session_date="2026-03-11",
+        )
+
+        # First call is the structured extraction; a later call may be the
+        # unrelated entity-reflexion pass, which does not set think=False.
+        assert llm.generate.call_args_list[0].kwargs.get("think") is False
+
     def test_llm_fallback_to_local(self) -> None:
         llm = self._mock_llm("")  # Empty response triggers fallback
         ext = FactExtractor(
