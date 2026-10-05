@@ -46,7 +46,7 @@ def test_tags_summaries_and_leaves_everything_else(db) -> None:
                        {"tags": "session-end"})
     work, _ = _save(db, "[platform] session ended 2026-10-03 09:00", profile="work")
     own, _ = _save(db, "[acme-billing] session ended 2026-10-04 19:00",
-                   {"project": "/Users/dev/chosen"})
+                   {"project": "/Users/alice/chosen"})
     vague, _ = _save(db, "[acme-billing] session ended at some point")
     plain, _ = _save(db, "A plain memory about invoices.")
 
@@ -57,7 +57,7 @@ def test_tags_summaries_and_leaves_everything_else(db) -> None:
     assert _meta(db, summary)[SOURCE_KEY] == "session_end_prefix"
     assert _meta(db, summary)["tags"] == "session-end"
     assert _meta(db, work)["project"] == "platform"            # stays in its profile
-    assert _meta(db, own)["project"] == "/Users/dev/chosen"    # never overwritten
+    assert _meta(db, own)["project"] == "/Users/alice/chosen"    # never overwritten
     assert "project" not in _meta(db, vague)
     assert "project" not in _meta(db, plain)
 

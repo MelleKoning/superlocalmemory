@@ -90,7 +90,7 @@ def _other_account_health(port: int, pid: int = 4242) -> dict:
     """What another account's daemon answers: its own owner and data folder."""
     return {
         "status": "ok", "service": DAEMON_SERVICE, "daemon_protocol": DAEMON_PROTOCOL,
-        "namespace_id": namespace_id_for("/Users/someone-else/.superlocalmemory"),
+        "namespace_id": namespace_id_for("/Users/user/.superlocalmemory"),
         "instance_id": "their-instance", "capability_fingerprint": "f" * 64,
         "owner_id": OTHER_OWNER, "pid": pid, "port": port, "state": "ready",
         "version": "4.1.21",
