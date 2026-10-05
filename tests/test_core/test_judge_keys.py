@@ -207,6 +207,7 @@ def test_clear_removes_a_symlink_without_following_it(store, tmp_path):
     assert target.read_text(encoding="utf-8") == "must survive"
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes in the file system on Windows")
 def test_load_refuses_a_non_regular_file(store, tmp_path):
     secrets_dir = tmp_path / "secrets"
     secrets_dir.mkdir(parents=True)
@@ -218,6 +219,8 @@ def test_load_refuses_a_non_regular_file(store, tmp_path):
         store.load("typesafe")
 
 
+@pytest.mark.skipif(not hasattr(os, "getuid"),
+                    reason="Windows has no POSIX file owner uid; the store skips this check there")
 def test_load_refuses_a_file_not_owned_by_current_user(store, tmp_path, monkeypatch):
     store.set_key("typesafe", VALID_KEY)
     # Simulate a different owner without needing root to chown for real.

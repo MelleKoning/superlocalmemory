@@ -62,7 +62,8 @@ class TestBoundedLoopsMcpWindowsTrustChecks:
         """
         _purge_module("superlocalmemory.integrations.bounded_loops_mcp")
         with unittest.mock.patch.object(
-            os, "geteuid", side_effect=AttributeError("simulated: Windows has no geteuid")
+            os, "geteuid", side_effect=AttributeError("simulated: Windows has no geteuid"),
+            create=True,  # on Windows there is no geteuid to replace
         ):
             importlib.import_module("superlocalmemory.integrations.bounded_loops_mcp")
 
@@ -161,7 +162,8 @@ class TestAssertTrustedExecutable:
         with (
             unittest.mock.patch.object(os, "name", "posix"),
             # geteuid returns the actual uid so the owner check passes
-            unittest.mock.patch.object(os, "geteuid", return_value=exe.stat().st_uid),
+            unittest.mock.patch.object(os, "geteuid", return_value=exe.stat().st_uid,
+                                       create=True),  # absent on Windows
         ):
             with pytest.raises(_BU, match="trusted regular file"):
                 _assert_trusted_executable(exe)
