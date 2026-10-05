@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._portable import committed_executable, require_posix_bash
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "ci" / "stage5b_gate.sh"
@@ -49,15 +51,14 @@ def _copy_script_into(tmp_path: Path) -> Path:
 
 def _run_gate(cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["bash", str(cwd / "scripts" / "ci" / "stage5b_gate.sh")],
+        [require_posix_bash(), str(cwd / "scripts" / "ci" / "stage5b_gate.sh")],
         cwd=cwd, capture_output=True, text=True,
     )
 
 
 def test_gate_script_exists_and_is_executable() -> None:
     assert SCRIPT.exists(), f"missing gate script: {SCRIPT}"
-    mode = SCRIPT.stat().st_mode
-    assert mode & stat.S_IXUSR, "gate script must be executable"
+    assert committed_executable(SCRIPT), "gate script must be executable"
 
 
 def test_gate_passes_on_clean_code(tmp_path: Path) -> None:
@@ -161,7 +162,7 @@ def test_gate_reports_all_failures_before_exit(tmp_path: Path) -> None:
 def test_gate_passes_on_real_slm_src_tree() -> None:
     """Regression: the live SLM src/ currently satisfies all 5 checks."""
     result = subprocess.run(
-        ["bash", str(SCRIPT)], cwd=REPO_ROOT, capture_output=True, text=True,
+        [require_posix_bash(), str(SCRIPT)], cwd=REPO_ROOT, capture_output=True, text=True,
     )
     assert result.returncode == 0, (
         f"live src/ tree violates Stage-5b gate\n"

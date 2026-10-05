@@ -31,6 +31,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._portable import committed_executable
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -99,10 +101,7 @@ def test_ensure_venv_sh_exists() -> None:
 
 def test_ensure_venv_sh_is_executable() -> None:
     assert ENSURE_VENV_SH.exists(), f"ensure-venv.sh not found at {ENSURE_VENV_SH}"
-    mode = ENSURE_VENV_SH.stat().st_mode
-    assert mode & stat.S_IXUSR, (
-        f"ensure-venv.sh must be user-executable (+x), mode={oct(mode)}"
-    )
+    assert committed_executable(ENSURE_VENV_SH), "ensure-venv.sh must be user-executable (+x)"
 
 
 # ---------------------------------------------------------------------------

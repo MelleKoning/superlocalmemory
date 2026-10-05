@@ -10,6 +10,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -196,6 +197,26 @@ def _active_adapter(repo: Path, client_id: str, work: Path) -> str:
     return restarted.target_path.relative_to(work).as_posix()
 
 
+#: Whether files here carry a POSIX executable bit (not on Windows).
+HAS_EXECUTABLE_BIT = os.name != "nt"
+
+
+def _ships_executable(repo: Path, path: Path) -> bool:
+    """Whether ``path`` ships with its executable bit set.
+
+    Windows files have no executable bit (``st_mode`` is always ``0o666``), so
+    there the answer is the mode Git recorded, ``100755``, which is what a
+    release build packs.
+    """
+    if HAS_EXECUTABLE_BIT:
+        return bool(path.stat().st_mode & stat.S_IXUSR)
+    done = subprocess.run(
+        ["git", "ls-files", "--stage", "--", path.relative_to(repo).as_posix()],
+        cwd=repo, capture_output=True, text=True, encoding="utf-8", check=False,
+    )
+    return done.returncode == 0 and done.stdout.split(maxsplit=1)[:1] == ["100755"]
+
+
 def _plugin_package(repo: Path, _client_id: str, _work: Path) -> str:
     config = repo / "plugin/.mcp.json"
     data = json.loads(config.read_text(encoding="utf-8"))
@@ -217,7 +238,7 @@ def _plugin_package(repo: Path, _client_id: str, _work: Path) -> str:
     if not command.startswith(prefix):
         raise AssertionError(f"invalid Claude plugin start command: {block!r}")
     launcher = repo / "plugin" / command.removeprefix(prefix)
-    if not launcher.is_file() or not launcher.stat().st_mode & stat.S_IXUSR:
+    if not launcher.is_file() or not _ships_executable(repo, launcher):
         raise AssertionError("Claude plugin launcher is missing or not executable")
     source = repo / "plugin-src/.mcp.json"
     if json.loads(source.read_text(encoding="utf-8")) != data:

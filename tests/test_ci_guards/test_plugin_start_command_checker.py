@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
+import scripts.integration_compatibility as compat
 from scripts.integration_compatibility import _plugin_package
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,7 +30,18 @@ def _repo(tmp_path: Path, block: dict) -> Path:
     text = json.dumps({"mcpServers": {"superlocalmemory": block}})
     for rel in ("plugin/.mcp.json", "plugin-src/.mcp.json"):
         (tmp_path / rel).write_text(text, encoding="utf-8")
+    if not compat.HAS_EXECUTABLE_BIT:
+        _record_in_git(tmp_path, "plugin/scripts/slm-launch", executable=True)
     return tmp_path
+
+
+def _record_in_git(repo: Path, rel: str, *, executable: bool) -> None:
+    """Record ``rel`` in a git index, the only place Windows keeps its +x."""
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+    git("init", "-q")
+    git("add", "--", rel)
+    git("update-index", f"--chmod={'+' if executable else '-'}x", "--", rel)
 
 
 def _shipped() -> dict:
@@ -52,3 +65,17 @@ def test_a_malformed_entry_is_rejected(tmp_path, mutate) -> None:
     mutate(block)
     with pytest.raises(AssertionError, match="invalid Claude plugin start command"):
         _plugin_package(_repo(tmp_path, block), "claude-code", tmp_path)
+
+
+@pytest.mark.parametrize("executable", [True, False])
+def test_on_windows_the_bit_comes_from_git(tmp_path, monkeypatch, executable) -> None:
+    """Windows has no executable bit, so the checker reads the mode Git
+    recorded instead of rejecting every launcher (it did, on every run)."""
+    monkeypatch.setattr(compat, "HAS_EXECUTABLE_BIT", False)
+    repo = _repo(tmp_path, _shipped())
+    _record_in_git(repo, "plugin/scripts/slm-launch", executable=executable)
+    if executable:
+        assert _plugin_package(repo, "claude-code", tmp_path) == "plugin/scripts/slm-launch"
+    else:
+        with pytest.raises(AssertionError, match="missing or not executable"):
+            _plugin_package(repo, "claude-code", tmp_path)
