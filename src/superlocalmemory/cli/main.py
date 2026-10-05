@@ -120,11 +120,6 @@ def _command_requires_daemon(args: argparse.Namespace) -> bool:
 
 def main() -> None:
     """Parse CLI arguments and dispatch to command handlers."""
-    # First, before anything prints: on a Windows pipe (cp1252) a character
-    # such as a check mark must become "?" rather than crash the command.
-    from superlocalmemory.cli.stdio_safety import protect_standard_streams
-    protect_standard_streams()
-
     # Fast path: hook invocations bypass argparse entirely (stdlib only, ~30ms)
     if len(sys.argv) >= 3 and sys.argv[1] == "hook":
         from superlocalmemory.hooks.hook_handlers import handle_hook
