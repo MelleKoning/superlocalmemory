@@ -672,6 +672,9 @@ def _hook_stop() -> None:
     _daemon_post("/remember", {
         "content": summary,
         "tags": "session-end",
+        # #150: saved under its project, so recall, the project filter and
+        # the project summary find it (the "[name]" prefix alone did not).
+        "metadata": {"project": project_dir},
         "session_id": session_id,
         "idempotency_key": (
             f"hook-session-end:{session_id}"

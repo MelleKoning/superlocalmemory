@@ -483,7 +483,12 @@ def main() -> None:
              "Default: no time filter.",
     )
     recall_p.add_argument("--project", default="",
-                          help="Only memories saved under this project.")
+                          help="Only memories saved under this project (a name or a path). "
+                               "If none of the memories found were, the results are not "
+                               "narrowed and recall says so.")
+    recall_p.add_argument("--prefer-project", dest="prefer_project", default="",
+                          help="Rank memories saved under this project above others of "
+                               "similar relevance; removes nothing.")
     recall_p.add_argument("--saved-by", dest="saved_by", default="",
                           help="Only memories saved by this agent (e.g. claude-desktop).")
     recall_p.add_argument("--about", default="",

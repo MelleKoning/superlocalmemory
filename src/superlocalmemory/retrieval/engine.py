@@ -552,12 +552,17 @@ class RetrievalEngine:
                     fused = windowed
                 _em("time_window")
 
-        # Facets (project / agent / about): explicit, so a hard filter -
-        # honoured even when it leaves nothing (retrieval/facets.py).
-        if facets is not None and not getattr(facets, "empty", True) and fused:
-            from superlocalmemory.retrieval.facets import matching_fact_ids
+        # Facets (saved_by / about / kind): explicit, so hard filters -
+        # honoured even when they leave nothing (retrieval/facets.py).
+        # ``project`` filters but falls back to unfiltered, and says so, when
+        # nothing found was saved under it; ``prefer_project`` only marks
+        # memories for the bounded boost below (retrieval/project_scope.py).
+        preferred: frozenset[str] = frozenset()
+        project_scope = None
+        if facets is not None and not getattr(facets, "empty", True):
+            from superlocalmemory.retrieval.project_scope import narrow
 
-            keep = matching_fact_ids(
+            scoped = narrow(
                 self._db, [fr.fact_id for fr in fused], profile_id, facets,
                 resolver=getattr(self._entity, "_resolver", None),
                 # M3: the configured threshold, not kind_fields' 0.20 default —
@@ -565,7 +570,9 @@ class RetrievalEngine:
                 # displays for the SAME row.
                 display_min_confidence=self._display_min_confidence,
             )
+            keep = set(scoped.kept)
             fused = [fr for fr in fused if fr.fact_id in keep]
+            preferred, project_scope = scoped.preferred, scoped.report
             _em("facets")
 
         # 4. Load facts for rerank pool
@@ -642,6 +649,13 @@ class RetrievalEngine:
         stage_ms["rerank"] = round((time.monotonic() - _t_rerank) * 1000.0, 1)
         _em(f"rerank(ready={reranker_ready})")
 
+        if preferred:
+            # #150: before the cut, so a same-project memory just below it can
+            # be chosen; bounded by project_scope.BOOST, so only one of similar
+            # relevance ever passes another memory.
+            from superlocalmemory.retrieval.project_scope import boost_order
+            top = boost_order(top, preferred)
+
         # V3.4.11: Channel diversity — guarantee entity_graph results appear in
         # the final output. Applied AFTER reranking and evidence qualification
         # so an associative-only candidate cannot be reintroduced after the gate.
@@ -665,7 +679,7 @@ class RetrievalEngine:
         facts = {fid: f for fid, f in facts.items() if fid in selected_ids}
 
         # 6. Build response
-        results = self._build_results(final_top, facts, strat)
+        results = self._build_results(final_top, facts, strat, preferred=preferred)
         ms = (time.monotonic() - t0) * 1000.0
         stage_ms["retrieval_total"] = round(ms, 1)
         no_match = floor_enabled and len(results) == 0
@@ -682,6 +696,7 @@ class RetrievalEngine:
             incomplete_channels=tuple(sorted(dropped_channels)),
             channel_status=dict(channel_status),
             stage_ms=dict(stage_ms),
+            project_scope=project_scope,
         )
 
     # -- Community context (Wave Q2b) --------------------------------------
@@ -1516,7 +1531,7 @@ class RetrievalEngine:
 
     def _build_results(
         self, fused: list[FusionResult], fact_map: dict[str, AtomicFact],
-        strat: QueryStrategy,
+        strat: QueryStrategy, preferred: frozenset[str] = frozenset(),
     ) -> list[RetrievalResult]:
         from datetime import UTC, datetime
         now = datetime.now(UTC)
@@ -1621,6 +1636,13 @@ class RetrievalEngine:
             # boosts push raw scores well above 1 (observed: 27.97). A sigmoid
             # preserves rank (monotonic) while giving users a readable 0-1 range.
             normalized_score = 1.0 / (1.0 + math.exp(-boosted_score * 0.5))
+            # #150: the same-project boost moves the RANK only. score and
+            # relevance_score stay what retrieval measured, so a boosted
+            # memory never reads as more relevant than it is.
+            if fr.fact_id in preferred:
+                from superlocalmemory.retrieval.project_scope import lift
+                boosted_score = lift(boosted_score)
+                evidence = [*evidence, "same_project"]
             results.append(RetrievalResult(
                 fact=fact, score=round(normalized_score, 4),
                 channel_scores=fr.channel_scores,

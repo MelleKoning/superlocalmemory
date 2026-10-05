@@ -28,8 +28,34 @@ DEFAULT_MEMORIES_K = 10
 
 # A RecallFn takes (query, limit, profile_id) and returns a list of memory
 # dicts with at least {"text": str, "score": float}. Adapters inject the
-# real recall engine at construction time; tests inject a fake.
-RecallFn = Callable[[str, int, str], list[dict]]
+# real recall engine at construction time; tests inject a fake. When the
+# builder knows the project (4.1.21, #150) it also passes ``project=<name>``
+# as a keyword: recall's project filter, which falls back to unfiltered
+# results when the project has no saved memories.
+RecallFn = Callable[..., list[dict]]
+
+
+def _call(recall_fn: RecallFn, query: str, limit: int, profile_id: str,
+          project: str | None) -> list:
+    if project:
+        return recall_fn(query, limit, profile_id, project=project) or []
+    return recall_fn(query, limit, profile_id) or []
+
+
+def _query(section: str, scope: str, project: str | None) -> str:
+    """The query for one section. With a known project it names the project
+    (#150): the canned global words ("project topics", "entities") matched
+    whatever memories mention those words, so cross-project trivia was baked
+    into the file. Without one, the queries are exactly as before."""
+    if scope == "project" and project:
+        return f"{project} {section}"
+    if section == "topics":
+        return "topics" if scope == "global" else "project topics"
+    if section == "entities":
+        return "entities" if scope == "global" else "project entities"
+    if section == "memories":
+        return "project memories" if scope == "project" else "memories"
+    return section
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,10 +103,11 @@ def _redact_seq(items: Iterable[str], limit: int) -> tuple[str, ...]:
 
 def _recall_topics(
     recall_fn: RecallFn, profile_id: str, scope: str, limit: int,
+    project: str | None = None,
 ) -> tuple[tuple[str, float], ...]:
-    query = "topics" if scope == "global" else "project topics"
     try:
-        results = recall_fn(query, limit, profile_id) or []
+        results = _call(recall_fn, _query("topics", scope, project), limit,
+                        profile_id, project if scope == "project" else None)
     except Exception:
         return ()
     topics: list[tuple[str, float]] = []
@@ -99,10 +126,11 @@ def _recall_topics(
 
 def _recall_entities(
     recall_fn: RecallFn, profile_id: str, scope: str, limit: int,
+    project: str | None = None,
 ) -> tuple[tuple[str, int], ...]:
-    query = "entities" if scope == "global" else "project entities"
     try:
-        results = recall_fn(query, limit, profile_id) or []
+        results = _call(recall_fn, _query("entities", scope, project), limit,
+                        profile_id, project if scope == "project" else None)
     except Exception:
         return ()
     entities: list[tuple[str, int]] = []
@@ -121,9 +149,11 @@ def _recall_entities(
 
 def _recall_decisions(
     recall_fn: RecallFn, profile_id: str, limit: int,
+    project: str | None = None,
 ) -> tuple[str, ...]:
     try:
-        rows = recall_fn("recent decisions", limit, profile_id) or []
+        query = f"{project} recent decisions" if project else "recent decisions"
+        rows = _call(recall_fn, query, limit, profile_id, project)
     except Exception:
         return ()
     texts = (row.get("text", "") for row in rows if isinstance(row, dict))
@@ -132,10 +162,11 @@ def _recall_decisions(
 
 def _recall_memories(
     recall_fn: RecallFn, profile_id: str, scope: str, limit: int,
+    project: str | None = None,
 ) -> tuple[str, ...]:
-    query = "project memories" if scope == "project" else "memories"
     try:
-        rows = recall_fn(query, limit, profile_id) or []
+        rows = _call(recall_fn, _query("memories", scope, project), limit,
+                     profile_id, project if scope == "project" else None)
     except Exception:
         return ()
     texts = (row.get("text", "") for row in rows if isinstance(row, dict))
@@ -152,6 +183,7 @@ def build_payload(
     decisions_k: int = DEFAULT_DECISIONS_K,
     memories_k: int = DEFAULT_MEMORIES_K,
     now_fn: Callable[[], str] | None = None,
+    project: str | None = None,
 ) -> ContextPayload:
     """Build a redacted, ranked context payload.
 
@@ -163,10 +195,15 @@ def build_payload(
     if scope not in ("project", "global"):
         raise ValueError(f"scope must be 'project' or 'global', got {scope!r}")
 
-    topics = _recall_topics(recall_fn, profile_id, scope, top_k)
-    entities = _recall_entities(recall_fn, profile_id, scope, top_k)
-    decisions = _recall_decisions(recall_fn, profile_id, decisions_k)
-    memories = _recall_memories(recall_fn, profile_id, scope, memories_k)
+    # ``project`` (a name or a path): only for the project scope, and only
+    # when it names one. Omitted, every query is what it always was.
+    from superlocalmemory.core.project_identity import project_name
+
+    name = project_name(project) if scope == "project" else None
+    topics = _recall_topics(recall_fn, profile_id, scope, top_k, name)
+    entities = _recall_entities(recall_fn, profile_id, scope, top_k, name)
+    decisions = _recall_decisions(recall_fn, profile_id, decisions_k, name)
+    memories = _recall_memories(recall_fn, profile_id, scope, memories_k, name)
 
     # Late-bind ``now_fn`` so monkeypatching ``_now_iso`` at module scope
     # still controls the timestamp — crucial for deterministic content-hash

@@ -155,8 +155,10 @@ def register_core_tools(server, get_engine: Callable) -> None:
         session_id = resolve_session_id(
             session_id, agent_id=agent_id, allow_agent_fallback=False,
         )
+        from superlocalmemory.core.project_identity import storable_project
+
         meta = {
-            "project": project,
+            "project": storable_project(project),
             "importance": importance,
             "agent_id": agent_id,
             "session_id": session_id,
@@ -485,6 +487,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
         saved_by: str = "",
         about: str = "",
         kind: str = "",
+        prefer_project: str = "",
     ) -> dict:
         """Search memories through hybrid retrieval, RRF fusion, and reranking.
 
@@ -534,6 +537,15 @@ def register_core_tools(server, get_engine: Callable) -> None:
         person, project or tool). Each is a hard filter. Questions phrased as
         "what did we decide", "how do I", "what is the current status of" get
         decisions, how-tos and the newest current-state memory first.
+
+        Projects (4.1.21): ``prefer_project`` (a name or a path) ranks memories
+        saved under that project above others of similar relevance and removes
+        nothing - pass your working directory on every recall in a project.
+        ``project`` keeps only that project's memories; when none of the
+        memories found were saved under it, the unfiltered results come back
+        and ``project_scope.filter.applied`` is false with a ``note`` saying
+        so - never a silent empty answer. A name matches the same project saved
+        as a full path, ignoring case.
 
         ``kind`` (4.1.19 WP8) keeps only results whose kind — the same nine
         values ``remember``'s ``kind`` parameter takes — equals this value,
@@ -632,7 +644,9 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     **({"profile_id": profile_id.strip()} if (profile_id or "").strip() else {}),
                     # 4.1.19 facets, only when set.
                     **{k: v.strip() for k, v in (("project", project), ("saved_by", saved_by),
-                                                 ("about", about)) if (v or "").strip()},
+                                                 ("about", about),
+                                                 ("prefer_project", prefer_project))
+                       if (v or "").strip()},
                     # 4.1.19 WP8: the already-validated, normalized kind.
                     **({"kind": _kind} if _kind else {}),
                 )
@@ -755,6 +769,10 @@ def register_core_tools(server, get_engine: Callable) -> None:
             pid = await _runtime_profile(get_engine)
             facts = engine._db.get_facts_by_ids(ids, pid)
             found = {f.fact_id for f in facts}
+            # #150: the project each memory was saved under ("" when none).
+            from superlocalmemory.retrieval.project_scope import stored_projects
+
+            projects = stored_projects(engine._db, [f.fact_id for f in facts])
             not_found = [fid for fid in ids if fid not in found]
             items = []
             for f in facts:
@@ -769,6 +787,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     "referenced_date": f.referenced_date,
                     "lifecycle": f.lifecycle.value,
                     "access_count": f.access_count,
+                    "project": projects.get(f.fact_id, ""),
                 })
             if not items:
                 return {

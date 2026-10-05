@@ -31,24 +31,40 @@ from superlocalmemory.hooks.cross_platform_connector import (
 from superlocalmemory.mcp.tools_context import prestage_context
 
 
-def _noop_recall(_q: str, _limit: int, _profile: str) -> list[dict]:
-    """Placeholder recall when the daemon/engine isn't reachable."""
-    return []
+def _daemon_recall(q: str, limit: int, _profile: str, *, project: str = "") -> list[dict]:
+    """Recall through a RUNNING daemon, as ``{"text", "score"}`` rows.
+
+    Never starts one: building a context file is not a reason to launch the
+    memory service. Not a question either, so it is never judged. ``project``
+    is recall's project filter (#150). The active profile serves it, as before.
+    """
+    from superlocalmemory.cli.daemon import _get_port, is_daemon_running
+    from superlocalmemory.core.answer_check_scope import skip_answer_check
+    from superlocalmemory.mcp._daemon_proxy import DaemonPoolProxy
+
+    if not is_daemon_running():
+        return []
+    with skip_answer_check():
+        raw = DaemonPoolProxy(port=_get_port()).recall(
+            q, limit=limit, project=project or "", answer_check=False)
+    if not isinstance(raw, dict) or raw.get("ok") is False:
+        return []
+    return [{"text": r.get("content", ""), "score": float(r.get("score") or 0.0)}
+            for r in raw.get("results", []) if isinstance(r, dict)]
 
 
 def _get_recall_fn() -> RecallFn:
-    """Wire the real recall engine if available, else no-op."""
-    try:
-        from superlocalmemory.core.engine import Engine  # pragma: no cover
-        eng = Engine.get_shared()
-        def _fn(q: str, limit: int, profile_id: str) -> list[dict]:
-            try:
-                return eng.recall(q, limit=limit) or []  # type: ignore
-            except Exception:
-                return []
-        return _fn
-    except Exception:
-        return _noop_recall
+    """Recall through the running daemon; nothing when none is running.
+
+    This used to call ``Engine.get_shared()``, which does not exist, so the
+    import failed silently and every context file was built from no memories.
+    """
+    def _fn(q: str, limit: int, profile_id: str, *, project: str = "") -> list[dict]:
+        try:
+            return _daemon_recall(q, limit, profile_id, project=project)
+        except Exception:  # noqa: BLE001 - a context file is advisory
+            return []
+    return _fn
 
 
 def _default_sync_log_db() -> Path:
@@ -186,9 +202,12 @@ def cmd_context(args: Namespace) -> None:
         return
 
     # Build a full markdown / JSON payload for CLI consumption.
+    # #150: the working directory is the project, so each section asks for
+    # that project's memories rather than canned global words.
     payload = build_payload(
         profile_id, "project", Path.cwd(),
         recall_fn=_get_recall_fn(),
+        project=str(Path.cwd()),
     )
     if getattr(args, "json", False):
         print(_json.dumps({

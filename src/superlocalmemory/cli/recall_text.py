@@ -12,7 +12,7 @@ by a search that did not look everywhere. These lines say what was skipped.
 
 from __future__ import annotations
 
-__all__ = ["empty_result_line", "incomplete_line", "remember_receipt_text"]
+__all__ = ["empty_result_line", "incomplete_line", "project_line", "remember_receipt_text"]
 
 
 def incomplete_line(result: dict) -> str:
@@ -30,6 +30,16 @@ def incomplete_line(result: dict) -> str:
         f"Incomplete search: {reason}; searched without "
         f"{', '.join(sorted(skipped))}. Ask again in a moment for a full answer."
     )
+
+
+def project_line(result: dict) -> str:
+    """Says when ``--project`` matched nothing found and the results shown are
+    therefore NOT narrowed to it (#150), or ""."""
+    scope = result.get("project_scope") or {}
+    filt = scope.get("filter") if isinstance(scope, dict) else None
+    if isinstance(filt, dict) and not filt.get("applied", True):
+        return str(filt.get("note") or "These results are not narrowed to the project.")
+    return ""
 
 
 def empty_result_line(result: dict) -> str:

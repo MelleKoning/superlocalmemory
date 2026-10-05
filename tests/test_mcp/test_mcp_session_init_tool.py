@@ -122,7 +122,8 @@ class TestSessionInitTool:
         assert result["memory_count"] == 2
         assert len(result["memories"]) == 2
         mock_pool_recall.assert_called_once_with(
-            "project context /my/project", limit=10, fast=None,
+            "project context project", limit=10, fast=None,
+            prefer_project="/my/project",  # 4.1.21 (#150)
         )
 
     @patch("superlocalmemory.mcp.tools_active._emit_event")

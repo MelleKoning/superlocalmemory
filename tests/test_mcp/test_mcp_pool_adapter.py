@@ -19,9 +19,10 @@ class _FakePool:
 
     def recall(
         self, query: str, limit: int = 10, session_id: str = "",
-        fast: bool = False,
+        fast: bool = False, prefer_project: str = "",
     ):
         self.recall_calls.append((query, limit, session_id, fast))
+        self.prefer_project = prefer_project
         return {
             "ok": True,
             "query": query,
@@ -192,9 +193,12 @@ class TestToolsActiveUsesPool:
         # internal agentic round). Session start is a hot path — it must return
         # fast local results, not spend an Ollama reformulation round every time.
         # FTS5 fallback only triggers when the daemon is completely down.
+        # 4.1.21 (#150): the query names the project, and the project itself
+        # travels as a preference rather than as search words.
         assert fake_pool.recall_calls == [
-            ("project context /tmp/p", 10, "", None),
+            ("project context p", 10, "", None),
         ], "session_init should recall with fast=None (client-driven default)"
+        assert fake_pool.prefer_project == "/tmp/p"
 
     def test_observe_uses_pool_adapter_not_engine_store(self, monkeypatch):
         import asyncio

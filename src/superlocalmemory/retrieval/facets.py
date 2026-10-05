@@ -6,16 +6,22 @@
 a memory is about.
 
 ``project`` and ``agent`` come from what was recorded when each memory was
-saved (the ``project`` and ``agent_id`` an agent passes to remember); they are
-compared without regard to case or surrounding spaces. ``about`` is a name - a
+saved (the ``project`` and ``agent_id`` an agent passes to remember). ``agent``
+is compared without regard to case or surrounding spaces; ``project`` by
+``core.project_identity.project_key`` (4.1.21, GitHub #150), so a bare name
+matches the same project saved as a full path. ``about`` is a name - a
 person, a project, a tool - looked up the way recall looks up names: exact
 name, alias, or a spelling close enough to merge automatically, read-only.
 
 The candidates were already checked for visibility (a shared or global
 memory may belong to another profile), so matching does not re-filter by
-profile. A facet the caller asks for is a hard filter: only memories that match are
-kept, even if that leaves none, because the caller asked for exactly that.
-Reads only; never raises (a failure keeps nothing rather than everything).
+profile. ``saved_by``, ``about`` and ``kind`` are hard filters: only memories
+that match are kept, even if that leaves none, because the caller asked for
+exactly that. ``project`` filters too, but recall falls back to unfiltered
+results - and says so - when nothing it found was saved under the project
+(``retrieval.project_scope``). ``prefer_project`` never filters; it only ranks
+that project's memories higher. Reads only; ``matching_fact_ids`` never raises
+(a failure keeps nothing rather than everything).
 """
 
 from __future__ import annotations
@@ -30,11 +36,19 @@ logger = logging.getLogger(__name__)
 _MAX_VALUE = 200
 
 
-def _clean(value: object) -> str | None:
+def _clean(value: object, limit: int = _MAX_VALUE) -> str | None:
     if not isinstance(value, str):
         return None
     text = value.strip()
-    return text[:_MAX_VALUE] if text else None
+    return text[:limit] if text else None
+
+
+def _clean_project(value: object) -> str | None:
+    # A path's identity is its LAST part, so a long path must not be cut to
+    # the 200 characters a name gets (core.project_identity).
+    from superlocalmemory.core.project_identity import MAX_PROJECT_CHARS
+
+    return _clean(value, MAX_PROJECT_CHARS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,26 +61,46 @@ class Facets:
     #: Already validated/normalized by the caller (core.kind_query.resolve_kind)
     #: before it ever reaches here — this module only matches, never parses.
     kind: str | None = None
+    #: 4.1.21 (#150): rank this project's memories higher; never a filter.
+    prefer_project: str | None = None
 
     @classmethod
     def of(cls, project: object = None, agent: object = None, about: object = None,
-          kind: object = None) -> "Facets":
-        return cls(_clean(project), _clean(agent), _clean(about), _clean(kind))
+          kind: object = None, prefer_project: object = None) -> "Facets":
+        return cls(_clean_project(project), _clean(agent), _clean(about), _clean(kind),
+                   _clean_project(prefer_project))
+
+    @property
+    def narrows(self) -> bool:
+        """True when any facet filters (everything but ``prefer_project``)."""
+        return not (self.project is None and self.agent is None and self.about is None
+                    and self.kind is None)
 
     @property
     def empty(self) -> bool:
-        return (self.project is None and self.agent is None and self.about is None
-                and self.kind is None)
+        """Nothing was asked for at all, so recall need not be told."""
+        return not self.narrows and self.prefer_project is None
 
     def as_dict(self) -> dict[str, str]:
         return {k: v for k, v in (("project", self.project), ("agent", self.agent),
-                                  ("about", self.about), ("kind", self.kind))
+                                  ("about", self.about), ("kind", self.kind),
+                                  ("prefer_project", self.prefer_project))
                 if v is not None}
 
 
 def _chunks(items: list[str], size: int = 500) -> Iterable[list[str]]:
     for i in range(0, len(items), size):
         yield items[i:i + size]
+
+
+def _by_project(db: Any, fact_ids: list[str], wanted: str) -> set[str]:
+    from superlocalmemory.core.project_identity import project_key
+    from superlocalmemory.retrieval.project_scope import project_keys
+
+    key = project_key(wanted)
+    if key is None:
+        return set()
+    return {fid for fid, k in project_keys(db, fact_ids).items() if k == key}
 
 
 def _by_memory_metadata(db: Any, fact_ids: list[str], profile_id: str,
@@ -169,12 +203,12 @@ def matching_fact_ids(db: Any, fact_ids: Iterable[str], profile_id: str,
     ``storage.memory_kinds.kind_fields``'s own default.
     """
     remaining = list(dict.fromkeys(str(f) for f in fact_ids))
-    if facets.empty or not remaining:
+    if not facets.narrows or not remaining:
         return set(remaining)
     try:
         if facets.project is not None:
-            remaining = [f for f in remaining if f in _by_memory_metadata(
-                db, remaining, profile_id, "project", facets.project)]
+            remaining = [f for f in remaining if f in _by_project(
+                db, remaining, facets.project)]
         if facets.agent is not None and remaining:
             remaining = [f for f in remaining if f in _by_memory_metadata(
                 db, remaining, profile_id, "agent_id", facets.agent)]
@@ -191,18 +225,40 @@ def matching_fact_ids(db: Any, fact_ids: Iterable[str], profile_id: str,
     return set(remaining)
 
 
+def _project_counts(db: Any, profile_id: str, limit: int) -> list[dict]:
+    """Projects grouped by ``project_key``, so "slm" and "/x/slm" are one."""
+    from superlocalmemory.core.project_identity import project_key
+
+    rows = db.execute(
+        "SELECT json_extract(metadata_json, '$.project') AS v, COUNT(*) AS n "
+        "FROM memories WHERE profile_id = ? AND json_valid(metadata_json) "
+        "GROUP BY v HAVING v IS NOT NULL AND trim(v) != ''", (profile_id,))
+    counts: dict[str, int] = {}
+    for row in rows:
+        d = dict(row)
+        key = project_key(d["v"])
+        if key is not None:
+            counts[key] = counts.get(key, 0) + int(d["n"])
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:int(limit)]
+    return [{"name": name, "memories": n} for name, n in ranked]
+
+
 def list_facets(db: Any, profile_id: str, *, limit: int = 50) -> dict[str, list[dict]]:
     """The projects and agents this profile's memories were saved under, with counts."""
     out: dict[str, list[dict]] = {"projects": [], "agents": []}
-    for key, label in (("project", "projects"), ("agent_id", "agents")):
-        try:
-            rows = db.execute(
-                f"SELECT lower(trim(json_extract(metadata_json, '$.{key}'))) AS v, COUNT(*) AS n "
-                "FROM memories WHERE profile_id = ? GROUP BY v HAVING v IS NOT NULL AND v != '' "
-                "ORDER BY n DESC, v LIMIT ?", (profile_id, int(limit)))
-        except Exception:  # noqa: BLE001
-            continue
-        out[label] = [{"name": str(dict(r)["v"]), "memories": int(dict(r)["n"])} for r in rows]
+    try:
+        out["projects"] = _project_counts(db, profile_id, limit)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        rows = db.execute(
+            "SELECT lower(trim(json_extract(metadata_json, '$.agent_id'))) AS v, COUNT(*) AS n "
+            "FROM memories WHERE profile_id = ? GROUP BY v HAVING v IS NOT NULL AND v != '' "
+            "ORDER BY n DESC, v LIMIT ?", (profile_id, int(limit)))
+        out["agents"] = [{"name": str(dict(r)["v"]), "memories": int(dict(r)["n"])}
+                         for r in rows]
+    except Exception:  # noqa: BLE001
+        pass
     return out
 
 

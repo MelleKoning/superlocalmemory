@@ -366,8 +366,10 @@ def register_active_tools(server, get_engine: Callable) -> None:
         The AI should call this automatically before any other work.
 
         Parameters:
-            project_path: Working directory path. Used to build the search query
-                when no explicit query is provided.
+            project_path: Working directory path. Memories saved under this
+                project rank above others of similar relevance (nothing is
+                removed), and its name builds the search query when no
+                explicit query is provided.
             query: Override the search query. If omitted, derived from project_path
                 or falls back to "recent important decisions".
             max_results: Maximum memories to return (default: 10).
@@ -395,12 +397,16 @@ def register_active_tools(server, get_engine: Callable) -> None:
 
             recall_config = rules.get_recall_config()
             relevance_threshold = recall_config.get("relevance_threshold", 0.3)
-            if query:
-                search_query = query
-            elif project_path:
-                search_query = f"project context {project_path}"
-            else:
-                search_query = "recent important decisions"
+            # #150: the project is used as a project, not as search words. Its
+            # memories rank above others of similar relevance (a bounded
+            # preference that removes nothing), and a derived query names the
+            # project rather than every directory in its path.
+            from superlocalmemory.core.project_identity import session_context_query
+
+            search_query = query or session_context_query(project_path)
+            _project_kwargs = (
+                {"prefer_project": project_path.strip()} if (project_path or "").strip() else {}
+            )
 
             # 2-tier recall (industry pattern: Hindsight / Zep / Supermemory):
             # PRIMARY: full recall via daemon — five candidate producers (semantic
@@ -426,6 +432,7 @@ def register_active_tools(server, get_engine: Callable) -> None:
                 with skip_answer_check():
                     response = await asyncio.to_thread(
                         pool_recall, search_query, limit=max_results, fast=None,
+                        **_project_kwargs,
                     )
             except (PoolError, Exception) as exc:
                 logger.warning(
