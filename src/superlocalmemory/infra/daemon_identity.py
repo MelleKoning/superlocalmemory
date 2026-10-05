@@ -10,7 +10,6 @@ random process instance through a private, atomically written descriptor.
 
 from __future__ import annotations
 
-import getpass
 import hashlib
 import hmac
 import json
@@ -59,7 +58,9 @@ def owner_id() -> str:
     getuid = getattr(os, "getuid", None)
     if getuid is not None:
         return f"uid:{getuid()}"
-    return f"user:{getpass.getuser()}"
+    from superlocalmemory.core.platform_utils import current_user_name
+
+    return f"user:{current_user_name()}"
 
 
 def process_create_time_for(pid: int) -> float:
@@ -173,7 +174,9 @@ def _restrict_to_owner(path: Path) -> None:
     """
     if sys.platform == "win32":
         try:
-            user = getpass.getuser()
+            from superlocalmemory.core.platform_utils import current_account
+
+            user = current_account()
             subprocess.run(
                 ["icacls", str(path), "/inheritance:r"],
                 check=False, capture_output=True,

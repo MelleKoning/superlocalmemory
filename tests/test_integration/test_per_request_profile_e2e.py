@@ -170,11 +170,9 @@ def test_only_production_port_daemons_count_as_foreign() -> None:
 
 
 def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+    from superlocalmemory.core.platform_utils import is_pid_alive
+
+    return is_pid_alive(pid)  # not os.kill(pid, 0): that is Ctrl+C on Windows
 
 
 class _RpcClient:
