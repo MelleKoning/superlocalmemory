@@ -202,6 +202,14 @@ def _load_or_create_hash_key(db_path: Path) -> bytes:
             "process-local key", db_path, exc,
         )
         return key
+    # Windows ignores 0o600: apply the owner-only access list while the file
+    # is still empty.
+    from superlocalmemory.infra.owner_only_acl import restrict_to_owner
+
+    try:
+        restrict_to_owner(key_path)
+    except OSError as exc:
+        logger.warning("could not make %s readable only by you: %s", key_path.name, exc)
     with os.fdopen(fd, "wb") as handle:
         handle.write(key)
         handle.flush()

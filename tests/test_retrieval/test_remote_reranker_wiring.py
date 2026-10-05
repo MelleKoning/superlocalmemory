@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import json
 import logging
-import stat
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from superlocalmemory.core.config import RetrievalConfig, SLMConfig
+from tests._portable import assert_owner_only
 from superlocalmemory.core.engine_wiring import init_reranker
 from superlocalmemory.retrieval.remote_reranker import RemoteReranker
 from superlocalmemory.storage.models import Mode
@@ -109,7 +109,7 @@ class TestRetrievalConfigKeys:
 
         on_disk = json.loads(path.read_text(encoding="utf-8"))
         assert on_disk["retrieval"]["cross_encoder_api_key"] == "reranker-secret"
-        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        assert_owner_only(path)  # it holds an API key
         assert SLMConfig.load(path).retrieval.cross_encoder_api_key == (
             "reranker-secret"
         )

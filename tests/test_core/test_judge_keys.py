@@ -17,6 +17,8 @@ import stat
 
 import pytest
 
+from tests._portable import assert_owner_only
+
 from superlocalmemory.core.judge_keys import (
     PROVIDERS,
     JudgeKeyStore,
@@ -137,6 +139,7 @@ def test_clear_on_a_missing_key_does_not_raise(store):
 # filesystem permissions
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skipif(os.name == "nt", reason="folder mode bits do nothing on Windows")
 def test_secrets_dir_is_mode_0700(store, tmp_path):
     store.set_key("typesafe", VALID_KEY)
     mode = stat.S_IMODE((tmp_path / "secrets").stat().st_mode)
@@ -146,8 +149,7 @@ def test_secrets_dir_is_mode_0700(store, tmp_path):
 def test_key_file_is_mode_0600(store, tmp_path):
     store.set_key("typesafe", VALID_KEY)
     key_path = tmp_path / "secrets" / "jev-typesafe.key"
-    mode = stat.S_IMODE(key_path.stat().st_mode)
-    assert mode == 0o600
+    assert_owner_only(key_path)  # on Windows: the owner-only access list
 
 
 def test_set_key_is_atomic_no_tmp_files_left_behind(store, tmp_path):

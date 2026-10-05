@@ -13,6 +13,7 @@ consent answered 200 and the online check kept running.
 
 from __future__ import annotations
 
+import os
 import json
 from types import SimpleNamespace
 
@@ -280,4 +281,4 @@ def test_a_damaged_settings_file_never_reads_as_consent(client, live, three_mode
 def test_the_settings_file_is_private_to_its_owner(client, live, three_modes):  # noqa: F811
     _turn_jev_and_reordering_on(client)
     mode = (three_modes / STATE_FILE).stat().st_mode & 0o777
-    assert mode == 0o600, oct(mode)
+    assert os.name == "nt" or mode == 0o600, oct(mode)  # no mode bits on Windows

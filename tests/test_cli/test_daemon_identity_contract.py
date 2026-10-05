@@ -66,7 +66,8 @@ def test_descriptor_is_atomic_private_and_round_trips(tmp_path: Path) -> None:
 
     assert loaded == descriptor
     assert path == tmp_path / "daemon.json"
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if os.name != "nt":  # POSIX mode bits; Windows has none (icacls there)
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert json.loads(path.read_text(encoding="utf-8"))["service"] == DAEMON_SERVICE
 
 

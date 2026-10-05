@@ -66,7 +66,8 @@ def test_manifest_written_after_rename_with_sha256(tmp_path, monkeypatch) -> Non
 
     assert seen == [(True, False)], "manifest must be written after both renames"
     [manifest_file] = _manifests(snaps)
-    assert stat.S_IMODE(manifest_file.stat().st_mode) == 0o600
+    if os.name != "nt":  # POSIX mode bits; Windows has none
+        assert stat.S_IMODE(manifest_file.stat().st_mode) == 0o600
     manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
     assert manifest["reason"] == "migration"
     assert manifest["from_version"] == "4.1.18"

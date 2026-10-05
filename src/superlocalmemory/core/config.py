@@ -26,6 +26,21 @@ from superlocalmemory.storage.models import Mode
 logger = logging.getLogger(__name__)
 
 
+def _restrict_config_to_owner(path: Path) -> None:
+    """Make the (still empty) config file readable by its owner only.
+
+    config.json can hold API keys. POSIX: 0o600. Windows, where mode bits do
+    nothing: the owner-only access list. Best effort — failing to tighten it
+    must not stop settings from being saved — but never silent.
+    """
+    from superlocalmemory.infra.owner_only_acl import restrict_to_owner
+
+    try:
+        restrict_to_owner(path)
+    except OSError as exc:
+        logger.warning("could not make %s readable only by you: %s", path.name, exc)
+
+
 # ---------------------------------------------------------------------------
 # Canonical limits — single source of truth across all surfaces
 # ---------------------------------------------------------------------------
@@ -1866,6 +1881,7 @@ class SLMConfig:
         )
         _tmp = Path(_tmp_name)
         try:
+            _restrict_config_to_owner(_tmp)
             with _os.fdopen(_fd, "w", encoding="utf-8") as _handle:
                 json.dump(data, _handle, indent=2)
                 _handle.write("\n")
