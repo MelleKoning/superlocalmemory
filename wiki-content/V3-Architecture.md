@@ -98,8 +98,8 @@ memory is retrieved through MCP at runtime.
 | Mode | Description | LLM | Compliance status |
 |:----:|:-----------|:---:|:------------------|
 | **A: Local Guardian** | Core memory operations use the local data root. Optional integrations have separate network behavior. | None | Deployment assessment required |
-| **B: Smart Local** | Mode A + operator-configured Ollama extraction. | Local | Deployment assessment required |
-| **C: Full Power** | Mode B + cloud-provider calls and agentic retrieval. | Cloud | Deployment and provider assessment required |
+| **B: Smart Local** | Mode A + operator-configured local-model extraction (Ollama by default; any local OpenAI-compatible server works). | Local | Deployment assessment required |
+| **C: Full Power** | Mode B + calls to your own endpoint or a cloud provider, and agentic retrieval. | Your endpoint or cloud | Deployment and provider assessment required |
 
 Mode A runs the core memory path without a cloud model provider. Retrieval quality depends on the configured embedding model, corpus, and enabled indexes; this page makes no market-uniqueness claim.
 

@@ -1393,9 +1393,15 @@ def cmd_mode(args: Namespace) -> None:
             print(f"  LLM: {updated.llm.provider}/{updated.llm.model}")
         print(f"  Reranker: ONNX cross-encoder (enabled)")
 
-        # V3.3.4: Warn if Mode C lacks cloud API key
-        if args.value == "c" and not updated.llm.api_key:
-            print("  ⚠ Mode C requires a cloud API key. Run: slm provider set")
+        # V3.3.4: Warn if Mode C has neither a cloud key nor a configured
+        # custom endpoint (#112). A keyless custom endpoint — llama.cpp,
+        # vLLM, LM Studio, any other OpenAI-compatible server — is a
+        # working Mode C setup; only a genuinely bare config needs this.
+        if args.value == "c" and not updated.llm.api_key and not updated.llm.has_custom_endpoint:
+            print(
+                "  ⚠ Mode C needs a cloud API key, or a configured custom endpoint. "
+                "Run: slm provider set"
+            )
         print("  ℹ Run `slm restart` to apply the new mode.")
     else:
         print(f"Current mode: {config.mode.value.upper()}")
@@ -2770,8 +2776,8 @@ _COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("setup", "Guided first-time setup (models, mode, IDEs) — start here"),
         ("init", "Set up + wire Claude Code hooks + connect IDEs"),
         ("reconfigure", "Re-run setup / pick a performance profile"),
-        ("mode", "Switch memory mode: a (local) / b (Ollama) / c (cloud)"),
-        ("provider", "Configure the cloud LLM provider + API key (Mode C)"),
+        ("mode", "Switch memory mode: a (local) / b (a local model) / c (your endpoint or cloud)"),
+        ("provider", "Configure the LLM provider + API key (Mode C)"),
         ("connect", "Auto-configure detected IDEs (Cursor, VS Code, …)"),
         ("upgrade-hosts", "Preview or explicitly refresh existing SLM host integrations"),
         ("hooks", "Install/inspect Claude Code hooks"),
@@ -2863,13 +2869,16 @@ _COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
 
 _HELP_TOPICS: dict[str, str] = {
     "modes": """\
-Operating modes
-  a  On-device only  — no AI language model runs; all data stays on this
-                       device. Fastest and most private. (EU AI Act: full)
-  b  On-device + AI  — uses a local Ollama model to improve recall quality;
-                       all data stays on this device. Requires Ollama running.
-  c  Cloud AI        — uses a cloud provider (OpenAI, Anthropic, …) for best
-                       recall quality; queries leave this device. Needs a key.
+Operating modes — named by what you get, not by a vendor
+  a  Local Guardian — no AI language model runs; all data stays on this
+                       device. Fastest and most private.
+  b  Smart Local     — a model on this machine improves recall quality;
+                       all data stays on this device. Ollama by default,
+                       but any local OpenAI-compatible server works.
+  c  Full Power      — your own endpoint, or a cloud provider (OpenAI,
+                       Anthropic, …), for the best recall quality; queries
+                       leave this device. A key is needed for a cloud
+                       provider, but not for a keyless custom endpoint.
 
   Switch any time:  slm mode a   (or b / c)
 """,

@@ -369,7 +369,7 @@ function updateProviderUI() {
         var hints = {
             'none': 'No LLM needed in Mode A',
             'openrouter': '200+ models via OpenRouter API',
-            'openai': 'OpenAI models (requires API key)',
+            'openai': 'OpenAI-compatible models (key optional for a custom endpoint)',
             'anthropic': 'Anthropic models (requires API key)',
         };
         modelHint.textContent = hints[provider] || '';

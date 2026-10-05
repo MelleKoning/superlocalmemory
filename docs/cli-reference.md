@@ -25,8 +25,8 @@ Get or set the operating mode.
 ```bash
 slm mode          # Show current mode
 slm mode a        # Zero-cloud (no LLM, no API key)
-slm mode b        # Local LLM via Ollama
-slm mode c        # Cloud LLM (requires API key)
+slm mode b        # A model on this machine (Ollama by default, any local server works)
+slm mode c        # Your own endpoint, or a cloud provider (key required for cloud)
 ```
 
 ### `slm provider [set]`

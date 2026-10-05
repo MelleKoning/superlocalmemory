@@ -99,19 +99,21 @@ class SignalType(str, Enum):
 
 
 class Mode(str, Enum):
-    """Operating modes.
+    """Operating modes, named by what the user gets (#112) — never by a vendor.
 
     A — All data stays on this device. No AI language model runs anywhere.
         Fastest and most private.
-    B — All data stays on this device. Uses a local Ollama AI model to
-        improve recall quality. Requires Ollama to be installed and running.
-    C — Uses a cloud AI provider (OpenAI, Anthropic, …) for the best recall
-        quality. Queries leave this device; an API key is required.
+    B — All data stays on this device. Uses a model running on this
+        machine to improve recall quality — Ollama by default, but any
+        local OpenAI-compatible server works.
+    C — Uses your own endpoint, or a cloud provider (OpenAI, Anthropic, …),
+        for the best recall quality. Queries leave this device; a key is
+        required for a cloud provider, but not for a keyless custom endpoint.
     """
 
     A = "a"  # Local Guardian — on-device only, no LLM
-    B = "b"  # Smart Local — on-device + local Ollama LLM, no cloud
-    C = "c"  # Cloud LLM — best accuracy, queries leave device, API key needed
+    B = "b"  # Smart Local — on-device + a local model (Ollama by default), no cloud
+    C = "c"  # Full Power — your own endpoint or a cloud provider, best accuracy
 
 
 # ---------------------------------------------------------------------------

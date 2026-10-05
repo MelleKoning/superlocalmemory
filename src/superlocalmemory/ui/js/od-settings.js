@@ -328,8 +328,8 @@
   function buildMode() {
     var modeSel = makeSel('mode', [
       { v:'a', l:'Mode A — Local Guardian (zero cloud)' },
-      { v:'b', l:'Mode B — Smart Local (Ollama)' },
-      { v:'c', l:'Mode C — Full Power (cloud LLM)' }
+      { v:'b', l:'Mode B — Smart Local (local model, Ollama default)' },
+      { v:'c', l:'Mode C — Full Power (your endpoint or cloud)' }
     ]);
     var provSel = makeSel('provider', [
       { v:'none', l:'None (Mode A)' }, { v:'ollama', l:'Ollama (local)' },

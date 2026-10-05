@@ -35,12 +35,16 @@ operating modes:
           Optional integrations, backup, and downloads have separate network
           behavior; assess the complete deployment for privacy requirements.
 
-  Mode B  Smart Local — Uses a local Ollama LLM for summarization and
-          enrichment. The Ollama endpoint and enabled integrations determine
-          the data path. Requires: ollama running with a model pulled.
+  Mode B  Smart Local — Uses a model running on this machine for summarization
+          and enrichment: Ollama by default, but any local OpenAI-compatible
+          server works. The configured endpoint and enabled integrations
+          determine the data path. Requires: a local model server running
+          with a model pulled.
 
-  Mode C  Full Power — Uses a cloud LLM (OpenAI, Anthropic, etc.) for
-          provider-assisted enrichment and retrieval behavior.
+  Mode C  Full Power — Uses your own endpoint, or a cloud provider (OpenAI,
+          Anthropic, etc.), for provider-assisted enrichment and retrieval
+          behavior. A key is required for a cloud provider, but not for a
+          keyless custom endpoint.
 
 quick start:
   slm setup                   Interactive first-time setup

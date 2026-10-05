@@ -279,25 +279,34 @@ class TestOllamaEndpoint:
 # ---------------------------------------------------------------------------
 
 class TestValidateModeConfig:
-    def test_mode_b_no_warning_with_ollama(self) -> None:
-        """No warnings when Mode B has Ollama available."""
+    def test_mode_b_no_warning_with_llm_available(self) -> None:
+        """No warnings when Mode B has a local model available (Ollama or any
+        other local OpenAI-compatible server — see the StubLLMServer tests
+        above proving the latter actually works)."""
         from superlocalmemory.core.modes import validate_mode_config
         from superlocalmemory.storage.models import Mode
 
-        issues = validate_mode_config(Mode.B, has_ollama=True)
+        issues = validate_mode_config(Mode.B, has_llm=True)
         assert issues == [], f"Expected no issues, got: {issues}"
 
-    def test_mode_b_warns_without_ollama(self) -> None:
-        """Mode B emits a warning when Ollama is not available."""
+    def test_mode_b_warns_without_any_local_llm(self) -> None:
+        """Mode B emits a warning when no local model is available.
+
+        #112: the warning names the capability ("a local model"), not one
+        vendor — the file this test lives in exists specifically to prove
+        Mode B works with any local OpenAI-compatible server, not just
+        Ollama, so the warning must not contradict that by singling it out.
+        """
         from superlocalmemory.core.modes import validate_mode_config
         from superlocalmemory.storage.models import Mode
 
-        issues = validate_mode_config(Mode.B, has_ollama=False)
-        assert len(issues) >= 1, "Expected at least one warning for Mode B without Ollama"
+        issues = validate_mode_config(Mode.B, has_llm=False)
+        assert len(issues) >= 1, "Expected at least one warning for Mode B without a local model"
         combined = " ".join(issues).lower()
-        assert "ollama" in combined, (
-            f"Warning should mention Ollama, got: {issues}"
+        assert "ollama" not in combined, (
+            f"Warning must not name Ollama specifically, got: {issues}"
         )
+        assert "local model" in combined
 
     def test_mode_c_warns_without_cloud_llm(self) -> None:
         """Mode C emits warnings when cloud LLM is not available."""

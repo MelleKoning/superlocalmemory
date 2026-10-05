@@ -161,12 +161,12 @@ async def dashboard(request: Request):
             except Exception:
                 pass
 
-        from superlocalmemory.core.modes import dashboard_mode_fields
+        from superlocalmemory.core.modes import dashboard_mode_fields, mode_short_name
 
         # Mode record is the single source of truth for locality claims (F-03).
         payload = {
             "mode": config.mode.value,
-            "mode_name": {"a": "Local Guardian", "b": "Smart Local", "c": "Full Power"}.get(config.mode.value, "Unknown"),
+            "mode_name": mode_short_name(config.mode),
             "provider": config.llm.provider or "none",
             "model": config.llm.model or "",
             "memory_count": memory_count,
@@ -224,6 +224,31 @@ async def get_mode(request: Request):
         return _internal_error()
 
 
+def _mode_c_quick_switch_refusal(llm_config: "LLMConfig") -> dict | None:
+    """What the Mode C one-click quick-switch (PUT /api/v3/mode) must refuse (#112).
+
+    Allowed: a cloud API key, OR a deliberately configured custom endpoint —
+    llama.cpp, vLLM, LM Studio, or any other self-hosted OpenAI-compatible
+    server — with no key. Ollama's default endpoint does not count: that is
+    Mode B's own local model, not "my own endpoint" chosen for Mode C.
+
+    Refused only when NEITHER is present, since the daemon would come up with
+    nothing to call. Returns ``None`` when the switch may proceed, or the
+    JSON error body to send with it when it must not.
+    """
+    if llm_config.api_key or llm_config.has_custom_endpoint:
+        return None
+    return {
+        "error": (
+            "Mode C needs a cloud API key, or a configured custom endpoint "
+            "(llama.cpp, vLLM, or any other OpenAI-compatible server). "
+            "Configure one in Settings → Step 2 (uses POST /api/v3/mode/set), "
+            "or run `slm provider set`."
+        ),
+        "code": "mode_c_requires_api_key",
+    }
+
+
 @router.put("/mode")
 async def set_mode(request: Request):
     """Switch operating mode. Body: {"mode": "a"|"b"|"c"}"""
@@ -246,20 +271,15 @@ async def set_mode(request: Request):
         # Safety: a bare ``{mode:"c"}`` body (e.g., a stray dashboard button
         # click) used to silently auto-default the model to
         # ``anthropic/claude-sonnet-4`` with no API key, writing phantom state
-        # into config.json. Refuse that path — Mode C requires explicit
-        # provider+key via POST /api/v3/mode/set.
-        if new_mode == "c" and not old_config.llm.api_key:
-            return JSONResponse(
-                {
-                    "error": (
-                        "Mode C requires a cloud API key. "
-                        "Configure provider + key in Settings → Step 2 "
-                        "(uses POST /api/v3/mode/set)."
-                    ),
-                    "code": "mode_c_requires_api_key",
-                },
-                status_code=400,
-            )
+        # into config.json. Refuse that path unless a cloud key or a
+        # deliberately configured custom endpoint already exists — either
+        # one means the daemon has something to call. A genuinely bare
+        # config still needs explicit provider setup via POST
+        # /api/v3/mode/set.
+        if new_mode == "c":
+            _refusal = _mode_c_quick_switch_refusal(old_config.llm)
+            if _refusal is not None:
+                return JSONResponse(_refusal, status_code=400)
 
         # Apply new mode's structural presets (retrieval, math, channel_weights)
         # by building a fresh template, then graft them onto the loaded config so

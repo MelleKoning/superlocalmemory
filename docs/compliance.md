@@ -13,8 +13,8 @@ surrounding systems, and verified operating procedures.
 | Mode | Core memory path | Network considerations |
 |---|---|---|
 | A | Can store and retrieve through the configured local data root without a cloud model provider | Model/dependency downloads, connectors, backup, proxy providers, remote embedding endpoints, and other enabled integrations remain separate network paths |
-| B | Adds an operator-configured Ollama endpoint | Verify where Ollama runs and which data it receives |
-| C | Adds configured provider calls | Provider terms, retention, region, logging, access, and data-processing agreements become part of the deployment |
+| B | Adds an operator-configured local model endpoint (Ollama by default; any local OpenAI-compatible server works) | Verify where that local model runs and which data it receives |
+| C | Adds calls to your own endpoint, or a configured cloud provider | Provider terms, retention, region, logging, access, and data-processing agreements become part of the deployment |
 
 “Local-first” describes the default core state location. It does not mean that
 every optional feature is offline or that operating-system processes cannot

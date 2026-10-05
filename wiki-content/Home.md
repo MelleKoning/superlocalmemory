@@ -119,7 +119,7 @@ Explicit non-coverage (see `benchmark/README.md` honesty notes): fault-injection
 | Mode | Core behavior | Model path |
 |---|---|---|
 | **A — Local Guardian** | Local core memory and math-informed retrieval | No cloud model provider is required for core operations. |
-| **B — Smart Local** | Mode A plus an operator-managed Ollama endpoint | Local LLM endpoint. |
+| **B — Smart Local** | Mode A plus an operator-managed local model endpoint (Ollama by default; any local server works) | Local LLM endpoint. |
 | **C — Provider-assisted** | Local storage with configured provider-backed enrichment/retrieval behavior | Content sent to the configured provider follows that provider path. |
 
 Mode A does not disable model downloads, adapters, backup, proxy providers, or

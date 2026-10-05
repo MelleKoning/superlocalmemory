@@ -55,12 +55,16 @@ def register_v3_tools(server, get_engine: Callable) -> None:
     async def set_mode(mode: str) -> dict:
         """Switch operating mode (a, b, or c).
 
+        Modes are named by what you get, not by a vendor:
         Mode A (Local Guardian): Nothing leaves this device. No AI language
                 model runs. Fastest and most private.
-        Mode B: All data stays on this device. Uses a local Ollama AI model
-                to improve recall quality. Requires Ollama installed.
-        Mode C: Uses a cloud AI provider (OpenAI, Anthropic, …) for best
-                recall quality. Queries leave this device; API key required.
+        Mode B (Smart Local): All data stays on this device. Uses a model
+                running on this machine to improve recall quality — Ollama
+                by default, but any local OpenAI-compatible server works.
+        Mode C (Full Power): Uses your own endpoint, or a cloud AI provider
+                (OpenAI, Anthropic, …), for best recall quality. Queries
+                leave this device; a key is required for a cloud provider,
+                but not for a keyless custom endpoint.
         In any mode, the optional online answer check (off unless the user
         turns it on and agrees) sends each recall's question and top
         memories to the chosen provider; the returned description says so
@@ -413,20 +417,15 @@ def _mode_description(mode: str, retrieval: Any = None) -> str:
 
 
 def _base_mode_description(mode: str) -> str:
-    descriptions = {
-        "a": (
-            "Local Guardian — on-device only: no AI language model runs and "
-            "nothing leaves this device. Fastest and most private."
-        ),
-        "b": (
-            "Smart Local — on-device plus a local Ollama model: better recall "
-            "quality, and nothing leaves this device. Requires Ollama to be "
-            "installed and running."
-        ),
-        "c": (
-            "Full Power — uses a cloud AI provider (OpenAI, Anthropic, …) for "
-            "the best recall quality. Your queries leave this device and an "
-            "API key is required."
-        ),
-    }
-    return descriptions.get(mode, "Unknown mode")
+    """Capability blurb for a mode, read from the one place every surface
+    shares (#112) — CLI help, the setup wizard, and this MCP tool must never
+    describe a mode differently from one another.
+    """
+    from superlocalmemory.core.modes import mode_short_name, mode_tagline
+    from superlocalmemory.storage.models import Mode as _Mode
+
+    try:
+        m = _Mode(mode)
+    except ValueError:
+        return "Unknown mode"
+    return f"{mode_short_name(m)} — {mode_tagline(m)}"

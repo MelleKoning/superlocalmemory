@@ -135,6 +135,18 @@ class LLMConfig:
     def is_available(self) -> bool:
         return bool(self.provider)
 
+    @property
+    def has_custom_endpoint(self) -> bool:
+        """True when a deliberately configured non-Ollama endpoint exists (#112).
+
+        Mode C's quick-switch guard (PUT /api/v3/mode) needs to tell "nothing
+        is configured" apart from "a keyless custom endpoint — llama.cpp,
+        vLLM, LM Studio, or any other self-hosted OpenAI-compatible server —
+        is already set up". Ollama's endpoint is excluded on purpose: it is
+        Mode B's default, never "my own endpoint" for Mode C by itself.
+        """
+        return bool(self.api_base) and self.provider not in ("", "ollama")
+
 
 # ---------------------------------------------------------------------------
 # Channel Weights

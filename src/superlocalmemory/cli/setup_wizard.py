@@ -568,12 +568,13 @@ def run_wizard(auto: bool = False) -> None:
     print("      Review optional integrations and network policy for your deployment.")
     print()
     print("  [B] Smart Local" + (" (recommended — Ollama detected)" if ollama_present else ""))
-    print("      Local LLM via Ollama for enrichment.")
-    print("      Data stays on your machine.")
+    print("      A model on this machine for enrichment — Ollama by default,")
+    print("      any local OpenAI-compatible server works. Data stays on your machine.")
     print()
     print("  [C] Full Power")
-    print("      Cloud LLM for maximum accuracy.")
-    print("      Requires API key.")
+    print("      Your own endpoint, or a cloud provider, for maximum accuracy.")
+    print("      Requires an API key for a cloud provider; a keyless custom")
+    print("      endpoint needs none.")
     print()
 
     if interactive:
@@ -635,8 +636,8 @@ def run_wizard(auto: bool = False) -> None:
     else:
         config.save(mode_change=True)
 
-    mode_names = {"a": "Local Guardian", "b": "Smart Local", "c": "Full Power"}
-    print(f"\n  ✓ Mode {choice.upper()} ({mode_names[choice]}) configured")
+    from superlocalmemory.core.modes import mode_short_name
+    print(f"\n  ✓ Mode {choice.upper()} ({mode_short_name(choice)}) configured")
 
     # -- Step 3: Code Knowledge Graph --
     print()
