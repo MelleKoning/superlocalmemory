@@ -1,0 +1,153 @@
+# Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar
+# Licensed under AGPL-3.0-or-later - see LICENSE file
+# Part of SuperLocalMemory | https://qualixar.com
+
+"""MCP surface for saved views (issue #113).
+
+Two tools, split by what they may change, because a remote read-only key may
+run views but never edit them (``server/remote_tool_policy.py``):
+
+* ``run_view`` (read) — no name: list the profile's views. A name: run that
+  view through the same recall the ``recall`` tool uses, and return recall's
+  answer in recall's order, with every memory's id.
+* ``manage_view`` (write) — create, rename or delete a view.
+
+Both work on the active profile and take no profile argument; over remote
+access they run only while the key's own profile is active (they are not in
+``ROUTED_TOOLS``), so a key bound to one profile only ever sees that
+profile's views. Inputs are validated by ``views.model`` with the same codes
+the CLI and HTTP routes return.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Any, Callable
+
+from mcp.types import ToolAnnotations
+
+from superlocalmemory.core.admission import admits
+from superlocalmemory.core.operation_request import OperationKind
+from superlocalmemory.views import (
+    ViewError,
+    default_store,
+    recall_arguments,
+    shape_run,
+    view_session_id,
+)
+
+logger = logging.getLogger("superlocalmemory.mcp.views")
+
+_ACTIONS = ("create", "rename", "delete")
+
+
+def _refused(exc: ViewError) -> dict[str, Any]:
+    return {"success": False, "retryable": False, **exc.as_dict(), "error": exc.message}
+
+
+async def _profile(get_engine: Callable[[], Any]) -> str:
+    from superlocalmemory.mcp.tools_core import _runtime_profile
+
+    return await _runtime_profile(get_engine)
+
+
+def _recall(profile: str, view: Any) -> dict[str, Any]:
+    """The ``recall`` tool's own path: the daemon pool, the view's arguments.
+
+    The session id is synthetic (``view:``), so continuity ignores it: a
+    conversation's working set would bias a view's second run toward what its
+    first run showed.
+    """
+    from superlocalmemory.mcp._daemon_proxy import choose_pool
+
+    args = recall_arguments(view)
+    return choose_pool().recall(
+        args["query"], limit=args["limit"], session_id=view_session_id(view),
+        profile_id=profile,
+        **{k: args[k] for k in ("window", "as_of", "kind") if k in args},
+    )
+
+
+def register_view_tools(server: Any, get_engine: Callable[[], Any]) -> None:
+    """Register ``run_view`` and ``manage_view``."""
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
+    @admits(OperationKind.RECALL)
+    async def run_view(name: str = "") -> dict[str, Any]:
+        """Run one of your saved views, or list them.
+
+        A saved view is a named recall query the person saved (e.g. "Work log":
+        "what did I ship" over the last 7 days). Leave ``name`` empty to list
+        the views in this profile. With a name, the view's query runs through
+        the normal recall path and the answer comes back in recall's order;
+        every result carries ``fact_id``, the id ``fetch`` takes. Honour
+        ``no_confident_match`` exactly as for ``recall``.
+        """
+        try:
+            profile = await _profile(get_engine)
+            store = default_store()
+            if not (name or "").strip():
+                views = await asyncio.to_thread(store.list, profile)
+                return {"success": True, "profile": profile, "count": len(views),
+                        "views": [v.to_dict() for v in views]}
+            view = await asyncio.to_thread(store.get, profile, name)
+            response = await asyncio.to_thread(_recall, profile, view)
+        except ViewError as exc:
+            return _refused(exc)
+        except Exception as exc:  # noqa: BLE001 — reported, never a traceback
+            logger.exception("run_view failed")
+            return {"success": False, "error": f"run_view failed: {exc}"}
+        if not response.get("ok", False):
+            return {"success": False, "code": response.get("code", ""),
+                    "retryable": bool(response.get("retryable", False)),
+                    "error": response.get("error", "recall failed")}
+        return shape_run(view, response)
+
+    @server.tool(annotations=ToolAnnotations(destructiveHint=True))
+    @admits(OperationKind.REMEMBER)
+    async def manage_view(
+        action: str,
+        name: str,
+        query: str = "",
+        filters: dict[str, str] | None = None,
+        limit: int | None = None,
+        new_name: str = "",
+    ) -> dict[str, Any]:
+        """Create, rename or delete a saved view. No memory is ever changed.
+
+        Args:
+            action: "create", "rename" or "delete".
+            name: the view's name (at most 80 characters).
+            query: for "create": what to look for, as you would ask ``recall``
+                (at most 1000 characters).
+            filters: for "create", optional: ``kind`` (a memory kind),
+                ``window`` ("7d", "30d", "2026-07-01..2026-07-31") and/or
+                ``as_of`` (ISO-8601). Anything else is refused.
+            limit: for "create": results to show, 1-50 (default 10).
+            new_name: for "rename": the new name.
+        """
+        verb = (action or "").strip().lower()
+        if verb not in _ACTIONS:
+            return {"success": False, "code": "invalid_view_action", "retryable": False,
+                    "error": f"action must be one of: {', '.join(_ACTIONS)}"}
+        try:
+            profile = await _profile(get_engine)
+            store = default_store()
+            if verb == "create":
+                view = await asyncio.to_thread(
+                    lambda: store.create(profile, name=name, query=query,
+                                         filters=filters, limit=limit))
+            elif verb == "rename":
+                view = await asyncio.to_thread(store.rename, profile, name, new_name)
+            else:
+                view = await asyncio.to_thread(store.delete, profile, name)
+        except ViewError as exc:
+            return _refused(exc)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("manage_view failed")
+            return {"success": False, "error": f"manage_view failed: {exc}"}
+        return {"success": True, "action": verb, "profile": profile, "view": view.to_dict()}
+
+
+__all__ = ["register_view_tools"]

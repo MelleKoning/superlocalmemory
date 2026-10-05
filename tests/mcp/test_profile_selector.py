@@ -136,6 +136,8 @@ _EXPECTED_FULL_BASE = frozenset({
     "slm_loop_run", "slm_loop_history", "slm_loop_show",
     # 4.0.8 (#113): in core, therefore necessarily in full.
     "get_memory_summary",
+    # 4.1.21 (#113): saved views, run (read) and manage (write).
+    "run_view", "manage_view",
     # prestage_context is registered but intentionally not in named profiles.
 })
 
@@ -153,14 +155,14 @@ def test_profile_full_exact():
     assert full == _EXPECTED_FULL, (
         f"full diff — extra: {full - _EXPECTED_FULL}, missing: {_EXPECTED_FULL - full}"
     )
-    assert len(full) == 54, f"full must be 54 names, got {len(full)}"
+    assert len(full) == 56, f"full must be 56 names, got {len(full)}"
     # Must ⊇ core memory names
     core = mod._PROFILE_DEFINITIONS["core"]
     assert core <= full, f"full must be a superset of core; missing from full: {core - full}"
 
 
 # ---------------------------------------------------------------------------
-# RED-5: power == 66 and ⊇ full
+# RED-5: power == 68 and ⊇ full
 # ---------------------------------------------------------------------------
 
 _POWER_EXTRA = frozenset({
@@ -180,7 +182,7 @@ def test_profile_power_exact():
     assert power == _EXPECTED_POWER, (
         f"power diff — extra: {power - _EXPECTED_POWER}, missing: {_EXPECTED_POWER - power}"
     )
-    assert len(power) == 66, f"power must be 66 names, got {len(power)}"
+    assert len(power) == 68, f"power must be 68 names, got {len(power)}"
     full = mod._PROFILE_DEFINITIONS["full"]
     assert full <= power, f"power must be a superset of full; missing: {full - power}"
 
@@ -249,6 +251,7 @@ def test_every_profile_name_is_a_real_registered_tool():
     from superlocalmemory.mcp.tools_context import register_prestage_tool
     from superlocalmemory.mcp.tools_kinds import register_kind_tools
     from superlocalmemory.mcp.tools_summaries import register_summary_tools
+    from superlocalmemory.mcp.tools_views import register_view_tools
 
     collector = _NameCollector()
     get_engine_stub = lambda: None  # noqa: E731
@@ -267,6 +270,7 @@ def test_every_profile_name_is_a_real_registered_tool():
     register_brain_tools(collector, get_engine_stub)
     register_prestage_tool(collector, lambda *a, **k: [])
     register_summary_tools(collector, get_engine_stub)
+    register_view_tools(collector, get_engine_stub)
     register_kind_tools(collector, get_engine_stub)
 
     mod = _get_module()

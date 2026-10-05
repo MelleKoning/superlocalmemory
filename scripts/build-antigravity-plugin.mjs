@@ -191,11 +191,11 @@ files.set('mcp_config.json', JSON.stringify({
       command: 'slm',
       args: ['mcp'],
       // Antigravity is a content-production primary surface. Give it the
-      // full, opt-in power profile (66 tools) while keeping the operator's
+      // full, opt-in power profile (68 tools) while keeping the operator's
       // store path untouched and the host identity explicit.
       //
       // Do NOT also set SLM_MCP_ALL_TOOLS=1 here: that bypasses the profile
-      // filter and registers all 101 tools, above Antigravity's reported
+      // filter and registers all 103 tools, above Antigravity's reported
       // 100-tool ceiling (vendor-reported; the host refuses the server
       // above that count). `power` is already the widest named profile —
       // ALL_TOOLS would only add tools no profile is meant to carry.

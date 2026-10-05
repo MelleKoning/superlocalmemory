@@ -666,6 +666,11 @@ class GDPRCompliance:
                 )
                 counts["answer_check_history"] = erase_profile_everywhere(
                     data_root / "learning.db", profile_id)
+                # Saved views hold the person's own query text (4.1.21, #113).
+                from superlocalmemory.views import ViewStore
+
+                counts["saved_views"] = ViewStore(
+                    data_root / "learning.db").erase_profile(profile_id)
             except Exception as exc:
                 logger.warning("GDPR erase: learning-db reset failed: %s", exc)
                 counts["learning_db_failed"] = 1

@@ -21,8 +21,8 @@ _ENDPOINT = "/api/v3/mcp/profiles"
 _EXPECTED_COUNTS = {
     "core": 18,   # v4.1.0: + switch_profile (memory is profile-scoped)
     "code": 38,   # 4.1.19 WP8: + memory-kind management (default visibility)
-    "full": 54,   # 4.1.19 WP8: + memory-kind management (default visibility)
-    "power": 66,  # unchanged — memory-kind management now arrives via full
+    "full": 56,   # 4.1.21: + saved views (run_view, manage_view)
+    "power": 68,  # + saved views, via full
     "mesh": 8,
 }
 
@@ -144,7 +144,7 @@ def test_mcp_profiles_descriptions_present(trusted_client, monkeypatch):
 def test_mcp_profiles_current_defaults_to_full(trusted_client, monkeypatch):
     """When SLM_MCP_PROFILE is unset, the MCP server falls back to
     `_ESSENTIAL_TOOLS`, which `tests/test_mcp/test_mcp_exposure_contract.py`
-    asserts is exactly the `full` profile (54 tools) — not `core` (18). The
+    asserts is exactly the `full` profile (56 tools) — not `core` (18). The
     dashboard used to claim 'core' here, understating the real no-profile
     surface by 36 tools (L3-05).
     """

@@ -129,13 +129,14 @@ class TestProjectPickerEndpoint:
     """The picker replaces a control that could not work. Keep it wired."""
 
     def test_endpoint_is_registered(self):
-        from superlocalmemory.server.routes import memories
+        # 4.1.21: the summary routes moved to their own module.
+        from superlocalmemory.server.routes import summaries
 
-        paths = {r.path for r in memories.router.routes}
+        paths = {r.path for r in summaries.router.routes}
         assert "/api/summary/projects" in paths
 
     def test_label_shortens_long_paths_but_keeps_siblings_distinct(self):
-        from superlocalmemory.server.routes.memories import _project_label
+        from superlocalmemory.server.routes.summaries import _project_label
 
         a = "/Users/alice/Documents/official/Call-off-tool/goep-serviceTool"
         b = "/Users/alice/Documents/official/testing - automation"
@@ -145,7 +146,7 @@ class TestProjectPickerEndpoint:
 
     @pytest.mark.parametrize("path", ["", "/", "widget"])
     def test_label_never_raises_on_degenerate_paths(self, path):
-        from superlocalmemory.server.routes.memories import _project_label
+        from superlocalmemory.server.routes.summaries import _project_label
 
         assert isinstance(_project_label(path), str)
 
@@ -154,7 +155,7 @@ class TestProjectPickerEndpoint:
         silent summary of everything."""
         import inspect
 
-        from superlocalmemory.server.routes import memories
+        from superlocalmemory.server.routes import summaries
 
-        src = inspect.getsource(memories.get_summary)
+        src = inspect.getsource(summaries.get_summary)
         assert "project requires target" in src

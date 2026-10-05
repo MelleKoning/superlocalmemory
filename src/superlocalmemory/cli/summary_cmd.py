@@ -16,6 +16,7 @@ Three summaries, each bounded and traceable:
   ``slm summary session <id>``   what one session covered
   ``slm summary day [DATE]``     what a day's main topics were
   ``slm summary project <path>`` what was worked on in a project
+  ``slm summary sessions``       which sessions there are to summarise
 
 Every result states its coverage. Session data in particular is sparse — roughly
 4% of facts carry a session id on a real store — so a session summary reports what
@@ -28,6 +29,7 @@ works in Local Guardian mode with nothing installed.
 from __future__ import annotations
 
 import json
+import sys
 from argparse import Namespace
 from datetime import date, timedelta
 from pathlib import Path
@@ -133,7 +135,27 @@ def _emit(result: Any, as_json: bool) -> None:
     print(line)
     if result.generated_by:
         print(f"Method: {result.generated_by}")
-    print("Use --json to see the exact memories this came from.")
+    _print_source_ids(result.source_fact_ids)
+
+
+#: Source ids printed in text mode; --json always carries every one.
+_SHOWN_IDS = 20
+
+
+def _print_source_ids(ids: list[str]) -> None:
+    """The memories a summary came from, by the id ``slm delete`` and ``fetch`` take.
+
+    Issue #113's binding constraint is that a summary traces back to its
+    memories. Telling the reader to rerun with --json to find out which ones
+    left the plain-text summary untraceable on the surface people actually read.
+    """
+    if not ids:
+        return
+    print("Memory ids:")
+    for fact_id in ids[:_SHOWN_IDS]:
+        print(f"  {fact_id}")
+    if len(ids) > _SHOWN_IDS:
+        print(f"  … and {len(ids) - _SHOWN_IDS} more (--json lists every one)")
 
 
 def cmd_summary(args: Namespace) -> None:
@@ -156,13 +178,29 @@ def cmd_summary(args: Namespace) -> None:
 
     if sub == "day":
         from superlocalmemory.summaries import generate_daily_reflection
+        from superlocalmemory.summaries.base import local_offset_minutes
 
         target = getattr(args, "date", None) or date.today().isoformat()
         if target == "yesterday":
             target = (date.today() - timedelta(days=1)).isoformat()
         elif target == "today":
             target = date.today().isoformat()
-        _emit(generate_daily_reflection(db, target, profile, cfg), as_json)
+        try:
+            date.fromisoformat(target)
+        except ValueError:
+            print(f"Not a date: {target!r}. Use YYYY-MM-DD, 'today' or 'yesterday'.",
+                  file=sys.stderr)
+            sys.exit(2)
+        # "today" here is this computer's today, so the day is bucketed in this
+        # computer's time zone, not UTC (east of UTC, early-morning memories
+        # used to land in the previous day's reflection).
+        _emit(generate_daily_reflection(db, target, profile, cfg,
+                                        tz_offset_minutes=local_offset_minutes(target)),
+              as_json)
+        return
+
+    if sub == "sessions":
+        _emit_sessions(db, profile, as_json)
         return
 
     if sub == "project":
@@ -178,9 +216,30 @@ def cmd_summary(args: Namespace) -> None:
     print("  slm summary day yesterday       ...or yesterday")
     print("  slm summary day 2026-08-17      ...or a specific date")
     print("  slm summary project             work log for the current directory")
+    print("  slm summary sessions            sessions you can summarise")
     print("  slm summary session <id>        what one session covered")
     print()
     print("Add --json to include the ids of the memories a summary came from.")
+
+
+def _emit_sessions(db: Path, profile: str, as_json: bool) -> None:
+    """Recent sessions with memories, so a session summary can be asked for."""
+    from superlocalmemory.summaries.sessions import list_recent_sessions
+
+    sessions = list_recent_sessions(db, profile)
+    if as_json:
+        print(json.dumps({"profile_id": profile, "sessions": sessions}, indent=2))
+        return
+    if not sessions:
+        print("No sessions with saved memories yet. Most memories carry no session, "
+              "so a day or project summary usually covers more.")
+        return
+    print(f"Recent sessions ({len(sessions)}), newest first:")
+    for item in sessions:
+        n = item["memory_count"]
+        print(f"  {item['session_id']}  {n} memor{'y' if n == 1 else 'ies'}, "
+              f"last {item['last_at']}")
+    print("Summarise one with: slm summary session <id>")
 
 
 def register_summary_parser(sub: Any) -> None:
@@ -197,6 +256,10 @@ def register_summary_parser(sub: Any) -> None:
     s.add_argument("session_id", help="session id (see `slm status`)")
     s.add_argument("--json", action="store_true")
     s.add_argument("--profile")
+
+    ls = ssub.add_parser("sessions", help="recent sessions you can summarise")
+    ls.add_argument("--json", action="store_true")
+    ls.add_argument("--profile")
 
     d = ssub.add_parser("day", help="what a day's main topics were")
     d.add_argument(

@@ -27,8 +27,8 @@ project, a client engagement, a production vs staging environment.
 |---------|-------|-------------|
 | `core` | 18 tools — remember, recall, search, session, optimize | Minimal footprint, no code tools |
 | `code` | 38 tools — core + portable Brain evidence + code graph + profile switching + bounded loops + memory-kind management | Default for IDE/coding agents |
-| `full` | 54 tools — code + all memory ops + mesh + bounded loops | Multi-session, team workflows |
-| `power` | 66 tools — full + governance + behavioral tools | Enterprise, admin, audit use cases |
+| `full` | 56 tools — code + all memory ops + mesh + bounded loops | Multi-session, team workflows |
+| `power` | 68 tools — full + governance + behavioral tools | Enterprise, admin, audit use cases |
 | `mesh` | 8 tools — mesh coordination only | Lightweight cross-session signalling |
 
 The profile is set at MCP server startup via `SLM_MCP_PROFILE` in the MCP config.

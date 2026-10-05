@@ -4349,6 +4349,11 @@ def _register_dashboard_routes(application: FastAPI) -> None:
     application.include_router(answer_check_history_router)
     from superlocalmemory.server.routes.facets import router as facets_router
     application.include_router(facets_router)
+    # Readable summaries and saved views (4.1.21, issue #113).
+    from superlocalmemory.server.routes.summaries import router as summaries_router
+    application.include_router(summaries_router)
+    from superlocalmemory.server.routes.views import router as views_router
+    application.include_router(views_router)
     from superlocalmemory.server.routes.upgrade_restore import register as register_upgrade
     register_upgrade(application)
 

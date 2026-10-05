@@ -96,6 +96,9 @@ _PROFILE_FULL: frozenset[str] = frozenset({
     # v4.0.8: readable summaries (#113). In core, so it must be in full too —
     # full is asserted to be a superset of core.
     "get_memory_summary",
+    # 4.1.21: saved views (#113). Not in core: core stays the smallest surface,
+    # and a view is a convenience over recall, which core already has.
+    "run_view", "manage_view",
     # prestage_context remains registered but deliberately raw-server-only.
 }) | _PROFILE_FULL_MESH | _PROFILE_KINDS  # 54
 

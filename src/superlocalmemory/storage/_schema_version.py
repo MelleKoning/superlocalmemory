@@ -53,7 +53,11 @@ from pathlib import Path
 #: M053 is additive (two new learning.db tables for the Answer Check history);
 #: the ceiling moves to it by the same convention. Its ``DOWNGRADE_FLOOR`` is 51,
 #: so going back to 4.1.18 stays possible exactly as M052 left it.
-SUPPORTED_SCHEMA_VERSION: int = 53
+#:
+#: M054 is additive (one new learning.db table for saved views); the ceiling
+#: moves to it by the same convention. Its ``DOWNGRADE_FLOOR`` is 51 as well, so
+#: going back to 4.1.20, 4.1.19 or 4.1.18 stays possible.
+SUPPORTED_SCHEMA_VERSION: int = 54
 
 
 class SchemaVersionError(RuntimeError):

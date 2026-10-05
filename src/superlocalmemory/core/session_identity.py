@@ -60,8 +60,12 @@ __all__ = [
 #: shared by every request from either — ``agent:mcp_client`` alone held 24
 #: outcomes from unrelated callers. Both were hand-minted in
 #: ``server/routes/v3_api.py``, which is why neither was listed here.
+#: ``view:`` (4.1.21) names a saved view being run. A view is a fixed question,
+#: not a conversation: continuity must not bias its second run toward what its
+#: first run showed, and a burst of view runs must not take working-set slots
+#: from real conversations.
 SYNTHETIC_PREFIXES: tuple[str, ...] = (
-    "http:", "mcp:", "cli:", "probe:", "engine:", "agent:", "api:",
+    "http:", "mcp:", "cli:", "probe:", "engine:", "agent:", "api:", "view:",
 )
 
 

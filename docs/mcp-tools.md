@@ -442,7 +442,7 @@ Find and optionally terminate orphaned SLM daemon or MCP processes. Safe to call
 
 ## Code-Graph Tools
 
-Available only in the `code` profile (38 tools). `full` (54 tools) and `power` (66 tools)
+Available only in the `code` profile (38 tools). `full` (56 tools) and `power` (68 tools)
 do not include the code-graph tools; set `SLM_MCP_PROFILE=code` to get them. Not available
 in `core` or `mesh` profiles either.
 

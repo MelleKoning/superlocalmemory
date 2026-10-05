@@ -158,7 +158,8 @@ import pytest
 #: 52 as of 4.1.19: +M052_memory_kinds. Additive (five nullable columns, two new
 #: tables); the ceiling still follows the trailing serial by convention.
 #: 53 as of 4.1.20: +M053_answer_check_history (learning.db, two new tables).
-_EXPECTED_SCHEMA_VERSION: int = 53
+#: 54 as of 4.1.21: +M054_saved_views (learning.db, one new table).
+_EXPECTED_SCHEMA_VERSION: int = 54
 
 #: Total migrations in the MIGRATIONS + DEFERRED_MIGRATIONS catalogue.
 #: M001–M043 with M008 absent = 42 total.
@@ -177,7 +178,8 @@ _EXPECTED_SCHEMA_VERSION: int = 53
 # existing row, so 4.0.5 forward-compat is unaffected.
 # 51 as of 4.1.19: +M052_memory_kinds (eager, memory.db, additive).
 # 52 as of 4.1.20: +M053_answer_check_history (eager, learning.db, additive).
-_EXPECTED_MIGRATION_COUNT: int = 52
+# 53 as of 4.1.21: +M054_saved_views (eager, learning.db, additive).
+_EXPECTED_MIGRATION_COUNT: int = 53
 
 #: Path to an installed reference package's migrations directory, if one exists.
 #:

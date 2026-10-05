@@ -130,6 +130,17 @@ class TestEveryReadPathThatAnswersAQuestion:
         """"All memories 5,093" was counting 1,195 withheld summaries."""
         assert store.get_fact_count(_PROFILE) == 2
 
+    def test_the_daily_summary(self, store: DatabaseManager) -> None:
+        """4.1.21 (#113): the summaries hand-roll their SQL and were not on this
+        list, so "Today" quoted a withheld refusal as the owner's own note.
+        Session and project summaries are covered in
+        tests/test_summaries/test_summaries_show_only_visible_memories.py."""
+        from superlocalmemory.summaries import generate_daily_reflection
+
+        result = generate_daily_reflection(store.db_path, "2026-08-01", _PROFILE)
+        assert [f for f in result.source_fact_ids if f.startswith("hide-")] == []
+        assert sorted(result.source_fact_ids) == ["keep-1", "keep-2"]
+
 
 class TestTheEscapeHatchStillWorks:
     def test_repair_and_erasure_can_see_withheld_rows(

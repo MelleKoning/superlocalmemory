@@ -525,6 +525,12 @@ def _cmd_kinds_dispatch(args: Namespace) -> None:
     cmd_kinds(args)
 
 
+def _cmd_view_dispatch(args: Namespace) -> None:
+    """4.1.21: saved views through the daemon (cli/view_cmd.py)."""
+    from superlocalmemory.cli.view_cmd import cmd_view
+    cmd_view(args)
+
+
 # ---- end SLM v3.6 Optimize dispatch functions ----
 
 
@@ -661,6 +667,7 @@ def dispatch(args: Namespace) -> None:
         "backup": _cmd_backup_dispatch,
         "summary": _cmd_summary_dispatch,
         "kinds": _cmd_kinds_dispatch,
+        "view": _cmd_view_dispatch,
     }
     handler = handlers.get(args.command)
     if handler:
@@ -2789,6 +2796,7 @@ _COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("trace", "Recall with a per-channel score breakdown"),
         ("ingest", "Ingest external observations / documents"),
         ("summary", "Readable summaries: session, day, or project"),
+        ("view", "Saved views: named recall queries you can re-run"),
         ("kinds", "Memory kinds: status, settings, classify (undoable)"),
     ]),
     ("Privacy & compliance", [

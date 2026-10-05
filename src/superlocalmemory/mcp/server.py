@@ -77,13 +77,13 @@ def reset_engine():
 
 # Register tools and resources -------------------------------------------------
 #
-# Essential-only default: 46 base tools + 8 mesh tools = 54 registered
+# Essential-only default: 48 base tools + 8 mesh tools = 56 registered
 # when mesh is enabled. Set ``SLM_MCP_ALL_TOOLS=1`` to expose the full
 # toolset. Rationale: IDEs cap at 50-100 tools total (Cursor,
 # Antigravity, Windsurf) and a maximal SLM registration crowds out
 # other MCP servers the user may have installed.
 # Admin/diagnostics tools remain available via CLI (`slm <command>`).
-# Set SLM_MCP_ALL_TOOLS=1 to enable all 101 tools (power users).
+# Set SLM_MCP_ALL_TOOLS=1 to enable all 103 tools (power users).
 
 import os as _os_reg
 
@@ -110,6 +110,9 @@ _ESSENTIAL_TOOLS: set[str] = {
     # ``full``, and a tool that ships in the smallest profile ("core") cannot be
     # missing from the fallback without a client silently losing it.
     "get_memory_summary",
+    # 4.1.21 (#113): saved views — run (read) and manage (write). Mirrors
+    # ``full`` in mcp/profiles.py, as this set must.
+    "run_view", "manage_view",
     # Memory management (2)
     "forget", "run_maintenance",
     # NOTE: prestage_context IS registered (see register_prestage_tool below)
@@ -298,6 +301,8 @@ from superlocalmemory.mcp.tools_brain import register_brain_tools
 register_brain_tools(_target, get_engine)  # v4.0.2 portable Brain receipts
 from superlocalmemory.mcp.tools_summaries import register_summary_tools
 register_summary_tools(_target, get_engine)  # v4.0.8 issue #113 summary reads
+from superlocalmemory.mcp.tools_views import register_view_tools
+register_view_tools(_target, get_engine)  # 4.1.21 issue #113 saved views
 from superlocalmemory.mcp.tools_kinds import register_kind_tools
 register_kind_tools(_target, get_engine)  # 4.1.19 WP8: memory-kind management (ships in every profile, not only power)
 from superlocalmemory.mcp.tools_context import register_prestage_tool
