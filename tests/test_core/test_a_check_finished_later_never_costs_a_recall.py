@@ -13,7 +13,6 @@ fake worker that takes ``DOC_S`` per memory, as the real one does.
 from __future__ import annotations
 
 import json
-import sys
 import threading
 import time
 from pathlib import Path
@@ -28,6 +27,7 @@ from superlocalmemory.core.answer_check_stage import run_answer_check
 from superlocalmemory.retrieval import answer_check_status as acs
 from superlocalmemory.retrieval import sufficiency as laya_mod
 from superlocalmemory.retrieval.sufficiency import LayaSufficiencyJudge, SufficiencyVerdict
+from tests.helpers.owned_python import owned_environment
 
 #: Seconds the fake worker spends on each memory.
 DOC_S = 0.3
@@ -90,7 +90,8 @@ def laya(tmp_path, monkeypatch):
     monkeypatch.setenv("FAKE_LAYA_LOG", str(log))
     monkeypatch.setenv("FAKE_LAYA_DOC_S", str(DOC_S))
     monkeypatch.setattr(laya_mod, "_WARMUP_BACKOFF_S", 0.01)
-    judge = LayaSufficiencyJudge(python=sys.executable, worker_path=worker,
+    judge = LayaSufficiencyJudge(python=str(owned_environment(tmp_path / "env")),
+                                 worker_path=worker,
                                  timeout_s=5.0, start=False)
     judge.start_warmup()
     assert _wait(lambda: judge.ready), "fake worker did not load"

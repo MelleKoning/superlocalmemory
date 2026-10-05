@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import random
-import sys
 import threading
 import time
 from pathlib import Path
@@ -30,6 +29,7 @@ from superlocalmemory.retrieval.jev_judge import JEV_ENDPOINTS, JevSufficiencyJu
 from superlocalmemory.retrieval.sufficiency import LayaSufficiencyJudge, SufficiencyVerdict
 from superlocalmemory.server.recall_serializer import recall_response_metadata
 from superlocalmemory.storage.models import AtomicFact, RecallResponse, RetrievalResult
+from tests.helpers.owned_python import owned_environment
 
 FAKE_KEY = "sk-test-" + "z9Y8x7W6" * 4
 MODEL = JEV_ENDPOINTS["typesafe"][1]
@@ -434,7 +434,8 @@ def laya(tmp_path, monkeypatch):
     log = tmp_path / "worker.log"
     monkeypatch.setenv("FAKE_LAYA_LOG", str(log))
     monkeypatch.setattr(laya_mod, "_WARMUP_BACKOFF_S", 0.01)
-    judge = LayaSufficiencyJudge(python=sys.executable, worker_path=Path(path),
+    judge = LayaSufficiencyJudge(python=str(owned_environment(tmp_path / "env")),
+                                 worker_path=Path(path),
                                  timeout_s=2.0, start=False)
     yield judge, log
     judge.shutdown()
