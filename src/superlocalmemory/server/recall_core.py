@@ -131,6 +131,8 @@ def _envelope(engine: Any, call: RecallCall, response: Any, snapshot: Any) -> di
         ) if memory_ids else {}
     )
     retrieval = getattr(engine._config, "retrieval", None)
+    from superlocalmemory.core.kind_query import engine_display_min_confidence
+
     results, no_confident_match = serialize_recall_response(
         response, limit=call.limit,
         memory_map={k: sanitize_json_text(v) for k, v in memory_map.items()},
@@ -140,6 +142,8 @@ def _envelope(engine: Any, call: RecallCall, response: Any, snapshot: Any) -> di
         # learning signal when a pending outcome exists to settle.
         include_marker=call.include_marker,
         full=call.full, include_source=call.include_source,
+        # One kind threshold for the filter and the labels on every surface.
+        display_min_confidence=engine_display_min_confidence(engine),
     )
     for item in results:
         item["content"] = sanitize_json_text(item.get("content", ""))

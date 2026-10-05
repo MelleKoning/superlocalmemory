@@ -95,6 +95,7 @@ def _handle_recall(
 
     # v3.6.6: same shared chokepoint as the daemon HTTP route + CLI fallback,
     # so the MCP WorkerPool subprocess path returns identical budgeted output.
+    from superlocalmemory.core.kind_query import engine_display_min_confidence
     from superlocalmemory.server.recall_serializer import (
         recall_response_metadata,
         serialize_recall_response,
@@ -113,6 +114,7 @@ def _handle_recall(
         # ``pending_outcomes`` row that no code path writes; settlement reads
         # the evidence recorded with the play instead.)
         include_marker=bool(session_id),
+        display_min_confidence=engine_display_min_confidence(engine),
     )
     return {
         "ok": True,

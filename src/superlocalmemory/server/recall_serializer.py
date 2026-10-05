@@ -174,6 +174,7 @@ def serialize_recall_response(
     full: bool = False,
     include_source: bool = False,
     include_marker: bool = False,
+    display_min_confidence: float | None = None,
 ) -> tuple[list[dict], bool]:
     """Convert a RecallResponse into budgeted, source-disciplined dicts.
 
@@ -190,6 +191,15 @@ def serialize_recall_response(
         full:           Bypass clamping/stubs (additive escape hatch).
         include_source: Return full source_content (else ≤280-char preview).
         include_marker: Emit each result's HMAC usage marker. See below.
+        display_min_confidence: The confidence below which a model-suggested
+            kind is shown as its legacy/untyped fallback instead of a
+            suggestion (``storage.memory_kinds.kind_fields``). ``None`` (the
+            default) keeps that function's own 0.20 default — a caller with a
+            live ``SLMConfig`` should pass
+            ``core.kind_query.engine_display_min_confidence(engine)`` so a
+            recall result agrees with what ``slm list`` and MCP show for the
+            SAME fact (4.1.21 #16: this used to be silently hard-coded here
+            regardless of what was configured).
 
     Returns:
         (results, no_confident_match) — results is a list of dicts; the bool
@@ -221,6 +231,9 @@ def serialize_recall_response(
     # T-inject: one shared "now" so every result's age label is consistent.
     from datetime import datetime as _dt, timezone as _tz
     _now = _dt.now(_tz.utc)
+    # None keeps kind_fields' own default; a caller that passed a value means it.
+    _kind_kwargs = ({} if display_min_confidence is None
+                    else {"display_min_confidence": display_min_confidence})
     raw: list[dict] = []
     for r in (response.results or [])[:limit]:
         fact = r.fact
@@ -263,7 +276,7 @@ def serialize_recall_response(
             "age_label": relative_age(_created, _now),
             "evidence_chain": list(getattr(r, "evidence_chain", []) or []),
             # The memory's kind, the same five fields on every surface.
-            **kind_fields(fact),
+            **kind_fields(fact, **_kind_kwargs),
         }
         # Only when asked, and only when the engine actually produced one —
         # an empty key would be indistinguishable from a marker that failed

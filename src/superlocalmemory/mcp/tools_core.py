@@ -721,10 +721,14 @@ def register_core_tools(server, get_engine: Callable) -> None:
         try:
             engine = get_engine()
             pid = await _runtime_profile(get_engine, (profile_id or "").strip())
+            # Read once: used for BOTH the --kind filter above and labelling
+            # each item below, so a fact cannot pass the filter at one
+            # threshold and be labelled (confirmed/suggested/legacy) at another.
+            _display_min_confidence = engine_display_min_confidence(engine)
             _truncated: list[bool] = []
             facts = search_facts(
                 engine._db, query, pid, limit, parsed_kind,
-                display_min_confidence=engine_display_min_confidence(engine),
+                display_min_confidence=_display_min_confidence,
                 truncated=_truncated,
             )
             items = []
@@ -735,7 +739,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     "fact_type": f.fact_type.value,
                     "confidence": round(f.confidence, 3),
                     "date": f.observation_date,
-                    **kind_fields(f),
+                    **kind_fields(f, display_min_confidence=_display_min_confidence),
                 })
             result = {"success": True, "results": items, "count": len(items)}
             # 4.1.19 L2-13/M2: told, never a silent short answer, when the
@@ -846,10 +850,14 @@ def register_core_tools(server, get_engine: Callable) -> None:
             # v3.6.12 (search-2): push the limit into the query — was loading the
             # ENTIRE facts table (deserializing every 768-float embedding) just
             # to return the top N. get_all_facts preserves created_at DESC order.
+            # Read once: used for BOTH the --kind filter above and labelling
+            # each item below, so a fact cannot pass the filter at one
+            # threshold and be labelled (confirmed/suggested/legacy) at another.
+            _display_min_confidence = engine_display_min_confidence(engine)
             _truncated: list[bool] = []
             facts = list_recent_facts(
                 engine._db, pid, limit, parsed_kind,
-                display_min_confidence=engine_display_min_confidence(engine),
+                display_min_confidence=_display_min_confidence,
                 truncated=_truncated,
             )
             items = []
@@ -860,7 +868,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     "fact_type": f.fact_type.value,
                     "created_at": f.created_at,
                     "session_id": f.session_id,
-                    **kind_fields(f),
+                    **kind_fields(f, display_min_confidence=_display_min_confidence),
                 })
             result = {"success": True, "results": items, "count": len(items)}
             # 4.1.19 L2-13/M2: see the matching note in search() above.

@@ -1282,6 +1282,7 @@ async def recall_trace(request: Request):
         )
         elapsed_ms = round((_time.monotonic() - t0) * 1000, 1)
 
+        from superlocalmemory.core.kind_query import engine_display_min_confidence
         from superlocalmemory.server.recall_serializer import (
             recall_response_metadata,
             serialize_recall_response,
@@ -1292,6 +1293,7 @@ async def recall_trace(request: Request):
             limit=limit,
             per_fact_max=300,
             total_max=max(300, limit * 300),
+            display_min_confidence=engine_display_min_confidence(engine),
         )
 
         # Record learning signals (non-blocking, non-critical)

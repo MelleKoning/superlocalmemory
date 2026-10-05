@@ -72,8 +72,25 @@ def test_trace_answer_check_block_shape(app) -> None:
         "status": "judged", "detail": "", "judge": "laya", "abstained": True,
         "abstention_reason": "judged_insufficient", "answer_confidence": 0.18,
         "threshold": 0.5, "reordered": False, "retrieval_ms": 812.3, "judge_ms": 201.0,
+        "embed_ms": None, "rerank_ms": None,
         "total_ms": 1013.3, "ceiling_ms": 3000.0}
     assert body["abstained"] is True  # the existing envelope is untouched
+
+
+def test_trace_answer_check_block_carries_stage_timings(app, monkeypatch) -> None:
+    """Where retrieval's time went reaches the Try-it panel too (4.1.21 #4),
+    the same way it already reaches the Recent checks feed and summary."""
+    engine = app.state.engine
+    real = engine.recall
+
+    def staged(query, **kw):
+        resp = real(query, **kw)
+        resp.stage_ms = {"query_embedding": 45.5, "rerank": 12.0, "channels": 650.0}
+        return resp
+    monkeypatch.setattr(engine, "recall", staged)
+    block = TestClient(app).post(TRACE, json={"query": "q"}).json()["answer_check"]
+    assert block["embed_ms"] == 45.5
+    assert block["rerank_ms"] == 12.0
 
 
 def test_trace_block_without_a_trace_has_null_timings(app, monkeypatch) -> None:

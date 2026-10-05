@@ -840,6 +840,7 @@ class EngineRecallAdapter:
             if memory_ids else {}
         )
         # v3.6.6: same shared chokepoint as the HTTP route — identical output.
+        from superlocalmemory.core.kind_query import engine_display_min_confidence
         from superlocalmemory.server.recall_serializer import (
             recall_response_metadata,
             serialize_recall_response,
@@ -855,6 +856,7 @@ class EngineRecallAdapter:
             # only buy a learning signal when a pending_outcomes row exists
             # to settle, and those exist only when session_id is present.
             include_marker=bool(session_id),
+            display_min_confidence=engine_display_min_confidence(self._engine),
         )
         for _r in results:
             _r["content"] = _sanitize_json_text(_r.get("content", ""))

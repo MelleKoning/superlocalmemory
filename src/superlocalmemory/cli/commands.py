@@ -1690,12 +1690,16 @@ def cmd_list(args: Namespace) -> None:
         engine.initialize()
 
         limit = getattr(args, "limit", CANONICAL_LIST_LIMIT)
+        # Read once, used for BOTH the --kind filter above and labelling each
+        # item below — a fact must not pass the filter at one threshold and
+        # be labelled (confirmed/suggested/legacy) at another.
+        _display_min_confidence = engine_display_min_confidence(engine)
         # The query already returns newest-first; pushing the bound into SQL
         # keeps this from deserializing the whole table to show twenty rows.
         _truncated: list[bool] = []
         facts = list_recent_facts(
             engine._db, engine.profile_id, limit, parsed_kind,
-            display_min_confidence=engine_display_min_confidence(engine),
+            display_min_confidence=_display_min_confidence,
             truncated=_truncated,
         )
         kind_filter_truncated = bool(_truncated and _truncated[0])
@@ -1716,7 +1720,7 @@ def cmd_list(args: Namespace) -> None:
             items.append({
                 "fact_id": f.fact_id, "content": f.content,
                 "fact_type": ftype, "created_at": (f.created_at or "")[:19],
-                **kind_fields(f),
+                **kind_fields(f, display_min_confidence=_display_min_confidence),
             })
         _data = {"results": items, "count": len(items)}
         # 4.1.19 L2-13/M2: say so rather than returning a silent short answer
@@ -1739,7 +1743,8 @@ def cmd_list(args: Namespace) -> None:
         for i, f in enumerate(facts, 1):
             date = (f.created_at or "")[:19]
             content = f.content[:100] + ("..." if len(f.content) > 100 else "")
-            print(f"  {i:3d}. [{date}] {_kind_display(kind_fields(f))}: {content}")
+            fields = kind_fields(f, display_min_confidence=_display_min_confidence)
+            print(f"  {i:3d}. [{date}] {_kind_display(fields)}: {content}")
             print(f"       id: {f.fact_id}")
         print("\nChange one with: slm update <id> \"new text\"   "
               "Remove one with: slm delete <id>")
@@ -3899,6 +3904,7 @@ def cmd_trace(args: Namespace) -> None:
 
     if use_json:
         from superlocalmemory.cli.json_output import json_print
+        from superlocalmemory.core.kind_query import engine_display_min_confidence
         from superlocalmemory.server.recall_serializer import (
             recall_response_metadata,
             serialize_recall_response,
@@ -3908,6 +3914,7 @@ def cmd_trace(args: Namespace) -> None:
             limit=limit,
             per_fact_max=200,
             total_max=max(200, limit * 200),
+            display_min_confidence=engine_display_min_confidence(engine),
         )
         json_print("trace", data={
             "query": args.query,
