@@ -1985,10 +1985,15 @@ class DatabaseManager:
         # an FTS5 syntax error. Tokenize to word characters, quote each token,
         # and OR-join — mirrors the recall BM25 channel's safe MATCH expression.
         import re as _re
+
+        from superlocalmemory.storage.fts_terms import version_match_phrases
         tokens = [t for t in _re.findall(r"\w+", query.lower()) if t]
-        if not tokens:
+        # A dotted version is also matched whole (storage.fts_terms): its
+        # single numbers are too common to tell one release from another.
+        terms = [*(f'"{t}"' for t in tokens), *version_match_phrases(query)]
+        if not terms:
             return []
-        match_expr = " OR ".join(f'"{t}"' for t in tokens)
+        match_expr = " OR ".join(terms)
         where, params = _scope_where(
             profile_id,
             include_global=include_global,
