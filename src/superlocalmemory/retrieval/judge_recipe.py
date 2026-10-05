@@ -92,6 +92,20 @@ UNMEASURED = Calibration(0.0, "not_measured_cannot_abstain")
 
 
 def calibration_for(backend: str, recipe: JudgeRecipe = ACTIVE_RECIPE) -> Calibration | None:
+    """This store's measured threshold when there is one, else the built-in.
+
+    A measured threshold comes from ``answer_check_calibration.json`` in the
+    data folder (see ``judge_calibration_file``) and replaces the built-in
+    figure for that one (backend, recipe) pair only.
+    """
+    from superlocalmemory.retrieval.judge_calibration_file import (
+        STATUS,
+        measured_thresholds,
+    )
+
+    measured = measured_thresholds().get((backend, recipe.recipe_id))
+    if measured is not None:
+        return Calibration(measured, STATUS)
     return CALIBRATIONS.get((backend, recipe.recipe_id))
 
 
