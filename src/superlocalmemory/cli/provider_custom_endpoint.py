@@ -133,12 +133,19 @@ def test_custom_endpoint_connection(
         "max_tokens": 1,
     }
     try:
-        with httpx.Client(timeout=httpx.Timeout(10.0)) as client:
+        # Through the reviewed outbound gate, as every SLM request: never
+        # follows a redirect, so the key cannot be sent on to another host.
+        from superlocalmemory.core.outbound_http import GatedClient
+
+        client = GatedClient(timeout=httpx.Timeout(10.0))
+        try:
             resp = client.post(base, headers=headers, json=probe)
-            if resp.status_code in (200, 400, 422):
-                return True, f"reachable (HTTP {resp.status_code})"
-            resp.raise_for_status()
-            return True, "connected"
+        finally:
+            client.close()
+        if resp.status_code in (200, 400, 422):
+            return True, f"reachable (HTTP {resp.status_code})"
+        resp.raise_for_status()
+        return True, "connected"
     except httpx.ConnectError:
         return False, "cannot connect — is the service running?"
     except httpx.HTTPStatusError as exc:

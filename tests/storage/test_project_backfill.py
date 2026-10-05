@@ -98,7 +98,7 @@ def test_fetch_shows_the_backfilled_project(db, tmp_path, monkeypatch) -> None:
 
     tools_core.register_core_tools(_Server(), lambda: _Engine())
 
-    async def _pid(_get):
+    async def _pid(_get, _explicit=""):
         return "default"
 
     monkeypatch.setattr(tools_core, "_runtime_profile", _pid)
