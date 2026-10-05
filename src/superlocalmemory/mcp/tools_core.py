@@ -88,8 +88,9 @@ def _routed_daemon_call(method: str, path: str, body: dict | None = None) -> dic
     try:
         return daemon_request(method, path, body, preserve_not_found=True)
     except DaemonNotFound as exc:
-        return {"success": False, "code": exc.code, "retryable": False,
-                "error": exc.message}
+        # The route's own code (unknown_profile) when it gave one.
+        return {"success": False, "code": exc.error_code or exc.code, "retryable": False,
+                "error": exc.error_message or exc.message}
 
 def _emit_event(event_type: str, payload: dict | None = None,
                 source_agent: str = "mcp_client") -> None:

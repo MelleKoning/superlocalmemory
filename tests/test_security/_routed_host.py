@@ -82,10 +82,8 @@ def bind_daemon_request(monkeypatch, client) -> None:
         if status == 409 and preserve_conflict:
             raise daemon.DaemonConflict(str(detail or ""))
         if status == 404 and preserve_not_found:
-            code = detail.get("code", "not_found") if isinstance(detail, dict) else "not_found"
-            message = (detail.get("message") if isinstance(detail, dict)
-                       else detail if isinstance(detail, str) else "daemon returned 404")
-            raise daemon.DaemonNotFound(404, code, message, path)
+            # The real client's own reading of a 404 body.
+            raise daemon.not_found_from(payload, path)
         if status == 422 and preserve_unprocessable:
             raise daemon.DaemonUnprocessable("INVALID_REQUEST", json.dumps(detail))
         if status >= 400:
