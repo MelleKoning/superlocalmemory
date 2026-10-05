@@ -61,4 +61,29 @@ def owned_environment(root: Path) -> Path:
     return python
 
 
-__all__ = ["WINDOWS_REASON", "owned_environment"]
+def owned_python(folder: Path) -> Path:
+    """``owned_environment(folder / "owned-python")``, built on first use only."""
+    python = folder / "owned-python" / "bin" / "python"
+    return python if python.is_file() else owned_environment(python.parents[1])
+
+
+def owned_link(python: Path, folder: Path) -> Path:
+    """Make ``python`` (``<env>/bin/python``) an environment's link to an owned launcher.
+
+    The shape of a real environment: ``<env>/pyvenv.cfg`` beside ``bin``, and
+    ``bin/python`` a link to the interpreter - here ``owned_python(folder)``.
+    """
+    target = owned_python(folder)
+    env = python.parents[1]
+    python.parent.mkdir(parents=True, exist_ok=True)
+    for path in (env, python.parent):
+        path.chmod(0o755)
+    cfg = env / "pyvenv.cfg"
+    if not cfg.exists():
+        cfg.write_text(f"home = {target.parent}\n", encoding="utf-8")
+        cfg.chmod(0o644)
+    python.symlink_to(target)
+    return python
+
+
+__all__ = ["WINDOWS_REASON", "owned_environment", "owned_link", "owned_python"]

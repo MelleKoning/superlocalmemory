@@ -26,6 +26,7 @@ from superlocalmemory.retrieval import sufficiency as mod
 from superlocalmemory.retrieval.judge_recipe import RECIPE_V1, JudgeDocument, JudgeRecipe
 from superlocalmemory.retrieval.sufficiency import LayaSufficiencyJudge, SufficiencyVerdict
 from superlocalmemory.storage.models import AtomicFact, RecallResponse, RetrievalResult
+from tests.helpers.owned_python import owned_python
 
 _FAKE_WORKER = r'''
 import json, os, sys, time
@@ -75,7 +76,8 @@ def worker(tmp_path, monkeypatch) -> Path:
 
 def _judge(worker: Path, **kw) -> LayaSufficiencyJudge:
     kw.setdefault("timeout_s", 2.0)
-    return LayaSufficiencyJudge(python=sys.executable, worker_path=worker, **kw)
+    return LayaSufficiencyJudge(python=str(owned_python(worker.parent)), worker_path=worker,
+                                **kw)
 
 
 def _wait(predicate, timeout: float = 10.0) -> bool:
@@ -412,7 +414,3 @@ class TestOneLayaPerDataFolder:
             if second is not None:
                 second.shutdown()
 
-
-# A worker is started from the interpreter running the suite; on a CI runner
-# whose tool cache is group-writable the Laya safety rule would refuse it.
-pytestmark = pytest.mark.usefixtures("safely_owned_interpreter")

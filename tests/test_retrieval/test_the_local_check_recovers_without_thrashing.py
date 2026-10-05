@@ -17,7 +17,6 @@ Against a fake worker that speaks the real protocol, so no model is loaded:
 
 from __future__ import annotations
 
-import sys
 import threading
 import time
 from pathlib import Path
@@ -28,6 +27,7 @@ from superlocalmemory.retrieval import answer_check_status as acs
 from superlocalmemory.retrieval import sufficiency as mod
 from superlocalmemory.retrieval.judge_recipe import JudgeDocument
 from superlocalmemory.retrieval.sufficiency import LayaSufficiencyJudge
+from tests.helpers.owned_python import owned_python
 
 _MEASURED = "20aed815fc6acde75733882e7ec0e3f28aeb9717"
 
@@ -89,7 +89,7 @@ def fake(tmp_path, monkeypatch):
     def build(**kw) -> LayaSufficiencyJudge:
         kw.setdefault("timeout_s", 1.5)
         kw.setdefault("start", True)
-        judge = LayaSufficiencyJudge(python=kw.pop("python", sys.executable),
+        judge = LayaSufficiencyJudge(python=kw.pop("python", str(owned_python(tmp_path))),
                                      worker_path=path, **kw)
         judges.append(judge)
         return judge
@@ -312,7 +312,3 @@ class TestOnlyTheMeasuredWeightsMayAbstain:
         assert judge.threshold == 0.0
         assert judge.calibration_status == "not_measured_cannot_abstain"
 
-
-# A worker is started from the interpreter running the suite; on a CI runner
-# whose tool cache is group-writable the Laya safety rule would refuse it.
-pytestmark = pytest.mark.usefixtures("safely_owned_interpreter")
