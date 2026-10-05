@@ -81,6 +81,27 @@ def is_pid_alive(pid: int) -> bool:
         return False
 
 
+def current_account() -> str:
+    """The account this process runs as, qualified where the OS qualifies it.
+
+    POSIX: the login name. Windows: ``DOMAIN\\user``, the form psutil gives
+    for any process, so the two compare directly. Read from the process's
+    own token, not from ``USERNAME``: a process started with a stripped
+    environment (a service, an editor's MCP host) has no ``USERNAME``, and
+    ``getpass.getuser()`` then raises OSError.
+    """
+    if sys.platform == "win32":
+        import psutil
+        return str(psutil.Process(os.getpid()).username())
+    import getpass
+    return getpass.getuser()
+
+
+def current_user_name() -> str:
+    """The bare user name (no domain) of :func:`current_account`."""
+    return current_account().rsplit("\\", 1)[-1]
+
+
 def kill_process(pid: int) -> bool:
     """Send SIGTERM (POSIX) or taskkill /F /T (Windows).
 

@@ -18,6 +18,7 @@ import os
 import signal
 import socket
 import sqlite3
+import sys
 import time
 from pathlib import Path
 from threading import Thread
@@ -45,15 +46,13 @@ def _write_plain_pid(path: Path, pid: int) -> None:
 
 
 def _dead_pid() -> int:
+    from superlocalmemory.core.platform_utils import is_pid_alive
+
     pid = 2_000_000
     while pid > 1:
-        try:
-            os.kill(pid, 0)
-            pid -= 1
-        except ProcessLookupError:
+        if not is_pid_alive(pid):  # not os.kill(pid, 0): Ctrl+C on Windows
             return pid
-        except PermissionError:
-            pid -= 1
+        pid -= 1
     raise RuntimeError("Could not find a dead PID")
 
 
@@ -478,6 +477,8 @@ class TestLiveSLMLockProtection:
 class TestPermissionErrorIsAlive:
     """G-09: os.kill PermissionError means process exists; treat as alive."""
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="the no-psutil fallback is signal 0, "
+                        "which Windows lacks; psutil is a required dependency there")
     def test_permission_error_on_kill_means_alive(self):
         """_is_pid_alive returns True when os.kill raises PermissionError."""
         from superlocalmemory.infra.self_heal import _is_pid_alive

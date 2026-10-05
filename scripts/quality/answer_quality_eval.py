@@ -40,7 +40,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import pwd
 import sys
 import time
 import urllib.parse
@@ -78,13 +77,31 @@ class EvalError(Exception):
 
 # -- where the data is -----------------------------------------------------------
 
+def _account_home() -> Path:
+    """This account's home folder, whatever HOME or USERPROFILE say.
+
+    POSIX: the password database. Windows (no ``pwd``): the profile folder
+    of the account the process runs as (CSIDL_PROFILE), not an env variable.
+    """
+    if os.name != "nt":
+        import pwd
+
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    import ctypes
+
+    buffer = ctypes.create_unicode_buffer(32_768)
+    if ctypes.windll.shell32.SHGetFolderPathW(None, 0x0028, None, 0, buffer) != 0:
+        raise OSError("could not read your Windows profile folder")
+    return Path(buffer.value)
+
+
 def _owner_roots() -> set[Path]:
     """Every place this account's own store could be."""
     from superlocalmemory.infra.data_root import canonical_data_root
 
     saved = {k: os.environ.pop(k) for k in _ENV_ROOTS if k in os.environ}
     try:
-        home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        home = _account_home()
         return {canonical_data_root().resolve(),
                 canonical_data_root(home=home).resolve(),
                 (home / ".superlocalmemory").resolve()}

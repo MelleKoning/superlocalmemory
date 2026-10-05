@@ -108,3 +108,35 @@ class TestRetrievalModeRefusesTheOwnStore:
         code = tool.main(["retrieval", "--gold", str(_gold(tmp_path, 1, 0)),
                           "--data-dir", str(tmp_path / "nothing")])
         assert code == 2
+
+
+class TestItRunsOnWindows:
+    """Windows has no ``pwd``: the script failed to import there at all."""
+
+    def test_it_imports_without_pwd(self, monkeypatch):
+        import sys
+
+        monkeypatch.setitem(sys.modules, "pwd", None)  # import pwd -> ImportError
+        spec = importlib.util.spec_from_file_location("answer_quality_eval_nopwd", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert callable(module._account_home)
+
+    def test_the_windows_home_comes_from_the_account_not_the_environment(
+            self, tool, monkeypatch, tmp_path):
+        import ctypes
+        from types import SimpleNamespace
+
+        profile = str(tmp_path / "profile")
+
+        def folder_path(_hwnd, csidl, _token, _flags, buffer):
+            assert csidl == 0x0028  # CSIDL_PROFILE
+            buffer.value = profile
+            return 0
+
+        monkeypatch.setattr(tool.os, "name", "nt")
+        monkeypatch.setattr(ctypes, "windll",
+                            SimpleNamespace(shell32=SimpleNamespace(SHGetFolderPathW=folder_path)),
+                            raising=False)
+        monkeypatch.setenv("USERPROFILE", str(tmp_path / "elsewhere"))
+        assert tool._account_home() == Path(profile)

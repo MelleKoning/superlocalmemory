@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import sys
 import textwrap
 import threading
@@ -70,12 +71,12 @@ def _candidates() -> list[tuple[AtomicFact, float]]:
 
 
 def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+    from superlocalmemory.core.platform_utils import is_pid_alive
+
+    if not is_pid_alive(pid):  # never os.kill(pid, 0): that is Ctrl+C on Windows
         return False
-    except PermissionError:
-        return True
+    if os.name == "nt":
+        return True  # no zombies: a Windows process is gone once it exits
     try:  # a zombie still answers kill(0); reap it if it is our child
         done, _ = os.waitpid(pid, os.WNOHANG)
         return done == 0
@@ -124,7 +125,7 @@ def fake_worker(tmp_path, monkeypatch):
         rr.shutdown(timeout=2.0)
     for pid in spawned():
         if _alive(pid):
-            os.kill(pid, 9)
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))  # TerminateProcess on Windows
 
 
 def _warm(rr: CrossEncoderReranker) -> None:

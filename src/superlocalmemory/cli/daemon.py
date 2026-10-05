@@ -308,22 +308,11 @@ def _process_is_this_account(process) -> bool:
     try:
         if getuid is not None:
             return int(process.uids().real) == int(getuid())
-        return str(process.username()).casefold() == _this_windows_account().casefold()
+        from superlocalmemory.core.platform_utils import current_account
+
+        return str(process.username()).casefold() == current_account().casefold()
     except Exception:
         return False
-
-
-def _this_windows_account() -> str:
-    """This process's account as psutil names one on Windows: ``DOMAIN\\user``.
-
-    Read from this process's own environment, not from psutil, so it does not
-    depend on looking up the very PID being checked.
-    """
-    import getpass
-
-    user = getpass.getuser()
-    domain = os.environ.get("USERDOMAIN", "")
-    return f"{domain}\\{user}" if domain else user
 
 
 def _is_verified_legacy_process(pid: int) -> bool:

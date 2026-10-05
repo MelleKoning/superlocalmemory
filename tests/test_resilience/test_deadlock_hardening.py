@@ -59,15 +59,13 @@ def _write_plain_pid(path: Path, pid: int) -> None:
 
 def _dead_pid() -> int:
     """Return a PID that is provably NOT alive on this machine."""
+    from superlocalmemory.core.platform_utils import is_pid_alive
+
     pid = 2_000_000
     while pid > 1:
-        try:
-            os.kill(pid, 0)
-            pid -= 1
-        except ProcessLookupError:
+        if not is_pid_alive(pid):  # not os.kill(pid, 0): Ctrl+C on Windows
             return pid
-        except PermissionError:
-            pid -= 1
+        pid -= 1
     raise RuntimeError("Could not find a dead PID — something is wrong with the OS")
 
 
@@ -632,9 +630,9 @@ class TestPidReuseSafety:
         )
 
         # Critical: the live unrelated process must NOT have been killed.
-        try:
-            os.kill(live_unrelated_pid, 0)
-        except ProcessLookupError:
+        from superlocalmemory.core.platform_utils import is_pid_alive
+
+        if not is_pid_alive(live_unrelated_pid):
             pytest.fail(
                 f"PID {live_unrelated_pid} was killed — self_heal MUST NOT kill "
                 "unrelated live processes"

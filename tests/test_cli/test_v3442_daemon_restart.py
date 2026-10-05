@@ -62,7 +62,11 @@ class TestStartDaemonSubprocessHelper:
             result = _daemon._start_daemon_subprocess()
 
         assert result is True
-        popen.assert_called_once()
+        # One daemon launch. (On Windows, writing daemon.json also runs icacls
+        # through subprocess to make it owner-only; that is not a launch.)
+        launches = [c for c in popen.call_args_list
+                    if "superlocalmemory.server.unified_daemon" in c.args[0]]
+        assert len(launches) == 1, popen.call_args_list
         wait.assert_called_once()
         assert (tmp_path / "daemon.pid").read_text(encoding="utf-8") == "99999"
         assert (tmp_path / "daemon.port").read_text(encoding="utf-8") == str(_daemon._DEFAULT_PORT)

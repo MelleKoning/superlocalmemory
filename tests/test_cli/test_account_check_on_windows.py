@@ -32,9 +32,12 @@ class _Process:
 @pytest.fixture()
 def windows_account(monkeypatch):
     """No uid, and this process runs as ``OFFICE-PC\\<this user>``."""
+    from superlocalmemory.core import platform_utils
+
+    account = f"OFFICE-PC\\{getpass.getuser()}"
     monkeypatch.delattr(os, "getuid", raising=False)
-    monkeypatch.setenv("USERDOMAIN", "OFFICE-PC")
-    return f"OFFICE-PC\\{getpass.getuser()}"
+    monkeypatch.setattr(platform_utils, "current_account", lambda: account)
+    return account
 
 
 def test_a_process_of_this_account_is_ours(windows_account):
@@ -54,3 +57,29 @@ def test_a_process_whose_account_cannot_be_read_is_not_ours(windows_account):
 
     denied = psutil.AccessDenied(pid=4242)
     assert cli_daemon._process_is_this_account(_Process(denied)) is False
+
+
+def test_the_windows_account_is_read_without_username_in_the_environment(monkeypatch):
+    """A daemon started with a stripped environment has no USERNAME, and
+    ``getpass.getuser()`` raises there; the account comes from the process
+    itself instead (seen on the Windows runner: the daemon could not start)."""
+    import psutil
+
+    from superlocalmemory.core import platform_utils
+    from superlocalmemory.infra.daemon_identity import owner_id
+
+    for name in ("USERNAME", "USER", "LOGNAME", "LNAME"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(platform_utils.sys, "platform", "win32")
+    monkeypatch.delattr(os, "getuid", raising=False)
+
+    class _Me:
+        def __init__(self, _pid) -> None:
+            pass
+
+        def username(self):
+            return "OFFICE-PC\\alice"
+
+    monkeypatch.setattr(psutil, "Process", _Me)
+    assert platform_utils.current_account() == "OFFICE-PC\\alice"
+    assert owner_id() == "user:alice"
