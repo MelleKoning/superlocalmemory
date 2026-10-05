@@ -18,7 +18,11 @@ import pytest
 from tests.test_server.test_facets_rbac import _client
 
 _SECRET = "Zeus"
-_PATHS = ("/api/summary", "/api/v3/timeline/", "/api/v3/timeline")
+_PATHS = ("/api/summary", "/api/v3/timeline/", "/api/v3/timeline",
+          # 4.1.21 (#113): the pickers name projects and sessions, and saved
+          # views hold a person's queries and run recall.
+          "/api/summary/projects", "/api/summary/sessions",
+          "/api/v3/views", "/api/v3/views/run?name=x", "/api/v3/views/show?name=x")
 
 
 @pytest.fixture()

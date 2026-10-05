@@ -143,9 +143,9 @@ class TestTheSummaryRouteReturnsIt:
         """A helper nothing calls explains nothing."""
         import inspect
 
-        from superlocalmemory.server.routes import memories
+        from superlocalmemory.server.routes import summaries
 
-        source = inspect.getsource(memories.get_summary)
+        source = inspect.getsource(summaries.get_summary)
         assert "llm_capability" in source
         assert '"capability"' in source
 
@@ -156,7 +156,8 @@ class TestTheSummaryRouteReturnsIt:
         import superlocalmemory
 
         js = (
-            Path(superlocalmemory.__file__).parent / "ui" / "js" / "od-memories.js"
+            # 4.1.21: the Summaries pane moved to its own file.
+            Path(superlocalmemory.__file__).parent / "ui" / "js" / "od-summaries.js"
         ).read_text()
         assert "d.capability" in js or "capability" in js
         assert "cap.message" in js, (

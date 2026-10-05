@@ -1089,6 +1089,11 @@ def main() -> None:
 
     register_kinds_parser(sub)
 
+    # 4.1.21: saved views — named, profile-scoped recall queries (issue #113).
+    from superlocalmemory.cli.view_cmd import register_view_parser
+
+    register_view_parser(sub)
+
     from superlocalmemory.cli.backup_cmd import add_backup_parser
     add_backup_parser(sub)
 

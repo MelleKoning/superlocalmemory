@@ -200,6 +200,11 @@ def create_app() -> FastAPI:
     from superlocalmemory.server.routes.v3_api import router as v3_router
 
     application.include_router(memories_router)
+    # 4.1.21: the summary routes moved out of memories.py; saved views are new.
+    from superlocalmemory.server.routes.summaries import router as summaries_router
+    from superlocalmemory.server.routes.views import router as views_router
+    application.include_router(summaries_router)
+    application.include_router(views_router)
     application.include_router(stats_router)
     application.include_router(profiles_router)
     application.include_router(backup_router)

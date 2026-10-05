@@ -98,6 +98,7 @@ def _register_every_tool(target) -> None:
     from superlocalmemory.mcp.tools_brain import register_brain_tools
     from superlocalmemory.mcp.tools_kinds import register_kind_tools
     from superlocalmemory.mcp.tools_summaries import register_summary_tools
+    from superlocalmemory.mcp.tools_views import register_view_tools
     from superlocalmemory.mcp.tools_v28 import register_v28_tools
     from superlocalmemory.mcp.tools_v3 import register_v3_tools
     from superlocalmemory.mcp.tools_v33 import register_v33_tools
@@ -117,6 +118,7 @@ def _register_every_tool(target) -> None:
     register_ops_tools(target, get_engine)
     register_brain_tools(target, get_engine)
     register_summary_tools(target, get_engine)
+    register_view_tools(target, get_engine)
     register_kind_tools(target, get_engine)
     from superlocalmemory.mcp.tools_context import register_prestage_tool
     register_prestage_tool(target, lambda *a, **k: [])
@@ -129,7 +131,8 @@ def _register_every_tool(target) -> None:
         # clients; prestage_context remains a raw-server-only tool.
         # v4.0.8: +get_memory_summary. The essential/fallback surface must
         # mirror the full profile, so it moves with it.
-        ("essential", "", 54),
+        # 4.1.21: +run_view, +manage_view (saved views, issue #113).
+        ("essential", "", 56),
         # v4.0.8: get_memory_summary added to CORE — the summary layer's MCP
         # surface (issue #113). Counts bumped deliberately, which is what
         # this contract exists to force.
@@ -137,7 +140,7 @@ def _register_every_tool(target) -> None:
         # v4.1.12: +settle_session_outcomes and
         # +observe_bounded_loop_execution_learning. Both are whole-profile
         # tools; smaller profiles retain their explicit allowlists.
-        ("whole", "whole", 101),
+        ("whole", "whole", 103),
     ),
 )
 def test_registration_exposure_is_exact_and_duplicate_free(
@@ -265,14 +268,14 @@ async def test_attribution_reports_current_product_identity(
 def test_imported_server_exposes_product_name_and_whole_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Imported MCP server keeps product identity and whole surface at 101."""
+    """Imported MCP server keeps product identity and whole surface at 103."""
     mod = _fresh_server(monkeypatch, "whole")
     # Public SLMFastMCP/MCPServer attribute — do not assert private internals.
     assert mod.server.name == "SuperLocalMemory V4"
     strict = _StrictToolServer()
     _register_every_tool(strict)
-    assert len(strict.tools) == 101
+    assert len(strict.tools) == 103
     actual_names = [tool.name for tool in mod.server._tool_manager.list_tools()]
-    assert len(actual_names) == 101
+    assert len(actual_names) == 103
     assert len(actual_names) == len(set(actual_names))
     assert set(actual_names) == set(strict.tools)

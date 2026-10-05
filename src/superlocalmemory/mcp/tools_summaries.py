@@ -84,8 +84,9 @@ def register_summary_tools(server: Any, get_engine: Callable[[], Any]) -> None:
         Args:
             kind: "day", "project", or "session".
             target: For "day", an ISO date, "today" or "yesterday" (default
-                today). For "project", a directory path (default: none — supply
-                one). For "session", the session id.
+                today, in this computer's time zone). For "project", a directory
+                path (default: none — supply one). For "session", the session
+                id; leave it empty to get ``recent_sessions`` to choose from.
 
         Returns a summary plus ``coverage`` and ``source_fact_ids``. Coverage is
         not decoration: session data is sparse — roughly 4% of facts carry a
@@ -115,13 +116,22 @@ def register_summary_tools(server: Any, get_engine: Callable[[], Any]) -> None:
         try:
             if kind == "day":
                 from superlocalmemory.summaries import generate_daily_reflection
+                from superlocalmemory.summaries.base import local_offset_minutes
 
                 day = (target or "").strip() or date.today().isoformat()
                 if day == "today":
                     day = date.today().isoformat()
                 elif day == "yesterday":
                     day = (date.today() - timedelta(days=1)).isoformat()
-                result = generate_daily_reflection(db_path, day, profile_id, config)
+                try:
+                    date.fromisoformat(day)
+                except ValueError:
+                    return _error(f"target {day!r} is not a date; use YYYY-MM-DD, "
+                                  "'today' or 'yesterday'")
+                # "today" is this computer's today, so bucket by its time zone.
+                result = generate_daily_reflection(
+                    db_path, day, profile_id, config,
+                    tz_offset_minutes=local_offset_minutes(day))
 
             elif kind == "project":
                 from superlocalmemory.summaries import generate_project_work_log
@@ -136,7 +146,12 @@ def register_summary_tools(server: Any, get_engine: Callable[[], Any]) -> None:
                 from superlocalmemory.summaries import generate_session_summary
 
                 if not (target or "").strip():
-                    return _error("kind='session' requires target=<session id>")
+                    # Say which ids exist: an agent has no other way to learn
+                    # them, and a bare refusal is a dead end.
+                    from superlocalmemory.summaries.sessions import list_recent_sessions
+
+                    return _error("kind='session' requires target=<session id>",
+                                  recent_sessions=list_recent_sessions(db_path, profile_id))
                 result = generate_session_summary(
                     db_path, target.strip(), profile_id, config,
                 )

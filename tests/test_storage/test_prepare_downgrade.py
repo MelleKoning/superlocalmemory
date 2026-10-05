@@ -19,7 +19,7 @@ from superlocalmemory.storage.migrations import M052_memory_kinds as M052
 
 from ._upgrade_store import current_store
 
-#: The schema this build stamps (53 since M053, the Answer Check history).
+#: The schema this build stamps (54 since M054, saved views).
 _CURRENT = sv.SUPPORTED_SCHEMA_VERSION
 
 

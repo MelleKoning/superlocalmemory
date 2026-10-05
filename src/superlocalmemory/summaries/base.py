@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 
@@ -96,6 +97,45 @@ GENERATED_BY_LLM_B = "llm_b"
 
 GENERATED_BY_LLM_C = "llm_c"
 """Cloud LLM (Mode C).  Falls back via llm_b to extractive."""
+
+
+# ── local calendar day ──────────────────────────────────────────────────────
+
+#: Furthest a real time zone sits from UTC, in minutes (UTC-12 .. UTC+14).
+MAX_TZ_OFFSET_MINUTES = 840
+
+
+def local_day_modifier(tz_offset_minutes: int) -> str:
+    """SQLite date modifier that turns a stored UTC instant into the caller's day.
+
+    ``created_at`` is stored in UTC. A day summary asked for "5 October" by a
+    person in India means 5 October in India, which starts at 18:30 UTC on the
+    4th. ``DATE(created_at, '+330 minutes')`` is that day.
+
+    Refuses anything that is not a whole number of minutes within the range a
+    real time zone can have, so no caller text ever reaches the SQL.
+    """
+    if (not isinstance(tz_offset_minutes, int) or isinstance(tz_offset_minutes, bool)
+            or abs(tz_offset_minutes) > MAX_TZ_OFFSET_MINUTES):
+        raise ValueError(
+            "tz_offset_minutes must be a whole number of minutes between "
+            f"-{MAX_TZ_OFFSET_MINUTES} and {MAX_TZ_OFFSET_MINUTES} (the offset east of UTC)")
+    return f"{tz_offset_minutes:+d} minutes"
+
+
+def local_offset_minutes(day: str | None = None) -> int:
+    """This computer's offset east of UTC on ``day`` (ISO date; default today).
+
+    Taken at local noon of that day so a daylight-saving change on the day itself
+    cannot pick the wrong side. Used by the CLI and the MCP tool, whose "today"
+    is this computer's today; the dashboard sends the browser's own offset.
+    """
+    from datetime import datetime
+
+    base = date.fromisoformat(day) if day else date.today()
+    noon = datetime(base.year, base.month, base.day, 12).astimezone()
+    offset = noon.utcoffset()
+    return int(offset.total_seconds() // 60) if offset is not None else 0
 
 
 # ── highlight formatting ────────────────────────────────────────────────────

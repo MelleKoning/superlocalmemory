@@ -44,13 +44,15 @@ READ_TOOLS: frozenset[str] = frozenset({
     "get_memory_summary", "get_mode", "get_retention_stats", "get_soft_prompts",
     "get_status", "get_version", "health", "list_corrections", "list_recent",
     "memory_kinds_status", "memory_used", "prestage_context", "recall", "recall_trace",
-    "review_memory_kinds", "search", "skill_health", "skill_lineage", "slm_cache_get",
+    "review_memory_kinds", "run_view", "search", "skill_health", "skill_lineage",
+    "slm_cache_get",
     "slm_loop_history", "slm_loop_show", "slm_optimize_stats", "slm_retrieve",
 })
 
 WRITE_ONLY_TOOLS: frozenset[str] = frozenset({
     "close_session", "confirm_memory_kinds", "contradict_assertion", "core_memory",
     "correct_pattern", "delete_memory", "finalize_cognitive_turn", "log_tool_event",
+    "manage_view",
     "observe", "record_agent_experience", "record_cognitive_turn",
     "reinforce_assertion", "remember", "report_feedback", "report_outcome",
     "review_correction", "session_init", "set_memory_kind", "settle_session_outcomes",

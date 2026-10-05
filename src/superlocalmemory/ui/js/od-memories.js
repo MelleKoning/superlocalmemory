@@ -154,6 +154,7 @@
           // click/keydown delegation keyed on the IDs below, so it survives re-renders.
           '<button class="tab active" data-od-act="tab" data-tab="recall">Recall Lab</button>' +
           '<button class="tab" data-od-act="tab" data-tab="summary">Summaries</button>' +
+          '<button class="tab" data-od-act="tab" data-tab="views">Saved views</button>' +
           '<button class="tab" data-od-act="tab" data-tab="all">' +
             'All memories <span class="cnt" id="' + id + '-cnt-all">…</span></button>' +
           '<button class="tab" data-od-act="tab" data-tab="timeline">Creation timeline</button>' +
@@ -167,28 +168,17 @@
             _loading('Loading clusters…') +
           '</div>' +
         '</div>' +
+        '<div class="tabpane" id="' + id + '-pane-views">' +
+          (window.ODViews ? window.ODViews.pane(id) : '') +
+        '</div>' +
         '<div class="tabpane" id="' + id + '-pane-summary" style="padding-top:12px">' +
           '<p style="font-size:13px;color:var(--fg-2);margin-bottom:12px">'+
             'A readable view of what you recorded. Every summary states how much '+
             'of the underlying data it could actually cover.' +
           '</p>' +
-          // "This project" used to be a button sending an empty target, which the
-          // API rejected every single time with "project requires target". It could
-          // not have worked: SLM runs as one global daemon and this is a browser
-          // tab — there is no current working directory to mean "this". The server
-          // lists the projects it has actually seen and the user picks one.
-          '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px">' +
-            '<button class="tab" data-od-act="sum" data-kind="day" data-target="today">Today</button>' +
-            '<button class="tab" data-od-act="sum" data-kind="day" data-target="yesterday">Yesterday</button>' +
-            '<select id="' + id + '-sum-proj" data-od-act="sum-proj" ' +
-              'title="Projects SuperLocalMemory has recorded activity in" ' +
-              'style="padding:7px 10px;border:1px solid var(--border);' +
-                'border-radius:var(--r-md);background:var(--card-2);color:var(--fg);' +
-                'font-size:13px;max-width:340px">' +
-              '<option value="">Loading projects…</option>' +
-            '</select>' +
-          '</div>' +
-          '<div id="' + id + '-sum-out" style="font-size:13px;color:var(--fg-2)">Pick a summary above.</div>' +
+          // Today / Yesterday / project and session pickers, and the output
+          // area: od-summaries.js (loaded before this file).
+          (window.ODSummaries ? window.ODSummaries.controls(id) : '') +
           // Knowledge Overview.
           //
           // The Today/Yesterday buttons above are a date filter over
@@ -375,158 +365,12 @@
     if (pane) pane.classList.add('active');
     if (tab === 'timeline') _loadTimeline(id);
     if (tab === 'clusters')  _loadClusters(id);
-    if (tab === 'summary') { _loadProjectOptions(id); _loadKnowledgeOverview(id); }
-  }
-
-  /* Populate the project picker from projects SLM has actually recorded.
-   *
-   * Loaded lazily on first visit to Summaries rather than at render time — the
-   * Memories page opens on Recall Lab, and most visits never reach this tab.
-   */
-  function _loadProjectOptions(id) {
-    var sel = document.getElementById(id + '-sum-proj');
-    if (!sel) return;
-    // Guard on the element, not a module flag. A module-level "already loaded"
-    // boolean outlives the DOM it described: navigate away and back, the pane
-    // re-renders with a fresh <select> still reading "Loading projects…", and the
-    // stale flag suppresses the fetch that would fill it. Caught in review by
-    // exactly that sequence.
-    if (sel.dataset.loaded === '1' || sel.dataset.loading === '1') return;
-    sel.dataset.loading = '1';
-    fetch('/api/summary/projects')
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        var list = (d && d.projects) || [];
-        sel.dataset.loaded = '1';
-        delete sel.dataset.loading;
-        if (!list.length) {
-          sel.innerHTML = '<option value="">No projects recorded yet</option>';
-          sel.disabled = true;
-          return;
-        }
-        sel.innerHTML =
-          '<option value="">Summarise a project…</option>' +
-          list.map(function (p) {
-            return '<option value="' + _esc(p.path) + '" title="' + _esc(p.path) + '">' +
-              _esc(p.label) + ' (' + p.events + ')</option>';
-          }).join('');
-      })
-      .catch(function () {
-        // Fail visibly but harmlessly: a silent empty dropdown reads as "you have
-        // no projects", which is a different and wrong statement. Clearing the
-        // in-flight marker leaves the next tab visit free to retry.
-        delete sel.dataset.loading;
-        sel.innerHTML = '<option value="">Could not load projects — retry</option>';
-      });
-  }
-
-  /* Summaries pane (4.0.8, issue #113).
-   *
-   * Reads GET /api/summary. The generators shipped in 4.0.6 with no caller at
-   * all; 4.0.7 added the CLI; this is the surface for someone who is already
-   * looking at the dashboard rather than a terminal.
-   *
-   * Coverage is rendered on every result, never only on bad ones — a summary
-   * that hides how much of the data it saw is the failure mode #113 named.
-   */
-  function _loadSummary(id, kind, target) {
-    var out = document.getElementById(id + '-sum-out');
-    if (!out) return;
-    out.textContent = 'Building summary…';
-
-    var q = '/api/summary?kind=' + encodeURIComponent(kind);
-    // The daemon resolves an empty target for "day" (defaults to today) but not
-    // for project or session, which need an explicit one from the picker.
-    if (target) q += '&target=' + encodeURIComponent(target);
-
-    fetch(q)
-      .then(function (r) {
-        if (!r.ok) return r.json().then(function (e) { throw new Error(e.detail || r.status); });
-        return r.json();
-      })
-      .then(function (d) {
-        out.textContent = '';
-
-        var body = document.createElement('pre');
-        body.style.cssText = 'white-space:pre-wrap;font-family:inherit;font-size:13px;' +
-          'line-height:1.65;color:var(--fg);background:var(--card-2);border:1px solid var(--border);' +
-          'border-radius:var(--r-md);padding:14px;margin:0';
-        body.textContent = d.summary || '(nothing recorded)';
-        out.appendChild(body);
-
-        var meta = document.createElement('div');
-        meta.style.cssText = 'margin-top:10px;font-size:12px;color:var(--fg-3);line-height:1.6';
-        meta.textContent = _summaryProvenance(d);
-        out.appendChild(meta);
-
-        /* Why it came out this way, and what to do about it.
-         *
-         * The provenance line above says a summary was assembled from the
-         * user's own notes rather than written. It never said why. Someone in
-         * Mode A — which has no language model by design — saw a plainer
-         * result than they expected with no way to learn that a written one
-         * needs a model, and would reasonably read the feature as broken.
-         */
-        var cap = d.capability;
-        if (cap && cap.message) {
-          var hint = document.createElement('div');
-          hint.style.cssText = 'margin-top:10px;font-size:12px;line-height:1.6;' +
-            'color:var(--fg-2);background:var(--card-2);border:1px solid var(--border);' +
-            'border-left:3px solid var(--accent, var(--border));' +
-            'border-radius:var(--r-md);padding:10px 12px';
-          hint.textContent = cap.message;
-          out.appendChild(hint);
-        }
-      })
-      .catch(function (e) {
-        out.textContent = 'Could not build summary: ' + (e && e.message ? e.message : 'error');
-      });
-  }
-
-  /* Plain-English provenance line under a summary.
-   *
-   * The old line read "Built from 0 memories · coverage: full · method: llm_b".
-   * Three problems in one string: it contradicted itself (nothing, covered
-   * fully), and "coverage" and "llm_b" are internal vocabulary. Someone who has
-   * not read the source cannot tell whether that summary is trustworthy — which
-   * is the entire job of a provenance line.
-   */
-  var _COVERAGE_TEXT = {
-    full:         'Covers everything recorded for this period.',
-    partial:      'Partial view — some of what was recorded is not reflected here.',
-    insufficient: 'Too little was recorded to summarise properly.',
-    no_session:   'That session has no memories attached to it.',
-    unavailable:  'The underlying data could not be read.',
-  };
-
-  var _METHOD_TEXT = {
-    extractive: 'Assembled directly from your own notes — no AI involved.',
-    llm_b:      'Written by the AI model running locally on this machine.',
-    llm_c:      'Written by your configured cloud AI model.',
-  };
-
-  function _summaryProvenance(d) {
-    var n = d.source_count || 0;
-    var md = d.metadata || {};
-    var parts = [];
-
-    if (n > 0) {
-      parts.push('Based on ' + n + ' memor' + (n === 1 ? 'y' : 'ies') + '.');
-    } else if (md.event_count) {
-      // A project can have plenty of recorded activity and no stored facts. Saying
-      // "0 memories" and stopping makes that look like an error rather than a
-      // description of what actually happened.
-      parts.push('Based on ' + md.event_count + ' recorded actions; no facts were ' +
-                 'saved for this project.');
-    } else {
-      parts.push('No stored memories matched.');
+    // The Summaries and Saved views panes live in od-summaries.js / od-views.js.
+    if (tab === 'summary') {
+      if (window.ODSummaries) window.ODSummaries.onShow(id);
+      _loadKnowledgeOverview(id);
     }
-
-    parts.push(_COVERAGE_TEXT[d.coverage] || 'Coverage unknown.');
-    if (d.generated_by && _METHOD_TEXT[d.generated_by]) {
-      parts.push(_METHOD_TEXT[d.generated_by]);
-    }
-    return parts.join(' ');
+    if (tab === 'views' && window.ODViews) window.ODViews.onShow(id);
   }
 
   // ── Category counts (pre-fetch real totals) ──────────────────────────────────
@@ -866,8 +710,8 @@
   function _loadKnowledgeOverview(id) {
     var box = document.getElementById(id + '-kover');
     if (!box) return;
-    // Guarded on the element, not a module flag — same reason as
-    // _loadProjectOptions: a stale "already loaded" boolean outlives the DOM
+    // Guarded on the element, not a module flag — same reason as the
+    // summary pickers: a stale "already loaded" boolean outlives the DOM
     // it described and leaves a permanent spinner after a re-render.
     if (box.dataset.loaded === '1') return;
 
@@ -1325,10 +1169,6 @@
       if (!el) return;
       var act = el.dataset.odAct;
 
-      if (act === 'sum') {
-        _loadSummary(id, el.dataset.kind, el.dataset.target || '');
-        return;
-      }
       // Example query chip in the Recall Lab starter state. recall-lab.js owns the
       // search itself and listens on #recall-lab-search, so fill the box and let it
       // run — duplicating its fetch here would be a second, divergent code path.
@@ -1422,9 +1262,6 @@
         _st = Object.assign({}, _st, { window: e.target.value || '' });
         var wq = (_st.searchQ || '').trim();
         if (wq) _doSearch(id, wq);   // re-run active search with the new window
-      }
-      if (e.target.dataset.odAct === 'sum-proj' && e.target.value) {
-        _loadSummary(id, 'project', e.target.value);
       }
     });
     container.addEventListener('input', function (e) {

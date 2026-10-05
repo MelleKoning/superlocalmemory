@@ -10,8 +10,8 @@
 //     profiles: {
 //       core:  { count: 18, tools: [...], description: "..." },
 //       code:  { count: 38, tools: [...], description: "..." },
-//       full:  { count: 54, tools: [...], description: "..." },
-//       power: { count: 66, tools: [...], description: "..." },
+//       full:  { count: 56, tools: [...], description: "..." },
+//       power: { count: 68, tools: [...], description: "..." },
 //       mesh:  { count:  8, tools: [...], description: "..." },
 //     },
 //     aliases: { "code21": "code", ... },
@@ -371,8 +371,8 @@
       '"env": {\n' +
       '  "SLM_MCP_PROFILE": "core"    // 18 tools — minimal\n' +
       '  // "SLM_MCP_PROFILE": "code"  // 38 tools — + Brain, code graph, loops, kinds\n' +
-      '  // "SLM_MCP_PROFILE": "full"  // 54 tools — + mesh\n' +
-      '  // "SLM_MCP_PROFILE": "power" // 66 tools — + governance\n' +
+      '  // "SLM_MCP_PROFILE": "full"  // 56 tools — + mesh\n' +
+      '  // "SLM_MCP_PROFILE": "power" // 68 tools — + governance\n' +
       '  // "SLM_MCP_PROFILE": "mesh"  //  8 tools — mesh only\n' +
       '}';
     body2.appendChild(codeBlock);

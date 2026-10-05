@@ -66,7 +66,7 @@ SLM is part of Qualixar's AI Reliability Engineering work: agent memory that is 
 |---|---|---|
 | Editor plugins | Claude Code, Codex, VS Code / Copilot, Antigravity, Hermes. Each ships 12 skills, 4 sub-agents and session hooks | [IDE setup](docs/ide-setup.md), [Hermes](docs/hermes.md) |
 | `slm connect <ide>` | Writes the MCP config for 12 IDEs: Antigravity, Claude Code, Claude Desktop, Codex, Continue, Cursor, Gemini CLI, JetBrains, OpenCode, VS Code / Copilot, Windsurf, Zed | [IDE setup](docs/ide-setup.md) |
-| MCP | stdio (`slm mcp`) or HTTP at `http://127.0.0.1:8765/mcp/`, with tool profiles from 8 to 101 tools | [MCP tools](docs/mcp-tools.md) |
+| MCP | stdio (`slm mcp`) or HTTP at `http://127.0.0.1:8765/mcp/`, with tool profiles from 8 to 103 tools | [MCP tools](docs/mcp-tools.md) |
 | Framework adapters | LangGraph, LangChain, LlamaIndex, CrewAI, AutoGen, Semantic Kernel, Microsoft Agent Framework, Google ADK, OpenAI Agents | [Framework adapters](docs/framework-adapters.md) |
 | Python SDK and HTTP API | `MemoryEngine` in your own code; a local REST API behind the dashboard | [API reference](docs/api-reference.md) |
 | Auto-capture hooks | `slm hooks install` for Claude Code, `--agent codex` for Codex | [Auto-memory](docs/auto-memory.md) |
@@ -85,7 +85,8 @@ On Claude Code, `slm connect claude-code` points you to the plugin: `claude plug
 | Replace and correct | `--replaces <id>` retires an old fact, kept and undoable. Edits go through reviewed corrections with rollback | [Corrections](docs/reviewed-corrections.md) |
 | Time travel | `--as-of`, `--known-as-of`, `--valid-at`, and `--window 7d` or a date range | [Recall](docs/recall.md#time-travel) |
 | Recall filters | `--project`, `--saved-by`, `--about`, `--kind`; applied before the answer check | [Recall](docs/recall.md#narrowing-a-recall) |
-| Summaries | `slm summary session`, `day` or `project` | [Recall](docs/recall.md#summaries) |
+| Summaries | `slm summary session`, `day` or `project`, each listing the memories it came from | [Recall](docs/recall.md#summaries) |
+| Saved views | `slm view create "Work log" "what did I ship" --window 7d`, then `slm view run` any time | [Recall](docs/recall.md#saved-views) |
 | Knowledge graph | Entities, aliases, scenes and timelines; Entity Explorer in the dashboard | [Architecture](docs/ARCHITECTURE.md) |
 | Code graph | Build a graph of a repo, then ask for blast radius, review context and code search by meaning | [MCP tools](docs/mcp-tools.md) |
 | Learning | Ranking adapts to what you use; learned patterns become soft prompts; opt-in skill evolution | [Skill evolution](docs/skill-evolution.md) |
@@ -110,9 +111,9 @@ Pick how many tools your agent sees with `SLM_MCP_PROFILE`. Counts come from the
 | `core` | 18 | Remember, recall, sessions, optimize, correction review |
 | `code` | 38 | Core plus code graph, memory kinds, Brain evidence, profile switching, bounded loops |
 | `mesh` | 8 | SLM-Mesh coordination only |
-| `full` (and unset) | 54 | Memory, kinds, Brain, optimize, skill evolution, mesh, loops |
-| `power` | 66 | Full plus administration, lifecycle and diagnostics |
-| `whole` | 101 | Every registered tool |
+| `full` (and unset) | 56 | Memory, kinds, Brain, optimize, skill evolution, mesh, loops |
+| `power` | 68 | Full plus administration, lifecycle and diagnostics |
+| `whole` | 103 | Every registered tool |
 
 ```json
 { "mcpServers": { "superlocalmemory": { "type": "http", "url": "http://127.0.0.1:8765/mcp/" } } }

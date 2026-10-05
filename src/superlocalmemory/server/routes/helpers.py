@@ -406,6 +406,10 @@ def delete_profile_from_db(name: str) -> None:
     from superlocalmemory.core.answer_check_history_store import erase_profile_everywhere
 
     erase_profile_everywhere(Path(DB_PATH).parent / "learning.db", name)
+    # A workspace made later under the same name must not inherit these views.
+    from superlocalmemory.views import ViewStore
+
+    ViewStore(Path(DB_PATH).parent / "learning.db").erase_profile(name)
     with memory_write(DB_PATH) as conn:
         conn.execute("PRAGMA foreign_keys=ON")
         # Purge role grants for this workspace (no FK CASCADE covers these).

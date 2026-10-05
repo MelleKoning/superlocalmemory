@@ -26,7 +26,7 @@ def test_registered_eager_on_learning() -> None:
     m = next(m for m in mr.MIGRATIONS if m.name == M053.NAME)
     assert m.db_target == "learning" == M053.DB_TARGET
     assert _MODULES[M053.NAME] is M053
-    assert sv.SUPPORTED_SCHEMA_VERSION == 53
+    assert sv.SUPPORTED_SCHEMA_VERSION >= 53  # 54 since M054 (saved views)
 
 
 def test_applies_on_fresh_store_and_is_idempotent(tmp_path) -> None:
@@ -98,7 +98,10 @@ def test_the_stage_timing_columns_are_part_of_m053(tmp_path) -> None:
     with sqlite3.connect(learning) as conn:
         cols = {r[1]: r[2] for r in conn.execute("PRAGMA table_info(answer_check_events)")}
     assert cols["embed_ms"] == "REAL" and cols["rerank_ms"] == "REAL"
-    assert not [m for m in mr.MIGRATIONS if m.name.startswith("M054")]
+    # The stage columns belong to M053 itself; M054 (saved views) adds none.
+    from superlocalmemory.storage.migrations import M054_saved_views as M054
+
+    assert "embed_ms" not in M054.DDL and "rerank_ms" not in M054.DDL
 
 
 def test_a_development_store_without_the_stage_columns_is_repaired(tmp_path) -> None:

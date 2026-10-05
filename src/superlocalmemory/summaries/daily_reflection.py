@@ -33,8 +33,11 @@ import sqlite3
 from datetime import date
 from pathlib import Path
 
+from superlocalmemory.storage.database import visible_fact_clause_for_connection
+
 from .base import (
     clean_llm_summary,
+    local_day_modifier,
     format_highlight,
     SUMMARY_SYSTEM_PROMPT,
     COVERAGE_FULL,
@@ -59,6 +62,8 @@ def generate_daily_reflection(
     target_date: str | date,
     profile_id: str = "default",
     config: object | None = None,
+    *,
+    tz_offset_minutes: int = 0,
 ) -> SummaryResult:
     """Generate a Daily Reflection for a specific date.
 
@@ -69,6 +74,10 @@ def generate_daily_reflection(
         profile_id:  Profile scope — never mix profiles.
         config:      Optional SLMConfig for LLM enrichment.  None = Mode A
                      (extractive, always deterministic).
+        tz_offset_minutes: The caller's offset east of UTC (330 for India).
+                     ``created_at`` is stored in UTC, so without it the day is
+                     the UTC day and, east of UTC, memories saved after local
+                     midnight land in the previous day's reflection.
 
     Returns:
         SummaryResult with source_fact_ids for every contributing fact.
@@ -76,6 +85,7 @@ def generate_daily_reflection(
     """
     db_path = Path(db_path)
     date_str = target_date.isoformat() if isinstance(target_date, date) else str(target_date)
+    day_shift = local_day_modifier(tz_offset_minutes)
 
     # ── query ────────────────────────────────────────────────────────────────
     try:
@@ -83,17 +93,19 @@ def generate_daily_reflection(
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA query_only=ON")
         try:
+            # Withheld and deleted rows are not memories a person may be shown.
+            visible = visible_fact_clause_for_connection(conn)
             rows = conn.execute(
-                """
+                f"""
                 SELECT fact_id, content, created_at, importance,
                        canonical_entities_json, lifecycle
                 FROM   atomic_facts
                 WHERE  profile_id = ?
-                  AND  DATE(created_at) = ?
-                  AND  lifecycle != 'archived'
-                ORDER  BY importance DESC, created_at ASC
-                """,
-                (profile_id, date_str),
+                  AND  DATE(created_at, ?) = ?
+                  AND  lifecycle != 'archived'{visible}
+                ORDER  BY importance DESC, created_at ASC, fact_id ASC
+                """,  # noqa: S608 - the clause is built from constants only
+                (profile_id, day_shift, date_str),
             ).fetchall()
         finally:
             conn.close()
@@ -118,7 +130,8 @@ def generate_daily_reflection(
             source_fact_ids=[],
             coverage=COVERAGE_INSUFFICIENT,
             generated_by=GENERATED_BY_EXTRACTIVE,
-            metadata={"date": date_str, "fact_count": 0},
+            metadata={"date": date_str, "fact_count": 0,
+                      "tz_offset_minutes": tz_offset_minutes},
         )
 
     facts = [dict(r) for r in rows]
@@ -145,7 +158,8 @@ def generate_daily_reflection(
                 source_fact_ids=source_fact_ids,
                 coverage=coverage,
                 generated_by=llm_mode,
-                metadata={"date": date_str, "fact_count": fact_count},
+                metadata={"date": date_str, "fact_count": fact_count,
+                          "tz_offset_minutes": tz_offset_minutes},
             )
 
     return SummaryResult(
@@ -155,7 +169,8 @@ def generate_daily_reflection(
         source_fact_ids=source_fact_ids,
         coverage=coverage,
         generated_by=GENERATED_BY_EXTRACTIVE,
-        metadata={"date": date_str, "fact_count": fact_count},
+        metadata={"date": date_str, "fact_count": fact_count,
+                          "tz_offset_minutes": tz_offset_minutes},
     )
 
 

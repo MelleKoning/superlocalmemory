@@ -147,6 +147,7 @@ from superlocalmemory.storage.migrations import (
     M051_lifecycle_is_recomputed_not_resampled as _M051,
     M052_memory_kinds as _M052,
     M053_answer_check_history as _M053,
+    M054_saved_views as _M054,
 )
 from superlocalmemory.storage.migrations import (
     M043_quarantine_display_summaries as _M043,
@@ -218,6 +219,10 @@ MIGRATIONS: list[Migration] = [
     # M053: the Answer Check history (4.1.20). A learning-plane table for the
     # same reason as M040: its writer must never hold memory.db's recall lock.
     Migration(name=_M053.NAME, db_target="learning", ddl=_M053.DDL,
+              dependencies=(_M003.NAME,)),
+    # M054: saved views (4.1.21, issue #113). A person's named recall queries;
+    # learning.db so the upgrade copies only the smaller database.
+    Migration(name=_M054.NAME, db_target="learning", ddl=_M054.DDL,
               dependencies=(_M003.NAME,)),
     # Review-gated correction metadata is self-contained in memory.db. It
     # contains identifiers only and does not alter temporal fact state.

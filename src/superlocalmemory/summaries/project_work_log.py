@@ -38,6 +38,8 @@ import sqlite3
 from collections import Counter
 from pathlib import Path
 
+from superlocalmemory.storage.database import visible_fact_clause_for_connection
+
 from .base import (
     clean_llm_summary,
     format_highlight,
@@ -255,8 +257,10 @@ def _query_project_data(
             ).fetchall()
 
             # Facts recorded during sessions that touched this project.
+            # Withheld and deleted rows are not memories a person may be shown.
+            visible = visible_fact_clause_for_connection(conn, "af")
             facts_rows = conn.execute(
-                """
+                f"""
                 SELECT DISTINCT af.fact_id, af.content, af.created_at,
                                 af.importance, af.canonical_entities_json
                 FROM   atomic_facts  af
@@ -265,9 +269,9 @@ def _query_project_data(
                        AND te.profile_id  = af.profile_id
                 WHERE  af.profile_id   = ?
                   AND  te.project_path = ?
-                  AND  af.lifecycle   != 'archived'
-                ORDER  BY af.importance DESC, af.created_at ASC
-                """,
+                  AND  af.lifecycle   != 'archived'{visible}
+                ORDER  BY af.importance DESC, af.created_at ASC, af.fact_id ASC
+                """,  # noqa: S608 - the clause is built from constants only
                 (profile_id, project_path),
             ).fetchall()
         finally:

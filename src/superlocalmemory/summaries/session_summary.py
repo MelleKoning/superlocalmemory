@@ -36,6 +36,8 @@ import sqlite3
 from datetime import date, timezone
 from pathlib import Path
 
+from superlocalmemory.storage.database import visible_fact_clause_for_connection
+
 from .base import (
     clean_llm_summary,
     format_highlight,
@@ -101,15 +103,17 @@ def generate_session_summary(
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA query_only=ON")
         try:
+            # Withheld and deleted rows are not memories a person may be shown.
+            visible = visible_fact_clause_for_connection(conn)
             rows = conn.execute(
-                """
+                f"""
                 SELECT fact_id, content, created_at, importance, lifecycle
                 FROM   atomic_facts
                 WHERE  profile_id  = ?
                   AND  session_id  = ?
-                  AND  lifecycle  != 'archived'
-                ORDER  BY importance DESC, created_at ASC
-                """,
+                  AND  lifecycle  != 'archived'{visible}
+                ORDER  BY importance DESC, created_at ASC, fact_id ASC
+                """,  # noqa: S608 - the clause is built from constants only
                 (profile_id, session_id),
             ).fetchall()
         finally:
