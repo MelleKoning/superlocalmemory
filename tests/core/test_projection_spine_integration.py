@@ -278,7 +278,8 @@ def test_redrive_does_not_orphan_erase_obligations(stored_engine) -> None:
         "SELECT state FROM completion_manifests WHERE operation_id = ?",
         (op_id,),
     )
-    assert manifest, "erase close must write a manifest (missing-manifest feed)"
+    # An erasure's durable record is its receipt; manifests describe ingestions.
+    assert not manifest, manifest
 
 
 def _seed_erase_op(engine, op_id: str, subject: str, *, tombstone: bool) -> None:
@@ -305,15 +306,20 @@ def _seed_erase_op(engine, op_id: str, subject: str, *, tombstone: bool) -> None
 
 def _erase_states(engine, op_id: str) -> dict:
     rows = engine._db.execute(
-        "SELECT owner, state, attempts FROM projection_obligations "
+        "SELECT owner, state, attempts, verify_attempts, detail "
+        "FROM projection_obligations "
         "WHERE operation_id = ?",
         (op_id,),
     )
     return {dict(r)["owner"]: dict(r) for r in rows}
 
 
-def test_redrive_leaves_erase_pending_when_residue_remains(stored_engine) -> None:
-    """A bm25 row for the subject must block ERASED (no vacuous proof)."""
+def test_redrive_never_closes_erase_when_residue_remains(stored_engine) -> None:
+    """A bm25 row for the subject must block ERASED (no vacuous proof).
+
+    The obligation is marked unconfirmed with the reason and one re-proof, but
+    no erase attempt: the redrive re-checks, it never erases.
+    """
     from superlocalmemory.server.unified_daemon import (
         _reconcile_pending_projections,
     )
@@ -330,11 +336,13 @@ def test_redrive_leaves_erase_pending_when_residue_remains(stored_engine) -> Non
     _reconcile_pending_projections(engine, force=True)
 
     for owner, row in _erase_states(engine, op_id).items():
-        assert row["state"] == "pending", f"{owner}: {row}"
+        assert row["state"] == "failed", f"{owner}: {row}"
         assert row["attempts"] == 0, f"{owner}: {row}"
+        assert row["verify_attempts"] == 1, f"{owner}: {row}"
+        assert "the bm25 index still holds it" in row["detail"], f"{owner}: {row}"
 
 
-def test_redrive_leaves_erase_pending_without_tombstone(stored_engine) -> None:
+def test_redrive_never_closes_erase_without_tombstone(stored_engine) -> None:
     """No tombstone means the delete never ran: never mark ERASED."""
     from superlocalmemory.server.unified_daemon import (
         _reconcile_pending_projections,
@@ -348,8 +356,10 @@ def test_redrive_leaves_erase_pending_without_tombstone(stored_engine) -> None:
     _reconcile_pending_projections(engine, force=True)
 
     for owner, row in _erase_states(engine, op_id).items():
-        assert row["state"] == "pending", f"{owner}: {row}"
+        assert row["state"] == "failed", f"{owner}: {row}"
         assert row["attempts"] == 0, f"{owner}: {row}"
+        assert row["verify_attempts"] == 2, f"{owner}: {row}"
+        assert "no deletion record" in row["detail"], f"{owner}: {row}"
 
 
 def test_manifest_is_reverifiable(stored_engine) -> None:

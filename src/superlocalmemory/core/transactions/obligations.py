@@ -193,6 +193,45 @@ class ObligationLedger:
         ).fetchall()
         return tuple(_row_to_obligation(row) for row in rows)
 
+    def mark_if_unchanged(
+        self,
+        conn: sqlite3.Connection,
+        seen: Obligation,
+        state: ObligationState,
+        *,
+        detail: Mapping[str, Any] | None = None,
+        bump_verify_attempts: bool = False,
+    ) -> int:
+        """Mark ``seen`` only if nobody has written it since it was read.
+
+        For a background reader that decides from a snapshot: if the owning
+        service closed the obligation in the meantime, its write wins and this
+        one is dropped (returns 0) instead of overwriting a newer truth.
+        """
+        detail_json = None if detail is None else json.dumps(
+            dict(detail), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
+        cursor = conn.execute(
+            "UPDATE projection_obligations SET "
+            "state = ?, detail = ?, "
+            "verify_attempts = verify_attempts + ?, "
+            "updated_at = ? "
+            "WHERE operation_id = ? AND owner = ? AND kind = ? "
+            "AND state = ? AND updated_at = ?",
+            (
+                str(state),
+                detail_json,
+                1 if bump_verify_attempts else 0,
+                time.time(),
+                seen.operation_id,
+                seen.owner,
+                str(seen.kind),
+                str(seen.state),
+                seen.updated_at,
+            ),
+        )
+        return cursor.rowcount
+
     def pending_operation_ids(
         self,
         conn: sqlite3.Connection,
@@ -200,6 +239,7 @@ class ObligationLedger:
         profile_id: str | None = None,
         limit: int = 100,
         max_attempts: int = 10,
+        kind: ObligationKind | None = None,
     ) -> tuple[str, ...]:
         where = "state NOT IN (?, ?) AND attempts < ?"
         params: list[Any] = [
@@ -208,6 +248,9 @@ class ObligationLedger:
         if profile_id is not None:
             where += " AND profile_id = ?"
             params.append(profile_id)
+        if kind is not None:
+            where += " AND kind = ?"
+            params.append(str(kind))
         params.append(limit)
         rows = conn.execute(
             f"SELECT DISTINCT operation_id FROM projection_obligations "
@@ -223,18 +266,47 @@ class ObligationLedger:
         profile_id: str | None = None,
         limit: int = 100,
         max_attempts: int = 10,
+        kind: ObligationKind | None = None,
     ) -> tuple[str, ...]:
         where = "m.operation_id IS NULL AND o.attempts < ?"
         params: list[Any] = [max_attempts]
         if profile_id is not None:
             where += " AND o.profile_id = ?"
             params.append(profile_id)
+        if kind is not None:
+            where += " AND o.kind = ?"
+            params.append(str(kind))
         params.append(limit)
         rows = conn.execute(
             f"SELECT DISTINCT o.operation_id FROM projection_obligations o "
             f"LEFT JOIN completion_manifests m ON m.operation_id = o.operation_id "
             f"WHERE {where} ORDER BY o.operation_id LIMIT ?",
             tuple(params),
+        ).fetchall()
+        return tuple(row[0] for row in rows)
+
+    def unfinished_erase_operation_ids(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        profile_id: str,
+        limit: int = 100,
+    ) -> tuple[str, ...]:
+        """Erasures with an obligation not yet proven erased, oldest touch first.
+
+        Deliberately not bounded by ``attempts``: an erase obligation is closed
+        by proof, not by retrying, so one exhausted by an earlier release must
+        still be re-proven. Admin-cancelled obligations are left as cancelled.
+        """
+        rows = conn.execute(
+            "SELECT operation_id FROM projection_obligations "
+            "WHERE kind = ? AND profile_id = ? AND state NOT IN (?, ?) "
+            "AND (detail IS NULL OR detail NOT LIKE '%admin_cancel%') "
+            "GROUP BY operation_id ORDER BY MIN(updated_at) LIMIT ?",
+            (
+                str(ObligationKind.ERASE), profile_id,
+                str(ObligationState.VERIFIED), str(ObligationState.ERASED), limit,
+            ),
         ).fetchall()
         return tuple(row[0] for row in rows)
 

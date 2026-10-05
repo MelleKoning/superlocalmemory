@@ -40,6 +40,22 @@ _MAX_ATTEMPTS = 10
 
 _VALID_ACTIONS = frozenset({"retry", "force_reconcile", "cancel"})
 
+# A failed obligation is exhausted when its apply/erase attempts ran out, or --
+# for an erasure, which is closed by proof rather than by retrying -- when it
+# has been re-proven and found unconfirmed that many times. Two ? = _MAX_ATTEMPTS.
+_EXHAUSTED_PREDICATE = (
+    "(attempts >= ? OR (kind = 'erase' AND verify_attempts >= ?))"
+)
+
+_SYNC_EXHAUSTED = (
+    "Background sync failed after maximum retries — use Force Re-sync or Cancel."
+)
+_ERASE_UNCONFIRMED = (
+    "A deletion could not be confirmed: the memory or one of its search "
+    "indexes still holds it. Delete the memory again, then use Reconcile; "
+    "or Cancel to dismiss."
+)
+
 
 # ---------------------------------------------------------------------------
 # Public API — list_failed_operations
@@ -171,50 +187,46 @@ def _fetch_exhausted_obligations(
 ) -> list[dict]:
     """Read projection_obligations rows that are FAILED and exhausted (M033 table).
 
-    Exhausted = state='failed' AND attempts >= _MAX_ATTEMPTS AND NOT admin-cancelled.
-    We exclude admin-cancelled obligations (detail contains 'admin_cancel') so they
-    don't resurface after cancellation.
+    Exhausted = state='failed' AND NOT admin-cancelled AND either attempts >=
+    _MAX_ATTEMPTS, or (for an erasure) re-proofs >= _MAX_ATTEMPTS. An erasure
+    is closed by proof rather than by retrying, so its re-proof count is what
+    says it has been unconfirmed for too long. Admin-cancelled obligations
+    (detail contains 'admin_cancel') are excluded so they don't resurface.
     """
+    where = f"state = 'failed' AND {_EXHAUSTED_PREDICATE}"
+    params: list[Any] = [_MAX_ATTEMPTS, _MAX_ATTEMPTS]
+    if profile_id is not None:
+        where += " AND profile_id = ?"
+        params.append(profile_id)
     try:
-        if profile_id is not None:
-            rows = conn.execute(
-                "SELECT DISTINCT operation_id, profile_id, "
-                "MAX(attempts) AS attempts, MAX(updated_at) AS updated_at, detail "
-                "FROM projection_obligations "
-                "WHERE state = 'failed' AND attempts >= ? AND profile_id = ? "
-                "GROUP BY operation_id "
-                "ORDER BY updated_at DESC LIMIT 200",
-                (_MAX_ATTEMPTS, profile_id),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT DISTINCT operation_id, profile_id, "
-                "MAX(attempts) AS attempts, MAX(updated_at) AS updated_at, detail "
-                "FROM projection_obligations "
-                "WHERE state = 'failed' AND attempts >= ? "
-                "GROUP BY operation_id "
-                "ORDER BY updated_at DESC LIMIT 200",
-                (_MAX_ATTEMPTS,),
-            ).fetchall()
+        rows = conn.execute(
+            "SELECT operation_id, MAX(profile_id) AS profile_id, "
+            "MAX(attempts) AS attempts, MAX(updated_at) AS updated_at, "
+            "GROUP_CONCAT(DISTINCT kind) AS kinds, "
+            "SUM(CASE WHEN detail LIKE '%admin_cancel%' THEN 1 ELSE 0 END) AS cancelled "
+            f"FROM projection_obligations WHERE {where} "
+            "GROUP BY operation_id "
+            "ORDER BY updated_at DESC LIMIT 200",
+            tuple(params),
+        ).fetchall()
     except sqlite3.Error:
         return []
 
     result: list[dict] = []
     for row in rows:
         # Skip admin-cancelled obligations
-        detail_raw = row["detail"] if row["detail"] is not None else ""
-        if '"admin_cancel"' in detail_raw or '"admin_cancelled"' in detail_raw:
+        if row["cancelled"]:
             continue
+        kinds = set((row["kinds"] or "").split(","))
+        erase_only = kinds == {"erase"}
         entry = {
             "category": "exhausted_obligation",
             "operation_id": row["operation_id"],
+            "kind": "erase" if erase_only else ",".join(sorted(kinds)),
             "attempts": row["attempts"] or 0,
             "profile_id": row["profile_id"] or "",
             "when": row["updated_at"],
-            "what_happened": (
-                "Background sync failed after maximum retries — "
-                "use Force Re-sync or Cancel."
-            ),
+            "what_happened": _ERASE_UNCONFIRMED if erase_only else _SYNC_EXHAUSTED,
         }
         result.append(entry)
     return result
@@ -455,9 +467,17 @@ def _action_force_reconcile(db_path: Path, engine: Any, operation_id: str) -> di
                 "reason": "engine._db not available",
             }
 
+        # An erasure id has no ingestion row by design: re-prove it instead of
+        # reporting "no canonical record". Erase work goes first so a manifest
+        # written by the apply reconcile below already reflects it.
+        erasure = (
+            _force_reconcile_erasure(engine, operation_id)
+            if _has_erase_obligations(db_obj, operation_id) else None
+        )
+
         context = _context_for_operation(engine, operation_id)
         if context is None:
-            return {
+            return erasure or {
                 "success": False,
                 "action": "force_reconcile",
                 "operation_id": operation_id,
@@ -466,6 +486,8 @@ def _action_force_reconcile(db_path: Path, engine: Any, operation_id: str) -> di
 
         service = build_transaction_service(engine)
         service.reconcile_operation(db_obj, context)
+        if erasure is not None and not erasure["success"]:
+            return erasure
         return {
             "success": True,
             "action": "force_reconcile",
@@ -480,6 +502,36 @@ def _action_force_reconcile(db_path: Path, engine: Any, operation_id: str) -> di
             "operation_id": operation_id,
             "reason": str(exc),
         }
+
+
+def _has_erase_obligations(db_obj: Any, operation_id: str) -> bool:
+    return bool(db_obj.execute(
+        "SELECT 1 FROM projection_obligations "
+        "WHERE operation_id = ? AND kind = 'erase' LIMIT 1",
+        (operation_id,),
+    ))
+
+
+def _force_reconcile_erasure(engine: Any, operation_id: str) -> dict:
+    """Re-prove an erasure now. It closes only if nothing of the memory remains."""
+    from superlocalmemory.core.transactions.erase_redrive import (
+        reconcile_erase_operation,
+    )
+
+    outcome = reconcile_erase_operation(engine, operation_id)
+    if outcome.closed:
+        return {
+            "success": True,
+            "action": "force_reconcile",
+            "operation_id": operation_id,
+            "message": "Deletion confirmed: nothing of the memory remains.",
+        }
+    return {
+        "success": False,
+        "action": "force_reconcile",
+        "operation_id": operation_id,
+        "reason": f"deletion not confirmed: {outcome.reason}",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -520,9 +572,9 @@ def get_failure_counts(db_path: str | Path) -> dict[str, int]:
                 row = conn.execute(
                     "SELECT COUNT(DISTINCT operation_id) AS c "
                     "FROM projection_obligations "
-                    "WHERE state = 'failed' AND attempts >= ? "
+                    f"WHERE state = 'failed' AND {_EXHAUSTED_PREDICATE} "
                     "AND (detail IS NULL OR detail NOT LIKE '%admin_cancel%')",
-                    (_MAX_ATTEMPTS,),
+                    (_MAX_ATTEMPTS, _MAX_ATTEMPTS),
                 ).fetchone()
                 counts["exhausted_obligations"] = int(row["c"]) if row else 0
             except sqlite3.Error:
