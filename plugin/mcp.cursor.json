@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "superlocalmemory": {
+      "args": [
+        "--from",
+        "superlocalmemory==4.1.21",
+        "slm",
+        "mcp"
+      ],
+      "command": "uvx",
+      "env": {
+        "SLM_AGENT_ID": "grok_bot",
+        "SLM_MCP_PROFILE": "core",
+        "SLM_NON_INTERACTIVE": "1",
+        "TOKENIZERS_PARALLELISM": "false",
+        "UV_TORCH_BACKEND": "cpu"
+      }
+    }
+  }
+}
