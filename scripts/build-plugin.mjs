@@ -20,12 +20,11 @@
  *   node scripts/build-plugin.mjs [--check] [--quiet] [--help]
  */
 
-'use strict';
-
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import process from 'node:process';
+import { cursorPlan } from './build-cursor-plugin.mjs';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -193,7 +192,6 @@ export function renderPluginJson(manifest) {
   // Claude Code automatically loads the conventional plugin/hooks/hooks.json.
   // Declaring it in the manifest as well makes current Claude Code load it
   // twice and rejects the whole plugin as a duplicate hook file.
-  obj.mcpServers = './.mcp.json';
   return stableStringify(obj);
 }
 
@@ -393,6 +391,8 @@ export function buildPlan(root, manifest) {
   // .claude-plugin/marketplace.json at REPO ROOT (not plugin root)
   // ---------------------------------------------------------------------------
   plan.set(path.join(root, '.claude-plugin', 'marketplace.json'), renderMarketplaceJson(manifest));
+  // Cursor format (Grok Bot): .cursor-plugin/ manifests, mcp.cursor.json, logo.
+  cursorPlan(root, manifest, pluginRoot).forEach((content, p) => plan.set(p, content));
 
   // ---------------------------------------------------------------------------
   // Agents (verbatim)

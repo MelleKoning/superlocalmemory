@@ -77,31 +77,67 @@ def _codex_env():
     return out
 
 
+def _cursor_env():
+    """The Cursor-format manifest (plugin/mcp.cursor.json), read by Grok Bot and
+    the Cursor editor."""
+    d = json.loads((REPO / "plugin/mcp.cursor.json").read_text(encoding="utf-8"))
+    return d["mcpServers"]["superlocalmemory"].get("env", {})
+
+
 SURFACES = (
     ("Claude Code", _claude_env),
     ("Codex", _codex_env),
     ("VS Code", _vscode_env),
     ("Antigravity", _antigravity_env),
     ("Codex plugin tree", _codex_plugin_mcp_env),
+    ("Cursor / Grok Bot", _cursor_env),
 )
+
+#: The ONLY surfaces allowed to force a narrower profile, each with its reason.
+NARROWING_EXCEPTIONS = {
+    # Grok Bot lists every tool to the model on a shared, memory-tight computer;
+    # Varun's decision for 4.1.22: the 18-tool core set there.
+    "Cursor / Grok Bot": "core",
+}
+
+
+def _narrowing_violation(name: str, env: dict) -> str | None:
+    """Why ``env`` breaks the rule, or None when it keeps it."""
+    forced = env.get("SLM_MCP_PROFILE")
+    if forced is None or forced == "power":
+        return None
+    if NARROWING_EXCEPTIONS.get(name) == forced:
+        return None
+    return (
+        f"{name} forces SLM_MCP_PROFILE={forced!r}. "
+        f"Installing a plugin must not remove tools the user configured."
+    )
 
 
 class TestNoSurfaceNarrowsYourToolSet:
     @pytest.mark.parametrize("name, reader", SURFACES, ids=[s[0] for s in SURFACES])
     def test_it_does_not_force_a_profile(self, name, reader) -> None:
-        env = reader()
-
         # The harm this guards is NARROWING: three surfaces once forced
         # SLM_MCP_PROFILE=code (31 tools, mesh tools dropped), silently
         # taking away tools the user configured. Forcing the widest
         # profile ('power', the full set) cannot narrow anyone and is the
-        # standing product decision — so absent or 'power' passes, while
-        # any narrower forced profile still fails.
-        forced = env.get("SLM_MCP_PROFILE")
-        assert forced is None or forced == "power", (
-            f"{name} forces SLM_MCP_PROFILE={forced!r}. "
-            f"Installing a plugin must not remove tools the user configured."
-        )
+        # standing product decision — so absent or 'power' passes, any
+        # narrower forced profile fails, and the one documented exception
+        # in NARROWING_EXCEPTIONS passes only for its own surface and profile.
+        violation = _narrowing_violation(name, reader())
+        assert violation is None, violation
+
+    def test_the_cursor_manifest_uses_exactly_its_exception(self) -> None:
+        assert _cursor_env().get("SLM_MCP_PROFILE") == NARROWING_EXCEPTIONS["Cursor / Grok Bot"]
+
+    @pytest.mark.parametrize("name", [s[0] for s in SURFACES if s[0] not in NARROWING_EXCEPTIONS])
+    @pytest.mark.parametrize("profile", ["core", "code", "full"])
+    def test_the_exception_does_not_extend_to_any_other_surface(self, name, profile) -> None:
+        assert _narrowing_violation(name, {"SLM_MCP_PROFILE": profile}) is not None
+
+    @pytest.mark.parametrize("profile", ["code", "full"])
+    def test_the_exception_does_not_extend_to_another_profile(self, profile) -> None:
+        assert _narrowing_violation("Cursor / Grok Bot", {"SLM_MCP_PROFILE": profile}) is not None
 
 
 class TestNoSurfaceRepointsYourStore:
@@ -128,6 +164,7 @@ class TestAttributionIsStillSet:
             ("Codex", _codex_env, "codex"),
             ("Antigravity", _antigravity_env, "antigravity"),
             ("Codex plugin tree", _codex_plugin_mcp_env, "codex"),
+            ("Cursor / Grok Bot", _cursor_env, "cursor_plugin"),
         ],
     )
     def test_the_agent_id_identifies_the_host(self, name, reader, expected) -> None:
