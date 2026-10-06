@@ -116,19 +116,25 @@ def stub_embedder():
         server.server_close()
 
 
-def _start_daemon(data_root: Path, port: int, root: Path, models_url: str) -> RealDaemon:
+def _start_daemon(
+    data_root: Path, port: int, root: Path, models_url: str | None = None,
+) -> RealDaemon:
     # Pinned to Mode A (the now-default fresh-install mode) so this never
     # depends on, or reaches, a real local Ollama -- only the embedding
     # model is swapped for the hermetic stub; the rules-based extraction
-    # backend Mode A uses needs no LLM at all.
-    config = {
-        "mode": "a", "active_profile": "default", "daemon_port": port,
-        "daemon_enable_legacy_port": False, "mesh_enabled": False,
-        "scale_auto_promote_enabled": False,
-        "embedding": {"provider": "openai", "api_endpoint": f"{models_url}/v1",
-                      "model_name": "stub-embed", "dimension": 768, "api_key": ""},
-    }
-    (data_root / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    # backend Mode A uses needs no LLM at all. ``models_url`` is optional:
+    # a caller that only needs the daemon itself (not hermetic enrichment)
+    # gets the previous, config-free default untouched -- this file's own
+    # callers (below) always pass it.
+    if models_url is not None:
+        config = {
+            "mode": "a", "active_profile": "default", "daemon_port": port,
+            "daemon_enable_legacy_port": False, "mesh_enabled": False,
+            "scale_auto_promote_enabled": False,
+            "embedding": {"provider": "openai", "api_endpoint": f"{models_url}/v1",
+                          "model_name": "stub-embed", "dimension": 768, "api_key": ""},
+        }
+        (data_root / "config.json").write_text(json.dumps(config), encoding="utf-8")
     env = _child_env(data_root, port, root / "home", root / "cache")
     log = root / f"daemon-{time.monotonic_ns()}.log"
     with log.open("wb") as handle:
