@@ -24,6 +24,7 @@ from superlocalmemory.infra.daemon_identity import (
 )
 
 RECORDED_CREATE_TIME = 1785680165.85
+RECORDED_PID = 612
 LIVE_TOKEN = "lx1:9f3a2c1e-0000-4000-8000-000000000001:44219"
 OTHER_TOKEN = "lx1:9f3a2c1e-0000-4000-8000-000000000001:98877"
 
@@ -44,7 +45,7 @@ def _only_the_daemon_pid(process: MagicMock):
     real = psutil.Process
 
     def _process(pid=None):
-        return process if pid == 612 else real(pid)
+        return process if pid == RECORDED_PID else real(pid)
 
     return _process
 
@@ -55,7 +56,7 @@ def _write_owned_descriptor(port: int, *, token: str | None):
         data_root=root,
         port=port,
         version="3.8.11",
-        pid=612,
+        pid=RECORDED_PID,
         process_create_time=RECORDED_CREATE_TIME,
         process_start_token=token,
         instance_id="diagnosed-instance",
