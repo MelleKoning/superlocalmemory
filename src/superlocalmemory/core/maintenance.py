@@ -248,6 +248,15 @@ def run_maintenance(
         counts["orphan_metadata_gc"] = db.gc_orphaned_embedding_metadata()
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("orphan metadata GC skipped: %s", exc)
+    # 4.1.22: ...and the vectors that sweep (and every fact delete) leaves with
+    # no reference. They cannot be results but still take nearest-neighbour slots.
+    from superlocalmemory.storage.vector_residue import sweep_unreferenced_vectors
+    counts["unreferenced_vectors_gc"] = sweep_unreferenced_vectors(db.db_path)
+    try:  # deleted words leave the keyword index at once from now on
+        from superlocalmemory.storage.fts_residue import ensure_secure_delete
+        ensure_secure_delete(db)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("keyword index secure delete skipped: %s", exc)
 
     # v3.8.x: self-healing NULL-embedding backfill.  Facts stored while the
     # embedder was unavailable end up with NULL embedding and are invisible to

@@ -1624,9 +1624,9 @@ class DatabaseManager:
         """Hard-delete a fact.
 
         DatabaseManager connections enforce FKs (PRAGMA foreign_keys=ON), so
-        embedding_metadata / fact_retention cascade. The explicit
-        embedding_metadata delete below is belt-and-suspenders for the case a
-        future caller routes through a connection without FK enforcement.
+        tables that declare ON DELETE CASCADE go with the fact. Derived rows in
+        tables that declare none (BM25 tokens, vector map, ...) are removed by
+        storage/fact_dependents.py in this same transaction.
 
         ``graph_edges`` does NOT cascade, whatever this docstring used to say.
         Its only foreign key is to ``profiles``; there is none to
@@ -1658,9 +1658,8 @@ class DatabaseManager:
             # filed under the wrong tenant is a fact id that outlives that
             # tenant's erasure.
             owner = profile_id or projection_outbox.resolve_profile(self, fact_id)
-            self.execute(
-                "DELETE FROM embedding_metadata WHERE fact_id = ?", (fact_id,),
-            )
+            from superlocalmemory.storage.fact_dependents import delete_derived_rows
+            delete_derived_rows(self, fact_id)  # rows no foreign key removes
             if profile_id is not None:
                 self.execute(
                     "DELETE FROM atomic_facts WHERE fact_id = ? AND profile_id = ?",

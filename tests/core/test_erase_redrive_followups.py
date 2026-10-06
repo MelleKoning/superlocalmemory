@@ -251,7 +251,10 @@ def test_entity_erasure_is_not_closed_while_a_listed_memory_remains(
             "Kestrel Programme", engine._profile_id,
         )
     erasure_id = _entity_erasure_id(engine, "Kestrel Programme")
-    engine._db.delete_bm25_tokens_for_fact(first)  # second keeps its residue
+    # 4.1.22: deleting a fact now removes its token row in the same transaction
+    # (storage/fact_dependents.py), so residue no longer survives on its own.
+    # Plant it for the second memory: the redrive must still refuse to close.
+    engine._db.store_bm25_tokens(second, engine._profile_id, ["acme", "ingrid"])
 
     _redrive(engine)
 
