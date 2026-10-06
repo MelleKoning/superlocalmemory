@@ -5,7 +5,8 @@
 """Copies of memory and remote secrets stay readable by their owner only.
 
 A restore point, a backup or a learning copy holds the same memories as the
-live store, which is ``0600``. Releases before 4.1.20 wrote some of them with
+live store, which is ``0600``; the configuration and the answer-check and
+feedback keys are secrets of their own. Releases before 4.1.20 wrote some of them with
 the default mode (``0644``), so another account on the same computer could read
 them whenever the data directory itself was not private.
 
@@ -40,6 +41,7 @@ PRIVATE_DIRS: tuple[str, ...] = (
     "pre-restore",               # the store as it was before each restore
     "restore-delta",             # memories carried across a restore
     "backups",                   # routine backups and backup sets (infra/backup.py)
+    "secrets",                   # answer-check provider keys (core/judge_keys.py)
 )
 #: Single files under the data root that hold secrets or copies.
 PRIVATE_FILES: tuple[tuple[str, ...], ...] = (
@@ -47,6 +49,10 @@ PRIVATE_FILES: tuple[tuple[str, ...], ...] = (
     ("remote", "remote.json"),
     ("remote", "tls", "server.key"),
     ("remote", "tls", "ca.key"),
+    # Tightened again here, not only when next saved or loaded: an older
+    # release's 0644 copy stayed readable by other accounts until then.
+    ("config.json",),          # can hold provider API keys
+    (".feedback-hash-key",),   # keys the feedback query hashes
 )
 #: File-name prefixes in the data root itself (dashboard learning backups).
 PRIVATE_PREFIXES: tuple[str, ...] = ("learning.db.backup_",)

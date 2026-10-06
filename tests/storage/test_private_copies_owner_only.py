@@ -55,11 +55,14 @@ def _old_install(root: Path) -> dict[str, Path]:
         "remote_settings": root / "remote" / "remote.json",
         "tls_key": root / "remote" / "tls" / "server.key",
         "ca_key": root / "remote" / "tls" / "ca.key",
+        "config": root / "config.json",
+        "feedback_key": root / ".feedback-hash-key",
+        "answer_check_key": root / "secrets" / "jev-typesafe.key",
     }
     for path in files.values():
         _open_file(path)
     for folder in ("pre-migration-snapshots", "pre-restore", "restore-delta",
-                   "restore-delta/20260902", "backups", "backups/backup_abc"):
+                   "restore-delta/20260902", "backups", "backups/backup_abc", "secrets"):
         os.chmod(root / folder, 0o755)
     return files
 
@@ -74,7 +77,7 @@ def test_start_up_pass_makes_old_copies_and_secrets_owner_only(tmp_path) -> None
     for name, path in files.items():
         assert _mode(path) == 0o600, f"{name} is still {oct(_mode(path))}"
     for folder in ("pre-migration-snapshots", "pre-restore", "restore-delta",
-                   "restore-delta/20260902", "backups", "backups/backup_abc"):
+                   "restore-delta/20260902", "backups", "backups/backup_abc", "secrets"):
         assert _mode(tmp_path / folder) == 0o700, folder
     assert _mode(unrelated) == 0o644, "files that are not copies or secrets are left alone"
     assert _mode(certificate) == 0o644, "a public certificate is not a secret"
