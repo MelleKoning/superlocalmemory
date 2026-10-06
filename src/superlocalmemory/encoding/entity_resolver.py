@@ -497,6 +497,16 @@ class EntityResolver:
                     "WHERE fact_id = ?",
                     (json.dumps(deduped), d["fact_id"]),
                 )
+                # The fact now names the kept entity; index it under that id
+                # (storage/entity_index.py). The merged id's rows go with the
+                # entity row below, by its foreign key.
+                from superlocalmemory.storage.entity_index import (
+                    record_fact_entities,
+                )
+
+                record_fact_entities(
+                    self._db, d["fact_id"], profile_id, [entity_id_keep],
+                )
             except (json.JSONDecodeError, TypeError):
                 continue
 

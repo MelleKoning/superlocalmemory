@@ -1047,6 +1047,14 @@ class DatabaseManager:
             # anchor. Absence deliberately represents pre-4.0.2
             # ``legacy_unknown``; never backfill it from ``created_at``.
             self.store_temporal_validity(fact.fact_id, fact.profile_id)
+            # Which facts name an entity is answered from an index; every
+            # write path lands here, so this keeps it complete
+            # (storage/entity_index.py).
+            from superlocalmemory.storage.entity_index import record_fact_entities
+
+            record_fact_entities(
+                self, fact.fact_id, fact.profile_id, fact.canonical_entities,
+            )
             # The graph and the vectors live in other storage engines, so the
             # intent to project this fact is queued here, in this transaction.
             # Enqueueing in the storage layer rather than at each pipeline call
@@ -1177,6 +1185,11 @@ class DatabaseManager:
             tuple(params),
         )
         self.store_temporal_validity(fact.fact_id, fact.profile_id)
+        from superlocalmemory.storage.entity_index import record_fact_entities
+
+        record_fact_entities(
+            self, fact.fact_id, fact.profile_id, fact.canonical_entities,
+        )
         projection_outbox.enqueue(self, fact.fact_id, fact.profile_id)
         return fact.fact_id
 
@@ -1587,6 +1600,12 @@ class DatabaseManager:
                 self.execute(
                     f"UPDATE atomic_facts SET {set_clause} WHERE fact_id = ?",
                     (*set_params, fact_id),
+                )
+            if "canonical_entities_json" in clean:
+                from superlocalmemory.storage import entity_index
+
+                entity_index.record_rewritten_fact(
+                    self, fact_id, profile_id, clean["canonical_entities_json"],
                 )
             # Only an update that changes something a projection is derived
             # from needs re-projecting. Recall bumps access_count on every hit,

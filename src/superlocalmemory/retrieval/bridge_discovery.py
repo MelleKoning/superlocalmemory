@@ -27,7 +27,6 @@ License: AGPL-3.0-or-later
 from __future__ import annotations
 
 import logging
-import time
 from typing import TYPE_CHECKING
 
 from superlocalmemory.retrieval.scope_policy import (
@@ -50,6 +49,23 @@ _TYPED_MU: dict[str, float] = {
     "supersedes": 0.0,
 }
 _MAX_DEPTH: int = 4
+
+#: Newest facts read per bridge entity; the walk has always used five.
+_FACTS_PER_ENTITY: int = 5
+
+#: Work budget for one ``discover`` call, in entity lookups. It replaces a
+#: 0.4 s wall-clock deadline that made the answer depend on machine load.
+#:
+#: What it costs in quality, measured on the author's store (7,330 facts,
+#: about 55 entities per fact) over the 50 dev and 97 held-out eval questions:
+#: with no bound at all a call needed at most 44 lookups (median 6), so 64
+#: truncates none of them and the bridges are exactly those of an unbounded
+#: walk. A question needing more than 64 loses only the bridges of entities
+#: that sort after the 64th, and loses the same ones every time. With the
+#: entity index a lookup costs about 0.3 ms, so the bound caps this stage near
+#: 20 ms; on the full-scan fallback, used only until the backfill finishes, it
+#: is 17-81 ms per lookup on that store.
+MAX_ENTITY_LOOKUPS: int = 64
 _NODE_BUDGET: int = 50
 
 
@@ -72,20 +88,30 @@ class BridgeDiscovery:
         *,
         include_global: bool = False,
         include_shared: bool = False,
-        time_budget_s: float = 0.4,
+        max_lookups: int | None = None,
     ) -> list[tuple[str, float]]:
         """Find bridge facts connecting seed results.
+
+        The same seeds on the same store always give the same bridges. The
+        walk visits each neighbouring pair of seeds in order and each pair's
+        bridge entities in sorted order, and it is bounded by a count of entity
+        lookups (``max_lookups``, default ``MAX_ENTITY_LOOKUPS``), never by a
+        clock, so a busy machine does the same work as an idle one.
 
         Args:
             seed_ids: Fact IDs from initial retrieval.
             profile_id: Scope to this profile.
             max_bridges: Maximum bridge facts to return.
+            max_lookups: Work budget in entity lookups for this call.
 
         Returns:
             List of (fact_id, bridge_score) for discovered bridges.
         """
+        from superlocalmemory.storage import entity_index
+
         if len(seed_ids) < 2:
             return []
+        budget = MAX_ENTITY_LOOKUPS if max_lookups is None else max(0, int(max_lookups))
 
         allowed_seeds = authorized_fact_ids(
             self._db,
@@ -110,20 +136,40 @@ class BridgeDiscovery:
         if any(seed_id not in seed_facts for seed_id in seed_ids):
             return []
 
+        # Read once per call: until the background backfill has indexed every
+        # older fact, the full scan is the only complete answer.
+        indexed = entity_index.is_complete(self._db)
+        with entity_index.lookup_session(self._db) as conn:
+            bridges = self._walk(
+                seed_ids, seed_facts, profile_id, max_bridges, budget,
+                indexed=indexed, conn=conn,
+                include_global=include_global, include_shared=include_shared,
+            )
+        bridges.sort(key=lambda x: (-x[1], x[0]))
+        return filter_authorized_results(
+            self._db,
+            bridges,
+            profile_id,
+            include_global=include_global,
+            include_shared=include_shared,
+        )[:max_bridges]
+
+    def _walk(
+        self, seed_ids: list[str], seed_facts: dict, profile_id: str,
+        max_bridges: int, budget: int, *, indexed: bool, conn,
+        include_global: bool, include_shared: bool,
+    ) -> list[tuple[str, float]]:
+        """Each neighbouring pair of seeds, each bridge entity in sorted order,
+        until ``budget`` lookups or ``max_bridges`` bridges."""
+        from superlocalmemory.storage import entity_index
+
         bridges: list[tuple[str, float]] = []
         seen = set(seed_ids)
-        # v3.8.2: bound the per-entity get_facts_by_entity fan-out. On a dense
-        # entity graph (M5: 3.3k entities / 208k edges) a single recall could
-        # issue 200+ DB round-trips here — the primary 3.8 full-mode latency
-        # spike (observed 7.6s). Bridges are a SUPPLEMENTARY post-fusion boost
-        # (score x0.8, only added if not already found), so truncating them
-        # under a wall-clock budget is quality-safe: the ranked channels have
-        # already returned the core results.
-        deadline = time.monotonic() + time_budget_s
+        lookups = 0
 
         # Check consecutive pairs for entity overlap
         for i in range(len(seed_ids) - 1):
-            if time.monotonic() > deadline:
+            if lookups >= budget:
                 break
             fact_a = seed_facts.get(seed_ids[i])
             fact_b = seed_facts.get(seed_ids[i + 1])
@@ -137,37 +183,31 @@ class BridgeDiscovery:
             if entities_a & entities_b:
                 continue
 
-            # Strategy 1: Entity bridge (union minus intersection)
-            bridge_entities = (entities_a | entities_b) - (entities_a & entities_b)
+            # Strategy 1: Entity bridge (union minus intersection). Sorted, so
+            # a walk the budget stops early stops at the same entity in every
+            # process: set order changes with Python's per-process hash seed.
+            bridge_entities = sorted((entities_a | entities_b) - (entities_a & entities_b))
             for eid in bridge_entities:
-                if time.monotonic() > deadline:
+                if lookups >= budget:
                     break
-                entity_facts = self._db.get_facts_by_entity(
-                    eid,
-                    profile_id,
+                lookups += 1
+                entity_facts = entity_index.facts_for_entity(
+                    self._db, eid, profile_id, limit=_FACTS_PER_ENTITY,
+                    indexed=indexed, conn=conn,
                     include_global=include_global,
                     include_shared=include_shared,
                 )
-                for f in entity_facts[:5]:
-                    if f.fact_id not in seen:
-                        seen.add(f.fact_id)
-                        overlap = (
-                            len(set(f.canonical_entities) & entities_a)
-                            + len(set(f.canonical_entities) & entities_b)
-                        )
-                        bridges.append((f.fact_id, min(1.0, 0.5 + overlap * 0.15)))
+                for fact_id, fact_entities in entity_facts:
+                    if fact_id not in seen:
+                        seen.add(fact_id)
+                        ents = set(fact_entities)
+                        overlap = len(ents & entities_a) + len(ents & entities_b)
+                        bridges.append((fact_id, min(1.0, 0.5 + overlap * 0.15)))
 
             if len(bridges) >= max_bridges:
                 break
 
-        bridges.sort(key=lambda x: (-x[1], x[0]))
-        return filter_authorized_results(
-            self._db,
-            bridges,
-            profile_id,
-            include_global=include_global,
-            include_shared=include_shared,
-        )[:max_bridges]
+        return bridges
 
     def spreading_activation(
         self,
