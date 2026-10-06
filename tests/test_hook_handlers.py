@@ -360,16 +360,16 @@ class TestHookStart:
 
     @patch("superlocalmemory.hooks.hook_handlers.subprocess.Popen")
     @patch("superlocalmemory.hooks.hook_handlers.subprocess.run")
-    def test_reap_runs_on_unix(self, mock_run, mock_popen):
+    def test_start_never_kills_processes_by_name_pattern(self, mock_run, mock_popen):
+        """4.1.22 (handoff §13: never pattern-kill). The old orphan "reaper"
+        piped `ps | grep | xargs kill` and could end another live session's
+        MCP server during parallel host starts."""
         mock_run.return_value = MagicMock(stdout="", returncode=0)
-        with patch("superlocalmemory.hooks.hook_handlers.sys") as mock_sys:
-            mock_sys.platform = "darwin"
-            mock_sys.stderr = sys.stderr
-            # Re-import won't help; we test the Popen was called
         handle_hook("start")
-        # Popen should have been called for reap (on non-win32 platform)
-        if sys.platform != "win32":
-            assert mock_popen.called
+        for call in mock_popen.call_args_list + mock_run.call_args_list:
+            argv = call.args[0] if call.args else call.kwargs.get("args", [])
+            text = " ".join(argv) if isinstance(argv, (list, tuple)) else str(argv)
+            assert "kill" not in text and "ps -eo" not in text, text
 
 
 # ───────────────────────────────────────────────────────────────────

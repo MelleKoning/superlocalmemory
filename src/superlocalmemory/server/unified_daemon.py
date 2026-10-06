@@ -1373,59 +1373,13 @@ async def _consolidation_timer_loop(application: FastAPI) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Legacy port TCP redirect (backward compat for port 8767)
+# Legacy port TCP redirect (backward compat for port 8767): server/legacy_port
 # ---------------------------------------------------------------------------
 
-async def _start_legacy_redirect(primary_port: int, legacy_port: int) -> None:
-    """Start TCP redirect from legacy_port → primary_port.
-
-    Simple byte-level proxy. No shared event loop with uvicorn — runs
-    in its own asyncio task within the same loop.
-    """
-    _deprecation_warned = False
-
-    async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        nonlocal _deprecation_warned
-        if not _deprecation_warned:
-            logger.warning(
-                "Request on deprecated port %d. Update config to use port %d.",
-                legacy_port, primary_port,
-            )
-            _deprecation_warned = True
-
-        try:
-            upstream_r, upstream_w = await asyncio.open_connection("127.0.0.1", primary_port)
-            await asyncio.gather(
-                _pipe(reader, upstream_w),
-                _pipe(upstream_r, writer),
-            )
-        except Exception:
-            pass
-        finally:
-            writer.close()
-
-    async def _pipe(src: asyncio.StreamReader, dst: asyncio.StreamWriter):
-        try:
-            while True:
-                data = await src.read(8192)
-                if not data:
-                    break
-                dst.write(data)
-                await dst.drain()
-        except Exception:
-            pass
-        finally:
-            try:
-                dst.close()
-            except Exception:
-                pass
-
-    try:
-        server = await asyncio.start_server(_handle_client, "127.0.0.1", legacy_port)
-        logger.info("Legacy redirect: port %d → %d (deprecated)", legacy_port, primary_port)
-        await server.serve_forever()
-    except OSError:
-        logger.info("Port %d in use (old daemon?), skipping legacy redirect", legacy_port)
+from superlocalmemory.server.legacy_port import (  # noqa: E402 - re-exported
+    maybe_start_legacy_redirect as _maybe_start_legacy_redirect,
+    start_legacy_redirect as _start_legacy_redirect,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -3125,11 +3079,17 @@ async def lifespan(application: FastAPI):
         idle_timeout = idle_timeout or config.daemon_idle_timeout
     _start_idle_watchdog(idle_timeout)
 
-    # Start legacy port redirect
-    enable_legacy = os.environ.get("SLM_DISABLE_LEGACY_PORT", "").lower() not in ("1", "true")
-    if enable_legacy:
-        identity = application.state.daemon_descriptor
-        asyncio.create_task(_start_legacy_redirect(identity.port, _LEGACY_PORT))
+    # Legacy port redirect: only a daemon on the default data root may take
+    # 8767, or a second root could capture old clients (GB6). The status dict
+    # is the truth for /status's legacy_port field below -- not every daemon
+    # that is *entitled* to the port actually binds it (an older daemon can
+    # already hold it), so this is updated once the real bind resolves.
+    application.state.legacy_port_status = {"bound": False, "port": None, "reason": "not started"}
+    _maybe_start_legacy_redirect(
+        application.state.daemon_descriptor.port,
+        _LEGACY_PORT,
+        status=application.state.legacy_port_status,
+    )
 
     # V3.4.22 LLD-02: signal-worker background drainer (S8-SK-01 fix).
     # Without this, ``signals.enqueue`` fills a bounded queue and drops
@@ -5596,7 +5556,15 @@ def _register_daemon_routes(application: FastAPI) -> None:
             "db_size_mb": db_size_mb,
             "idle_s": round(time.monotonic() - _last_activity),
             "port": application.state.daemon_descriptor.port,
-            "legacy_port": _LEGACY_PORT,
+            # The truth, not the policy: null + a reason unless this daemon
+            # actually has the socket bound (#4.1.22 fix -- this used to
+            # report the constant 8767 even for a daemon that never took it).
+            "legacy_port": (
+                getattr(application.state, "legacy_port_status", None) or {}
+            ).get("port"),
+            "legacy_port_reason": (
+                getattr(application.state, "legacy_port_status", None) or {}
+            ).get("reason", "unknown"),
             "profile": profile_snapshot.profile_id,
             "profile_generation": profile_snapshot.generation,
             # Facts stored but not yet in the graph and vector projections. The

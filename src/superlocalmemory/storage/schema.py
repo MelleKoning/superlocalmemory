@@ -1061,8 +1061,8 @@ def create_all_tables(conn: sqlite3.Connection) -> None:
 
     # The graph's change counter, part of the activation-cache key. After the
     # V32 DDL: its triggers sit on association_edges and empty activation_cache.
-    from superlocalmemory.storage import graph_generation
-    conn.executescript(graph_generation.DDL)
+    from superlocalmemory.storage import fact_search_changes, graph_generation
+    conn.executescript(graph_generation.DDL + fact_search_changes.ddl(conn))
 
     # Additive columns on tables that predate them.
     #
@@ -1102,10 +1102,10 @@ def drop_all_tables(conn: sqlite3.Connection) -> None:
         conn: An open SQLite connection. Caller manages commit.
     """
     # The graph counter's triggers reference V32 tables: drop them first.
-    from superlocalmemory.storage import graph_generation
-    for trigger in graph_generation.trigger_names():
+    from superlocalmemory.storage import fact_search_changes, graph_generation
+    for trigger in (*graph_generation.trigger_names(), *fact_search_changes.trigger_names()):
         conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
-    conn.execute(f"DROP TABLE IF EXISTS {graph_generation.TABLE}")
+    for table in (graph_generation.TABLE, fact_search_changes.TABLE): conn.execute(f"DROP TABLE IF EXISTS {table}")  # noqa: E701
 
     # V32 tables first (they may FK to base tables)
     from superlocalmemory.storage.schema_v32 import V32_ROLLBACK

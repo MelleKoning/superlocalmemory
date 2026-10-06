@@ -139,7 +139,81 @@ def test_legacy_redirect_targets_the_actual_runtime_port() -> None:
     from superlocalmemory.server import unified_daemon
 
     source = inspect.getsource(unified_daemon.lifespan)
-    assert "_start_legacy_redirect(identity.port, _LEGACY_PORT)" in source
+    # 4.1.22 (GB6): through the default-root ownership rule, still aimed at
+    # the port this daemon actually serves, and (4.1.22 polish) reporting its
+    # real outcome back through a status dict for /status to read truthfully.
+    assert "application.state.daemon_descriptor.port," in source
+    assert "_LEGACY_PORT," in source
+    assert "status=application.state.legacy_port_status," in source
+    assert "_maybe_start_legacy_redirect(" in source
+
+
+def test_status_reports_the_legacy_port_only_when_actually_bound(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The status route must report the truth, not the policy (4.1.22 polish):
+    a daemon whose legacy-port bind resolved to ``bound: True`` reports the
+    real port number and the real reason."""
+    from superlocalmemory.server import unified_daemon
+
+    monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("SLM_DAEMON_PORT", "43135")
+    monkeypatch.setattr(unified_daemon, "_ACTIVE_DAEMON_DESCRIPTOR", None)
+    app = unified_daemon.create_app()
+    app.state.legacy_port_status = {
+        "bound": True, "port": 8767, "reason": "default data root",
+    }
+    route = next(route for route in app.routes if getattr(route, "path", None) == "/status")
+
+    payload = asyncio.run(route.endpoint())
+
+    assert payload["legacy_port"] == 8767
+    assert payload["legacy_port_reason"] == "default data root"
+
+
+def test_status_reports_null_legacy_port_when_not_bound(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A daemon that never took 8767 (a second data root, or the socket was
+    already held by another process) must report ``null``, never the
+    constant 8767 -- that was the 4.1.22 bug (it always reported 8767)."""
+    from superlocalmemory.server import unified_daemon
+
+    monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("SLM_DAEMON_PORT", "43136")
+    monkeypatch.setattr(unified_daemon, "_ACTIVE_DAEMON_DESCRIPTOR", None)
+    app = unified_daemon.create_app()
+    app.state.legacy_port_status = {
+        "bound": False,
+        "port": None,
+        "reason": "this daemon serves /somewhere/else, not the default data root",
+    }
+    route = next(route for route in app.routes if getattr(route, "path", None) == "/status")
+
+    payload = asyncio.run(route.endpoint())
+
+    assert payload["legacy_port"] is None
+    assert "not the default data root" in payload["legacy_port_reason"]
+
+
+def test_status_legacy_port_defaults_to_null_before_startup_runs(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Calling the route function directly (as these unit tests do) bypasses
+    ``lifespan`` entirely, so ``legacy_port_status`` is never set -- must not
+    crash, and must still refuse to claim the port is bound."""
+    from superlocalmemory.server import unified_daemon
+
+    monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("SLM_DAEMON_PORT", "43137")
+    monkeypatch.setattr(unified_daemon, "_ACTIVE_DAEMON_DESCRIPTOR", None)
+    app = unified_daemon.create_app()
+    route = next(route for route in app.routes if getattr(route, "path", None) == "/status")
+
+    payload = asyncio.run(route.endpoint())
+
+    assert payload["legacy_port"] is None
+    assert payload["legacy_port_reason"] == "unknown"
 
 
 def test_status_reports_the_actual_runtime_port(tmp_path: Path, monkeypatch) -> None:

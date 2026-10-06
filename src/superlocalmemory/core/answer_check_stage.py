@@ -90,29 +90,73 @@ def run_answer_check(retrieval_engine: Any, query: str, response: Any, *,
     if request == REQUEST_FULL and reorders(judge):
         deadline = _deadline_or_skip(recall_started)
         if deadline is _SKIP:
+            # 4.1.22, the reorder branch's budget recovery, explicitly: the
+            # hosted check is never memoised (it re-reads consent and its key
+            # before every request) and never finished later (that would bill
+            # for a verdict nobody waited for, and a late order could reorder
+            # a list the caller already read). So the recall returns exactly as
+            # retrieval ranked it, nothing is sent, nothing is queued, and the
+            # response says unjudged / budget_exhausted.
             return JudgeOutcome(None, STATUS_SKIPPED, DETAIL_BUDGET)
         return rerank_and_judge(judge, query, response, deadline)
     # 4.1.20: the same question over the same memories gets the same verdict,
     # whatever retrieval cost this time (core.answer_check_memo; on-device only).
     documents = _top_documents(judge, response)
-    remembered = answer_check_memo.lookup(judge, query, documents)
+    binding, changed = _binding(retrieval_engine, response, profile_id, len(documents))
+    remembered = answer_check_memo.lookup(judge, query, documents,
+                                          binding=binding, changed=changed)
     if remembered is not None:
         return JudgeOutcome(remembered, STATUS_JUDGED, DETAIL_REUSED)
     deadline = _deadline_or_skip(recall_started)
     if deadline is _SKIP:
         # Results are unchanged; finish the check off the recall's clock so the
         # next run of this question is judged instead of skipped again.
-        answer_check_memo.finish_later(judge, query, documents)
+        answer_check_memo.finish_later(judge, query, documents, binding=binding)
         return JudgeOutcome(None, STATUS_SKIPPED, DETAIL_BUDGET)
     # A live recall comes first: a check being finished later yields the worker
     # to it, and if that check was this very question, its verdict is reused
     # the moment this recall gets the worker instead of being asked again.
     with answer_check_memo.live_check(judge):
         outcome = _plain_check(judge, query, documents, deadline,
-                               reuse=lambda: answer_check_memo.lookup(judge, query, documents))
+                               reuse=lambda: answer_check_memo.lookup(
+                                   judge, query, documents, binding=binding, changed=changed))
     if outcome.status == STATUS_JUDGED and outcome.detail != DETAIL_REUSED:
-        answer_check_memo.store(judge, query, documents, outcome.verdict)
+        answer_check_memo.store(judge, query, documents, outcome.verdict, binding=binding)
     return outcome
+
+
+def _binding(retrieval_engine: Any, response: Any, profile_id: str | None,
+             count: int) -> tuple[Any, Any]:
+    """What a remembered verdict is bound to, and how to tell it went stale.
+
+    Never raises: without a readable change log the binding still carries the
+    profile, ids and kinds, and ``changed`` answers "cannot say" (True), so a
+    remembered verdict is not reused on a store that cannot prove it current.
+    """
+    from superlocalmemory.storage import fact_search_changes as changes
+
+    facts = [getattr(r, "fact", None) for r in response.results[:count]]
+    ids = tuple(str(getattr(f, "fact_id", "") or "") for f in facts)
+    kinds = tuple(str(getattr(f, "memory_kind", "") or "") for f in facts)
+    db = getattr(retrieval_engine, "_db", None)
+    try:
+        seq = changes.log_bounds(db)[0] if db is not None else 0
+    except Exception:  # noqa: BLE001
+        seq = -1
+    binding = answer_check_memo.Binding(str(profile_id or ""), ids, kinds, seq)
+
+    if db is None:  # a stand-in engine with no store: nothing to validate against
+        return binding, None
+
+    def changed(since: int, fact_ids: tuple[str, ...]) -> bool:
+        if since < 0:
+            return True
+        head, oldest = changes.log_bounds(db)
+        if head < since or (oldest is not None and oldest > since + 1 and head > since):
+            return True  # restored store, or the log no longer reaches back
+        return bool(changes.changed_fact_ids_among(db, since, fact_ids))
+
+    return binding, changed
 
 
 _SKIP = object()

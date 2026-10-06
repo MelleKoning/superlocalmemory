@@ -121,10 +121,10 @@ def _cmd_db_dispatch(args: Namespace) -> None:
         if rc:
             sys.exit(rc)
         return
-    if sub in ("restore-points", "restore", "prepare-downgrade"):
-        from superlocalmemory.cli import upgrade_cmd
+    if sub in ("restore-points", "restore", "prepare-downgrade", "fidelity"):
+        from superlocalmemory.cli import fidelity_cmd, upgrade_cmd
         handler = {"restore-points": upgrade_cmd.cmd_db_restore_points,
-                   "restore": upgrade_cmd.cmd_db_restore,
+                   "restore": upgrade_cmd.cmd_db_restore, "fidelity": fidelity_cmd.cmd_db_fidelity,
                    "prepare-downgrade": upgrade_cmd.cmd_db_prepare_downgrade}[sub]
         rc = handler(args)
         if rc:
@@ -135,7 +135,7 @@ def _cmd_db_dispatch(args: Namespace) -> None:
         "| slm db scale <action> "
         "| slm db regraph [--check] [--profile NAME] "
         "| slm db reembed [--missing-only] [--all-profiles] [--limit N] "
-        "| slm db compact [--offline]"
+        "| slm db compact [--offline] | slm db fidelity [--withhold|--release ID]"
     )
     sys.exit(2)
 
@@ -750,13 +750,41 @@ def _cmd_wrap(args: Namespace) -> None:
 
 def cmd_serve(args: Namespace) -> None:
     """Start/stop the SLM daemon for instant CLI response."""
-    from superlocalmemory.cli.daemon import is_daemon_running, ensure_daemon, stop_daemon
+    from superlocalmemory.cli.daemon import (
+        is_daemon_running, ensure_daemon, stop_daemon,
+        read_descriptor, _descriptor_process_is_alive,
+    )
 
     action = getattr(args, 'action', 'start')
 
     if action == 'stop':
+        from superlocalmemory.cli.daemon_startup import stop_wait_budget
+
+        def _starting_and_alive(descriptor):
+            return (
+                descriptor is not None
+                and getattr(descriptor, "state", "") == "starting"
+                and _descriptor_process_is_alive(descriptor)
+            )
+
+        before = read_descriptor()
+        if _starting_and_alive(before):
+            # 4.1.22 polish: this used to wait silently -- say what for, and
+            # the wait is bounded (SLM_DAEMON_STOP_WAIT_S), never forever.
+            print(
+                f"Daemon (pid {before.pid}) is still starting; waiting up to "
+                f"{int(stop_wait_budget())}s for it to finish before stopping..."
+            )
         if stop_daemon():
             print("Daemon stopped.")
+        elif _starting_and_alive(read_descriptor()):
+            # Truthful, not "was not running": the process is alive and
+            # never left "starting" in time to take /stop.
+            print(
+                "Daemon is still starting and did not respond to stop in "
+                "time; it may still be running. Run `slm serve stop` again, "
+                "or `slm doctor`."
+            )
         else:
             print("Daemon was not running.")
         return
@@ -1892,9 +1920,8 @@ def _answer_check_line(result: dict) -> str:
     "uncalibrated"``) so plain-text output is byte-identical to before this
     existed — that is the overwhelming majority of installs today.
 
-    Results are never removed from the printed list; this is an additional
-    line, not a filter. Abstention is a signal for the reader, not a reason
-    to hide what was actually retrieved.
+    Results are never removed from the printed list; this is an extra line, not
+    a filter: abstention is a signal for the reader, never a reason to hide results.
     """
     if result.get("calibration_status", "uncalibrated") == "uncalibrated":
         return _not_checked_line(result)
@@ -1906,7 +1933,8 @@ def _answer_check_line(result: dict) -> str:
             f"(confidence {confidence:.2f}). Say you don't have it, or ask "
             "— don't present these as the answer."
         )
-    if not result.get("abstained", False):
+    from superlocalmemory.retrieval.answerability import is_supported as _checked
+    if not result.get("abstained", False) and _checked(result):  # a checked answer only
         return f"Answer check: likely answered (confidence {confidence:.2f})."
     return ""
 
@@ -3048,33 +3076,9 @@ def _installed_plugin_versions() -> dict:
     Best effort by design: an editor this does not know about should produce
     "not detected", never an error.
     """
-    import json
-    from pathlib import Path
+    from superlocalmemory.cli.doctor_hosts import installed_plugin_versions
 
-    found: dict[str, str] = {}
-    roots = (
-        # Claude Code: marketplace installs and directly-added plugins.
-        Path.home() / ".claude" / "plugins",
-        # Codex and VS Code copies, when placed by hand.
-        Path.home() / ".codex" / "plugins",
-        Path.home() / ".vscode" / "extensions",
-    )
-    for root in roots:
-        if not root.is_dir():
-            continue
-        for manifest in list(root.glob("*/.claude-plugin/plugin.json")) + \
-                list(root.glob("*/plugin.json")) + \
-                list(root.glob("*/*/.claude-plugin/plugin.json")):
-            try:
-                data = json.loads(manifest.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001 — a sibling plugin's bad json is not ours
-                continue
-            if str(data.get("name", "")) != "superlocalmemory":
-                continue
-            found[str(manifest.parent.parent.name)] = str(
-                data.get("version", "unknown")
-            )
-    return found
+    return installed_plugin_versions()
 
 
 def _detect_all_installs() -> list:
@@ -3503,29 +3507,13 @@ def cmd_doctor(args: Namespace) -> None:
             # pending on it by definition, so this is not a finding.
             _check("Projection queue", "PASS", "not applicable to this store")
 
-    # 11. PEP 668 advisory: detect EXTERNALLY-MANAGED marker and
-    #     recommend pipx when the system Python is managed by the OS package
-    #     manager (e.g. Homebrew, Debian/Ubuntu, Fedora 38+).
+    # 11. PEP 668 advisory (only for the system Python; a venv is exempt)
+    #     and whether this Python can load SQLite extensions at all.
     try:
-        import sysconfig as _sc
-        _stdlib = _sc.get_path("stdlib")
-        if _stdlib:
-            _em_marker = Path(_stdlib) / "EXTERNALLY-MANAGED"
-            if _em_marker.exists():
-                _check(
-                    "PEP 668 / Install method",
-                    "WARN",
-                    "System Python is externally managed (EXTERNALLY-MANAGED marker found). "
-                    "pip install may fail with PEP 668 error.",
-                    "Use an isolated install: pipx install superlocalmemory  "
-                    "or uv tool install superlocalmemory",
-                )
-            else:
-                _check(
-                    "PEP 668 / Install method",
-                    "PASS",
-                    "No EXTERNALLY-MANAGED marker — standard pip install supported",
-                )
+        from superlocalmemory.cli import doctor_hosts as _dh
+
+        _check("PEP 668 / Install method", *_dh.install_method_finding())
+        _check("SQLite extensions (vector search)", *_dh.sqlite_extension_finding())
     except Exception:
         pass  # advisory only — never fail doctor on this check
 
@@ -3663,7 +3651,9 @@ def cmd_doctor(args: Namespace) -> None:
                 _check(
                     "plugin_skills",
                     "PASS",
-                    f"plugin content matches the package ({_pkg_version})",
+                    f"plugin content matches the package ({_pkg_version}): "
+                    + ", ".join(sorted(_pl)) + " (found on disk; not proof "
+                    "that the host runs its hooks)",
                 )
     except Exception as _pl_exc:  # noqa: BLE001 — never break doctor
         _check("plugin_skills", "WARN", f"could not probe plugins: {_pl_exc}")
@@ -3861,8 +3851,8 @@ def cmd_trace(args: Namespace) -> None:
                         "abstention_reason": result.get("abstention_reason"),
                         **{k: result[k] for k in (
                             "answer_check_status", "answer_check_ran",
-                            "answer_check_reason", "answer_check_note",
-                        ) if k in result},
+                            "answer_check_reason", "answer_check_note", "answerability",
+                            "answerability_reason") if k in result},
                     }, next_actions=[
                         {
                             "command": "slm recall '<query>' --json",

@@ -20,6 +20,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from superlocalmemory.retrieval.answerability import is_supported
+
 _NOT_ANSWERED = (
     "Answer check: none of these memories answers the question "
     "(confidence {confidence:.2f}). Say you don't have it, or ask "
@@ -46,7 +48,9 @@ def answer_check_line(result: Any) -> str:
         confidence = 0.0
     if get("abstention_reason", None) == "judged_insufficient":
         return _NOT_ANSWERED.format(confidence=confidence)
-    if not get("abstained", False):
+    # 4.1.22: "answered" only for a checked answer. ``abstained`` is False on an
+    # unchecked recall too, so it alone must never produce this line.
+    if not get("abstained", False) and is_supported(result):
         return _ANSWERED.format(confidence=confidence)
     return ""
 

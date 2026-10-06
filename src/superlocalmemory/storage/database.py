@@ -1706,13 +1706,11 @@ class DatabaseManager:
         include_global: bool = False,
         include_shared: bool = False,
     ) -> int:
-        """Memories this profile has, as the owner would count them.
-
-        Counts what a caller can be shown, which is why it applies
-        ``visible_fact_clause``. It fed the dashboard's "All memories 5,093" and
-        was counting 1,195 withheld summaries and every soft-deleted row into
-        that figure -- a number the owner reads as "how much do I remember".
-        """
+        """Visible memories (``visible_fact_clause``); personal scope from a warm,
+        log-fresh in-memory count when one exists (SQL: 225 ms+ on 2 GB)."""
+        warm = None if include_global or include_shared else getattr(self, "visible_count", None)
+        if warm is not None and (n := warm(profile_id)) is not None:
+            return n
         where, params = _scope_where(
             profile_id,
             include_global=include_global,

@@ -52,6 +52,7 @@ from superlocalmemory.loops import (
     run_bounded_loop,
 )
 from superlocalmemory.retrieval.answer_check_status import REQUEST_NO_REORDER
+from superlocalmemory.retrieval.answerability import SUPPORTED, of_envelope, of_response
 
 logger = logging.getLogger("slm.mcp.tools_loops")
 
@@ -121,6 +122,7 @@ def register_loop_tools(
         poll_interval_s: float = 1.0,
         max_tokens: int = 0,
         no_progress_window: int = 0,
+        require_support: bool = False,
     ) -> dict:
         """Run one bounded loop that finishes only when an INDEPENDENT gate passes.
 
@@ -154,6 +156,10 @@ def register_loop_tools(
             no_progress_window: Halt after this many consecutive no-change laps
                 (0 disables). A pure watcher never "changes", so leave at 0
                 unless the runner reports progress.
+            require_support: Pass only when the answer check RAN and judged the
+                memories sufficient (``answerability == "supported"``). An
+                unchecked recall (check off, busy, loading, out of time) never
+                passes such a gate. Default False: the score gate alone.
         """
         try:
             name = (name or "").strip()
@@ -199,12 +205,14 @@ def register_loop_tools(
                     all_results = resp.get("results", []) or []
                     floored = bool(resp.get("no_confident_match", False))
                     reason = resp.get("abstention_reason")
+                    answerable = of_envelope(resp)
                 else:
                     resp = engine.recall(gate_query, limit=_GATE_LIMIT, fast=True,
                                          answer_check=REQUEST_NO_REORDER)
                     all_results = getattr(resp, "results", None) or []
                     floored = bool(getattr(resp, "no_confident_match", False))
                     reason = getattr(resp, "abstention_reason", None)
+                    answerable = of_response(resp)
                 # The score says a memory is related; the answer check says
                 # whether it answers. A gate must never pass on a recall the
                 # check already called insufficient.
@@ -245,11 +253,13 @@ def register_loop_tools(
                 ]
                 best = max((_score(result) for result in results), default=0.0)
                 passed = (bool(results) and not floored and not judged_out
-                          and best >= min_score)
+                          and best >= min_score
+                          and (not require_support or answerable[0] == SUPPORTED))
                 return Verdict(
                     passed,
                     f"recall '{gate_query[:48]}': hits={len(results)} "
-                    f"top={best:.3f} floor={floored} judged_insufficient={judged_out}",
+                    f"top={best:.3f} floor={floored} judged_insufficient={judged_out} "
+                    f"answerability={answerable[0]}:{answerable[1]}",
                 )
 
             def runner(lap: int) -> LapResult:

@@ -29,6 +29,7 @@ import sys
 import time
 from dataclasses import replace
 
+from superlocalmemory.cli import daemon_startup as _startup
 from superlocalmemory.infra.daemon_identity import (
     build_descriptor,
     descriptor_matches_health,
@@ -275,14 +276,14 @@ def owned_daemon_process_alive() -> bool:
     return _verified_legacy_health() is not None
 
 
-def _fetch_health(port: int) -> dict | None:
+def _fetch_health(port: int, timeout: float = 2.0) -> dict | None:
     """Fetch loopback health without following cross-namespace discovery."""
     try:
         import urllib.request
 
         expected_url = f"http://127.0.0.1:{port}/health"
         response = urllib.request.urlopen(
-            expected_url, timeout=2,
+            expected_url, timeout=max(0.05, min(float(timeout), 2.0)),
         )
         if response.status != 200:
             return None
@@ -534,6 +535,7 @@ def daemon_request(
     preserve_conflict: bool = False,
     preserve_not_found: bool = False,
     preserve_unprocessable: bool = False,
+    start_wait_seconds: float | None = None,
 ) -> dict | None:
     """Send a request only after validating the owned daemon identity.
 
@@ -551,7 +553,18 @@ def daemon_request(
     busy-but-alive daemon does not get misreported as not running. Only
     meaningful for the descriptor path — the legacy bridge has no capability
     header and still needs health to identify its target.
+
+    ``start_wait_seconds`` — 4.1.22: when the daemon is *starting* (this
+    process is spawning it, or its descriptor says so), wait up to this long
+    (default: the ``daemon_startup`` budget, never more than
+    ``timeout_seconds``) for it to answer, instead of failing at once. Nothing
+    starting means no wait. Callers pinning a descriptor never wait.
     """
+    unpinned = expected_descriptor is _EXPECTED_DESCRIPTOR_UNSET and expected_legacy is None
+    wait_cap = (
+        timeout_seconds if start_wait_seconds is None
+        else min(start_wait_seconds, timeout_seconds)
+    )
     legacy = None
     if expected_legacy is not None:
         # Legacy daemons have no capability header. Bind the compatibility
@@ -575,11 +588,20 @@ def daemon_request(
             if expected_descriptor is _EXPECTED_DESCRIPTOR_UNSET
             else expected_descriptor
         )
+    if descriptor is None and unpinned and _startup.this_process_is_spawning():
+        ready = _startup.wait_for_starting_daemon(cap=wait_cap)
+        descriptor = ready[0] if ready is not None else read_descriptor()
     capability: str | None = None
     target_instance: str | None = None
     if descriptor is not None:
         if verify_health:
-            health = _fetch_health(descriptor.port)
+            health = _startup.probe_health(
+                sys.modules[__name__], descriptor.port, _startup.health_probe_timeout(descriptor),
+            )
+            if health is None and unpinned:
+                ready = _startup.wait_for_starting_daemon(cap=wait_cap)
+                if ready is not None:
+                    descriptor, health = ready
             if health is None or not descriptor_matches_health(descriptor, health):
                 return None
             if method.upper() == "GET" and path == "/health":
@@ -662,6 +684,55 @@ def _port_file_path():
 
 def _lock_file_path():
     return _LOCK_FILE or state_path("daemon.lock")
+
+
+def start_lock_is_held() -> bool:
+    """Is some OTHER process holding ``daemon.lock`` right now?
+
+    A non-mutating probe: tries the same non-blocking exclusive lock
+    ``ensure_daemon`` takes, and releases it at once if acquired. Used by
+    ``daemon_startup`` (4.1.22) to tell a cross-process start-in-progress
+    (the lock is held, but the other process has not written a descriptor
+    yet) apart from "nothing is starting" -- before this, that window had no
+    signal at all, so a caller fell into ``ensure_daemon``'s old flat 60 s
+    wait instead of the bounded start-wait budget, or a diagnosis call
+    reported "no daemon" while one was actually starting.
+    """
+    lock_file = _lock_file_path()
+    if not lock_file.exists():
+        return False
+    try:
+        lock_fd = open(lock_file, "w", encoding="utf-8")
+    except OSError:
+        return False
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            try:
+                msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+            except (IOError, OSError):
+                return True
+            try:
+                msvcrt.locking(lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
+            except (IOError, OSError):
+                pass
+            return False
+        else:
+            import fcntl
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (IOError, OSError):
+                return True
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except (IOError, OSError):
+                pass
+            return False
+    finally:
+        try:
+            lock_fd.close()
+        except Exception:
+            pass
 
 
 def _start_daemon_subprocess(*, port: int | None = None) -> bool:
@@ -763,6 +834,21 @@ def _start_daemon_subprocess(*, port: int | None = None) -> bool:
     return _wait_for_daemon(timeout=60)
 
 
+def _wait_bounded_for_lock_holder() -> bool:
+    """Wait (bounded) for whoever holds ``daemon.lock`` to finish starting it.
+
+    4.1.22: the file-lock branch of ``ensure_daemon`` used to wait a flat
+    60 s here regardless of ``SLM_DAEMON_START_WAIT_S`` -- long enough to
+    outlive a host's own ~60 s tool-call timeout before this process ever
+    reported anything back. The holder has no descriptor to read yet in the
+    window right after it wins the lock, so ``wait_for_starting_daemon``
+    treats a currently-held lock as its own evidence of a start in progress
+    (see ``daemon.start_lock_is_held``).
+    """
+    _startup.wait_for_starting_daemon()
+    return is_daemon_running()
+
+
 def ensure_daemon(*, port: int | None = None) -> bool:
     """Start daemon if not running. Returns True if daemon is ready.
 
@@ -792,9 +878,16 @@ def ensure_daemon(*, port: int | None = None) -> bool:
             "pytest isolation blocked daemon spawn; use an owned daemon fixture",
         )
         return False
+    if _startup.this_process_is_spawning():
+        # 4.1.22: another thread of THIS process holds the start lock and is
+        # spawning. Never spawn twice; wait the bounded start budget only.
+        _startup.wait_for_starting_daemon()
+        return is_daemon_running()
 
     # File lock — prevent concurrent starts from multiple CLI/MCP calls
     lock_fd = None
+    spawn_mark = _startup.spawning()
+    marked = False
     try:
         lock_file = _lock_file_path()
         lock_file.parent.mkdir(parents=True, exist_ok=True)
@@ -806,16 +899,21 @@ def ensure_daemon(*, port: int | None = None) -> bool:
             try:
                 msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
             except (IOError, OSError):
-                # Another process is starting the daemon — just wait for it
+                # Another process holds the start lock — wait the same
+                # bounded start budget a same-process contender gets (4.1.22;
+                # this used to be a flat 60 s wait that could outlive a
+                # host's own tool-call timeout).
                 lock_fd.close()
-                return _wait_for_daemon(timeout=60)
+                return _wait_bounded_for_lock_holder()
         else:
             import fcntl
             try:
                 fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except (IOError, OSError):
                 lock_fd.close()
-                return _wait_for_daemon(timeout=60)
+                return _wait_bounded_for_lock_holder()
+        spawn_mark.__enter__()  # released in finally; see daemon_startup
+        marked = True
 
         # Re-check after acquiring lock (another process may have started it)
         if is_daemon_running():
@@ -890,6 +988,8 @@ def ensure_daemon(*, port: int | None = None) -> bool:
         logger.warning("ensure_daemon error: %s (run `slm doctor`)", exc)
         return False
     finally:
+        if marked:
+            spawn_mark.__exit__(None, None, None)
         if lock_fd:
             try:
                 lock_fd.close()
@@ -920,55 +1020,21 @@ def _wait_for_daemon(timeout: int = 60) -> bool:
     return False
 
 
-_GENERIC_UNAVAILABLE = {
-    "reason": "unknown",
-    "message": "Owned daemon is unavailable; retry later.",
-    "hint": "Run `slm doctor`, then `slm restart` if it stays down.",
-}
-
-_LIVENESS_DIAGNOSIS = {
-    "process_exited": (
-        "daemon_process_exited",
-        "the recorded daemon process (pid {pid}) is no longer running",
-        "Start it again with `slm serve start`.",
-    ),
-    "process_zombie": (
-        "daemon_process_exited",
-        "the recorded daemon process (pid {pid}) has exited and is awaiting "
-        "reaping by its parent",
-        "Start it again with `slm serve start`.",
-    ),
-    "process_unreadable": (
-        "daemon_process_unreadable",
-        "the recorded daemon process (pid {pid}) could not be inspected; it "
-        "may belong to another user",
-        "Run `slm restart` to publish a fresh descriptor.",
-    ),
-    "start_token_mismatch": (
-        "pid_reused_by_another_process",
-        "pid {pid} is alive but is a different process than the daemon that "
-        "wrote {path}; the daemon exited and its pid was recycled",
-        "Run `slm restart` to publish a fresh descriptor.",
-    ),
-    "identity_mismatch": (
-        "daemon_identity_mismatch",
-        "pid {pid} did not match the process identity recorded in {path} and "
-        "the process on port {port} did not prove it owns that identity; the "
-        "recorded creation time can also diverge on its own if this machine's "
-        "clock is stepped (common under WSL2)",
-        "Run `slm restart` to publish a fresh descriptor.",
-    ),
-}
+# The diagnosis tables and body live in daemon_diagnosis (4.1.22); these names
+# stay importable from here.
+from superlocalmemory.cli.daemon_diagnosis import (  # noqa: E402, F401 - re-exported
+    _GENERIC_UNAVAILABLE,
+    _LIVENESS_DIAGNOSIS,
+)
 
 
 def describe_daemon_unavailability() -> dict[str, str]:
     """Explain *why* the owned daemon cannot be used, in actionable terms.
 
     "Owned daemon is unavailable" is true of a stopped daemon, a recycled PID,
-    an unreachable port and an identity mismatch alike, which left issue #104's
-    reporter with nothing to act on. This names the specific evidence instead.
-    Diagnosis is best-effort and never raises: a broken diagnosis must not
-    replace the caller's real error.
+    an unreachable port, an identity mismatch and a daemon still starting
+    alike, which left issue #104's reporter with nothing to act on. This names
+    the specific evidence instead. Best-effort and never raises.
     """
     try:
         return _describe_daemon_unavailability()
@@ -977,85 +1043,9 @@ def describe_daemon_unavailability() -> dict[str, str]:
 
 
 def _describe_daemon_unavailability() -> dict[str, str]:
-    path = descriptor_path()
-    descriptor = read_descriptor()
-    if descriptor is None:
-        if path.exists():
-            return {
-                "reason": "descriptor_unusable",
-                "message": (
-                    f"{path} is unreadable, malformed, or belongs to another "
-                    f"data root or user."
-                ),
-                "hint": "Run `slm restart` to publish a fresh descriptor.",
-            }
-        if _verified_legacy_health() is not None:
-            return {
-                "reason": "legacy_daemon_request_failed",
-                "message": (
-                    "a pre-descriptor daemon answered health but rejected or "
-                    "dropped the request."
-                ),
-                "hint": "Run `slm restart` to upgrade it to an owned daemon.",
-            }
-        return {
-            "reason": "no_daemon",
-            "message": f"no daemon is registered for this data root ({path} is absent).",
-            "hint": "Run `slm serve start`.",
-        }
+    from superlocalmemory.cli import daemon_diagnosis
 
-    alive, evidence = _resolve_descriptor_liveness(descriptor)
-    if not alive:
-        reason, template, hint = _LIVENESS_DIAGNOSIS.get(
-            evidence,
-            (
-                "daemon_identity_mismatch",
-                "pid {pid} did not match the identity recorded in {path}",
-                "Run `slm restart` to publish a fresh descriptor.",
-            ),
-        )
-        return {
-            "reason": reason,
-            "message": template.format(
-                pid=descriptor.pid, port=descriptor.port, path=path,
-            ) + ".",
-            "hint": hint,
-        }
-
-    health = _fetch_health(descriptor.port)
-    if health is None:
-        return {
-            "reason": "daemon_unreachable",
-            "message": (
-                f"the owned daemon (pid {descriptor.pid}) is running but did "
-                f"not answer http://127.0.0.1:{descriptor.port}/health within "
-                f"2s."
-            ),
-            "hint": (
-                f"Check {state_path('logs', 'daemon.log')} for a stalled "
-                "request, or run `slm restart` if it stays unresponsive."
-            ),
-        }
-    if not descriptor_matches_health(descriptor, health):
-        return {
-            "reason": "port_owned_by_another_daemon",
-            "message": (
-                f"port {descriptor.port} answered health but with a different "
-                f"daemon identity than {path} records."
-            ),
-            "hint": (
-                "Another SuperLocalMemory instance holds that port. Stop it, "
-                "or set SLM_DAEMON_PORT to a free port."
-            ),
-        }
-    return {
-        "reason": "request_rejected",
-        "message": (
-            f"the owned daemon (pid {descriptor.pid}) is healthy but rejected "
-            f"or dropped this request."
-        ),
-        "hint": f"Check {state_path('logs', 'daemon.log')} for the failing request.",
-    }
+    return daemon_diagnosis.describe(sys.modules[__name__])
 
 
 def stop_daemon() -> bool:
@@ -1093,6 +1083,14 @@ def stop_daemon() -> bool:
     if descriptor is not None:
         if not _descriptor_process_is_alive(descriptor):
             return False
+        if descriptor.state == "starting":
+            # 4.1.22: a starting daemon cannot take /stop yet. Returning False
+            # here printed "not running" and left it running; wait for it.
+            # Bounded (never a flat hang forever) and configurable via
+            # SLM_DAEMON_STOP_WAIT_S -- a daemon wedged permanently in
+            # "starting" must not make this command hang indefinitely.
+            ready = _startup.wait_for_starting_daemon(seconds=_startup.stop_wait_budget())
+            descriptor = ready[0] if ready is not None else descriptor
         response = daemon_request(
             "POST",
             "/stop",

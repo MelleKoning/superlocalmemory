@@ -395,6 +395,8 @@ def main() -> None:
         "--profile", default="",
         help="Workspace to re-derive. Default: all of them",
     )
+    from superlocalmemory.cli.fidelity_cmd import register_db_fidelity_parser
+    register_db_fidelity_parser(db_sub)  # 4.1.22: facts that changed their memory
 
     db_reembed_p = db_sub.add_parser(
         "reembed",
@@ -1118,12 +1120,10 @@ def main() -> None:
     # V4.0.7: the readable summary layer from issue #113. The generators shipped
     # in 4.0.6 with no caller; this is the surface that makes them reachable.
     from superlocalmemory.cli.summary_cmd import register_summary_parser
-
     register_summary_parser(sub)
 
     # 4.1.19: memory kinds (status, settings, undoable classification runs).
     from superlocalmemory.cli.kinds_cmd import register_kinds_parser
-
     register_kinds_parser(sub)
 
     # 4.1.21: saved views — named, profile-scoped recall queries (issue #113).

@@ -226,9 +226,10 @@ class SemanticChannel:
                 query_embedding, q_vec, profile_id, top_k,
                 include_global=include_global, include_shared=include_shared,
             )
-            if results:  # If vec0 returned results, use them
+            # vec0 empty (cold start) falls through to the full scan; the
+            # in-memory index is exhaustive, so its empty answer is the answer.
+            if results or getattr(self._vector_store, "exhaustive", False) is True:
                 return results
-            # If vec0 is empty (cold start), fall through to full scan
 
         # --- FALLBACK: full-table scan (original code, unchanged) ---
         return self._search_full_scan(
@@ -297,7 +298,7 @@ class SemanticChannel:
                     query_embedding, q_vec, profile_id, top_k,
                     include_global=include_global, include_shared=include_shared,
                 )
-                if results:
+                if results or getattr(self._vector_store, "exhaustive", False) is True:
                     return results
             return self._search_full_scan(
                 query_embedding, q_vec, profile_id, top_k,
@@ -314,14 +315,25 @@ class SemanticChannel:
         top_k: int,
         include_global: bool | None = None,
         include_shared: bool | None = None,
+        source: Any | None = None,
     ) -> list[tuple[str, float]]:
-        """KNN via VectorStore (or QAS 3-tier), then Fisher-Rao re-scoring."""
+        """KNN via VectorStore (or QAS 3-tier), then Fisher-Rao re-scoring.
+
+        ``source``: a candidate source to use for this one call instead of the
+        channel's own (kind-scoped recall searches inside one kind this way;
+        retrieval/kind_scope). Passed per call, never swapped onto ``self``, so
+        concurrent recalls cannot see each other's source.
+        """
         if include_global is None:
             include_global = bool(getattr(self, "include_global", False))
         if include_shared is None:
             include_shared = bool(getattr(self, "include_shared", False))
+        if source is not None:
+            knn_results = source.search(
+                query_embedding, top_k=top_k * 2, profile_id=profile_id,
+            )
         # V3.3.19: Try TurboQuant 3-tier search first (float32 + int8 + polar)
-        if self._qas is not None:
+        elif self._qas is not None:
             try:
                 knn_results = self._qas.search(
                     query_embedding=q_vec, profile_id=profile_id,

@@ -149,15 +149,23 @@ def capture_operation_lineage(
                 ).hexdigest(),
             }
         else:
+            # G03: a derived fact must still say what the source said; one that
+            # turns 2004.6 ms into a date, or drops a "never", is withheld.
+            from superlocalmemory.core.source_fidelity_guard import withhold_if_unfaithful
+
+            reason = withhold_if_unfaithful(
+                db, profile_id=profile_id, fact_id=fact_id,
+                content=content, raw_content=raw_content,
+            ) or "no_exact_span_in_raw_source"
             _record(
                 db, profile_id=profile_id, object_type="fact", object_id=fact_id,
                 operation_id=operation_id, derivation_version=derivation_version,
                 source_status="unresolved",
-                unresolved_reason="no_exact_span_in_raw_source",
+                unresolved_reason=reason,
             )
             fact_lineage[fact_id] = {
                 "source_status": "unresolved",
-                "unresolved_reason": "no_exact_span_in_raw_source",
+                "unresolved_reason": reason,
             }
 
     operation_fact_ids = frozenset(fact_ids)
