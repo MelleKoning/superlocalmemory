@@ -63,11 +63,26 @@ def test_anthropic_provider_default_url_without_api_base():
     assert url == _ANTHROPIC_URL
 
 
-def test_ollama_provider_no_key_needed():
+def test_ollama_provider_no_key_needed(monkeypatch):
+    """No API key is required -- a separate question from whether anything
+    is actually listening at the configured host, which is faked reachable
+    here so this test does not depend on the machine running it."""
+    from superlocalmemory.llm import ollama_reachability
+    monkeypatch.setattr(ollama_reachability, "ollama_reachable", lambda *a, **k: True)
     config = LLMConfig(provider="ollama", model="llama3.2")
     backbone = LLMBackbone(config)
     assert backbone.provider == "ollama"
     assert backbone.is_available()
+
+
+def test_ollama_provider_unavailable_when_unreachable(monkeypatch):
+    """4.1.22: a saved Mode B with nothing listening must say so, not report
+    available forever (the old bug this reachability check closes)."""
+    from superlocalmemory.llm import ollama_reachability
+    monkeypatch.setattr(ollama_reachability, "ollama_reachable", lambda *a, **k: False)
+    config = LLMConfig(provider="ollama", model="llama3.2")
+    backbone = LLMBackbone(config)
+    assert not backbone.is_available()
 
 
 def test_no_provider_is_not_available():
@@ -229,6 +244,7 @@ def test_generate_downgrades_think_once_on_400(monkeypatch):
     import httpx
 
     backbone = _thinking_model_backbone()
+    monkeypatch.setattr(backbone, "is_available", lambda: True)
     seen_payloads: list[dict] = []
 
     def _flaky_send(url, headers, payload):
@@ -250,6 +266,7 @@ def test_generate_second_400_returns_empty(monkeypatch):
     import httpx
 
     backbone = _thinking_model_backbone()
+    monkeypatch.setattr(backbone, "is_available", lambda: True)
 
     def _always_400(url, headers, payload):
         request = httpx.Request("POST", url)
