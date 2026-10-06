@@ -25,6 +25,19 @@ The pieces here keep a hook inside its budget on every path:
 Windows: pipes are read by threads (no ``select`` on pipes) and a timed-out
 child is ended with ``Popen.kill``; grandchildren are not reached there,
 because the shared daemon a child may have spawned is one of them.
+
+Windows PATH resolution: ``subprocess.Popen(["slm", ...])`` with a list and
+``shell=False`` asks Windows' ``CreateProcess`` to find ``slm`` itself, and
+that search is not the same one ``cmd.exe`` does. ``CreateProcess`` appends
+only ``.exe`` to an extension-less name; it never consults ``PATHEXT`` for
+``.cmd``/``.bat``. A ``slm`` installed (or, in tests, shimmed) as a ``.cmd``
+wrapper is invisible to that search, so it silently keeps looking past it
+and can execute an unrelated ``slm.exe`` found later on ``PATH`` instead
+(reproduced: a test's ``.cmd`` stub standing in for a hung ``slm mcp`` was
+skipped entirely and the real, installed ``slm`` answered instead). Every
+spawn here resolves the executable through :func:`shutil.which` first, which
+does the real ``PATHEXT`` search, so the child that actually runs is the one
+``PATH`` says it should be -- on every platform.
 """
 
 from __future__ import annotations
@@ -32,6 +45,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import shutil
 import signal
 import subprocess
 import sys
@@ -41,6 +55,23 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 _KILL_WAIT_S = 1.0
+
+
+def _resolve_command(cmd: list[str], env: dict[str, str] | None) -> list[str]:
+    """Replace ``cmd[0]`` with its ``PATH``-resolved path, when found.
+
+    Looks up ``PATH`` in the env the child will actually run under (falling
+    back to this process' own environment), so resolution and execution
+    never disagree about which directories are searched or in what order.
+    Leaves ``cmd`` untouched when nothing is found: the existing
+    ``OSError``/``FileNotFoundError`` handling at each call site still
+    applies unchanged.
+    """
+    if not cmd:
+        return cmd
+    search_path = (env or os.environ).get("PATH")
+    resolved = shutil.which(cmd[0], path=search_path)
+    return [resolved, *cmd[1:]] if resolved else cmd
 
 
 class HookDeadline:
@@ -129,7 +160,7 @@ def run_bounded(
         return BoundedResult(None, "", "", True)
     try:
         proc = subprocess.Popen(
-            cmd,
+            _resolve_command(cmd, env),
             stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding="utf-8", errors="replace", env=env,
@@ -170,7 +201,7 @@ class McpStdio:
         self._registry = registry
         self._lines: "queue.Queue[str | None]" = queue.Queue()
         self.proc = subprocess.Popen(
-            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            _resolve_command(cmd, env), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
             errors="replace", env=env, **_popen_group_kwargs(),
         )
