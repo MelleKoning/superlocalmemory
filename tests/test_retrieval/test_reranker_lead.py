@@ -123,3 +123,23 @@ def test_recall_without_the_reranker_is_unchanged(monkeypatch, tmp_path) -> None
     out = _recall_through_the_pipeline(
         monkeypatch, tmp_path, [_scored("a", None), _scored("b", None)], _reverse)
     assert _ids(out.results) == ["b", "a"]
+
+
+def test_the_engine_records_the_reranker_score_only_when_it_ran() -> None:
+    from unittest.mock import MagicMock
+
+    from superlocalmemory.core.config import RetrievalConfig
+    from superlocalmemory.retrieval.engine import RetrievalEngine
+    from superlocalmemory.retrieval.fusion import FusionResult
+    from superlocalmemory.retrieval.strategy import QueryStrategy
+
+    engine = RetrievalEngine(db=MagicMock(), config=RetrievalConfig(use_trust_weighting=False),
+                             channels={}, embedder=MagicMock())
+    try:
+        fused = [FusionResult(fact_id="a", fused_score=0.7, channel_ranks={}, channel_scores={})]
+        facts = {"a": AtomicFact(fact_id="a", content="a memory long enough to count")}
+        ran = engine._build_results(fused, facts, QueryStrategy(), reranked=True)
+        assert ran[0].rerank_score == 0.7
+        assert engine._build_results(fused, facts, QueryStrategy())[0].rerank_score is None
+    finally:
+        engine.close()
