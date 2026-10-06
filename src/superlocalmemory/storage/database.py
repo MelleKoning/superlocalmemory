@@ -1302,15 +1302,15 @@ class DatabaseManager:
         now = time.monotonic()
         if last_checked and (now - last_checked) < 5.0:
             return False
-        self._kind_columns_checked_at = now
         try:
             have = {
                 dict(row).get("name")
                 for row in self.execute("PRAGMA table_info(atomic_facts)")
             }
         except sqlite3.Error:
-            return False
+            have = set()
         present = set(KIND_COLUMNS).issubset(have)
+        self._kind_columns_checked_at = 0.0 if present else now  # after, never mid-probe
         if present:
             self._kind_columns_present = True
         return present

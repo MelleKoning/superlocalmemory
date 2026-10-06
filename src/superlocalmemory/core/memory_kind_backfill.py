@@ -203,8 +203,14 @@ class BackfillRunner:
         except RuntimeError:          # appended to by the runner thread mid-copy
             timings = ()
         reason = SCHEMA_REASON if db is not None else STARTING
-        return runs.status_view(db if ready else None, store, cfg, self._choice(engine, cfg),
-                                profile_id, timings, not_ready_reason=reason)
+        out = runs.status_view(db if ready else None, store, cfg, self._choice(engine, cfg),
+                               profile_id, timings, not_ready_reason=reason)
+        # The start-up check of confirmed kinds runs in the background
+        # (core/kind_reconcile_task.py): say whether it has finished.
+        task = getattr(engine, "_kind_reconcile", None)
+        out["confirmed_kind_check"] = task.snapshot() if task is not None else {
+            "state": "not_started"}
+        return out
 
     # -- one step --------------------------------------------------------------
 

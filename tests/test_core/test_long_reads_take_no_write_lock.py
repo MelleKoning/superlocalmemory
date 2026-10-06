@@ -182,3 +182,60 @@ def test_an_event_waits_a_bounded_time_for_a_busy_store(tmp_path) -> None:
                          lambda: bus.emit("memory.stored", {"fact_id": "f1"}))
     # Not stored while the store was busy, but still delivered live.
     assert [e["event_type"] for e in received] == ["memory.stored"]
+
+
+@pytest.fixture
+def make_engine():
+    made: list = []
+
+    def _make(*args, **kwargs):
+        from superlocalmemory.core.engine import MemoryEngine
+
+        made.append(MemoryEngine(*args, **kwargs))
+        return made[-1]
+
+    yield _make
+    for engine in made:
+        engine.close()
+
+
+def test_the_start_up_kind_check_never_holds_up_engine_start(make_engine, mode_a_config,
+                                                              monkeypatch) -> None:
+    """A real engine start returns while its kind check is still reading."""
+    from superlocalmemory.core.engine import Capabilities
+    from superlocalmemory.storage import memory_kind_writes
+
+    release = threading.Event()
+    real_pass = memory_kind_writes.reconcile_confirmed_pass
+
+    def slow_pass(db, profile_id, **kw):
+        assert release.wait(timeout=10)  # a 2 GB store: the read takes a while
+        return real_pass(db, profile_id, **kw)
+
+    monkeypatch.setattr(memory_kind_writes, "reconcile_confirmed_pass", slow_pass)
+    engine = make_engine(mode_a_config, capabilities=Capabilities.LIGHT)
+    engine.initialize()  # returned while the pass is still blocked (no clock bound:
+    task = engine._kind_reconcile  # a start that waited would see it fail instead)
+    assert not release.is_set()
+    assert task.snapshot()["state"] in ("pending", "running")  # truthful while it runs
+    release.set()
+    assert task.wait(timeout=10) and task.snapshot()["state"] == "complete"
+
+
+def test_closing_the_engine_stops_its_kind_check_and_joins_it(make_engine, mode_a_config,
+                                                              monkeypatch) -> None:
+    """No thread keeps reading a store after its engine closed it."""
+    from superlocalmemory.core.engine import Capabilities
+    from superlocalmemory.storage import memory_kind_writes
+
+    def stuck_pass(db, profile_id, *, should_stop, **_kw):
+        while not should_stop():
+            time.sleep(0.01)
+        raise memory_kind_writes.ReconcileStopped("stopped")
+
+    monkeypatch.setattr(memory_kind_writes, "reconcile_confirmed_pass", stuck_pass)
+    engine = make_engine(mode_a_config, capabilities=Capabilities.LIGHT)
+    engine.initialize()
+    task = engine._kind_reconcile
+    engine.close()
+    assert task.wait(timeout=5) and task.snapshot()["state"] == "stopped"
