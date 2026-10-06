@@ -69,7 +69,10 @@ def describe(d) -> dict[str, str]:
                 ),
                 "hint": "Run `slm restart` to publish a fresh descriptor.",
             }
-        if daemon_startup.this_process_is_spawning():
+        if (
+            daemon_startup.this_process_is_spawning()
+            or daemon_startup.lock_is_held_by_another_process()
+        ):
             return daemon_startup.starting_diagnosis(None)
         if d._verified_legacy_health() is not None:
             return {

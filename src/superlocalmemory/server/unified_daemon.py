@@ -3080,8 +3080,16 @@ async def lifespan(application: FastAPI):
     _start_idle_watchdog(idle_timeout)
 
     # Legacy port redirect: only a daemon on the default data root may take
-    # 8767, or a second root could capture old clients (GB6).
-    _maybe_start_legacy_redirect(application.state.daemon_descriptor.port, _LEGACY_PORT)
+    # 8767, or a second root could capture old clients (GB6). The status dict
+    # is the truth for /status's legacy_port field below -- not every daemon
+    # that is *entitled* to the port actually binds it (an older daemon can
+    # already hold it), so this is updated once the real bind resolves.
+    application.state.legacy_port_status = {"bound": False, "port": None, "reason": "not started"}
+    _maybe_start_legacy_redirect(
+        application.state.daemon_descriptor.port,
+        _LEGACY_PORT,
+        status=application.state.legacy_port_status,
+    )
 
     # V3.4.22 LLD-02: signal-worker background drainer (S8-SK-01 fix).
     # Without this, ``signals.enqueue`` fills a bounded queue and drops
@@ -5548,7 +5556,15 @@ def _register_daemon_routes(application: FastAPI) -> None:
             "db_size_mb": db_size_mb,
             "idle_s": round(time.monotonic() - _last_activity),
             "port": application.state.daemon_descriptor.port,
-            "legacy_port": _LEGACY_PORT,
+            # The truth, not the policy: null + a reason unless this daemon
+            # actually has the socket bound (#4.1.22 fix -- this used to
+            # report the constant 8767 even for a daemon that never took it).
+            "legacy_port": (
+                getattr(application.state, "legacy_port_status", None) or {}
+            ).get("port"),
+            "legacy_port_reason": (
+                getattr(application.state, "legacy_port_status", None) or {}
+            ).get("reason", "unknown"),
             "profile": profile_snapshot.profile_id,
             "profile_generation": profile_snapshot.generation,
             # Facts stored but not yet in the graph and vector projections. The

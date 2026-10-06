@@ -326,12 +326,22 @@ def test_post_tool_hook_crash_returns_0(
 def test_post_tool_hook_under_10ms_p95(
     memory_db, slm_home, install_token, monkeypatch
 ) -> None:
-    """Hot-path p95 < 10 ms over 100 no-op invocations (I1 budget).
+    """Hot-path median wall-clock cost stays small (I1 budget).
 
     No matching pending row → no DB write → pure read + early-return.
     That is the representative hot-path case (no recall happened).
+
+    4.1.22 (W4): this used to assert a flat wall-clock ``p95 < 30ms``, which
+    measured 49-197 ms under sibling-lane load on a shared machine (passes
+    alone) -- a tail statistic over a modest sample is exactly what a
+    minority of host-contention-delayed calls contaminates. The median
+    ignores that minority while staying sensitive to a real regression,
+    which adds cost to every call and so shifts the whole distribution (see
+    test_post_tool_hook_timing_budget_catches_a_real_slowdown directly
+    below, which proves this with an injected 50 ms stall).
     """
     from superlocalmemory.hooks import post_tool_outcome_hook as h
+    from tests.test_hooks._timing import assert_median_under_budget
 
     payload = {
         "session_id": "sess-none",
@@ -343,17 +353,59 @@ def test_post_tool_hook_under_10ms_p95(
     for _ in range(5):
         _invoke_hook(h.main, payload, monkeypatch)
 
-    durations = []
-    for _ in range(100):
-        t0 = time.perf_counter_ns()
+    def _call_once() -> None:
         rc, _ = _invoke_hook(h.main, payload, monkeypatch)
-        durations.append(time.perf_counter_ns() - t0)
         assert rc == 0
 
-    durations.sort()
-    p95_ms = durations[94] / 1e6
-    # Generous ceiling for CI noise; typical is 1-3 ms.
-    assert p95_ms < 30.0, f"post_tool_hook p95 = {p95_ms:.2f}ms > 30ms"
+    # Generous ceiling for CI noise; typical median is 1-3 ms.
+    assert_median_under_budget(
+        _call_once, budget_ms=30.0, label="post_tool_hook",
+    )
+
+
+def test_post_tool_hook_timing_budget_catches_a_real_slowdown(
+    memory_db, slm_home, install_token, monkeypatch
+) -> None:
+    """The median-based timing check above must not be vacuous: a genuine
+    50 ms stall added to the hook's hot path must still fail it.
+
+    This is the test-only proof the fix comment above refers to -- it
+    injects the stall via monkeypatch, never in production code.
+    """
+    from superlocalmemory.hooks import post_tool_outcome_hook as h
+    from tests.test_hooks._timing import assert_median_under_budget
+
+    payload = {
+        "session_id": "sess-none",
+        "tool_name": "Read",
+        "tool_response": "no markers here",
+    }
+
+    for _ in range(5):
+        _invoke_hook(h.main, payload, monkeypatch)
+
+    real_inner_main = h._inner_main
+
+    def _slow_inner_main() -> str:
+        time.sleep(0.05)
+        return real_inner_main()
+
+    monkeypatch.setattr(h, "_inner_main", _slow_inner_main)
+
+    def _call_once() -> None:
+        rc, _ = _invoke_hook(h.main, payload, monkeypatch)
+        assert rc == 0
+
+    try:
+        assert_median_under_budget(
+            _call_once, budget_ms=30.0, iterations=20, label="post_tool_hook",
+        )
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError(
+            "timing budget did not catch an injected 50ms stall -- vacuous test"
+        )
 
 
 # ---------------------------------------------------------------------------

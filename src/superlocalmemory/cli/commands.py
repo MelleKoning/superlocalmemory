@@ -750,13 +750,41 @@ def _cmd_wrap(args: Namespace) -> None:
 
 def cmd_serve(args: Namespace) -> None:
     """Start/stop the SLM daemon for instant CLI response."""
-    from superlocalmemory.cli.daemon import is_daemon_running, ensure_daemon, stop_daemon
+    from superlocalmemory.cli.daemon import (
+        is_daemon_running, ensure_daemon, stop_daemon,
+        read_descriptor, _descriptor_process_is_alive,
+    )
 
     action = getattr(args, 'action', 'start')
 
     if action == 'stop':
+        from superlocalmemory.cli.daemon_startup import stop_wait_budget
+
+        def _starting_and_alive(descriptor):
+            return (
+                descriptor is not None
+                and getattr(descriptor, "state", "") == "starting"
+                and _descriptor_process_is_alive(descriptor)
+            )
+
+        before = read_descriptor()
+        if _starting_and_alive(before):
+            # 4.1.22 polish: this used to wait silently -- say what for, and
+            # the wait is bounded (SLM_DAEMON_STOP_WAIT_S), never forever.
+            print(
+                f"Daemon (pid {before.pid}) is still starting; waiting up to "
+                f"{int(stop_wait_budget())}s for it to finish before stopping..."
+            )
         if stop_daemon():
             print("Daemon stopped.")
+        elif _starting_and_alive(read_descriptor()):
+            # Truthful, not "was not running": the process is alive and
+            # never left "starting" in time to take /stop.
+            print(
+                "Daemon is still starting and did not respond to stop in "
+                "time; it may still be running. Run `slm serve stop` again, "
+                "or `slm doctor`."
+            )
         else:
             print("Daemon was not running.")
         return

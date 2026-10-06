@@ -39,11 +39,18 @@ def legacy_redirect_decision() -> tuple[bool, str]:
     return True, "default data root"
 
 
-async def start_legacy_redirect(primary_port: int, legacy_port: int) -> None:
+async def start_legacy_redirect(
+    primary_port: int, legacy_port: int, status: dict | None = None,
+) -> None:
     """Byte-level TCP redirect from ``legacy_port`` to ``primary_port``.
 
     Runs as a task in the daemon's own loop. A port already in use (an older
     daemon, another service) is logged and skipped.
+
+    ``status``, when given, is updated in place once the bind attempt
+    resolves: ``{"bound": bool, "port": int | None, "reason": str}``. This is
+    how a status endpoint reports the *truth* of whether this daemon holds
+    the legacy port, rather than assuming a policy decision always succeeds.
     """
     _deprecation_warned = False
 
@@ -82,19 +89,41 @@ async def start_legacy_redirect(primary_port: int, legacy_port: int) -> None:
     try:
         server = await asyncio.start_server(_handle_client, "127.0.0.1", legacy_port)
         logger.info("Legacy redirect: port %d → %d (deprecated)", legacy_port, primary_port)
+        if status is not None:
+            status["bound"] = True
+            status["port"] = legacy_port
+            status["reason"] = "default data root"
         await server.serve_forever()
-    except OSError:
+    except OSError as exc:
         logger.info("Port %d in use (old daemon?), skipping legacy redirect", legacy_port)
+        if status is not None:
+            status["bound"] = False
+            status["port"] = None
+            status["reason"] = f"port {legacy_port} already in use: {exc}"
 
 
-def maybe_start_legacy_redirect(primary_port: int, legacy_port: int = LEGACY_PORT):
+def maybe_start_legacy_redirect(
+    primary_port: int, legacy_port: int = LEGACY_PORT, status: dict | None = None,
+):
     """Start the redirect task when this daemon may own the legacy port.
 
     Returns the task, or ``None`` when the port is left alone. Must be called
     from inside the daemon's running event loop.
+
+    ``status``, when given, is populated in place immediately with the policy
+    decision (``bound: False`` + the reason) and then, if the policy says to
+    take the port, updated again once the real bind attempt resolves (see
+    :func:`start_legacy_redirect`). Callers that only care about the policy
+    decision get an answer synchronously; callers that care about the truth
+    of whether the socket is actually listening should read ``status`` again
+    after a short delay.
     """
     take_it, reason = legacy_redirect_decision()
+    if status is not None:
+        status["bound"] = False
+        status["port"] = None
+        status["reason"] = reason
     if not take_it:
         logger.info("Legacy port %d not taken: %s", legacy_port, reason)
         return None
-    return asyncio.create_task(start_legacy_redirect(primary_port, legacy_port))
+    return asyncio.create_task(start_legacy_redirect(primary_port, legacy_port, status=status))
