@@ -113,13 +113,13 @@
           ' style="display:none;background:var(--warn-soft);border:1px solid var(--warn);' +
                   'border-radius:var(--r-md);padding:12px 16px;margin-bottom:16px;' +
                   'align-items:center;justify-content:space-between;gap:12px">' +
-          '<span style="color:var(--warn);font-size:13.5px" id="od-agents-err-msg">' +
+          '<span style="color:var(--warn-text);font-size:13.5px" id="od-agents-err-msg">' +
             'Could not load agent memory data' +
           '</span>' +
           '<button id="od-agents-retry"' +
             ' style="padding:5px 12px;font-size:12.5px;border-radius:var(--r-md);' +
                     'border:1px solid var(--warn);background:transparent;' +
-                    'color:var(--warn);cursor:pointer;font-weight:600">' +
+                    'color:var(--warn-text);cursor:pointer;font-weight:600">' +
             'Retry' +
           '</button>' +
         '</div>' +
@@ -434,12 +434,12 @@
     if (grid) {
       grid.innerHTML =
         '<div style="grid-column:1/-1;text-align:center;padding:32px;' +
-          'color:var(--fg-3);font-size:13px">Agent activity unavailable — see the message above.</div>';
+          'color:var(--fg-2);font-size:13px">Agent activity unavailable — see the message above.</div>';
     }
     var table = document.getElementById('od-agents-table');
     if (table) {
       table.innerHTML =
-        '<div style="text-align:center;padding:32px;color:var(--fg-3);font-size:13px">' +
+        '<div style="text-align:center;padding:32px;color:var(--fg-2);font-size:13px">' +
           'Recent memories unavailable — see the message above.' +
         '</div>';
     }
