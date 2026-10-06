@@ -63,7 +63,7 @@ def get_integrity(request: Request, pages: bool = False) -> dict[str, Any]:
 @router.post("/repair")
 def post_repair(request: Request, body: RepairRequest) -> dict[str, Any]:
     from superlocalmemory.infra.data_root import canonical_data_root
-    from superlocalmemory.storage.integrity_repair import Limits, Repair
+    from superlocalmemory.storage.integrity_repair import Limits, Repair, RepairBusy
 
     _manage(request)
     own_root = canonical_data_root().resolve()
@@ -78,6 +78,8 @@ def post_repair(request: Request, body: RepairRequest) -> dict[str, Any]:
             return {"undone": body.undo_run_id, "restored": repair.undo(body.undo_run_id),
                     "ran_in": "daemon"}
         return {**repair.apply(), "ran_in": "daemon"}
+    except RepairBusy as exc:
+        raise HTTPException(409, detail=str(exc)) from None
     except Exception:
         logger.exception("integrity repair failed")
         raise HTTPException(500, detail="repair failed; what finished is receipted, run it "

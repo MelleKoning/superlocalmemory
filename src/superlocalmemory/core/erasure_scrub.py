@@ -134,6 +134,18 @@ def _drop_unnamed_entities(db: Any, profile_id: str, entity_ids: list[str]) -> i
     return removed
 
 
+def _drop_archive_copies(db: Any, fact_id: str) -> int:
+    """A soft-forgotten fact's payload is copied to ``memory_archive`` so it
+    can be restored; once the fact is erased that copy is only its words."""
+    try:
+        return len(db.execute("DELETE FROM memory_archive WHERE fact_id = ? RETURNING 1",
+                              (fact_id,)))
+    except Exception as exc:
+        if "no such table" in str(exc).lower():
+            return 0
+        raise
+
+
 def _drop_derived_summaries(db: Any, profile_id: str, fact_id: str) -> int:
     removed = 0
     for table, column in (("core_memory_blocks", "source_fact_ids"),
@@ -245,6 +257,7 @@ def scrub(db: Any, profile_id: str, fact_id: str,
             "derived_summaries_removed": _drop_derived_summaries(db, profile_id, fact_id),
             "journal_text_removed": _scrub_journal(db, erased_ops),
             "event_previews_removed": _scrub_events(db, fact_id, erased_ops),
+            "archive_copies_removed": _drop_archive_copies(db, fact_id),
             "unnamed_entities_removed": _drop_unnamed_entities(
                 db, profile_id, list(entity_ids or ())),
         }

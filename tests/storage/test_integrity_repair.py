@@ -199,3 +199,30 @@ def test_health_has_five_separate_sections(damaged):
     assert report["relational_integrity"]["removable_rows"] >= 8
     assert report["projection_readiness"]["failed_obligations"]["proven_erased"] == 2
     assert report["active_repair"]["last"] is None
+
+
+def test_one_repair_at_a_time_and_an_interrupted_run_is_closed(damaged):
+    from superlocalmemory.storage import integrity_receipts
+    from superlocalmemory.storage import integrity_repair as ir
+
+    conn = sqlite3.connect(damaged["db"])
+    integrity_receipts.ensure_tables(conn)
+    conn.execute("INSERT INTO integrity_repair_runs (run_id, started_at, status) "
+                 "VALUES ('crashed', 1.0, 'running')")
+    conn.commit()
+    conn.close()
+    assert ir._ONE_RUN.acquire(blocking=False)
+    try:
+        with pytest.raises(ir.RepairBusy):
+            ir.Repair(damaged["db"]).apply()
+    finally:
+        ir._ONE_RUN.release()
+
+    summary = ir.Repair(damaged["db"], limits=ir.Limits(pause_s=0, confirm_s=0)).apply()
+
+    conn = sqlite3.connect(damaged["db"])
+    assert conn.execute("SELECT status FROM integrity_repair_runs WHERE run_id = 'crashed'"
+                        ).fetchone()[0] == "stopped"
+    assert conn.execute("SELECT status FROM integrity_repair_runs WHERE run_id = ?",
+                        (summary["run_id"],)).fetchone()[0] == "finished"
+    conn.close()

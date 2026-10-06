@@ -45,7 +45,7 @@ def _live(conn: sqlite3.Connection, ids: list[str]) -> bool:
 def erased_text_leftovers(conn: sqlite3.Connection) -> dict[str, int]:
     """Copies of erased memories' words outside the projections (counts)."""
     out = {"erased_facts": 0, "journal_text": 0, "event_previews": 0,
-           "entity_summaries": 0, "derived_summaries": 0}
+           "entity_summaries": 0, "derived_summaries": 0, "archive_copies": 0}
     erased = erased_facts(conn)
     out["erased_facts"] = len(erased)
     journal_ops: set[str] = set()
@@ -74,6 +74,9 @@ def erased_text_leftovers(conn: sqlite3.Connection) -> dict[str, int]:
                 out["derived_summaries"] += int(conn.execute(
                     f"SELECT COUNT(*) FROM {table} WHERE profile_id = ? AND {column} LIKE ?",  # noqa: S608
                     (profile_id, like)).fetchone()[0])
+        if _has(conn, "memory_archive"):
+            out["archive_copies"] += int(conn.execute(
+                "SELECT COUNT(*) FROM memory_archive WHERE fact_id = ?", (fact_id,)).fetchone()[0])
     out["journal_text"] = len(journal_ops)
     return out
 

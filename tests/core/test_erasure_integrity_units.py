@@ -155,7 +155,13 @@ def test_full_erasure_removes_the_words_from_every_table(engine_with_mock_deps):
             (json.dumps({"operation_id": receipt.operation_id, "fact_ids": [],
                          "content_preview": f"{marker} Haverlin audits"}),))
         conn.commit()
+        conn.execute(  # a soft-forget copy (memories route /forget) of the same fact
+            "INSERT INTO memory_archive (archive_id, fact_id, profile_id, payload_json, "
+            "archived_at, reason) VALUES ('a1', ?, ?, ?, 't', 'forget')",
+            (facts[0], engine._profile_id, json.dumps({"content": f"{marker} Haverlin"})))
+        conn.commit()
     assert "ingestion_operations.raw_content" in _text_copies(engine._db.db_path, marker)
+    assert "memory_archive.payload_json" in _text_copies(engine._db.db_path, marker)
 
     for fact_id in facts:
         result = _delete(engine, fact_id)

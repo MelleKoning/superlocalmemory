@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -74,6 +75,14 @@ class RunStats:
 
 class _OutOfTime(Exception):
     pass
+
+
+class RepairBusy(RuntimeError):
+    """Another repair is running in this process."""
+
+
+#: One repair at a time per process (the daemon serves the HTTP route).
+_ONE_RUN = threading.Lock()
 
 
 class Repair:
@@ -289,10 +298,22 @@ class Repair:
     STEPS = ("orphans", "vectors", "erased_text", "keyword_index", "obligations")
 
     def apply(self, run_id: str | None = None) -> dict[str, Any]:
+        if not _ONE_RUN.acquire(blocking=False):
+            raise RepairBusy("a repair is already running on this SLM; wait for it to finish")
+        try:
+            return self._apply(run_id)
+        finally:
+            _ONE_RUN.release()
+
+    def _apply(self, run_id: str | None) -> dict[str, Any]:
         stats = RunStats(run_id or uuid.uuid4().hex[:16])
         conn = self._connect()
         try:
             receipts.ensure_tables(conn)
+            # A run still marked running was interrupted (this process holds
+            # the only-run lock): the steps are idempotent, this run finishes it.
+            conn.execute("UPDATE integrity_repair_runs SET status = 'stopped', finished_at = ? "
+                         "WHERE status = 'running'", (time.time(),))
             before = plan(conn)
             receipts.start_run(conn, stats.run_id)
         finally:
@@ -349,4 +370,4 @@ class Repair:
             conn.close()
 
 
-__all__ = ["Limits", "Repair"]
+__all__ = ["Limits", "Repair", "RepairBusy"]

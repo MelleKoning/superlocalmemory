@@ -140,7 +140,8 @@ def cmd_db_repair(args: Namespace) -> int:
     try:
         result = _via_daemon(body)
     except DaemonConflict as exc:
-        return _fail("db repair", "WRONG_ROOT", exc.detail, args.json)
+        code = "WRONG_ROOT" if "this SLM serves" in exc.detail else "BUSY"
+        return _fail("db repair", code, exc.detail, args.json)
     if result is None:
         from superlocalmemory.storage.integrity_repair import Limits, Repair
 
