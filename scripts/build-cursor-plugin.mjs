@@ -37,6 +37,24 @@ export const CURSOR_SERVER_ENV = Object.freeze({
   // know the option ignores it instead of refusing to start.
   UV_TORCH_BACKEND: 'cpu',
   TOKENIZERS_PARALLELISM: 'false',
+  // GB5 lite bot-host profile: the box is shared by every bot on it with
+  // 1.8-3.5 GiB free RAM, and the cross-encoder reranker subprocess alone
+  // measured ~200 MB resident once warm (plus its own PyTorch import). Turn
+  // it off here — opt-in via env, nowhere else — so recall still works (BM25
+  // + semantic + the other fusion channels), just without cross-encoder
+  // re-ordering of the fused results. Quality cost: reranking measurably
+  // improves top-of-list precision in SLM's own benchmarks (see
+  // bench-v342-locomo.md referenced in core/config.py); turning it off trades
+  // that precision for RAM headroom on a host where OOM would lose the
+  // session entirely. Set SLM_RERANKER_ENABLED=true to opt back in once RAM
+  // allows. SLM_RERANKER_IDLE_TIMEOUT is set too so a future re-enable (or a
+  // host that flips this at the MCP env level) recycles the worker quickly
+  // instead of holding it warm for the default 30 minutes.
+  SLM_RERANKER_ENABLED: 'false',
+  SLM_RERANKER_IDLE_TIMEOUT: '120',
+  // Explicit, not just relying on the default: one embedding worker, never a
+  // pool, on a computer this memory-tight.
+  SLM_MAX_EMBEDDING_WORKERS: '1',
 });
 
 const DESCRIPTION =

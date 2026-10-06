@@ -63,6 +63,12 @@ describe('Cursor MCP definition', () => {
     assert.equal(server.env.UV_TORCH_BACKEND, 'cpu');
     assert.ok(!('SLM_DATA_DIR' in server.env), 'never re-point the store');
   });
+
+  test('GB5: opts into the lite bot-host profile (reranker off, short idle, one embedding worker)', () => {
+    assert.equal(server.env.SLM_RERANKER_ENABLED, 'false');
+    assert.equal(server.env.SLM_RERANKER_IDLE_TIMEOUT, '120');
+    assert.equal(server.env.SLM_MAX_EMBEDDING_WORKERS, '1');
+  });
 });
 
 describe('Cursor plugin.json', () => {

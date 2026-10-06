@@ -31,6 +31,7 @@ Design principles
 from __future__ import annotations
 
 import importlib.util
+import os
 import threading
 import time
 from dataclasses import dataclass, replace
@@ -267,10 +268,19 @@ def probe_embedder_model(config: Any = None) -> Component:
 
 def probe_reranker_model(config: Any = None) -> Component:
     # Only auto-heal / flag the reranker when the user actually has it enabled.
+    # `config` is typed ``Any`` and callers (including tests) sometimes pass a
+    # lightweight stand-in with a bare ``use_cross_encoder`` attribute instead
+    # of a real RetrievalConfig, so prefer the method (which also honours
+    # GB5's SLM_RERANKER_ENABLED override) but fall back to the plain
+    # attribute for anything that does not have it.
     enabled = True
     try:
-        enabled = bool(getattr(config.retrieval, "use_cross_encoder", True)) \
-            if config is not None else True
+        if config is not None:
+            retrieval = getattr(config, "retrieval", None)
+            if retrieval is not None and hasattr(retrieval, "reranker_enabled"):
+                enabled = bool(retrieval.reranker_enabled())
+            else:
+                enabled = bool(getattr(retrieval, "use_cross_encoder", True))
     except Exception:
         enabled = True
     if enabled and config is not None and _reranker_is_remote(config):
@@ -293,9 +303,17 @@ def probe_reranker_model(config: Any = None) -> Component:
     if not enabled:
         # A cached reranker is still inactive when the operator disabled the
         # channel. The dashboard must describe configured runtime state, not
-        # machine-specific HuggingFace-cache state.
+        # machine-specific HuggingFace-cache state. GB5: this can be either the
+        # persisted config.json choice or the process-only SLM_RERANKER_ENABLED
+        # override — name whichever is actually in force so the two can never
+        # be confused with each other.
+        reason = (
+            "SLM_RERANKER_ENABLED env override"
+            if os.environ.get("SLM_RERANKER_ENABLED") is not None
+            else "retrieval.use_cross_encoder=false"
+        )
         return replace(comp, status=STATUS_OK,
-                       detail="disabled (retrieval.use_cross_encoder=false)",
+                       detail=f"disabled ({reason})",
                        fix_cmd="", auto_fixable=False)
     return comp
 
