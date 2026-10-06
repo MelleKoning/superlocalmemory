@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._portable import committed_executable, require_posix_bash
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "ci" / "stage5b_gate.sh"
@@ -49,15 +51,14 @@ def _copy_script_into(tmp_path: Path) -> Path:
 
 def _run_gate(cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["bash", str(cwd / "scripts" / "ci" / "stage5b_gate.sh")],
+        [require_posix_bash(), str(cwd / "scripts" / "ci" / "stage5b_gate.sh")],
         cwd=cwd, capture_output=True, text=True,
     )
 
 
 def test_gate_script_exists_and_is_executable() -> None:
     assert SCRIPT.exists(), f"missing gate script: {SCRIPT}"
-    mode = SCRIPT.stat().st_mode
-    assert mode & stat.S_IXUSR, "gate script must be executable"
+    assert committed_executable(SCRIPT), "gate script must be executable"
 
 
 def test_gate_passes_on_clean_code(tmp_path: Path) -> None:
@@ -65,7 +66,8 @@ def test_gate_passes_on_clean_code(tmp_path: Path) -> None:
     repo = _init_tmp_repo(tmp_path)
     _copy_script_into(repo)
     (repo / "src" / "clean.py").write_text(
-        "def foo():\n    return 'no forbidden patterns here'\n"
+        "def foo():\n    return 'no forbidden patterns here'\n",
+        encoding="utf-8",
     )
     result = _run_gate(repo)
     assert result.returncode == 0, (
@@ -79,7 +81,8 @@ def test_gate_fails_on_pending_observations(tmp_path: Path) -> None:
     repo = _init_tmp_repo(tmp_path)
     _copy_script_into(repo)
     (repo / "src" / "bad.py").write_text(
-        "CREATE_SQL = 'CREATE TABLE pending_observations (id TEXT)'\n"
+        "CREATE_SQL = 'CREATE TABLE pending_observations (id TEXT)'\n",
+        encoding="utf-8",
     )
     result = _run_gate(repo)
     assert result.returncode == 1
@@ -91,7 +94,8 @@ def test_gate_fails_on_wrong_finalize_outcome_signature(tmp_path: Path) -> None:
     repo = _init_tmp_repo(tmp_path)
     _copy_script_into(repo)
     (repo / "src" / "bad_call.py").write_text(
-        "model.finalize_outcome(query_id='x', signals={})\n"
+        "model.finalize_outcome(query_id='x', signals={})\n",
+        encoding="utf-8",
     )
     result = _run_gate(repo)
     assert result.returncode == 1
@@ -105,7 +109,8 @@ def test_gate_fails_on_bare_fact_id_scan(tmp_path: Path) -> None:
     (repo / "src" / "bad_hook.py").write_text(
         "for fid in known_fact_ids:\n"
         "    if fid in response_text:\n"
-        "        signals.append(fid)\n"
+        "        signals.append(fid)\n",
+        encoding="utf-8",
     )
     result = _run_gate(repo)
     assert result.returncode == 1
@@ -117,7 +122,8 @@ def test_gate_fails_on_opus_model_reference(tmp_path: Path) -> None:
     repo = _init_tmp_repo(tmp_path)
     _copy_script_into(repo)
     (repo / "src" / "bad_model.py").write_text(
-        'LLM_MODEL = "claude-opus-4-7"\n'
+        'LLM_MODEL = "claude-opus-4-7"\n',
+        encoding="utf-8",
     )
     result = _run_gate(repo)
     assert result.returncode == 1
@@ -130,7 +136,8 @@ def test_gate_fails_on_action_outcomes_insert_pattern(tmp_path: Path) -> None:
     _copy_script_into(repo)
     # pattern is literal per manifest: "action_outcomes.*INSERT.*VALUES"
     (repo / "src" / "bad_sql.py").write_text(
-        'SQL = "action_outcomes helper INSERT row VALUES ()"\n'
+        'SQL = "action_outcomes helper INSERT row VALUES ()"\n',
+        encoding="utf-8",
     )
     result = _run_gate(repo)
     assert result.returncode == 1
@@ -143,7 +150,8 @@ def test_gate_reports_all_failures_before_exit(tmp_path: Path) -> None:
     _copy_script_into(repo)
     (repo / "src" / "many_bad.py").write_text(
         "CREATE TABLE pending_observations (id TEXT);\n"
-        'MODEL = "claude-opus-4-7"\n'
+        'MODEL = "claude-opus-4-7"\n',
+        encoding="utf-8",
     )
     result = _run_gate(repo)
     assert result.returncode == 1
@@ -154,7 +162,7 @@ def test_gate_reports_all_failures_before_exit(tmp_path: Path) -> None:
 def test_gate_passes_on_real_slm_src_tree() -> None:
     """Regression: the live SLM src/ currently satisfies all 5 checks."""
     result = subprocess.run(
-        ["bash", str(SCRIPT)], cwd=REPO_ROOT, capture_output=True, text=True,
+        [require_posix_bash(), str(SCRIPT)], cwd=REPO_ROOT, capture_output=True, text=True,
     )
     assert result.returncode == 0, (
         f"live src/ tree violates Stage-5b gate\n"

@@ -563,7 +563,7 @@ def test_cache_stats_with_bad_db(
 ) -> None:
     from superlocalmemory.server.routes import brain as brain_mod
     bad = tmp_path / "bad.db"
-    bad.write_text("not a sqlite file")
+    bad.write_text("not a sqlite file", encoding="utf-8")
     monkeypatch.setattr(brain_mod, "_memory_db_path", lambda: bad)
     stats = brain_mod._compute_cache_stats()
     assert stats["entry_count"] == 0
@@ -725,6 +725,7 @@ def test_bandit_snapshot_with_seeded_arms(
 
     fake_mod = types.ModuleType("superlocalmemory.learning.bandit")
     fake_mod.ContextualBandit = _FakeBandit  # type: ignore
+    fake_mod.close_threadlocal_conn = lambda: None  # type: ignore
     monkeypatch.setitem(
         sys.modules, "superlocalmemory.learning.bandit", fake_mod,
     )
@@ -1000,3 +1001,25 @@ def test_brain_payload_surfaces_evolution(
     assert len(ev["points"]) == 30
     # No stale "ships_in" placeholder.
     assert "ships_in" not in ev
+
+
+# ---------------------------------------------------------------------------
+# The route leaves no connection to learning.db open
+# ---------------------------------------------------------------------------
+
+
+def test_a_brain_request_leaves_learning_db_closed(
+    client: TestClient, install_token: str, tmp_learning_db: Path,
+) -> None:
+    """The bandit snapshot runs on a worker thread and opened a per-thread
+    connection it never closed, so every worker kept learning.db open for the
+    life of the process. On Windows an open file cannot be deleted: this
+    file's temporary folders failed to clean up after every test (WinError 32).
+    """
+    from tests._portable import open_paths
+
+    r = client.get("/api/v3/brain", headers={"Authorization": f"Bearer {install_token}"})
+    assert r.status_code == 200
+    target = str(tmp_learning_db.resolve())
+    still_open = sorted(p for p in open_paths() if p.startswith(target))
+    assert not still_open, f"left open after the request: {still_open}"

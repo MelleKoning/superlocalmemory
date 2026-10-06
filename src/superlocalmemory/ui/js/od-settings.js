@@ -296,8 +296,12 @@
     lv.appendChild(el('b', { text: lbl }));
     if (desc) lv.appendChild(el('span', { text: desc },
       { fontSize:'12.5px', color:'var(--fg-2)', display:'block' }));
+    // The config key (e.g. "mode", "llm.provider") is informational, not
+    // decorative — a user reading Settings needs to read it (it's the
+    // literal key to set via config file/CLI/env var) — so --fg-2, not
+    // --fg-3 (2.97:1/3.89:1, under WCAG AA 4.5:1).
     if (key) lv.appendChild(el('div', { text: key },
-      { fontFamily:'var(--font-mono)', fontSize:'10.5px', color:'var(--fg-3)', marginTop:'3px' }));
+      { fontFamily:'var(--font-mono)', fontSize:'10.5px', color:'var(--fg-2)', marginTop:'3px' }));
     d.appendChild(lv);
     var cv = el('div', null, { flexShrink:'0' }); cv.appendChild(ctrl); d.appendChild(cv);
     return d;

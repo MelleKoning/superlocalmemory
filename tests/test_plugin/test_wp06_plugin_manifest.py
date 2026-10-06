@@ -36,6 +36,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._portable import committed_executable
+
 # ---------------------------------------------------------------------------
 # Paths — DOC-CORRECT layout
 # ---------------------------------------------------------------------------
@@ -488,11 +490,7 @@ class TestGeneratorRoundTrip:
     def test_ensure_venv_sh_is_executable(self) -> None:
         p = PLUGIN_ROOT / "scripts" / "ensure-venv.sh"
         assert p.exists(), "plugin/scripts/ensure-venv.sh must exist"
-        import stat
-        mode = p.stat().st_mode
-        assert mode & stat.S_IXUSR, (
-            f"ensure-venv.sh must be user-executable (+x), mode={oct(mode)}"
-        )
+        assert committed_executable(p), "ensure-venv.sh must be user-executable (+x)"
 
     def test_build_generator_emits_claude_md(self) -> None:
         """Generator must emit plugin/CLAUDE.md from rules/CLAUDE.md.fragment."""

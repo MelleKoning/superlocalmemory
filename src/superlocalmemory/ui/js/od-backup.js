@@ -212,8 +212,10 @@
       { id:'hero-encrypt', lbl:'Backup format' }
     ].forEach(function (s) {
       var item = el('div');
+      // Stat label ("Last backup", "Next scheduled", "Backup format") is
+      // informational — --fg-3 (2.91:1/4.02:1) is under WCAG AA (4.5:1).
       item.appendChild(el('div', { text: s.lbl },
-        { fontSize:'11px', color:'var(--fg-3)' }));
+        { fontSize:'11px', color:'var(--fg-2)' }));
       item.appendChild(el('div', { id: P + '-' + s.id, text:'…' },
         { fontSize:'16px', fontWeight:'650', marginTop:'2px' }));
       statsRow.appendChild(item);
@@ -351,7 +353,9 @@
     var info = el('div', null, { flex:'1' });
     info.appendChild(el('b', { text: prov.label }));
     var detailEl = el('div');
-    detailEl.className = 'dim';
+    // Sync status / provider hint text is informational, not decorative
+    // (2.91:1/4.09:1 under --fg-3, under WCAG AA 4.5:1).
+    detailEl.className = 'muted-info';
     Object.assign(detailEl.style, { fontSize:'12.5px' });
     if (dest) {
       var config = {};
@@ -429,7 +433,10 @@
       var labelGroup = el('div');
       labelGroup.appendChild(el('b', { text: item.lbl }));
       var subEl = el('div');
-      subEl.className = 'dim';
+      // Also informational (the file names and what each db holds), same
+      // reason as detailEl above — includes the nested .mono filenames,
+      // which have no color of their own and inherit this.
+      subEl.className = 'muted-info';
       subEl.style.fontSize = '12.5px';
       subEl.innerHTML = item.sub;
       labelGroup.appendChild(subEl);

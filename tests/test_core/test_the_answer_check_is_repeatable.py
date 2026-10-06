@@ -430,7 +430,7 @@ def _wait(predicate, timeout: float = 10.0) -> bool:
 @pytest.fixture
 def laya(tmp_path, monkeypatch):
     path = tmp_path / "fake_laya_worker.py"
-    path.write_text(_FAKE_WORKER)
+    path.write_text(_FAKE_WORKER, encoding="utf-8")
     log = tmp_path / "worker.log"
     monkeypatch.setenv("FAKE_LAYA_LOG", str(log))
     monkeypatch.setattr(laya_mod, "_WARMUP_BACKOFF_S", 0.01)
@@ -444,7 +444,7 @@ def laya(tmp_path, monkeypatch):
 def _judge_requests(log: Path) -> int:
     if not log.exists():
         return 0
-    return sum(1 for line in log.read_text().splitlines() if '"judge"' in line)
+    return sum(1 for line in log.read_text(encoding="utf-8").splitlines() if '"judge"' in line)
 
 
 class TestTheOnDeviceCheckFinishesLater:

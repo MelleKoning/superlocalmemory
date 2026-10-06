@@ -257,7 +257,7 @@ class TestV332OnnxCrossEncoderConfig:
         cfg = SLMConfig.for_mode(Mode.A, base_dir=tmp_path)
         cfg_path = tmp_path / "config.json"
         cfg.save(cfg_path)
-        data = json.loads(cfg_path.read_text())
+        data = json.loads(cfg_path.read_text(encoding="utf-8"))
         assert data["retrieval"]["cross_encoder_model"] == "cross-encoder/ms-marco-MiniLM-L-12-v2"
         assert data["retrieval"]["cross_encoder_backend"] == ""
 
@@ -283,7 +283,7 @@ class TestV332OnnxCrossEncoderConfig:
                 "use_cross_encoder": False,
             },
         }
-        cfg_path.write_text(json.dumps(old_config))
+        cfg_path.write_text(json.dumps(old_config), encoding="utf-8")
         loaded = SLMConfig.load(cfg_path)
         # Explicit False is RESPECTED — not overwritten
         assert loaded.retrieval.use_cross_encoder is False
@@ -307,7 +307,7 @@ class TestV332OnnxCrossEncoderConfig:
             },
             "retrieval": {"rrf_k": 60},
         }
-        cfg_path.write_text(json.dumps(old_config))
+        cfg_path.write_text(json.dumps(old_config), encoding="utf-8")
         loaded = SLMConfig.load(cfg_path)
         # When use_cross_encoder is absent, setdefault enables it
         assert loaded.retrieval.use_cross_encoder is True
@@ -332,7 +332,7 @@ class TestV332OnnxCrossEncoderConfig:
                 "cross_encoder_model": "cross-encoder/ms-marco-MiniLM-L-12-v2",
             },
         }
-        cfg_path.write_text(json.dumps(post_config))
+        cfg_path.write_text(json.dumps(post_config), encoding="utf-8")
         loaded = SLMConfig.load(cfg_path)
         # Should respect user's explicit choice
         assert loaded.retrieval.use_cross_encoder is False

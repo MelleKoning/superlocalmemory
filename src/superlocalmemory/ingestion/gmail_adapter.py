@@ -83,7 +83,7 @@ class GmailAdapter(BaseAdapter):
         adapters_path = _adapters_config_path()
         cfg = {}
         if adapters_path.exists():
-            cfg = json.loads(adapters_path.read_text()).get("gmail", {})
+            cfg = json.loads(adapters_path.read_text(encoding="utf-8")).get("gmail", {})
 
         # Check for explicit tier
         if cfg.get("tier") == "mbox" or cfg.get("mbox_path"):
@@ -371,7 +371,7 @@ if __name__ == "__main__":
     adapters_path = _adapters_config_path()
     tier = "auto"
     if adapters_path.exists():
-        cfg = json.loads(adapters_path.read_text()).get("gmail", {})
+        cfg = json.loads(adapters_path.read_text(encoding="utf-8")).get("gmail", {})
         tier = cfg.get("tier", "auto")
 
     adapter = GmailAdapter(tier=tier)

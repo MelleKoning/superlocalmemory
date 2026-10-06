@@ -59,7 +59,7 @@ def _complete_snapshot(snapshot: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.is_symlink():  # a finished download replaces a dangling link
             path.unlink()
-        path.write_text("{}")
+        path.write_text("{}", encoding="utf-8")
 
 
 @pytest.fixture(autouse=True)
@@ -90,13 +90,13 @@ def offline_install(monkeypatch, tmp_path):
     every machine, whoever can change the Python running the suite.
     """
     worker = tmp_path / "worker.py"
-    worker.write_text(_WORKER)
+    worker.write_text(_WORKER, encoding="utf-8")
     monkeypatch.setattr(lr, "WORKER_PATH", worker)
     monkeypatch.setattr(lr, "_check_disk_space", lambda path: True)
 
     def _venv(venv_dir, *, timeout_s):
         (venv_dir / "bin").mkdir(parents=True, exist_ok=True)
-        (venv_dir / "pyvenv.cfg").write_text("home = /usr/bin\n")
+        (venv_dir / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
         python = venv_dir / "bin" / "python"
         if not python.exists():
             python.symlink_to(owned_python(tmp_path))
@@ -132,7 +132,7 @@ def test_a_managed_install_records_a_model_folder_that_exists(offline_install):
     assert offline_install, "the download step never ran"
     assert result.state == lr.STATE_READY, result.error
     assert Path(result.model_path).is_dir()
-    record = json.loads((lr.runtime_dir() / ".slm-managed").read_text())
+    record = json.loads((lr.runtime_dir() / ".slm-managed").read_text(encoding="utf-8"))
     assert record["verified"] is True
     assert Path(record["model_path"]).is_dir()
 
@@ -157,7 +157,7 @@ def test_weights_left_where_an_earlier_build_put_them_are_used_not_refetched(
     old.mkdir(parents=True)
     _complete_snapshot(old)
     (run_dir / ".install-steps.json").write_text(json.dumps({"venv": True, "pip": True,
-                                                             "weights": True}))
+                                                             "weights": True}), encoding="utf-8")
     lr._create_venv(run_dir / "venv", timeout_s=1)
     result = lr.install()
     assert result.state == lr.STATE_READY, result.error
@@ -169,7 +169,7 @@ def test_a_weights_step_marked_done_without_its_folder_is_redone(offline_install
     run_dir = lr.runtime_dir()
     run_dir.mkdir(parents=True)
     (run_dir / ".install-steps.json").write_text(json.dumps({"venv": True, "pip": True,
-                                                             "weights": True}))
+                                                             "weights": True}), encoding="utf-8")
     lr._create_venv(run_dir / "venv", timeout_s=1)
     result = lr.install()
     assert offline_install, "the stamp said done, the folder was missing, nothing redid it"
@@ -188,7 +188,7 @@ def test_an_interrupted_download_is_fetched_again_on_set_up(offline_install):
     (snapshot / "model.safetensors").unlink()
     (snapshot / "model.safetensors").symlink_to("../../blobs/not-downloaded-yet")
     (run_dir / ".install-steps.json").write_text(json.dumps({"venv": True, "pip": True,
-                                                             "weights": True}))
+                                                             "weights": True}), encoding="utf-8")
     lr._create_venv(run_dir / "venv", timeout_s=1)
     result = lr.install()
     assert offline_install, "the weights were incomplete and Set up never fetched them again"

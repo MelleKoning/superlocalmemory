@@ -12,6 +12,7 @@ subsystem holds the lock.
 
 from __future__ import annotations
 
+import os
 import stat
 import sys
 from pathlib import Path
@@ -37,7 +38,7 @@ def test_sec_m6_ram_lock_parent_dir_is_0700(
     with ram_lock.ram_reservation("stage8-m6", required_mb=1):
         assert parent.is_dir()
         mode = stat.S_IMODE(parent.stat().st_mode)
-        assert mode == 0o700, oct(mode)
+        assert os.name == "nt" or mode == 0o700, oct(mode)  # no mode bits on Windows
     # After release, dir perm is stable.
     mode = stat.S_IMODE(parent.stat().st_mode)
-    assert mode == 0o700, oct(mode)
+    assert os.name == "nt" or mode == 0o700, oct(mode)

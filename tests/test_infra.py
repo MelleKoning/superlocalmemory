@@ -149,14 +149,14 @@ def test_auth_no_key_file_allows_all():
 def test_auth_read_always_allowed(tmp_path):
     from superlocalmemory.infra.auth_middleware import check_api_key
     key_file = tmp_path / "api_key"
-    key_file.write_text("secret-key-123")
+    key_file.write_text("secret-key-123", encoding="utf-8")
     assert check_api_key({}, is_write=False, key_file=key_file) is True
 
 
 def test_auth_write_requires_key(tmp_path):
     from superlocalmemory.infra.auth_middleware import check_api_key
     key_file = tmp_path / "api_key"
-    key_file.write_text("secret-key-123")
+    key_file.write_text("secret-key-123", encoding="utf-8")
     # No header -> rejected
     assert check_api_key({}, is_write=True, key_file=key_file) is False
     # Wrong key -> rejected

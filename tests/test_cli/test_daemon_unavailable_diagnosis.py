@@ -64,7 +64,7 @@ def test_no_descriptor_reports_no_daemon() -> None:
 def test_unreadable_descriptor_is_named_as_such() -> None:
     from superlocalmemory.cli import daemon as _daemon
 
-    Path(os.environ["SLM_DATA_DIR"], "daemon.json").write_text("not-json")
+    Path(os.environ["SLM_DATA_DIR"], "daemon.json").write_text("not-json", encoding="utf-8")
 
     diagnosis = _daemon.describe_daemon_unavailability()
     assert diagnosis["reason"] == "descriptor_unusable"

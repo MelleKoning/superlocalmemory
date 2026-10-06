@@ -37,7 +37,8 @@ def test_safe_open_creates_db_with_mode_0600(tmp_path: Path) -> None:
         conn.close()
     assert db.exists()
     st = db.stat()
-    assert stat.S_IMODE(st.st_mode) == 0o600, f"Mode is {oct(st.st_mode)}"
+    if os.name != "nt":  # POSIX mode bits; Windows has none
+        assert stat.S_IMODE(st.st_mode) == 0o600, f"Mode is {oct(st.st_mode)}"
 
 
 def test_safe_open_preserves_wal_mode(tmp_path: Path) -> None:
@@ -79,7 +80,8 @@ def test_safe_open_auto_tightens_parent_dir(tmp_path: Path) -> None:
     conn = sf._safe_open_db(db)
     conn.close()
     # After open, parent must be 0700
-    assert stat.S_IMODE(tmp_path.stat().st_mode) == 0o700
+    if os.name != "nt":  # POSIX mode bits; Windows has none
+        assert stat.S_IMODE(tmp_path.stat().st_mode) == 0o700
 
 
 # ---------------------------------------------------------------------------

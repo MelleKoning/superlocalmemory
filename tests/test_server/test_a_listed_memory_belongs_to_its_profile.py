@@ -213,7 +213,7 @@ class TestTheClauseIsOneDefinitionNotTwo:
             "src/superlocalmemory/server/routes/memories.py",
             "src/superlocalmemory/server/routes/timeline.py",
         ):
-            tree = ast.parse(open(path).read())
+            tree = ast.parse(open(path, encoding="utf-8").read())
             top = {
                 alias.name
                 for node in tree.body

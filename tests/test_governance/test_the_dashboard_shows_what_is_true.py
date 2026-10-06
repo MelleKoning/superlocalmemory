@@ -23,13 +23,13 @@ _UI = pathlib.Path(superlocalmemory.__file__).parent / "ui"
 
 class TestTheVersionMarkerReachesThePage:
     def _shipped_placeholder(self) -> str:
-        html = (_UI / "index.html").read_text()
+        html = (_UI / "index.html").read_text(encoding="utf-8")
         found = re.search(r'<meta name="slm-version" content="([^"]+)">', html)
         assert found, "the page carries no version marker at all"
         return found.group(1)
 
     def test_the_page_and_the_script_agree_on_the_placeholder(self):
-        core = (_UI / "js" / "core.js").read_text()
+        core = (_UI / "js" / "core.js").read_text(encoding="utf-8")
         guard = re.search(r"pageVersion === '([^']+)'", core)
         assert guard, "the script no longer guards on an unsubstituted marker"
         assert guard.group(1) == self._shipped_placeholder()
@@ -43,7 +43,7 @@ class TestTheVersionMarkerReachesThePage:
         source = (
             pathlib.Path(superlocalmemory.__file__).parent
             / "server" / f"{module}.py"
-        ).read_text()
+        ).read_text(encoding="utf-8")
         used = set(re.findall(r"__SLM_[A-Za-z_]*__", source))
         unknown = used - {self._shipped_placeholder()}
         assert not unknown, (
@@ -66,7 +66,7 @@ class TestTheVersionMarkerReachesThePage:
 
 class TestTheHealthCardReportsRealReadiness:
     def _script(self) -> str:
-        return (_UI / "js" / "od-health.js").read_text()
+        return (_UI / "js" / "od-health.js").read_text(encoding="utf-8")
 
     def test_it_does_not_decide_from_a_field_that_never_varies(self):
         """`status` is "ok" on every reply. Deciding from it means the card is
@@ -83,7 +83,7 @@ class TestTheHealthCardReportsRealReadiness:
         daemon_source = (
             pathlib.Path(superlocalmemory.__file__).parent
             / "server" / "unified_daemon.py"
-        ).read_text()
+        ).read_text(encoding="utf-8")
         reported = set(re.findall(r'runtime_state = "([a-z_]+)"', daemon_source))
         assert reported, "the daemon no longer reports a readiness state"
 

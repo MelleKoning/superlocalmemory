@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import sys
 import textwrap
 import threading
@@ -70,12 +71,12 @@ def _candidates() -> list[tuple[AtomicFact, float]]:
 
 
 def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+    from superlocalmemory.core.platform_utils import is_pid_alive
+
+    if not is_pid_alive(pid):  # never os.kill(pid, 0): that is Ctrl+C on Windows
         return False
-    except PermissionError:
-        return True
+    if os.name == "nt":
+        return True  # no zombies: a Windows process is gone once it exits
     try:  # a zombie still answers kill(0); reap it if it is our child
         done, _ = os.waitpid(pid, os.WNOHANG)
         return done == 0
@@ -95,9 +96,9 @@ def _wait_for(predicate, timeout: float = 10.0) -> bool:
 @pytest.fixture
 def fake_worker(tmp_path, monkeypatch):
     script = tmp_path / "fake_worker.py"
-    script.write_text(_FAKE_WORKER)
+    script.write_text(_FAKE_WORKER, encoding="utf-8")
     log = tmp_path / "workers.log"
-    log.write_text("")
+    log.write_text("", encoding="utf-8")
     monkeypatch.setenv("FAKE_LOG", str(log))
     monkeypatch.setenv("FAKE_FAIL_FLAG", str(tmp_path / "fail"))
     monkeypatch.setattr(mod, "_RERANKER_PID_FILE", tmp_path / ".reranker.pid")
@@ -114,7 +115,7 @@ def fake_worker(tmp_path, monkeypatch):
         return rr
 
     def spawned() -> list[int]:
-        return [int(line.split()[1]) for line in log.read_text().splitlines()
+        return [int(line.split()[1]) for line in log.read_text(encoding="utf-8").splitlines()
                 if line.startswith("spawn")]
 
     make.spawned = spawned  # type: ignore[attr-defined]
@@ -124,7 +125,7 @@ def fake_worker(tmp_path, monkeypatch):
         rr.shutdown(timeout=2.0)
     for pid in spawned():
         if _alive(pid):
-            os.kill(pid, 9)
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))  # TerminateProcess on Windows
 
 
 def _warm(rr: CrossEncoderReranker) -> None:
@@ -203,7 +204,7 @@ class TestRecycleIsBlueGreen:
                          and rr._worker_proc.pid != old_pid)
         assert _wait_for(lambda: not _alive(old_pid)), "the old worker was orphaned"
         assert rr._request_count < 5
-        assert int(mod._reranker_pid_file().read_text()) == rr._worker_proc.pid
+        assert int(mod._reranker_pid_file().read_text(encoding="utf-8")) == rr._worker_proc.pid
 
     def test_one_replacement_at_a_time(self, fake_worker) -> None:
         rr = fake_worker(load_delay=0.5)
@@ -220,7 +221,7 @@ class TestRecycleIsBlueGreen:
         rr = fake_worker(load_delay=0.1)
         _warm(rr)
         old_pid = rr._worker_proc.pid
-        fake_worker.fail_flag.write_text("1")
+        fake_worker.fail_flag.write_text("1", encoding="utf-8")
         rr._request_count = mod._WORKER_RECYCLE_AFTER
         rr.rerank_with_status("q", _candidates())
         assert _wait_for(lambda: not rr._replacing)

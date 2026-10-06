@@ -232,7 +232,10 @@ def _record_fact_entity_association(
                 return
             # (a) partial migration: insert with count_applied=1 (no historical-
             # rowid check needed — all associations in this state are
-            # post-migration). ON CONFLICT DO NOTHING makes this retry-safe.
+            # post-migration). A row ``store_fact`` already wrote for the
+            # entity index (storage/entity_index.py) is uncounted and is
+            # claimed exactly as a fresh insert would be; a counted one is
+            # left alone, which keeps this retry-safe.
             fallback = db.execute(
                 "INSERT INTO fact_entity_associations "
                 "(profile_id,fact_id,entity_id,first_operation_id,count_applied) "
@@ -241,7 +244,9 @@ def _record_fact_entity_association(
                 "JOIN atomic_facts AS fact "
                 "ON fact.fact_id=? AND fact.profile_id=? "
                 "WHERE entity.entity_id=? AND entity.profile_id=? "
-                "ON CONFLICT(profile_id,fact_id,entity_id) DO NOTHING "
+                "ON CONFLICT(profile_id,fact_id,entity_id) DO UPDATE SET "
+                "count_applied=1,first_operation_id=excluded.first_operation_id "
+                "WHERE fact_entity_associations.count_applied=0 "
                 "RETURNING count_applied",
                 (
                     profile_id, fact_id, entity_id, operation_id,

@@ -36,35 +36,101 @@ QUERY = "what happens to an invoice"
 MODES = ("off", "v1", "v2", "v2-ensemble")
 
 
-def _trained_model() -> tuple[bytes, list[str]]:
-    """A real LightGBM booster, trained deterministically here on synthetic
-    rows shaped like recall's features (the displayed score near 0.5-0.6,
-    keyword and meaning evidence, ages in days) and rewarding the displayed
-    score and keyword evidence - a plausible learned taste that knows nothing
-    about projects, and that separates this fixture's memories."""
+def _trained_model(store) -> tuple[bytes, list[str]]:
+    """A real LightGBM booster, trained deterministically here on THIS
+    fixture's own retrieval features - rewarding the displayed score and
+    keyword evidence - a plausible learned taste that knows nothing about
+    projects, and that separates this fixture's memories.
+
+    This used to train on an independent synthetic sample - x ~ uniform
+    over a plausible-looking range (0.45-0.65 for the displayed score,
+    0-5 for bm25, and so on) - rather than on values this fixture actually
+    produces. That range is wide enough that the ten real values recall
+    gives back for QUERY (a ~0.53-0.57 band - see the docstring on
+    test_the_seeded_model_is_really_active for the measured numbers) are a
+    handful of close points deep inside it. Histogram-based split-finding
+    bins the training range into a fixed number of bins; whichever bin edges
+    a platform's build happens to land on, nothing stops every one of those
+    ten close points from landing in the SAME bin there even though they
+    land in ten different leaves here - and when that happens every
+    prediction for this fixture comes back identical. That is exactly what
+    CI (ubuntu, Python 3.14) measured: every one of the ten scores in
+    test_the_seeded_model_is_really_active came back 0.3636741782759984.
+
+    Training directly on the rows this fixture's own (non-learning) recall
+    produces - oversampled, each copy nudged by noise far smaller than the
+    real gap between any two of them - puts all of the training mass inside
+    the exact band being scored, so a split has to separate it wherever a
+    platform's bin edges land, on every machine that runs this fixture.
+    """
     import lightgbm as lgb
 
-    from superlocalmemory.learning.features import FEATURE_NAMES
+    from superlocalmemory.learning.features import FEATURE_NAMES, FeatureExtractor
+
+    with pytest.MonkeyPatch.context() as mp:
+        # Explicit, regardless of ambient state: these are the plain
+        # (un-learned) features apply_v2_adaptive_ranking will itself
+        # re-extract from the same results at test time.
+        mp.setenv("SLM_RANKING", "off")
+        plain = _recall(store, QUERY, limit=10).results
+
+    rows: list[list[float]] = []
+    labels: list[float] = []
+    for r in plain:
+        result = {
+            "score": r.score,
+            "cross_encoder_score": r.score,
+            "trust_score": r.trust_score,
+            "channel_scores": r.channel_scores or {},
+            "fact": {"age_days": 0.0, "access_count": r.fact.access_count},
+        }
+        fv = FeatureExtractor.extract(result, {"query_type": "single_hop"})
+        rows.append(fv.to_list())
+        labels.append(10.0 * fv.features["cross_encoder_score"]
+                      + 0.3 * fv.features["bm25_score"]
+                      + 0.5 * fv.features["semantic_score"])
+
+    distinct = sorted(set(round(v, 9) for v in labels))
+    assert len(distinct) >= 4, (
+        "the fixture no longer gives test_the_seeded_model_is_really_active "
+        f"enough distinct per-memory features to train on: {labels!r}"
+    )
+
+    base = np.asarray(rows, dtype=np.float32)
+    y_base = np.asarray(labels, dtype=np.float32)
+    min_gap = min(b - a for a, b in zip(distinct, distinct[1:]))
+    jitter_scale = min_gap / 20.0
 
     rng = np.random.RandomState(150)
-    x = np.zeros((600, len(FEATURE_NAMES)), dtype=np.float32)
-    col = FEATURE_NAMES.index
-    x[:, col("cross_encoder_score")] = rng.uniform(0.45, 0.65, 600)
-    x[:, col("bm25_score")] = rng.uniform(0.0, 5.0, 600)
-    x[:, col("semantic_score")] = rng.uniform(0.0, 1.0, 600)
-    x[:, col("fact_age_days")] = rng.uniform(0.0, 2.0, 600)
-    y = (10.0 * x[:, col("cross_encoder_score")] + 0.3 * x[:, col("bm25_score")]
-         + 0.5 * x[:, col("semantic_score")])
+    reps = 60
+    x = np.concatenate([base] + [
+        base + rng.normal(0.0, jitter_scale, size=base.shape).astype(np.float32)
+        for _ in range(reps)
+    ])
+    y = np.concatenate([y_base] * (reps + 1))
+
     params = {"objective": "regression", "num_leaves": 15, "learning_rate": 0.2,
               "min_data_in_leaf": 5, "deterministic": True, "num_threads": 1,
               "seed": 150, "verbose": -1, "force_row_wise": True}
     booster = lgb.train(params, lgb.Dataset(x, label=y, feature_name=list(FEATURE_NAMES)),
                         num_boost_round=40)
+
+    # The model that is about to be persisted and shipped into the recall
+    # path must really discriminate the rows it was built for - verified
+    # here, not assumed, so a platform-specific collapse like the one above
+    # fails loudly at fixture setup instead of as a confusing assertion deep
+    # in a parametrized test.
+    predicted = booster.predict(base)
+    assert len(set(round(float(p), 6) for p in predicted)) > 3, (
+        "freshly trained booster predicts a near-constant score for the "
+        f"fixture's own memories: {predicted!r}"
+    )
+
     return booster.model_to_string().encode("utf-8"), list(FEATURE_NAMES)
 
 
 @pytest.fixture()
-def learning(tmp_path, monkeypatch):
+def learning(store, tmp_path, monkeypatch):
     """A learning store past the phase-3 gate, with an active, verified model."""
     from superlocalmemory.learning import model_cache
     from superlocalmemory.learning.database import LearningDatabase
@@ -81,7 +147,7 @@ def learning(tmp_path, monkeypatch):
         conn.close()
     for i in range(210):
         db.store_signal("default", f"q{i}", f"f{i}", "recall_hit", 1.0)
-    state, names = _trained_model()
+    state, names = _trained_model(store)
     db.persist_model(profile_id="default", state_bytes=state,
                      bytes_sha256=hashlib.sha256(state).hexdigest(),
                      feature_names=names, trained_on_count=210, metrics={})

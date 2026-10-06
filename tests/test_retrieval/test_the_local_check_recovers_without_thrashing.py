@@ -80,7 +80,7 @@ for raw in sys.stdin:
 @pytest.fixture()
 def fake(tmp_path, monkeypatch):
     path = tmp_path / "fake_laya_worker.py"
-    path.write_text(_FAKE_WORKER)
+    path.write_text(_FAKE_WORKER, encoding="utf-8")
     log = tmp_path / "events.log"
     monkeypatch.setenv("FAKE_LOG", str(log))
     monkeypatch.setattr(mod, "_WARMUP_BACKOFF_S", 0.01)
@@ -97,7 +97,7 @@ def fake(tmp_path, monkeypatch):
     def events(kind: str) -> int:
         if not log.exists():
             return 0
-        return sum(1 for line in log.read_text().splitlines() if line == kind)
+        return sum(1 for line in log.read_text(encoding="utf-8").splitlines() if line == kind)
 
     build.events = events
     yield build

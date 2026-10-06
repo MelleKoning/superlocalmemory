@@ -158,19 +158,19 @@ class TestStateFile:
 
     def test_corrupt_file_returns_empty(self, tmp_path):
         path = str(tmp_path / "corrupt.json")
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write("not valid JSON {{{")
         assert tsh.load_state(path) == []
 
     def test_wrong_version_returns_empty(self, tmp_path):
         path = str(tmp_path / "wrong-version.json")
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump({"version": 99, "window": [["alpha"]]}, f)
         assert tsh.load_state(path) == []
 
     def test_wrong_shape_returns_empty(self, tmp_path):
         path = str(tmp_path / "wrong-shape.json")
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump({"version": 1, "window": "not a list"}, f)
         assert tsh.load_state(path) == []
 
@@ -342,7 +342,7 @@ class TestLogging:
             }))):
                 tsh.main()
             assert os.path.exists(log_path)
-            with open(log_path) as f:
+            with open(log_path, encoding="utf-8") as f:
                 content = f.read()
             # TSV format: contains timestamp, sess_hash, etc.
             assert "\t" in content

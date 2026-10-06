@@ -39,11 +39,11 @@ def isolated_config(tmp_path, monkeypatch):
 
 def _write_config(base_dir: Path, payload: dict) -> None:
     """Write a config.json directly so we control the starting state."""
-    (base_dir / "config.json").write_text(json.dumps(payload, indent=2))
+    (base_dir / "config.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def _read_config(base_dir: Path) -> dict:
-    return json.loads((base_dir / "config.json").read_text())
+    return json.loads((base_dir / "config.json").read_text(encoding="utf-8"))
 
 
 def _invoke_mode_cli(value: str | None = None) -> None:

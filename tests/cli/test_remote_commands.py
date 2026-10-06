@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._portable import child_env_base
+
 from superlocalmemory.cli import remote_commands
 
 REPO = Path(__file__).resolve().parents[2]
@@ -26,7 +28,7 @@ STRICT_FLAGS = ssl.VERIFY_X509_STRICT | ssl.VERIFY_X509_PARTIAL_CHAIN
 
 def _slm(tmp_path: Path, *argv: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "PYTHONPATH": str(REPO / "src"), "SLM_DATA_DIR": str(tmp_path),
-           "HOME": str(tmp_path / "home"), "SLM_SKIP_FIRST_USE": "1"}
+           **child_env_base(tmp_path / "home"), "SLM_SKIP_FIRST_USE": "1"}
     return subprocess.run([sys.executable, "-m", "superlocalmemory.cli.main", *argv],
                           env=env, capture_output=True, text=True, timeout=120)
 
@@ -138,7 +140,7 @@ def test_keys_add_prints_the_secret_once_and_list_never_shows_it(tmp_path) -> No
     rows = json.loads(listed.stdout)["data"]["keys"]
     assert rows[0]["name"] == "hermes-laptop" and rows[0]["scope"] == "write"
     assert secret not in listed.stdout and "digest" not in listed.stdout
-    stored = (tmp_path / "remote_keys.json").read_text()
+    stored = (tmp_path / "remote_keys.json").read_text(encoding="utf-8")
     assert secret not in stored
     ro = _slm(tmp_path, "remote", "keys", "add", "viewer", "--read-only")
     assert ro.returncode == 0
@@ -201,12 +203,12 @@ def test_keys_add_profile_flag_is_documented(tmp_path) -> None:
 def test_keys_list_binds_a_pre_4_1_20_key_and_tells_the_user(tmp_path) -> None:
     from superlocalmemory.server.remote_keys import KEY_PREFIX, digest_secret
 
-    (tmp_path / "config.json").write_text(json.dumps({"active_profile": "work"}))
+    (tmp_path / "config.json").write_text(json.dumps({"active_profile": "work"}), encoding="utf-8")
     store = tmp_path / "remote_keys.json"
     store.write_text(json.dumps({"version": 1, "keys": [{
         "key_id": "rk_0000abcd", "name": "old-hermes", "scope": "write",
         "digest": digest_secret(KEY_PREFIX + "A" * 43),
-        "created_at": "2026-09-01T00:00:00+00:00", "revoked_at": None}]}))
+        "created_at": "2026-09-01T00:00:00+00:00", "revoked_at": None}]}), encoding="utf-8")
     os.chmod(store, 0o600)
     listed = _slm(tmp_path, "remote", "keys", "list")
     assert listed.returncode == 0, listed.stderr[-2000:]
@@ -214,4 +216,4 @@ def test_keys_list_binds_a_pre_4_1_20_key_and_tells_the_user(tmp_path) -> None:
     assert "work (bound on upgrade)" in listed.stdout
     again = _slm(tmp_path, "remote", "keys", "list")
     assert "bound to profile" not in again.stderr  # told once, recorded for good
-    assert json.loads(store.read_text())["keys"][0]["profile"] == "work"
+    assert json.loads(store.read_text(encoding="utf-8"))["keys"][0]["profile"] == "work"

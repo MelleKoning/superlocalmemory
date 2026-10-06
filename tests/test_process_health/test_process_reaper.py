@@ -20,6 +20,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# Everything here drives the POSIX reaper (ps, signals, parent PIDs). On Windows
+# process_reaper.py defines no-op stubs instead, by design; their contract is
+# checked on every platform in test_process_reaper_windows_stubs.py.
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32", reason="the process reaper is POSIX-only; Windows has no-op stubs",
+)
+
 
 # ---------------------------------------------------------------------------
 # T1: test_detect_orphan_process
@@ -165,14 +172,15 @@ class TestKillOrphan:
             f"pathlib.Path(\\\"{ready_file}\\\").touch(); "
             "time.sleep(300)'"
             f"], start_new_session=True)\n"
-            f"pathlib.Path('{pid_file}').write_text(str(proc.pid))\n"
+            f"pathlib.Path('{pid_file}').write_text(str(proc.pid))\n",
+            encoding="utf-8",
         )
         # Run launcher, which starts child in new session then exits
         subprocess.run(
             [sys.executable, str(launcher)], timeout=5, check=True
         )
 
-        target_pid = int(pid_file.read_text().strip())
+        target_pid = int(pid_file.read_text(encoding="utf-8").strip())
 
         # Wait for the process to be fully running
         deadline = time.monotonic() + 5.0
@@ -197,7 +205,8 @@ class TestKillOrphan:
         script.write_text(
             "import signal, time\n"
             "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-            "time.sleep(300)\n"
+            "time.sleep(300)\n",
+            encoding="utf-8",
         )
         proc = subprocess.Popen([sys.executable, str(script)])
         time.sleep(0.5)  # Let it start and register handler
@@ -1018,7 +1027,7 @@ class TestReapStaleOrphanKillPath:
 
         old_time = (datetime.now(UTC) - timedelta(hours=5)).isoformat()
         data = {"pids": [{"pid": 55555, "ppid": 1, "started_at": old_time}]}
-        tmp_pid_file.write_text(json.dumps(data))
+        tmp_pid_file.write_text(json.dumps(data), encoding="utf-8")
 
         # os.kill(55555, 0) must succeed (process alive)
         original_kill = os.kill
@@ -1067,7 +1076,7 @@ class TestReapStaleOrphanKillPath:
 
         old_time = (datetime.now(UTC) - timedelta(hours=5)).isoformat()
         data = {"pids": [{"pid": 55556, "ppid": 1, "started_at": old_time}]}
-        tmp_pid_file.write_text(json.dumps(data))
+        tmp_pid_file.write_text(json.dumps(data), encoding="utf-8")
 
         original_kill = os.kill
 
@@ -1109,7 +1118,7 @@ class TestReapStaleOrphanKillPath:
 
         # Write a record with an unparseable timestamp
         data = {"pids": [{"pid": 55559, "ppid": 1, "started_at": "INVALID-TIMESTAMP"}]}
-        tmp_pid_file.write_text(json.dumps(data))
+        tmp_pid_file.write_text(json.dumps(data), encoding="utf-8")
 
         original_kill = os.kill
 

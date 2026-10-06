@@ -88,7 +88,7 @@ def _macos_plist_content() -> str:
 def install_macos() -> bool:
     plist = _macos_plist_path()
     plist.parent.mkdir(parents=True, exist_ok=True)
-    plist.write_text(_macos_plist_content())
+    plist.write_text(_macos_plist_content(), encoding="utf-8")
     logger.info("Wrote LaunchAgent plist: %s", plist)
 
     # Load the service
@@ -178,7 +178,7 @@ WantedBy=default.target
 def install_linux() -> bool:
     service = _linux_service_path()
     service.parent.mkdir(parents=True, exist_ok=True)
-    service.write_text(_linux_service_content())
+    service.write_text(_linux_service_content(), encoding="utf-8")
     logger.info("Wrote systemd user service: %s", service)
 
     try:
@@ -264,7 +264,7 @@ def install_windows() -> bool:
     # Create a VBS wrapper to run Python without console window
     vbs_path = state_path("start-daemon.vbs")
     vbs_path.parent.mkdir(parents=True, exist_ok=True)
-    vbs_path.write_text(_windows_vbs_content())
+    vbs_path.write_text(_windows_vbs_content(), encoding="utf-8")
 
     # Use schtasks to create a logon trigger task
     try:

@@ -131,7 +131,7 @@ class TestARealPromotionIsNotTouched:
 
         journal = data_dir / ScaleEngineManager.PROMOTION_JOURNAL
         journal.parent.mkdir(parents=True, exist_ok=True)
-        journal.write_text('{"state": "intent"}')
+        journal.write_text('{"state": "intent"}', encoding="utf-8")
         config = _Config(graph="cozo", vector="lancedb", state="promoted")
 
         _reconcile(config, data_dir)

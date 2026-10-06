@@ -13,7 +13,7 @@ from superlocalmemory.hooks import codex_hooks
 
 
 def _read(path):
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def test_install_merges_only_slm_owned_entries_and_creates_backup(tmp_path):
@@ -26,7 +26,7 @@ def test_install_merges_only_slm_owned_entries_and_creates_backup(tmp_path):
         },
         "custom": {"keep": True},
     }
-    hooks_path.write_text(json.dumps(original, indent=2) + "\n")
+    hooks_path.write_text(json.dumps(original, indent=2) + "\n", encoding="utf-8")
 
     result = codex_hooks.install_hooks(hooks_path=hooks_path)
 
@@ -52,12 +52,12 @@ def test_install_is_idempotent(tmp_path):
 def test_malformed_json_fails_without_overwrite(tmp_path):
     hooks_path = tmp_path / ".codex" / "hooks.json"
     hooks_path.parent.mkdir()
-    hooks_path.write_text("{ definitely not json")
+    hooks_path.write_text("{ definitely not json", encoding="utf-8")
 
     result = codex_hooks.install_hooks(hooks_path=hooks_path)
 
     assert result["success"] is False
-    assert hooks_path.read_text() == "{ definitely not json"
+    assert hooks_path.read_text(encoding="utf-8") == "{ definitely not json"
     assert not hooks_path.with_suffix(".json.slm.bak").exists()
 
 
@@ -67,7 +67,7 @@ def test_remove_only_removes_owned_entries(tmp_path):
     hooks_path.write_text(json.dumps({"hooks": {
         "SessionStart": [{"hooks": [{"type": "command", "command": "my-start"}]}],
         "Stop": [{"hooks": [{"type": "command", "command": "my-stop"}]}],
-    }}))
+    }}), encoding="utf-8")
     codex_hooks.install_hooks(hooks_path=hooks_path)
 
     result = codex_hooks.remove_hooks(hooks_path=hooks_path)
@@ -85,7 +85,7 @@ def test_install_retires_legacy_slm_commands_without_removing_mixed_user_group(t
         {"type": "command", "command": "python3 ~/.codex/hooks/auto-recall.py"},
         {"type": "command", "command": "python3 ~/.agents/hooks/universal-hook.py --intent slm_recall --agent codex"},
         {"type": "command", "command": "my-unrelated-start"},
-    ]}]}}))
+    ]}]}}), encoding="utf-8")
 
     result = codex_hooks.install_hooks(hooks_path=hooks_path)
 
@@ -109,7 +109,7 @@ def test_definitions_are_portable_and_cover_supported_lifecycle():
 def test_status_reports_corrupt_config_as_indeterminate(tmp_path):
     hooks_path = tmp_path / ".codex" / "hooks.json"
     hooks_path.parent.mkdir()
-    hooks_path.write_text("{")
+    hooks_path.write_text("{", encoding="utf-8")
 
     status = codex_hooks.check_status(hooks_path=hooks_path)
 

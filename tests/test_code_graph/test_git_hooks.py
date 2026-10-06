@@ -49,13 +49,14 @@ class TestInstallHook:
 
         hook_path = git_repo / ".git" / "hooks" / "post-commit"
         assert hook_path.exists()
-        content = hook_path.read_text()
+        content = hook_path.read_text(encoding="utf-8")
         assert _HOOK_MARKER in content
         assert "#!/bin/sh" in content
 
-        # Verify executable
-        mode = hook_path.stat().st_mode
-        assert mode & stat.S_IXUSR
+        # Verify executable. Windows files have no executable bit (Git for
+        # Windows runs a hook by its #! line), so there is nothing to check.
+        if os.name != "nt":
+            assert hook_path.stat().st_mode & stat.S_IXUSR
 
     def test_install_idempotent(self, git_repo: Path) -> None:
         """Second install should detect existing and return already_present."""
@@ -67,20 +68,20 @@ class TestInstallHook:
         assert result2["action"] == "already_present"
 
         # Content should not be duplicated
-        content = (git_repo / ".git" / "hooks" / "post-commit").read_text()
+        content = (git_repo / ".git" / "hooks" / "post-commit").read_text(encoding="utf-8")
         assert content.count(_HOOK_MARKER) == 1
 
     def test_install_appends_to_existing(self, git_repo: Path) -> None:
         """If a hook already exists (without our marker), append."""
         hook_path = git_repo / ".git" / "hooks" / "post-commit"
-        hook_path.write_text("#!/bin/sh\necho 'existing hook'\n")
+        hook_path.write_text("#!/bin/sh\necho 'existing hook'\n", encoding="utf-8")
         hook_path.chmod(0o755)
 
         result = install_post_commit_hook(git_repo)
         assert result["success"] is True
         assert result["action"] == "appended"
 
-        content = hook_path.read_text()
+        content = hook_path.read_text(encoding="utf-8")
         assert "existing hook" in content
         assert _HOOK_MARKER in content
 
@@ -116,19 +117,19 @@ class TestUninstallHook:
     def test_uninstall_preserves_other_content(self, git_repo: Path) -> None:
         """Uninstall should only remove our section, keep the rest."""
         hook_path = git_repo / ".git" / "hooks" / "post-commit"
-        hook_path.write_text("#!/bin/sh\necho 'keep this'\n")
+        hook_path.write_text("#!/bin/sh\necho 'keep this'\n", encoding="utf-8")
         hook_path.chmod(0o755)
 
         # Install (append)
         install_post_commit_hook(git_repo)
-        content_before = hook_path.read_text()
+        content_before = hook_path.read_text(encoding="utf-8")
         assert _HOOK_MARKER in content_before
 
         # Uninstall
         result = uninstall_post_commit_hook(git_repo)
         assert result["action"] == "removed"
 
-        content_after = hook_path.read_text()
+        content_after = hook_path.read_text(encoding="utf-8")
         assert "keep this" in content_after
         assert _HOOK_MARKER not in content_after
 
@@ -140,7 +141,7 @@ class TestUninstallHook:
     def test_uninstall_no_marker(self, git_repo: Path) -> None:
         """Hook exists but doesn't contain our marker."""
         hook_path = git_repo / ".git" / "hooks" / "post-commit"
-        hook_path.write_text("#!/bin/sh\necho 'other hook'\n")
+        hook_path.write_text("#!/bin/sh\necho 'other hook'\n", encoding="utf-8")
 
         result = uninstall_post_commit_hook(git_repo)
         assert result["success"] is True

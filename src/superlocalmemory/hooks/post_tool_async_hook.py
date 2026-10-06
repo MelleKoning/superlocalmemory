@@ -43,7 +43,7 @@ def _port_file_url() -> str:
     """
     port = _DEFAULT_DAEMON_PORT
     try:
-        port = int(state_path("daemon.port").read_text().strip())
+        port = int(state_path("daemon.port").read_text(encoding="utf-8").strip())
     except Exception:
         pass
     return f"http://127.0.0.1:{port}"

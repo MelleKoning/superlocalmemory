@@ -16,6 +16,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, TypeVar
+from contextlib import closing
 
 from superlocalmemory.contracts.v402 import validate_agent_experience, validate_cognitive_turn
 
@@ -452,7 +453,7 @@ def purge_profile_receipts(
     path = Path(learning_db_path)
     if not path.exists():
         return 0
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         tables = {
             row[0]
             for row in conn.execute(
@@ -473,7 +474,7 @@ def purge_profile_receipts(
         if tables in (expected | optional, expected | execution, expected | optional | execution):
             from superlocalmemory.storage.migrations import M041_external_evidence_receipts as m041
 
-            with sqlite3.connect(path) as conn:
+            with closing(sqlite3.connect(path)) as conn, conn:
                 # Erasure needs a valid table, not its optional performance indexes.
                 # A damaged index must never strand profile-scoped evidence.
                 external_ok = (

@@ -241,7 +241,8 @@ def pinned_weights(model: str, hf_home: str) -> str | None:
     from superlocalmemory.core.laya_runtime import LAYA_MODEL_REPO, LAYA_MODEL_REVISION
 
     text = str(model or "").strip()
-    if text.startswith(("/", "~", ".")):
+    # A folder: absolute on this OS (C:\... on Windows), or ~ / . relative.
+    if os.path.isabs(text) or text.startswith(("/", "~", ".")):
         return text
     if text != LAYA_MODEL_REPO:
         logger.info("Answer check (Laya) off: %r is named by repo id, which loads whatever "

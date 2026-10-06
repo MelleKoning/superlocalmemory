@@ -87,8 +87,8 @@ def test_clear_cache_removes_caches_only(
     assert not (tmp_home / "context_cache.db").exists()
     assert not (tmp_home / "entity_trigram_cache.db").exists()
     # Sacred:
-    assert (tmp_home / "memory.db").read_text() == "precious"
-    assert (tmp_home / "learning.db").read_text() == "signals"
+    assert (tmp_home / "memory.db").read_text(encoding="utf-8") == "precious"
+    assert (tmp_home / "learning.db").read_text(encoding="utf-8") == "signals"
     captured = capsys.readouterr().out
     assert "memory.db" in captured  # confirms preservation note printed
 

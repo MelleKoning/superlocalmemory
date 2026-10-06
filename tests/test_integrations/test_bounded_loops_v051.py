@@ -156,3 +156,28 @@ def test_v051_command_reaps_a_process_that_closes_pipes_then_hangs(
         adapter._run_command(sys.executable, "-c", code)
 
     assert time.monotonic() - started < 1
+
+
+@pytest.mark.parametrize("code, message", [
+    ("import sys; sys.stdout.write('{\"ok\": true}')", None),
+    ("import sys; sys.stdout.write('x' * 2100000); sys.stderr.write('y' * 2100000)",
+     "size limit"),
+])
+def test_v051_command_output_is_read_where_pipes_cannot_be_selected(
+    monkeypatch: pytest.MonkeyPatch, code: str, message: str | None,
+) -> None:
+    """Windows can wait only on sockets with select(): a pipe gives WinError
+    10038, so every bounded-loops command "did not complete" there. The pipes
+    are read without a selector, so this holds with selectors refusing pipes."""
+    import selectors
+
+    class _SocketsOnly(selectors.DefaultSelector):
+        def register(self, fileobj, events, data=None):
+            raise OSError(10038, "An operation was attempted on something that is not a socket")
+
+    monkeypatch.setattr(selectors, "DefaultSelector", _SocketsOnly)
+    if message is None:
+        assert adapter._run_command(sys.executable, "-c", code) == '{"ok": true}'
+    else:
+        with pytest.raises(BoundedLoopsReceiptError, match=message):
+            adapter._run_command(sys.executable, "-c", code)

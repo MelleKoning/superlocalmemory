@@ -24,6 +24,7 @@ import tempfile
 from datetime import datetime, UTC, timezone
 from pathlib import Path
 from typing import Any
+from contextlib import closing
 
 from superlocalmemory.infra.cloud_backup_github import (  # noqa: F401 - re-exported
     MAX_GITHUB_RELEASES,
@@ -97,6 +98,11 @@ def _atomic_write_creds(store_path: Path, data: dict) -> None:
         # Re-open with 0o600; mkstemp already creates with 0o600 on POSIX.
         # Use os.open with O_NOFOLLOW on the temp name to refuse symlink tricks.
         os.close(tmp_fd)
+        # 0o600 means nothing on Windows: there the owner-only access list
+        # is applied, before a single byte of the secret is written.
+        from superlocalmemory.infra.owner_only_acl import restrict_to_owner
+
+        restrict_to_owner(Path(tmp_name))
         flags = os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
         fd = os.open(tmp_name, flags, 0o600)
         try:
@@ -136,7 +142,7 @@ def _store_credential(key: str, value: str) -> bool:
         existing: dict = {}
         if store_path.exists():
             try:
-                existing = json.loads(store_path.read_text())
+                existing = json.loads(store_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError as exc:
                 logger.warning(
                     "Credential store corrupt (JSON decode error), starting fresh: %s", exc
@@ -167,7 +173,7 @@ def _get_credential(key: str) -> str | None:
         store_path = _get_credential_store()
         if store_path.exists():
             try:
-                data = json.loads(store_path.read_text())
+                data = json.loads(store_path.read_text(encoding="utf-8"))
                 return data.get(key)
             except json.JSONDecodeError as exc:
                 logger.warning(
@@ -200,7 +206,7 @@ def _delete_credential(key: str) -> bool:
         store_path = _get_credential_store()
         if store_path.exists():
             try:
-                data = json.loads(store_path.read_text())
+                data = json.loads(store_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError as exc:
                 logger.warning(
                     "Credential store corrupt (JSON decode error) during delete of '%s': %s",
@@ -273,7 +279,7 @@ def remove_destination(dest_id: str, db_path: Path | None = None) -> bool:
         import sqlite3 as _sqlite3
         creds_ref = None
         try:
-            with _sqlite3.connect(str(path)) as rconn:
+            with closing(_sqlite3.connect(str(path))) as rconn, rconn:
                 row = rconn.execute(
                     "SELECT credentials_ref FROM backup_destinations WHERE id = ?",
                     (dest_id,),

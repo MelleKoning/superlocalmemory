@@ -450,7 +450,7 @@ def _acquire_install_lock(lock_path: Path):
     if fcntl is None:
         return None
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fh = open(lock_path, "w")  # noqa: SIM115 — lifetime matches install(), closed explicitly
+    fh = open(lock_path, "w", encoding="utf-8")  # noqa: SIM115 — lifetime matches install(), closed explicitly
     try:
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:

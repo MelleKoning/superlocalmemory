@@ -42,7 +42,7 @@ def test_safe_resolve_rejects_escape_via_absolute(tmp_path: Path) -> None:
     base.mkdir()
     other = tmp_path / "other" / "file.txt"
     other.parent.mkdir()
-    other.write_text("x")
+    other.write_text("x", encoding="utf-8")
     with pytest.raises(sp.PathTraversalError):
         sp.safe_resolve(base, str(other))
 

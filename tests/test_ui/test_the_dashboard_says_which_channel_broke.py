@@ -74,7 +74,7 @@ def test_the_pane_actually_contains_the_renderer() -> None:
     call it next.
     """
     assert _JS.exists(), f"missing UI JS file: {_JS}"
-    src = _JS.read_text()
+    src = _JS.read_text(encoding="utf-8")
     assert len(src) > 500, f"{_JS} is {len(src)} bytes; that is not the pane"
     assert "buildChannelHealth" in src, (
         "the channel-health renderer is gone from the pane"
@@ -142,7 +142,7 @@ def test_the_strip_renders_before_the_no_results_branch() -> None:
     'No results found'. Rendering the strip after that early return would make
     the field invisible in precisely the case it was added for.
     """
-    src = _JS.read_text()
+    src = _JS.read_text(encoding="utf-8")
     strip = src.index("buildChannelHealth(recallLabState.channelStatus)")
     empty_branch = src.index("recallLabState.allResults.length === 0")
     assert strip < empty_branch, (
@@ -153,6 +153,6 @@ def test_the_strip_renders_before_the_no_results_branch() -> None:
 
 def test_the_pane_is_not_an_injection_sink() -> None:
     """Statuses arrive over HTTP; this pane builds DOM, it does not parse HTML."""
-    src = _JS.read_text()
+    src = _JS.read_text(encoding="utf-8")
     for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"):
         assert sink not in src, f"{sink} in recall-lab.js"

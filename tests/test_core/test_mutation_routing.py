@@ -6,8 +6,8 @@
 
 Only the kinds listed in ``core/mutation_routing.py`` may, and only to a
 profile that exists. Every other kind stays bound to the active profile, so a
-route that forwards a client's ``profile_id`` by mistake still cannot delete,
-merge, re-scope or re-kind another profile's memories.
+route that forwards a client's ``profile_id`` by mistake still cannot rewrite,
+archive, merge or re-scope another profile's memories.
 """
 
 from __future__ import annotations
@@ -34,13 +34,20 @@ def conn():
     connection.close()
 
 
-def test_the_routable_kinds_are_exactly_replace_and_review() -> None:
-    """Adding a kind is a decision with its own route change, never a drive-by."""
+def test_the_routable_kinds_are_exactly_those_with_a_routed_route() -> None:
+    """Adding a kind is a decision with its own route change, never a drive-by.
+
+    4.1.21: delete, propose-correction and set-kind, for DELETE/PATCH
+    /api/memories/{id} and /api/memory-kinds with a ``profile_id``.
+    """
     assert ROUTABLE_MUTATIONS == frozenset({
         CommandKind.REPLACE_BY_CALLER,
         CommandKind.APPLY_CORRECTION,
         CommandKind.REJECT_CORRECTION,
         CommandKind.ROLLBACK_CORRECTION,
+        CommandKind.DELETE_FACT,
+        CommandKind.PROPOSE_CORRECTION,
+        CommandKind.SET_FACT_KIND,
     })
 
 
@@ -95,12 +102,10 @@ def _fact(engine, fact_id: str) -> dict | None:
 
 
 @pytest.mark.parametrize("mutate", [
-    lambda rt, fid: rt.delete_fact("work", fid),
     lambda rt, fid: rt.update_fact("work", fid, {"content": "rewritten"}),
     lambda rt, fid: rt.archive_fact("work", fid),
     lambda rt, fid: rt.set_fact_scope("work", fid, "global", []),
-    lambda rt, fid: rt.set_fact_kinds("work", [(fid, "decision")]),
-], ids=["delete", "update", "archive", "scope", "kind"])
+], ids=["update", "archive", "scope"])
 def test_non_routable_mutations_cannot_touch_a_routed_profile(writer, mutate) -> None:
     """Refused as a decision, not reported as an outage that invites a retry."""
     from superlocalmemory.core.remember_runtime import MutationNotRoutable
@@ -119,6 +124,29 @@ def test_a_routed_replace_to_a_missing_profile_is_a_refusal_not_an_outage(writer
     with pytest.raises(UnknownMutationProfile):
         runtime.replace_by_caller("ghost", fact_id, fact_id,
                                   trusted_actor_id="tester", idempotency_key="ghost-1")
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda rt, fid: rt.delete_fact("ghost", fid),
+    lambda rt, fid: rt.set_fact_kinds("ghost", [(fid, "decision")]),
+], ids=["delete", "kind"])
+def test_a_routed_delete_or_kind_to_a_missing_profile_is_a_refusal(writer, mutate) -> None:
+    from superlocalmemory.core.remember_runtime import UnknownMutationProfile
+
+    runtime, engine, fact_id = writer
+    before = _fact(engine, fact_id)
+    with pytest.raises(UnknownMutationProfile):
+        mutate(runtime, fact_id)
+    assert _fact(engine, fact_id) == before
+
+
+def test_a_kind_change_finds_only_facts_the_named_profile_owns(writer) -> None:
+    """Named 'default', a 'work' fact is not found: the profile is a filter, so
+    a routed change cannot reach a fact by id across profiles."""
+    runtime, engine, fact_id = writer
+    receipt = dict(runtime.set_fact_kinds("default", [(fact_id, "decision")]))
+    assert [f.get("ok") for f in receipt.get("facts", [])] == [False], receipt
+    assert _fact(engine, fact_id)["profile_id"] == "work"
 
 
 def test_a_routed_review_of_a_missing_profile_is_a_refusal_not_an_outage(writer) -> None:

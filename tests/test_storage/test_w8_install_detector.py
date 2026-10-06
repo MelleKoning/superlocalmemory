@@ -48,7 +48,7 @@ class TestDetectAllInstalls:
         fake_venv = tmp_path / ".slm-venv"
         init_path = fake_venv / "lib" / "python3.11" / "site-packages" / "superlocalmemory" / "__init__.py"
         init_path.parent.mkdir(parents=True)
-        init_path.write_text('__version__ = "4.0.8"\n')
+        init_path.write_text('__version__ = "4.0.8"\n', encoding="utf-8")
 
         monkeypatch.setattr(
             "superlocalmemory.core.install_detector._VENV_ROOT",
@@ -67,7 +67,7 @@ class TestDetectAllInstalls:
         fake_pipx = tmp_path / ".local" / "pipx" / "venvs" / "superlocalmemory"
         init_path = fake_pipx / "lib" / "python3.12" / "site-packages" / "superlocalmemory" / "__init__.py"
         init_path.parent.mkdir(parents=True)
-        init_path.write_text('__version__ = "4.0.8"\n')
+        init_path.write_text('__version__ = "4.0.8"\n', encoding="utf-8")
 
         monkeypatch.setattr(
             "superlocalmemory.core.install_detector._PIPX_ROOT",
@@ -86,7 +86,7 @@ class TestDetectAllInstalls:
         fake_npm_root = tmp_path / "node_modules"
         pkg_json = fake_npm_root / "superlocalmemory" / "package.json"
         pkg_json.parent.mkdir(parents=True)
-        pkg_json.write_text('{"version": "4.1.0"}\n')
+        pkg_json.write_text('{"version": "4.1.0"}\n', encoding="utf-8")
 
         # Patch the subprocess call for npm root
         def fake_npm_root_fn():
@@ -150,7 +150,7 @@ class TestDetectAllInstalls:
 
         # Control: prove the trackers intercept. Without this, the assertion
         # below is unfalsifiable and the test is lying about what it checks.
-        (tmp_path / "control.txt").write_text("x")
+        (tmp_path / "control.txt").write_text("x", encoding="utf-8")
         assert writes, "tracker never fired — this test cannot detect a write"
         writes.clear()
 
@@ -307,7 +307,7 @@ class TestWindowsSitePackagesLayout:
     def _make(base: Path, rel: str, version: str) -> None:
         pkg = base / rel / "superlocalmemory"
         pkg.mkdir(parents=True)
-        (pkg / "__init__.py").write_text(f'__version__ = "{version}"\n')
+        (pkg / "__init__.py").write_text(f'__version__ = "{version}"\n', encoding="utf-8")
 
     def test_finds_version_in_windows_layout(self, tmp_path):
         from superlocalmemory.core.install_detector import _read_python_version
@@ -333,7 +333,8 @@ class TestWindowsSitePackagesLayout:
         pkg = tmp_path / "lib" / "python3.13" / "site-packages" / "superlocalmemory"
         pkg.mkdir(parents=True)
         (pkg / "__init__.py").write_text(
-            '__version_info__ = (4, 1, 99)\n__version__ = "4.1.14"\n'
+            '__version_info__ = (4, 1, 99)\n__version__ = "4.1.14"\n',
+            encoding="utf-8",
         )
         assert _read_python_version(tmp_path) == "4.1.14"
 
@@ -367,7 +368,7 @@ class TestResolvedPackageAuthority:
     def _make_venv(base: Path, version: str) -> Path:
         pkg = base / "lib" / "python3.13" / "site-packages" / "superlocalmemory"
         pkg.mkdir(parents=True)
-        (pkg / "__init__.py").write_text(f'__version__ = "{version}"\n')
+        (pkg / "__init__.py").write_text(f'__version__ = "{version}"\n', encoding="utf-8")
         return pkg
 
     def test_resolve_package_dir_points_at_package(self, tmp_path):

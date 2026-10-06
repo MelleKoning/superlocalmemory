@@ -1777,7 +1777,7 @@ def _load_auto_invoke_json() -> dict:
     config_path = MEMORY_DIR / "config.json"
     if config_path.exists():
         try:
-            data = json.loads(config_path.read_text())
+            data = json.loads(config_path.read_text(encoding="utf-8"))
             return data.get("auto_invoke", {})
         except (json.JSONDecodeError, IOError):
             pass
@@ -1791,12 +1791,12 @@ def _save_auto_invoke_json(auto_invoke_data: dict) -> None:
     cfg: dict = {}
     if config_path.exists():
         try:
-            cfg = json.loads(config_path.read_text())
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, IOError):
             pass
     cfg["auto_invoke"] = auto_invoke_data
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(cfg, indent=2))
+    config_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
 
 # ── 1. GET /api/v3/auto-invoke/config ─────────────────────────
@@ -2688,13 +2688,11 @@ async def process_health(request: Request):
         }
 
         # Check parent process
+        from superlocalmemory.core.platform_utils import is_pid_alive
+
         try:
-            _os.kill(_os.getppid(), 0)
-            processes["parent"]["status"] = "running"
-        except ProcessLookupError:
-            processes["parent"]["status"] = "dead"
-        except PermissionError:
-            processes["parent"]["status"] = "running"
+            alive = is_pid_alive(_os.getppid())
+            processes["parent"]["status"] = "running" if alive else "dead"
         except OSError:
             processes["parent"]["status"] = "unknown"
 
@@ -3003,11 +3001,10 @@ async def v33_overview(request: Request, profile: str = ""):
         # Process health
         try:
             import os as _os
-            _os.kill(_os.getppid(), 0)
-            overview["process_health"] = {"healthy": True}
-        except ProcessLookupError:
-            overview["process_health"] = {"healthy": False}
-        except (PermissionError, OSError):
+
+            from superlocalmemory.core.platform_utils import is_pid_alive
+            overview["process_health"] = {"healthy": is_pid_alive(_os.getppid())}
+        except OSError:
             overview["process_health"] = {"healthy": True}
 
         conn.close()

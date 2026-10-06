@@ -71,7 +71,7 @@ for raw in sys.stdin:
 @pytest.fixture()
 def worker(tmp_path, monkeypatch):
     path = tmp_path / "fake_laya_worker.py"
-    path.write_text(_FAKE_WORKER)
+    path.write_text(_FAKE_WORKER, encoding="utf-8")
     log = tmp_path / "requests.jsonl"
     monkeypatch.setenv("FAKE_LAYA_LOG", str(log))
     monkeypatch.setattr(mod, "_WARMUP_BACKOFF_S", 0.01)
@@ -95,7 +95,7 @@ def _wait(predicate, timeout: float = 10.0) -> bool:
 def _requests(log: Path, cmd: str) -> list[dict]:
     if not log.exists():
         return []
-    return [r for r in map(json.loads, log.read_text().splitlines()) if r.get("cmd") == cmd]
+    return [r for r in map(json.loads, log.read_text(encoding="utf-8").splitlines()) if r.get("cmd") == cmd]
 
 
 def _in_background(fn):
@@ -141,16 +141,37 @@ def test_ask_kinds_refuses_on_foreground_thread(warm) -> None:
     assert _requests(log, "kinds") == []
 
 
-def test_ask_kinds_waits_for_foreground_idle(warm) -> None:
+def test_ask_kinds_waits_for_foreground_idle(warm, monkeypatch) -> None:
     judge, log = warm
+    # The old version of this test slept 0.3s and trusted that ask_kinds
+    # would have reached (and blocked on) wait_for_foreground_idle by then -
+    # a wall-clock margin that a loaded machine can blow past before the
+    # background thread is even scheduled, with nothing to show it ever
+    # entered the wait it's supposed to be testing. Instrument the real
+    # call instead: the Event fires exactly when ask_kinds reaches it, no
+    # matter how long scheduling takes to get there.
+    entered_wait = threading.Event()
+    real_wait_for_foreground_idle = recall_gate.wait_for_foreground_idle
+
+    def _observed_wait_for_foreground_idle() -> None:
+        entered_wait.set()
+        real_wait_for_foreground_idle()
+
+    monkeypatch.setattr(recall_gate, "wait_for_foreground_idle",
+                        _observed_wait_for_foreground_idle)
+
     recall_gate.begin_recall()
     try:
         thread, box = _in_background(lambda: judge.ask_kinds(["a memory"], KINDS_V1, []))
-        time.sleep(0.3)
+        # begin_recall() above already ran before the thread was started, so
+        # once ask_kinds reaches the real wait it is guaranteed to block -
+        # this is a hang-safety bound, not a guess at how long work takes.
+        assert entered_wait.wait(5), "ask_kinds never reached the foreground-idle wait"
         assert _requests(log, "kinds") == [], "typing ran while a recall was in flight"
     finally:
         recall_gate.end_recall()
-    thread.join(5)
+    assert _wait(lambda: not thread.is_alive(), 5.0), \
+        "ask_kinds never returned after the recall ended"
     assert len(_requests(log, "kinds")) == 1
     answers = box["value"]
     assert answers == [KindAnswer(choice=list(KINDS_V1.criteria)[1],

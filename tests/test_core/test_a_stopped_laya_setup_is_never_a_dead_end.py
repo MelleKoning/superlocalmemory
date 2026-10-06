@@ -44,7 +44,7 @@ def _clean(monkeypatch):
 
 def _write(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data) if not isinstance(data, str) else data)
+    path.write_text(json.dumps(data) if not isinstance(data, str) else data, encoding="utf-8")
 
 
 def _stopped_setup() -> Path:
@@ -64,10 +64,16 @@ def _external_install(tmp_path: Path) -> tuple[Path, Path]:
     return python, model
 
 
+#: The stand-in interpreter below is a shell script, which Windows cannot run.
+#: Laya itself only runs on Apple silicon (laya_runtime._apple_silicon).
+_needs_posix_shell = pytest.mark.skipif(
+    os.name == "nt", reason="the stand-in interpreter is a POSIX shell script")
+
+
 def _fake_python(tmp_path: Path, body: str) -> Path:
     """An executable that stands in for the environment's python."""
     exe = tmp_path / "fakepy"
-    exe.write_text("#!/bin/sh\n" + body + "\n")
+    exe.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8")
     exe.chmod(0o755)
     return exe
 
@@ -137,7 +143,7 @@ def test_remove_keeps_a_valid_adopted_record(tmp_path):
     _write(run_dir / "adopted.json", adopted)
     assert lr.remove().state == lr.STATE_NOT_INSTALLED
     assert sorted(p.name for p in run_dir.iterdir()) == ["adopted.json"]
-    assert json.loads((run_dir / "adopted.json").read_text()) == adopted
+    assert json.loads((run_dir / "adopted.json").read_text(encoding="utf-8")) == adopted
     assert lr.detect().state == lr.STATE_READY
 
 
@@ -229,6 +235,7 @@ def test_a_growing_download_is_not_called_stalled():
     assert proc.now == 600 and len(seen) == 600
 
 
+@_needs_posix_shell
 def test_progress_names_the_megabytes(tmp_path, monkeypatch):
     exe = _fake_python(tmp_path, "exit 0")
     seen = []
@@ -245,6 +252,7 @@ def test_progress_names_the_megabytes(tmp_path, monkeypatch):
     assert seen == ["Downloading the model weights (73 of 807 MB)"]
 
 
+@_needs_posix_shell
 def test_cancel_stops_a_download(tmp_path):
     """Cancel already pressed: stopped on the first tick. Were Cancel ignored,
     this would end by the 60 s budget as a timeout, not as cancelled."""
@@ -255,6 +263,7 @@ def test_cancel_stops_a_download(tmp_path):
     assert (ok, kind) == (False, laya_process.KIND_CANCELLED)
 
 
+@_needs_posix_shell
 def test_a_download_that_writes_a_lot_to_stderr_does_not_freeze(tmp_path):
     """Progress bars go to stderr; an unread pipe used to fill and freeze it."""
     exe = _fake_python(tmp_path, "head -c 2000000 /dev/zero | tr '\\0' x >&2; exit 0")
@@ -263,6 +272,7 @@ def test_a_download_that_writes_a_lot_to_stderr_does_not_freeze(tmp_path):
     assert ok is True, kind
 
 
+@_needs_posix_shell
 def test_cancel_stops_a_package_install(tmp_path):
     exe = _fake_python(tmp_path, "sleep 60")
     laya_process.CANCEL.set()
@@ -270,6 +280,7 @@ def test_cancel_stops_a_package_install(tmp_path):
     assert (ok, kind) == (False, laya_process.KIND_CANCELLED)
 
 
+@_needs_posix_shell
 def test_the_install_job_cancels(tmp_path, monkeypatch):
     monkeypatch.setattr(lr, "_check_disk_space", lambda p: True)
     monkeypatch.setattr(lr, "_create_venv", lambda *a, **k: (True, "", ""))

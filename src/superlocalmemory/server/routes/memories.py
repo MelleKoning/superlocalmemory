@@ -213,6 +213,29 @@ def _unknown_profile_response(profile_id: str):
     return JSONResponse(unknown_profile_body(profile_id), status_code=404)
 
 
+def _announce(event_type: str, payload: dict, actor: str) -> None:
+    """Tell the live event stream about a delete or a correction.
+
+    Announced here, by the daemon route every surface uses (dashboard, CLI,
+    MCP), so each change is seen once whichever surface made it. Best-effort:
+    the event bus never affects the answer.
+    """
+    from superlocalmemory.server.unified_daemon import _emit_event
+
+    _emit_event(event_type, payload, source_agent=actor or "dashboard")
+
+
+def _routed_mutation_error(exc: Exception, profile: str | None, detail: str):
+    """The answer to a failed routed mutation: the routed profile was deleted
+    between the route's check and the writer's own is an unknown profile, not
+    a server error. Anything else maps as for an active-profile mutation."""
+    from superlocalmemory.core.remember_runtime import UnknownMutationProfile
+
+    if profile is not None and isinstance(exc, (UnknownMutationProfile, _UnknownRoutedProfile)):
+        return _unknown_profile_response(profile)
+    raise _canonical_mutation_error(exc, detail)
+
+
 def _routed_profile(value) -> str | None:
     """A request's ``profile_id``: None means the active profile; not text is a 422."""
     from superlocalmemory.server.routed_profile import RoutedProfileError, routed_profile_id
@@ -299,6 +322,29 @@ def _preview(content: str | None) -> str:
     if not content:
         return ""
     return content[:100] + "..." if len(content) > 100 else content
+
+
+def _scope_where_clause(scope: str | None, active_profile: str) -> tuple[str, list]:
+    """The v3 "which rows is this view allowed to see" WHERE fragment + params.
+
+    Shared by ``get_memories`` and ``get_memory_kind_counts`` so the counts a
+    kind chip shows are drawn from exactly the rows that filtering by that
+    chip would then list — a second hand-written copy of this is how the
+    withheld-rows leak (``visible_fact_clause_for_connection``, see the
+    comment above it in ``get_memories``) happened in the first place.
+    """
+    esc = active_profile.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    shared_pat = f'%"{esc}"%'
+    if scope == "global":
+        return "scope = 'global'", []
+    if scope == "shared":
+        return "scope = 'shared' AND shared_with LIKE ? ESCAPE '\\'", [shared_pat]
+    if scope == "all":
+        return (
+            "(profile_id = ? OR scope = 'global' "
+            "OR (scope = 'shared' AND shared_with LIKE ? ESCAPE '\\'))"
+        ), [active_profile, shared_pat]
+    return "profile_id = ?", [active_profile]
 
 
 def _has_table(cursor, name: str) -> bool:
@@ -474,6 +520,14 @@ def _fetch_edges_v2(cursor, memory_ids: list) -> list:
 async def get_memories(
     request: Request,
     category: Optional[str] = None,
+    kind: Optional[str] = Query(
+        None,
+        description=(
+            "One of the nine memory kinds (core/storage/memory_kinds.py), "
+            "e.g. 'decision' or 'rule'. v3 stores only — a legacy (v2) store "
+            "has no memory_kind column and ignores this filter."
+        ),
+    ),
     project_name: Optional[str] = None,
     cluster_id: Optional[int] = None,
     min_importance: Optional[int] = None,
@@ -516,23 +570,7 @@ async def get_memories(
             # Scope view clause. Default (scope=None) is this-profile-only —
             # identical isolation to before. Other values widen the view to
             # global and/or shared-with-this-profile memories.
-            _esc = active_profile.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            _shared_pat = f'%"{_esc}"%'
-            if scope == "global":
-                scope_where = "scope = 'global'"
-                scope_params = []
-            elif scope == "shared":
-                scope_where = "scope = 'shared' AND shared_with LIKE ? ESCAPE '\\'"
-                scope_params = [_shared_pat]
-            elif scope == "all":
-                scope_where = (
-                    "(profile_id = ? OR scope = 'global' "
-                    "OR (scope = 'shared' AND shared_with LIKE ? ESCAPE '\\'))"
-                )
-                scope_params = [active_profile, _shared_pat]
-            else:
-                scope_where = "profile_id = ?"
-                scope_params = [active_profile]
+            scope_where, scope_params = _scope_where_clause(scope, active_profile)
 
             # Withheld rows are excluded from BOTH the page and the total. On
             # the author's store this list served 24 model-authored summaries
@@ -540,11 +578,33 @@ async def get_memories(
             # real ones -- the count a user reads, inflated by exactly the
             # 1,299 rows 4.0.10 withheld.
             visible = visible_fact_clause_for_connection(conn)
+            # project_name: NOT session_id (that is a different field — see
+            # mcp/tools_core.py's remember(), which stores them separately in
+            # the same metadata dict). The project a memory was saved under
+            # (remember(project=...), `slm remember --project`) lives in
+            # memories.metadata_json->>'project' (core/project_identity.py
+            # storable_project()); retrieval.project_scope.stored_projects()
+            # reads it the same way for project-aware recall. This mirrors
+            # that lookup as a correlated subquery instead of a JOIN so the
+            # unqualified column names below (content, category, created_at...)
+            # can't collide with the legacy v2 `memories` table's own columns
+            # of the same name.
+            # fact_type is selected TWICE on purpose: once aliased "category"
+            # (unchanged, pre-existing display field) and once under its own
+            # name, because storage.memory_kinds.kind_fields() reads a
+            # "fact_type" key for its legacy-kind fallback — it does not know
+            # about this route's "category" alias. memory_kind/_source/
+            # _confidence are the M052 columns kind_fields reads for the
+            # confirmed/suggested branches.
             query = (
                 "SELECT fact_id as id, memory_id, content, fact_type as category, "
+                "fact_type, memory_kind, memory_kind_source, memory_kind_confidence, "
                 "confidence as importance, access_count, "
                 "created_at, created_at as updated_at, "
-                "session_id as project_name, scope, shared_with "
+                "(SELECT CASE WHEN json_valid(m.metadata_json) "
+                " THEN json_extract(m.metadata_json, '$.project') END "
+                " FROM memories m WHERE m.memory_id = atomic_facts.memory_id) "
+                "as project_name, scope, shared_with "
                 f"FROM atomic_facts WHERE {scope_where}{visible}"
             )
             params = list(scope_params)
@@ -575,11 +635,20 @@ async def get_memories(
             count_params.append(category)
         if project_name:
             if use_v3:
-                query += " AND session_id = ?"
+                # Same metadata_json->>'project' lookup as the SELECT above,
+                # as an EXISTS so it works unchanged in the COUNT query too.
+                _project_filter = (
+                    " AND EXISTS (SELECT 1 FROM memories m "
+                    "WHERE m.memory_id = atomic_facts.memory_id "
+                    "AND json_valid(m.metadata_json) "
+                    "AND json_extract(m.metadata_json, '$.project') = ?)"
+                )
+                query += _project_filter
+                count_base += _project_filter
             else:
                 query += " AND project_name = ?"
+                count_base += " AND project_name = ?"
             params.append(project_name)
-            count_base += " AND project_name = ?" if not use_v3 else " AND session_id = ?"
             count_params.append(project_name)
         if cluster_id is not None and not use_v3:
             query += " AND cluster_id = ?"
@@ -649,22 +718,156 @@ async def get_memories(
                     ")"
                 )
 
-        query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
-        params.extend([limit, offset])
+        kind_truncated = False
+        if kind and use_v3:
+            # The nine kinds aren't a SQL-expressible predicate — a row's
+            # DISPLAYED kind depends on confirmed/suggested/confidence-
+            # threshold/legacy-fallback precedence (kind_fields), the exact
+            # same rule `slm list`/recall use (core/kind_query.py). So this
+            # grows the SAME WHERE-clause fetch window core.kind_query's own
+            # `_windowed_kind_fetch` uses, classifies each row in Python, and
+            # paginates the filtered result — rather than re-deriving the
+            # precedence as a one-off SQL CASE that could drift from theirs.
+            from superlocalmemory.core.kind_query import (
+                WINDOWED_FETCH_HARD_CAP,
+                InvalidKind,
+                engine_display_min_confidence,
+                resolve_kind,
+            )
+            from superlocalmemory.retrieval.kind_filter import overfetch_limit
+            from superlocalmemory.storage.memory_kinds import kind_fields
 
-        cursor.execute(query, params)
-        memories = cursor.fetchall()
+            try:
+                resolved_kind = resolve_kind(kind)
+            except InvalidKind as exc:
+                raise HTTPException(400, detail=str(exc)) from exc
 
-        cursor.execute(count_base, count_params)
-        total = cursor.fetchone()['total']
+            if resolved_kind is None:
+                memories, total = [], 0
+            else:
+                threshold = engine_display_min_confidence(_get_engine(request))
+                needed = offset + limit
+                window = min(max(overfetch_limit(needed), needed), WINDOWED_FETCH_HARD_CAP)
+                matched: list = []
+                while True:
+                    cursor.execute(
+                        query + " ORDER BY created_at DESC LIMIT ?", params + [window],
+                    )
+                    batch = cursor.fetchall()
+                    for row in batch:
+                        row.update(kind_fields(row, display_min_confidence=threshold))
+                    matched = [r for r in batch if r.get("memory_kind") == resolved_kind]
+                    if len(matched) >= needed or len(batch) < window:
+                        kind_truncated = (
+                            len(matched) < needed
+                            and len(batch) >= window
+                            and window >= WINDOWED_FETCH_HARD_CAP
+                        )
+                        break
+                    if window >= WINDOWED_FETCH_HARD_CAP:
+                        kind_truncated = True
+                        break
+                    window = min(window * 4, WINDOWED_FETCH_HARD_CAP)
+                total = len(matched)
+                memories = matched[offset:offset + limit]
+        else:
+            query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+
+            cursor.execute(query, params)
+            memories = cursor.fetchall()
+
+            cursor.execute(count_base, count_params)
+            total = cursor.fetchone()['total']
+
+            if use_v3:
+                from superlocalmemory.core.kind_query import engine_display_min_confidence
+                from superlocalmemory.storage.memory_kinds import kind_fields
+
+                threshold = engine_display_min_confidence(_get_engine(request))
+                for row in memories:
+                    row.update(kind_fields(row, display_min_confidence=threshold))
 
         conn.close()
 
-        return {
+        response = {
             "memories": memories, "total": total,
             "limit": limit, "offset": offset,
             "has_more": (offset + limit) < total,
         }
+        if kind and use_v3:
+            # Honest about the bound: more matches may exist past the window
+            # this looked at (same contract as core.kind_query.list_recent_facts'
+            # own `truncated` out-param) — never silently under-reported.
+            response["kind_filter_truncated"] = kind_truncated
+        return response
+
+    except HTTPException:
+        # An explicit, already-correct response (e.g. the 400 above for an
+        # unparseable `kind`) — must not be flattened into a generic 500.
+        raise
+    except Exception:
+        raise _internal_error("Database error")
+
+
+@router.get("/api/memories/kind-counts")
+async def get_memory_kind_counts(
+    request: Request,
+    scope: Optional[str] = Query(
+        None, description="Same 'shared'|'global'|'all' scope view as /api/memories.",
+    ),
+):
+    """How many visible memories display as each of the nine kinds.
+
+    Backs the Memories -> All memories filter chips. One pass over the
+    (lightweight — four columns, no content) visible rows classifies each
+    with the exact same ``kind_fields`` precedence ``GET /api/memories``'s
+    own ``kind=`` filter uses, instead of the dashboard firing one
+    ``?category=X&limit=1`` request per legacy fact_type (which could only
+    ever count the four legacy buckets, never the nine kinds that fan out
+    from them).
+    """
+    try:
+        conn = get_db_connection()
+        conn.row_factory = dict_factory
+        cursor = conn.cursor()
+        active_profile = get_active_profile()
+
+        if not _has_table(cursor, 'atomic_facts'):
+            # A legacy (v2) store has no memory_kind column at all.
+            conn.close()
+            return {"counts": {}, "truncated": False}
+
+        from superlocalmemory.core.kind_query import (
+            WINDOWED_FETCH_HARD_CAP,
+            engine_display_min_confidence,
+        )
+        from superlocalmemory.storage.memory_kinds import kind_fields
+
+        scope_where, scope_params = _scope_where_clause(scope, active_profile)
+        visible = visible_fact_clause_for_connection(conn)
+        cursor.execute(
+            "SELECT fact_type, memory_kind, memory_kind_source, memory_kind_confidence "
+            f"FROM atomic_facts WHERE {scope_where}{visible} "
+            "ORDER BY created_at DESC LIMIT ?",
+            scope_params + [WINDOWED_FETCH_HARD_CAP + 1],
+        )
+        rows = cursor.fetchall()
+        conn.close()
+
+        truncated = len(rows) > WINDOWED_FETCH_HARD_CAP
+        rows = rows[:WINDOWED_FETCH_HARD_CAP]
+
+        threshold = engine_display_min_confidence(_get_engine(request))
+        counts: dict[str, int] = {}
+        for row in rows:
+            fields = kind_fields(row, display_min_confidence=threshold)
+            kind_value = fields["memory_kind"]
+            if kind_value is None:  # "untyped" — no kind and no mappable legacy type
+                continue
+            counts[kind_value] = counts.get(kind_value, 0) + 1
+
+        return {"counts": counts, "truncated": truncated}
 
     except Exception:
         raise _internal_error("Database error")
@@ -857,7 +1060,16 @@ async def search_memories(request: Request, body: SearchRequest):
         apply_kind_filter = bool(parsed_kind) and has_kind_columns
         kind_clause = " AND memory_kind = ?" if apply_kind_filter else ""
         kind_params = (parsed_kind,) if apply_kind_filter else ()
-        kind_select = ", memory_kind" if has_kind_columns else ""
+        # memory_kind_source/_confidence and the bare fact_type (selected
+        # again, alongside the existing "fact_type as category" alias) are
+        # what kind_fields() below needs for its confirmed/suggested/legacy
+        # precedence — the same five fields the primary (engine) path's
+        # serialize_recall_response() already attaches. Without them this
+        # fallback could only ever show the raw memory_kind column, with no
+        # legacy-fact_type fallback for the ~pre-4.1.19 majority of rows
+        # that have none, and degraded mode would show kinds differently
+        # from — not "the same way as" — normal recall.
+        kind_select = ", memory_kind, memory_kind_source, memory_kind_confidence, fact_type" if has_kind_columns else ""
         # Same word-based match as the daemon's /recall fallback, so the
         # dashboard, CLI and MCP find the same rows (server/recall_fallback.py).
         from superlocalmemory.server.recall_fallback import (
@@ -870,6 +1082,14 @@ async def search_memories(request: Request, body: SearchRequest):
             ORDER BY {sql[2]}, confidence DESC LIMIT ?
         """, (active_profile, *sql[1], *kind_params, *sql[3], body.limit)).fetchall()
         conn.close()
+
+        if has_kind_columns:
+            from superlocalmemory.core.kind_query import engine_display_min_confidence
+            from superlocalmemory.storage.memory_kinds import kind_fields
+
+            _threshold = engine_display_min_confidence(engine)
+            for row in rows:
+                row.update(kind_fields(row, display_min_confidence=_threshold))
 
         results = [{
             **row, "score": None, "relevance_score": None, "ranking_score": None,
@@ -1278,11 +1498,20 @@ def _code_links_for_fact(fact_id: str) -> list[dict]:
 
 
 @router.delete("/api/memories/{fact_id}")
-async def delete_memory(request: Request, fact_id: str):
-    """Delete a specific memory (atomic fact) by ID."""
-    engine, _active_profile, hook_context = _authorize_memory_mutation(
-        request, "delete", fact_id, run_pre_hook=False,
-    )
+async def delete_memory(request: Request, fact_id: str, profile_id: str = ""):
+    """Delete a specific memory (atomic fact) by ID.
+
+    ``profile_id`` names the profile the memory belongs to, authorized like a
+    routed remember (role and policy on THAT profile, before its existence is
+    revealed); without it, the active profile.
+    """
+    profile = _routed_profile(profile_id)
+    try:
+        engine, target_profile, hook_context = _authorize_memory_mutation(
+            request, "delete", fact_id, run_pre_hook=False, profile=profile,
+        )
+    except _UnknownRoutedProfile as exc:
+        return _unknown_profile_response(exc.profile_id)
     try:
         from superlocalmemory.core.mutations import delete_fact_authorized
 
@@ -1292,9 +1521,10 @@ async def delete_memory(request: Request, fact_id: str):
             trusted_actor_id=hook_context["agent_id"],
             source_agent_id="dashboard",
             canonical_runtime=_mutation_runtime_or_missing_fact(
-                request, engine, _active_profile, fact_id,
+                request, engine, target_profile, fact_id,
             ),
             idempotency_key=_mutation_idempotency_key(request),
+            profile_id=target_profile,
         )
         if not result.get("ok"):
             if result.get("retryable"):
@@ -1303,6 +1533,8 @@ async def delete_memory(request: Request, fact_id: str):
                     detail="Erasure incomplete (projection residue); retry shortly",
                 )
             raise HTTPException(status_code=404, detail="Memory not found")
+        _announce("memory.deleted", {"fact_id": fact_id, "profile_id": target_profile},
+                  hook_context["agent_id"])
         return {
             "success": True,
             "deleted": fact_id,
@@ -1312,7 +1544,7 @@ async def delete_memory(request: Request, fact_id: str):
     except HTTPException:
         raise
     except Exception as exc:
-        raise _canonical_mutation_error(exc, "Delete error")
+        return _routed_mutation_error(exc, profile, "Delete error")
 
 
 @router.post("/api/memories/{fact_id}/forget")
@@ -1393,18 +1625,25 @@ async def merge_memory(request: Request, fact_id: str):
 
 @router.patch("/api/memories/{fact_id}", status_code=202)
 async def edit_memory(request: Request, fact_id: str):
-    """Propose an immutable, review-required correction for one memory."""
+    """Propose an immutable, review-required correction for one memory.
+
+    A ``profile_id`` in the body names the profile the memory belongs to,
+    authorized like a routed remember; without it, the active profile.
+    """
+    profile = None
     try:
         body = await request.json()
         new_content = (body.get("content") or "").strip()
         if not new_content:
             raise HTTPException(status_code=400, detail="content is required")
-        engine, _active_profile, hook_context = _authorize_memory_mutation(
+        profile = _routed_profile(body.get("profile_id"))
+        engine, target_profile, hook_context = _authorize_memory_mutation(
             request,
             "update",
             fact_id,
             content_preview=new_content,
             run_pre_hook=False,
+            profile=profile,
         )
         from superlocalmemory.core.mutations import update_fact_authorized
 
@@ -1416,12 +1655,18 @@ async def edit_memory(request: Request, fact_id: str):
             source_agent_id="dashboard",
             canonical_runtime=_canonical_mutation_runtime(request),
             idempotency_key=_mutation_idempotency_key(request),
+            profile_id=target_profile,
         )
         if not result.get("ok"):
             raise HTTPException(status_code=404, detail="Memory not found")
         if result.get("unchanged"):
             return {"success": True, "fact_id": fact_id, "content": new_content, "unchanged": True}
         correction = result["correction_case"]
+        _announce("memory.updated", {
+            "fact_id": fact_id, "successor_fact_id": result["successor_fact_id"],
+            "case_id": correction.get("case_id"), "profile_id": target_profile,
+            "status": "proposed", "content_preview": new_content[:120],
+        }, hook_context["agent_id"])
         return {
             "success": True,
             "fact_id": fact_id,
@@ -1434,7 +1679,7 @@ async def edit_memory(request: Request, fact_id: str):
     except HTTPException:
         raise
     except Exception as exc:
-        raise _canonical_mutation_error(exc, "Edit error")
+        return _routed_mutation_error(exc, profile, "Edit error")
 
 
 @router.post("/api/corrections/{case_id}/{action}")
@@ -1483,6 +1728,8 @@ async def review_correction(request: Request, case_id: str, action: str):
 
             purge_profile_context_cache(engine, target_profile)
         engine._hooks.run_post("update", hook_context)
+        _announce("memory.updated", {"case_id": case_id, "profile_id": target_profile,
+                                     "status": action}, hook_context["agent_id"])
         return {"success": True, "correction_case": result}
     except HTTPException:
         raise

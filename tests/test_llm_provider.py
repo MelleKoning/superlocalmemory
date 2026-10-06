@@ -100,7 +100,7 @@ def test_config_save_and_reload(tmp_path):
     config.save(config_path)
 
     assert config_path.exists()
-    data = json.loads(config_path.read_text())
+    data = json.loads(config_path.read_text(encoding="utf-8"))
     assert data["mode"] == "c"
     assert data["llm"]["provider"] == "openrouter"
 

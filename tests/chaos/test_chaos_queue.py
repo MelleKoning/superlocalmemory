@@ -290,7 +290,7 @@ def test_chaos_7_unmount_remount():
     """Requires root on the test host. We simulate via chmod'ing the
     parent dir to read-only and back, which exercises the same EACCES
     write-side code path without needing mount/umount privilege."""
-    if os.geteuid() == 0:
+    if getattr(os, "geteuid", lambda: None)() == 0:  # no geteuid on Windows
         pytest.skip("running as root — skip the chmod-based simulation")
 
     with tempfile.TemporaryDirectory() as td:

@@ -51,7 +51,7 @@ def test_native_hermes_plugin_declares_additive_contract() -> None:
 
 def test_plugin_registers_all_skills_agents_and_lifecycle_hooks() -> None:
     runtime = _runtime()
-    for skill in json.loads((PLUGIN / "command-inventory.json").read_text())["skills"]:
+    for skill in json.loads((PLUGIN / "command-inventory.json").read_text(encoding="utf-8"))["skills"]:
         assert f'ctx.register_skill("{skill}"' in runtime
     for role in ("memory", "governance", "optimize", "loop"):
         assert role in runtime
@@ -67,7 +67,7 @@ def test_plugin_registers_all_skills_agents_and_lifecycle_hooks() -> None:
 def test_all_cli_commands_have_router_and_generated_slash_aliases() -> None:
     inventory = json.loads((PLUGIN / "command-inventory.json").read_text(encoding="utf-8"))
     commands = inventory["primary_commands"]
-    assert len(commands) == 63
+    assert len(commands) == 64
     assert len(set(commands)) == len(commands)
     runtime = _runtime()
     assert 'ctx.register_command("slm", plugin.slash_router' in runtime

@@ -758,7 +758,7 @@ class TestFixtureShape:
         if not _INSTALLED_405_SCHEMA_VERSION_PATH.exists():
             return  # skip the cross-version part silently
 
-        src = _INSTALLED_405_SCHEMA_VERSION_PATH.read_text()
+        src = _INSTALLED_405_SCHEMA_VERSION_PATH.read_text(encoding="utf-8")
         m = re.search(r"SUPPORTED_SCHEMA_VERSION\s*:\s*int\s*=\s*(\d+)", src)
         assert m is not None, (
             f"Cannot parse SUPPORTED_SCHEMA_VERSION from installed 4.0.5 "

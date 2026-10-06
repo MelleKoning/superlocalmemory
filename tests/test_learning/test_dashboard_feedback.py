@@ -19,10 +19,11 @@ the feature was entirely dead). These tests lock the method's contract:
 from __future__ import annotations
 
 import sqlite3
-import stat
 from pathlib import Path
 
 import pytest
+
+from tests._portable import assert_owner_only
 
 from superlocalmemory.learning.feedback import (
     _DASHBOARD_SIGNAL_MAP,
@@ -105,9 +106,7 @@ def test_query_hash_is_keyed_per_install_and_key_is_owner_only(
 
     assert one._query_hash_key == one_again._query_hash_key
     assert one._query_hash_key != two._query_hash_key
-    assert stat.S_IMODE(
-        (first_dir / ".feedback-hash-key").stat().st_mode
-    ) == 0o600
+    assert_owner_only(first_dir / ".feedback-hash-key")
 
 
 def test_empty_query_yields_null_hash(collector: FeedbackCollector) -> None:

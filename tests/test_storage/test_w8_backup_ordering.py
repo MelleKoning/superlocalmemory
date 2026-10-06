@@ -235,7 +235,7 @@ class TestBackupDirIgnored:
         for name in (".gitignore", ".npmignore"):
             path = root / name
             assert path.exists(), f"{name} missing from repo root"
-            content = path.read_text()
+            content = path.read_text(encoding="utf-8")
             for entry in ("backups/", "pre-migration-snapshots/"):
                 assert entry in content, f"{entry!r} must be listed in {name}"
 
@@ -243,7 +243,7 @@ class TestBackupDirIgnored:
         """backups/ must appear in .npmignore so backup dirs are not published."""
         npmignore = Path(__file__).parents[2] / ".npmignore"
         assert npmignore.exists(), ".npmignore missing from repo root"
-        content = npmignore.read_text()
+        content = npmignore.read_text(encoding="utf-8")
         assert "backups/" in content or "backups" in content, (
             "'backups/' must be in .npmignore to prevent publishing backup dirs"
         )

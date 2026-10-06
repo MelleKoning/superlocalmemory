@@ -67,14 +67,14 @@ def test_foreign_health_is_rejected_without_rewriting_local_state() -> None:
     from superlocalmemory.cli import daemon
 
     descriptor = _owned_descriptor()
-    original = Path(os.environ["SLM_DATA_DIR"], "daemon.json").read_text()
+    original = Path(os.environ["SLM_DATA_DIR"], "daemon.json").read_text(encoding="utf-8")
     health = {"status": "ok", **descriptor.public_health_fields()}
     health["namespace_id"] = "foreign"
 
     with patch_urlopen(return_value=_HealthResponse(health)):
         assert not daemon.is_daemon_running()
 
-    assert Path(os.environ["SLM_DATA_DIR"], "daemon.json").read_text() == original
+    assert Path(os.environ["SLM_DATA_DIR"], "daemon.json").read_text(encoding="utf-8") == original
 
 
 def test_custom_port_never_falls_through_to_fixed_legacy_port() -> None:
@@ -113,8 +113,8 @@ def test_arbitrary_live_pid_without_descriptor_is_rejected() -> None:
     from superlocalmemory.cli import daemon
 
     root = Path(os.environ["SLM_DATA_DIR"])
-    (root / "daemon.pid").write_text(str(os.getpid()))
-    (root / "daemon.port").write_text("43125")
+    (root / "daemon.pid").write_text(str(os.getpid()), encoding="utf-8")
+    (root / "daemon.port").write_text("43125", encoding="utf-8")
 
     with patch.object(daemon, "_is_verified_legacy_process", return_value=False):
         assert not daemon.is_daemon_running()
@@ -189,7 +189,7 @@ def test_get_port_uses_only_valid_owned_descriptor() -> None:
     _owned_descriptor(port=43126)
     assert daemon._get_port() == 43126
 
-    Path(os.environ["SLM_DATA_DIR"], "daemon.json").write_text("malformed")
+    Path(os.environ["SLM_DATA_DIR"], "daemon.json").write_text("malformed", encoding="utf-8")
     assert daemon._get_port() == daemon._DEFAULT_PORT
 
 
@@ -204,7 +204,11 @@ def test_launcher_passes_and_publishes_one_process_identity() -> None:
     ):
         assert daemon._start_daemon_subprocess()
 
-    child_env = popen.call_args.kwargs["env"]
+    # The daemon launch, not the last Popen: on Windows, writing the
+    # descriptor then runs icacls to make it owner-only.
+    [launch] = [c for c in popen.call_args_list
+                if "superlocalmemory.server.unified_daemon" in c.args[0]]
+    child_env = launch.kwargs["env"]
     descriptor = read_descriptor()
     assert descriptor is not None
     assert descriptor.pid == 54321

@@ -28,6 +28,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._portable import child_env_base
+
 import superlocalmemory
 
 REPO_SRC = str(Path(superlocalmemory.__file__).resolve().parents[1])
@@ -101,7 +103,7 @@ def fake_daemon(tmp_path):
 def _run_cli(tmp_path: Path, port: int, *args: str) -> subprocess.CompletedProcess:
     env = dict(
         os.environ,
-        HOME=str(tmp_path / "home"),
+        **child_env_base(tmp_path / "home"),
         SLM_DATA_DIR=str(tmp_path / "data"),
         SLM_DAEMON_PORT=str(port),
         PYTHONPATH=REPO_SRC,

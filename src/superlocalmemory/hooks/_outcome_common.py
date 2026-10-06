@@ -175,7 +175,7 @@ def load_session_state(session_id: str) -> dict:
     if p is None or not p.exists():
         return {}
     try:
-        raw = p.read_text()
+        raw = p.read_text(encoding="utf-8")
         obj = json.loads(raw)
         if isinstance(obj, dict):
             return obj
@@ -219,7 +219,7 @@ def save_session_state(session_id: str, state: dict) -> None:
             finally:
                 os.close(fd)
         else:  # pragma: no cover — Windows path
-            tmp.write_text(data)
+            tmp.write_text(data, encoding="utf-8")
         os.replace(tmp, p)
     except Exception:
         # Best-effort cleanup of orphaned tmp — M-PERF-05.

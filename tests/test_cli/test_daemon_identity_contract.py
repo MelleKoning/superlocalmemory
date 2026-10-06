@@ -66,8 +66,9 @@ def test_descriptor_is_atomic_private_and_round_trips(tmp_path: Path) -> None:
 
     assert loaded == descriptor
     assert path == tmp_path / "daemon.json"
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert json.loads(path.read_text())["service"] == DAEMON_SERVICE
+    if os.name != "nt":  # POSIX mode bits; Windows has none (icacls there)
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert json.loads(path.read_text(encoding="utf-8"))["service"] == DAEMON_SERVICE
 
 
 def test_descriptor_records_a_clock_independent_start_token(
@@ -84,7 +85,7 @@ def test_descriptor_records_a_clock_independent_start_token(
         state="ready",
     )
     path = write_descriptor(descriptor, data_root=tmp_path)
-    payload = json.loads(path.read_text())
+    payload = json.loads(path.read_text(encoding="utf-8"))
 
     expected = process_start_token_for(os.getpid())
     assert payload["process_start_token"] == expected
@@ -106,9 +107,9 @@ def test_descriptor_written_before_the_token_existed_still_loads(
     )
     write_descriptor(descriptor, data_root=tmp_path)
     path = tmp_path / "daemon.json"
-    legacy = json.loads(path.read_text())
+    legacy = json.loads(path.read_text(encoding="utf-8"))
     legacy.pop("process_start_token")
-    path.write_text(json.dumps(legacy))
+    path.write_text(json.dumps(legacy), encoding="utf-8")
 
     loaded = read_descriptor(data_root=tmp_path)
     assert loaded is not None
@@ -128,9 +129,9 @@ def test_descriptor_with_a_non_string_token_fails_closed(tmp_path: Path) -> None
     )
     write_descriptor(descriptor, data_root=tmp_path)
     path = tmp_path / "daemon.json"
-    poisoned = json.loads(path.read_text())
+    poisoned = json.loads(path.read_text(encoding="utf-8"))
     poisoned["process_start_token"] = {"not": "a token"}
-    path.write_text(json.dumps(poisoned))
+    path.write_text(json.dumps(poisoned), encoding="utf-8")
 
     assert read_descriptor(data_root=tmp_path) is None
 
@@ -167,7 +168,7 @@ def test_health_match_requires_full_namespace_instance_and_capability(
 
 
 def test_malformed_descriptor_fails_closed(tmp_path: Path) -> None:
-    (tmp_path / "daemon.json").write_text("not-json")
+    (tmp_path / "daemon.json").write_text("not-json", encoding="utf-8")
     assert read_descriptor(data_root=tmp_path) is None
 
 

@@ -7,19 +7,35 @@
 A remote key is bound to one profile (:mod:`server.remote_keys`). Every
 remote-callable tool is in exactly one of three groups:
 
-* :data:`ROUTED_TOOLS` (``recall``, ``remember``, ``list_corrections``,
-  ``review_correction``, ``search``, ``fetch``, ``list_recent``) are served for the key's profile through the
+* :data:`ROUTED_TOOLS` are served for the key's profile through the
   per-request profile path, whatever profile this computer is using. The
   wrapper sets ``profile_id`` to the key's profile; the host's active profile
-  is neither read for the work nor moved.
+  is neither read for the work nor moved. Since 4.1.21 this is every
+  remote-callable tool that reads or writes a profile's memory. Each takes
+  ``profile_id`` and serves it either directly (``mcp/request_profile``) or
+  through a daemon route that accepts it, authorized on THAT profile:
+  ``/recall``, ``/remember``, ``DELETE``/``PATCH /api/memories/{id}``,
+  ``/api/corrections``, ``/api/memory-kinds`` and ``/api/v3/views/run``. A
+  write through a daemon route reaches the canonical writer only for the
+  mutation kinds ``core/mutation_routing`` lets go to a non-active profile.
 * :data:`PROFILE_FREE_TOOLS` touch no profile's memory (the key's own cache and
-  compression store, version). They always run.
-* Every other tool works on the active profile and cannot be routed in this
-  release. It runs only while the key's profile is the active one, under a
-  profile lease held for the whole call (a switch waits for it). Otherwise it
-  is refused with ``remote_profile_not_active``: the host is using another
-  workspace right now; try again later or ask the host owner. The refusal does
-  not name that workspace.
+  compression store, the version, the machine-wide mode, the product
+  attribution). They always run.
+* :data:`ACTIVE_ONLY_TOOLS` would work on the active profile only. None is left
+  in 4.1.21; the group stays because it is also where a new remote tool lands
+  until it is routed (default deny for profile choice, see
+  ``tests/test_security/test_remote_profile_binding.py``). Such a tool runs
+  only while the key's profile is the active one, under a profile lease held
+  for the whole call (a switch waits for it). Otherwise it is refused with
+  ``remote_profile_not_active``: the host is using another workspace right
+  now; try again later or ask the host owner. The refusal does not name that
+  workspace.
+
+Writes keep every check a local write for that profile has: only a write key
+reaches them (``server/remote_tool_policy``); ``@admits`` and the daemon routes
+check the caller's role on the routed profile, not the active one; the
+canonical writer rechecks the profile in its own transaction; and each call is
+logged with the remote key and its profile (``remote_tool_policy._audit``).
 
 Three rules hold for every call, read key or write key alike:
 
@@ -67,22 +83,36 @@ SCOPED_WRITE_TOOLS: frozenset[str] = frozenset({"remember"})
 #: the host's active profile untouched.
 ROUTED_TOOLS: frozenset[str] = frozenset({
     "recall", "remember", "list_corrections", "review_correction",
-    # 4.1.21: the read tools a remote agent uses to check what it saved.
-    "search", "fetch", "list_recent",
+    # 4.1.21: everything else a remote agent uses on its own profile.
+    "search", "fetch", "list_recent", "prestage_context", "recall_trace",
+    "session_init", "close_session", "observe", "update_memory", "delete_memory",
+    "core_memory", "get_status", "health", "memory_used", "get_memory_summary",
+    "get_lifecycle_status", "get_retention_stats", "get_soft_prompts",
+    "get_learned_patterns", "correct_pattern", "get_behavioral_patterns",
+    "report_feedback", "report_outcome", "settle_session_outcomes", "log_tool_event",
+    "get_assertions", "reinforce_assertion", "contradict_assertion",
+    "set_memory_kind", "memory_kinds_status", "review_memory_kinds",
+    "confirm_memory_kinds", "run_view", "manage_view", "skill_health", "skill_lineage",
+    "slm_loop_history", "slm_loop_show", "get_brain_evidence_status",
+    "record_agent_experience", "record_cognitive_turn", "finalize_cognitive_turn",
 })
 
 #: Remote-callable tools that take ``profile_id``. Each gets the key's profile
-#: written in explicitly. ``prestage_context`` takes one but is not routed: it
-#: defaults to the profile named "default" and serves through the shared
-#: engine, so it is active-only and always told the key's profile.
-PROFILE_ARGUMENT_TOOLS: frozenset[str] = ROUTED_TOOLS | frozenset({"prestage_context"})
+#: written in explicitly.
+PROFILE_ARGUMENT_TOOLS: frozenset[str] = ROUTED_TOOLS
 
 #: Read or write no profile's memory: a key's own cache and compression store
-#: (keyed by the key, see mcp/remote_caller), aggregate counters, the version.
+#: (keyed by the key, see mcp/remote_caller), aggregate counters, the version,
+#: the machine-wide mode (one config for every profile) and the product's
+#: fixed attribution.
 PROFILE_FREE_TOOLS: frozenset[str] = frozenset({
     "get_version", "slm_cache_get", "slm_cache_set", "slm_compress", "slm_retrieve",
-    "slm_optimize_stats",
+    "slm_optimize_stats", "get_mode", "get_attribution",
 })
+
+#: Remote-callable tools that can only serve the active profile, each with the
+#: reason it cannot be routed. Empty in 4.1.21.
+ACTIVE_ONLY_TOOLS: dict[str, str] = {}
 
 #: Every other argument of a remote-callable tool. None selects a profile.
 NEUTRAL_ARGUMENTS: frozenset[str] = frozenset({
@@ -193,8 +223,8 @@ def inactive_refusal(tool: str, key_name: str, bound: str) -> BindingRefusal:
         INACTIVE_DENIAL,
         f"The SLM computer is using another workspace right now, so '{tool}' cannot "
         f"run for remote key '{key_name}' (profile '{bound}'). Try again later or ask "
-        f"the host owner. Meanwhile {', '.join(sorted(ROUTED_TOOLS))} keep working "
-        f"for profile '{bound}'.")
+        f"the host owner. Meanwhile recall, remember and the other memory tools "
+        f"keep working for profile '{bound}'.")
 
 
 def runtime_from_scope(scope: Mapping[str, Any]) -> Any | None:
@@ -230,6 +260,7 @@ async def profile_lease(runtime: Any):
 RuntimeLookup = Callable[[Mapping[str, Any]], Any]
 
 __all__ = [
+    "ACTIVE_ONLY_TOOLS",
     "ARGUMENT_DENIAL",
     "BindingRefusal",
     "CLASSIFIED_ARGUMENTS",

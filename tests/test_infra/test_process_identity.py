@@ -25,7 +25,7 @@ def _fake_procfs(tmp_path: Path, pid: int, *, comm: str, starttime: int) -> Path
     """Build the two procfs files the Linux scheme reads."""
     root = tmp_path / "proc"
     (root / "sys" / "kernel" / "random").mkdir(parents=True, exist_ok=True)
-    (root / "sys" / "kernel" / "random" / "boot_id").write_text(BOOT_ID + "\n")
+    (root / "sys" / "kernel" / "random" / "boot_id").write_text(BOOT_ID + "\n", encoding="utf-8")
     proc_dir = root / str(pid)
     proc_dir.mkdir(parents=True, exist_ok=True)
     # "man proc" field order; starttime is field 22 (index 19 after comm).
@@ -33,6 +33,7 @@ def _fake_procfs(tmp_path: Path, pid: int, *, comm: str, starttime: int) -> Path
     fields[22 - 3] = str(starttime)
     proc_dir.joinpath("stat").write_text(
         f"{pid} ({comm}) S " + " ".join(fields[1:]) + "\n",
+        encoding="utf-8",
     )
     return root
 
@@ -70,9 +71,9 @@ def test_linux_token_does_not_move_when_the_wall_clock_moves(
     before = pi.process_start_token_for(612)
 
     # Simulate a WSL2 host resync: btime slides, /proc/<pid>/stat does not.
-    (root / "stat").write_text("btime 1785680130\n")
+    (root / "stat").write_text("btime 1785680130\n", encoding="utf-8")
     after = pi.process_start_token_for(612)
-    (root / "stat").write_text("btime 1785680165\n")
+    (root / "stat").write_text("btime 1785680165\n", encoding="utf-8")
     later = pi.process_start_token_for(612)
 
     assert before == after == later
@@ -85,6 +86,7 @@ def test_linux_token_changes_across_reboots(tmp_path, monkeypatch) -> None:
 
     (root / "sys" / "kernel" / "random" / "boot_id").write_text(
         "9c858901-8a57-4791-81fe-4c455b099bc9\n",
+        encoding="utf-8",
     )
     second = pi.process_start_token_for(612)
 
@@ -112,7 +114,7 @@ def test_unknown_pid_yields_no_token(tmp_path, monkeypatch) -> None:
 
 def test_truncated_stat_line_yields_no_token(tmp_path, monkeypatch) -> None:
     root = _fake_procfs(tmp_path, 612, comm="python3", starttime=44219)
-    (root / "612" / "stat").write_text("612 (python3) S 1 2 3\n")
+    (root / "612" / "stat").write_text("612 (python3) S 1 2 3\n", encoding="utf-8")
     _force_linux(monkeypatch, root)
     monkeypatch.setattr(pi, "_monotonic_start_token", lambda pid: None)
 

@@ -274,10 +274,10 @@ class TestReadingTheStatusChangesNothing:
                                    running=False)
         monkeypatch.setattr(laya_runtime.LayaInstallJob, "instance",
                             staticmethod(lambda: finished))
-        before = (tmp_path / "config.json").read_text()
+        before = (tmp_path / "config.json").read_text(encoding="utf-8")
         for _ in range(3):
             assert client.get("/api/v3/answer-check").status_code == 200
-        assert (tmp_path / "config.json").read_text() == before
+        assert (tmp_path / "config.json").read_text(encoding="utf-8") == before
         assert not (tmp_path / "answer_check.json").exists()
         assert call_order == []
 

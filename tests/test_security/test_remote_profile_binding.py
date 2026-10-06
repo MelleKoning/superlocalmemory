@@ -88,6 +88,20 @@ def test_profile_free_tools_are_remote_tools_that_name_no_profile(registry) -> N
         assert not set(registry[tool]) & binding.PROFILE_ARGUMENTS, tool
 
 
+def test_every_remote_tool_is_routed_profile_free_or_active_only_with_a_reason(
+        registry) -> None:
+    """4.1.21: a key bound to one profile can use every remote tool while the
+    computer is on another profile. A tool that cannot be routed must say why."""
+    remote = set(policy.WRITE_TOOLS)
+    routed, free = binding.ROUTED_TOOLS, binding.PROFILE_FREE_TOOLS
+    active_only = set(binding.ACTIVE_ONLY_TOOLS)
+    assert routed | free | active_only == remote, sorted(remote - routed - free - active_only)
+    assert not routed & free and not routed & active_only and not free & active_only
+    assert all(reason.strip() for reason in binding.ACTIVE_ONLY_TOOLS.values())
+    assert active_only == set(), "every remote tool is routed in 4.1.21"
+    assert {t for t in remote if t in registry} == remote, sorted(remote - set(registry))
+
+
 # -- bind_arguments -----------------------------------------------------------------------
 
 
@@ -284,15 +298,22 @@ def test_profile_free_tools_run_whatever_is_active(tool) -> None:
     assert answer["result"]["isError"] is False and stub.reached
 
 
-def test_an_active_only_tool_holds_the_lease_for_the_whole_call() -> None:
-    _, answer, stub, runtime = _run("memory_kinds_status", {}, READ_KEY, active="work")
+@pytest.fixture
+def active_only(monkeypatch):
+    """No tool is active-only in 4.1.21, so one is made so to test that path."""
+    tool = "memory_kinds_status"
+    monkeypatch.setattr(binding, "ROUTED_TOOLS", binding.ROUTED_TOOLS - {tool})
+    return tool
+
+
+def test_an_active_only_tool_holds_the_lease_for_the_whole_call(active_only) -> None:
+    _, answer, stub, runtime = _run(active_only, {}, READ_KEY, active="work")
     assert answer["result"]["isError"] is False
     assert stub.leases_during_call == [1] and runtime._active_operations == 0
 
 
-def test_an_active_only_tool_is_refused_while_another_profile_is_active() -> None:
-    for tool, args in (("memory_kinds_status", {}), ("health", {}), ("get_status", {}),
-                       ("prestage_context", {"query": "q"})):
+def test_an_active_only_tool_is_refused_while_another_profile_is_active(active_only) -> None:
+    for tool, args in ((active_only, {}),):
         _, answer, stub, runtime = _run(tool, args, READ_KEY, active="secret-client")
         text = answer["result"]["content"][0]["text"]
         assert answer["result"]["isError"] is True and stub.reached == [], tool
@@ -300,6 +321,51 @@ def test_an_active_only_tool_is_refused_while_another_profile_is_active() -> Non
         assert "another workspace right now" in text and "ask the host owner" in text
         assert "'work'" in text and "recall" in text and "secret-client" not in text
         assert runtime._active_operations == 0
+
+
+_ROUTED = sorted(binding.ROUTED_TOOLS)
+
+
+def _key_for(tool: str) -> RemotePrincipal:
+    return WRITE_KEY if tool in policy.WRITE_ONLY_TOOLS else READ_KEY
+
+
+@pytest.mark.parametrize("tool", _ROUTED)
+def test_every_routed_tool_is_served_for_the_keys_profile_while_the_host_is_elsewhere(
+        tool) -> None:
+    """Host on 'personal', key bound to 'work': told 'work', no lease, host unmoved."""
+    _, answer, stub, runtime = _run(tool, {}, _key_for(tool), active="personal")
+    assert answer["result"]["isError"] is False, (tool, answer)
+    assert stub.reached[0]["params"]["arguments"]["profile_id"] == "work", tool
+    assert stub.leases_during_call == [0] and runtime.snapshot.profile_id == "personal"
+
+
+@pytest.mark.parametrize("tool", _ROUTED)
+def test_every_routed_tool_refuses_another_profile_in_its_arguments(tool) -> None:
+    for arguments in ({"profile_id": "clientx"}, {"profile_id": "personal"},
+                      {"payload": {"profile_id": "clientx"}}):
+        _, answer, stub, _ = _run(tool, arguments, _key_for(tool), active="personal")
+        assert answer["result"]["isError"] is True and stub.reached == [], (tool, arguments)
+        assert answer["result"]["structuredContent"]["error"] == binding.PROFILE_DENIAL
+
+
+@pytest.mark.parametrize("tool", sorted(policy.WRITE_ONLY_TOOLS))
+def test_a_read_only_key_is_refused_every_write(tool) -> None:
+    _, answer, stub, _ = _run(tool, {}, READ_KEY, active="personal")
+    assert answer["result"]["isError"] is True and stub.reached == [], tool
+    assert policy.READ_ONLY_TAG in answer["result"]["content"][0]["text"], tool
+
+
+def test_a_routed_write_is_logged_with_the_remote_key_and_its_profile(caplog) -> None:
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="superlocalmemory.remote.audit"):
+        _, answer, stub, _ = _run("delete_memory", {"fact_id": "f1"}, WRITE_KEY,
+                                  active="personal")
+    assert answer["result"]["isError"] is False and stub.reached
+    [line] = [r.getMessage() for r in caplog.records if "tools/call" in r.getMessage()]
+    assert "key_id=rk_00000002" in line and "profile=work" in line, line
+    assert "tool=delete_memory" in line and "decision=allow" in line, line
 
 
 def test_the_older_api_key_reaches_only_the_active_profile() -> None:
@@ -311,7 +377,7 @@ def test_the_older_api_key_reaches_only_the_active_profile() -> None:
     assert answer["result"]["isError"] is False and stub.reached
 
 
-def test_a_profile_switch_cannot_land_inside_a_remote_call() -> None:
+def test_a_profile_switch_cannot_land_inside_a_remote_call(active_only) -> None:
     """The lease holds the switch until the call has finished."""
     runtime = ProfileRuntime("work")
     order: list[str] = []
@@ -333,7 +399,7 @@ def test_a_profile_switch_cannot_land_inside_a_remote_call() -> None:
     switcher.start()
     app = policy.RemoteToolScopeASGI(_Slow(runtime), runtime_for=lambda _s: runtime)
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                       "params": {"name": "memory_kinds_status", "arguments": {}}}).encode()
+                       "params": {"name": active_only, "arguments": {}}}).encode()
     scope = {"type": "http", "method": "POST", "path": "/mcp/h", "root_path": "/mcp",
              "headers": [], "client": ("peer", 1), PRINCIPAL_SCOPE_KEY: READ_KEY}
     queue = [{"type": "http.request", "body": body, "more_body": False}]

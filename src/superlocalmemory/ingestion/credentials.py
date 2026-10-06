@@ -51,12 +51,12 @@ def store_credential(service: str, key: str, value: str) -> bool:
         existing = {}
         if cred_file.exists():
             try:
-                existing = json.loads(cred_file.read_text())
+                existing = json.loads(cred_file.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 pass
 
         existing[key] = value
-        cred_file.write_text(json.dumps(existing, indent=2))
+        cred_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
 
         # Restrict permissions (Unix only — Windows skipped)
         if sys.platform != "win32":
@@ -85,7 +85,7 @@ def load_credential(service: str, key: str) -> str | None:
     try:
         cred_file = _credential_dir() / f"{service}.json"
         if cred_file.exists():
-            data = json.loads(cred_file.read_text())
+            data = json.loads(cred_file.read_text(encoding="utf-8"))
             return data.get(key)
     except Exception:
         pass
@@ -109,10 +109,10 @@ def delete_credential(service: str, key: str) -> bool:
     try:
         cred_file = _credential_dir() / f"{service}.json"
         if cred_file.exists():
-            data = json.loads(cred_file.read_text())
+            data = json.loads(cred_file.read_text(encoding="utf-8"))
             if key in data:
                 del data[key]
-                cred_file.write_text(json.dumps(data, indent=2))
+                cred_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
                 deleted = True
     except Exception:
         pass

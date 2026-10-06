@@ -33,10 +33,12 @@ _PROXY_VARS = (
 
 
 def _handshake_env(data_root: Path, home: Path) -> dict:
+    from tests._portable import child_env_base
+
     env = {name: os.environ[name] for name in _PASSTHROUGH_VARS if name in os.environ}
+    env.update(child_env_base(home))  # HOME, plus what Windows cannot run without
     env.update(
         {
-            "HOME": str(home),
             "PYTHONPATH": str(SRC_ROOT),
             "SLM_DATA_DIR": str(data_root),
             "SLM_MCP_TOOLS": "remember,recall",
@@ -170,7 +172,7 @@ def test_notifications_initialized_is_gracefully_absorbed(tmp_path) -> None:
                 last_error = exc
         assert proc.poll() is None, (
             "mcp child died on notifications/initialized; "
-            f"stderr tail: {stderr_path.read_text(errors='replace')[-1500:]}"
+            f"stderr tail: {stderr_path.read_text(errors='replace', encoding="utf-8")[-1500:]}"
         )
         assert listed is not None, f"tools/list never answered: {last_error}"
         assert "result" in listed, listed

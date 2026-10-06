@@ -112,27 +112,27 @@ class TestCooldownElapsed:
     def test_within_cooldown_returns_false(self, tmp_path):
         lock = str(tmp_path / "lock")
         now = int(time.time())
-        with open(lock, "w") as f:
+        with open(lock, "w", encoding="utf-8") as f:
             f.write(str(now - 100))  # 100 seconds ago
         assert _cooldown_elapsed(lock, 300, now) is False
 
     def test_after_cooldown_returns_true(self, tmp_path):
         lock = str(tmp_path / "lock")
         now = int(time.time())
-        with open(lock, "w") as f:
+        with open(lock, "w", encoding="utf-8") as f:
             f.write(str(now - 500))  # 500 seconds ago, > 300
         assert _cooldown_elapsed(lock, 300, now) is True
 
     def test_exactly_at_boundary_returns_true(self, tmp_path):
         lock = str(tmp_path / "lock")
         now = int(time.time())
-        with open(lock, "w") as f:
+        with open(lock, "w", encoding="utf-8") as f:
             f.write(str(now - 300))  # exactly 300 seconds ago
         assert _cooldown_elapsed(lock, 300, now) is True
 
     def test_corrupt_file_returns_true(self, tmp_path):
         lock = str(tmp_path / "lock")
-        with open(lock, "w") as f:
+        with open(lock, "w", encoding="utf-8") as f:
             f.write("not-a-number")
         assert _cooldown_elapsed(lock, 300, int(time.time())) is True
 
@@ -143,14 +143,14 @@ class TestWriteTimestamp:
     def test_writes_timestamp(self, tmp_path):
         path = str(tmp_path / "ts")
         _write_timestamp(path, 1234567890)
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             assert f.read() == "1234567890"
 
     def test_overwrites_existing(self, tmp_path):
         path = str(tmp_path / "ts")
         _write_timestamp(path, 111)
         _write_timestamp(path, 222)
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             assert f.read() == "222"
 
     def test_invalid_path_no_exception(self):
@@ -253,7 +253,7 @@ class TestHookStart:
     def test_cleans_stale_markers(self, mock_run, mock_popen):
         # Create stale marker files
         for p in (_MARKER, _START_TIME, _ACTIVITY_LOG):
-            with open(p, "w") as f:
+            with open(p, "w", encoding="utf-8") as f:
                 f.write("stale")
 
         mock_run.return_value = MagicMock(stdout="", returncode=0)
@@ -274,7 +274,7 @@ class TestHookStart:
         after = int(time.time())
 
         assert os.path.exists(_START_TIME)
-        with open(_START_TIME) as f:
+        with open(_START_TIME, encoding="utf-8") as f:
             ts = int(f.read().strip())
         assert before <= ts <= after
 
@@ -285,7 +285,7 @@ class TestHookStart:
         handle_hook("start")
 
         assert os.path.exists(_ACTIVITY_LOG)
-        with open(_ACTIVITY_LOG) as f:
+        with open(_ACTIVITY_LOG, encoding="utf-8") as f:
             assert f.read() == ""
 
     @patch("superlocalmemory.hooks.hook_handlers.subprocess.Popen")
@@ -381,7 +381,7 @@ class TestHookGate:
 
     def test_fast_path_marker_exists(self):
         """When marker file exists, exit 0 immediately."""
-        with open(_MARKER, "w") as f:
+        with open(_MARKER, "w", encoding="utf-8") as f:
             f.write(str(int(time.time())))
         with pytest.raises(SystemExit) as exc_info:
             handle_hook("gate")
@@ -396,7 +396,7 @@ class TestHookGate:
 
     def test_allows_slm_tools(self):
         """SLM tools pass through even without marker."""
-        with open(_START_TIME, "w") as f:
+        with open(_START_TIME, "w", encoding="utf-8") as f:
             f.write(str(int(time.time())))
 
         stdin_data = json.dumps({"tool_name": "mcp__superlocalmemory__session_init"})
@@ -408,7 +408,7 @@ class TestHookGate:
 
     def test_allows_toolsearch(self):
         """ToolSearch passes through even without marker."""
-        with open(_START_TIME, "w") as f:
+        with open(_START_TIME, "w", encoding="utf-8") as f:
             f.write(str(int(time.time())))
 
         stdin_data = json.dumps({"tool_name": "ToolSearch"})
@@ -420,7 +420,7 @@ class TestHookGate:
 
     def test_blocks_non_slm_tool(self, capsys):
         """Non-SLM tools get blocked with exit 2."""
-        with open(_START_TIME, "w") as f:
+        with open(_START_TIME, "w", encoding="utf-8") as f:
             f.write(str(int(time.time())))
 
         stdin_data = json.dumps({"tool_name": "Bash"})
@@ -440,7 +440,7 @@ class TestHookGate:
         correct production behaviour: the gate hook receives JSON piped
         from Claude Code, never a raw tty.
         """
-        with open(_START_TIME, "w") as f:
+        with open(_START_TIME, "w", encoding="utf-8") as f:
             f.write(str(int(time.time())))
 
         mock_stdin = MagicMock()
@@ -453,7 +453,7 @@ class TestHookGate:
 
     def test_corrupt_stdin_exits_0(self):
         """If stdin has non-JSON content, don't block (safety)."""
-        with open(_START_TIME, "w") as f:
+        with open(_START_TIME, "w", encoding="utf-8") as f:
             f.write(str(int(time.time())))
 
         with patch("sys.stdin", io.StringIO("not json {{")):
@@ -464,7 +464,7 @@ class TestHookGate:
 
     def test_empty_tool_name_exits_0(self):
         """Empty tool_name should not block."""
-        with open(_START_TIME, "w") as f:
+        with open(_START_TIME, "w", encoding="utf-8") as f:
             f.write(str(int(time.time())))
 
         stdin_data = json.dumps({"tool_name": ""})
@@ -498,7 +498,7 @@ class TestHookInitDone:
         after = int(time.time())
 
         assert exc_info.value.code == 0
-        with open(_MARKER) as f:
+        with open(_MARKER, encoding="utf-8") as f:
             ts = int(f.read().strip())
         assert before <= ts <= after
 
@@ -553,7 +553,7 @@ class TestHookCheckpoint:
 
         # Write a recent timestamp to the lock file (simulating recent observe)
         now = int(time.time())
-        with open(lock_file, "w") as f:
+        with open(lock_file, "w", encoding="utf-8") as f:
             f.write(str(now))
 
         stdin_data = json.dumps({
@@ -579,7 +579,7 @@ class TestHookCheckpoint:
 
         # Write an old timestamp (6 minutes ago)
         old_ts = int(time.time()) - (_OBSERVE_COOLDOWN + 60)
-        with open(lock_file, "w") as f:
+        with open(lock_file, "w", encoding="utf-8") as f:
             f.write(str(old_ts))
 
         stdin_data = json.dumps({
@@ -599,7 +599,7 @@ class TestHookCheckpoint:
     def test_logs_to_activity_file(self, mock_daemon_post, _clean_rate_locks):
         """Checkpoint should append to the activity log."""
         # Create activity log
-        with open(_ACTIVITY_LOG, "w") as f:
+        with open(_ACTIVITY_LOG, "w", encoding="utf-8") as f:
             f.write("")
 
         file_path = "/project/src/logged.py"
@@ -611,7 +611,7 @@ class TestHookCheckpoint:
                 with pytest.raises(SystemExit):
                     handle_hook("checkpoint")
 
-        with open(_ACTIVITY_LOG) as f:
+        with open(_ACTIVITY_LOG, encoding="utf-8") as f:
             content = f.read()
         assert "logged.py" in content
 
@@ -625,7 +625,7 @@ class TestHookCheckpoint:
         """
         recall_lock = os.path.join(tempfile.gettempdir(), "slm-recall-reminder")
         old_ts = int(time.time()) - (_RECALL_INTERVAL + 60)
-        with open(recall_lock, "w") as f:
+        with open(recall_lock, "w", encoding="utf-8") as f:
             f.write(str(old_ts))
 
         stdin_data = json.dumps({"tool_input": {}})
@@ -648,7 +648,7 @@ class TestHookCheckpoint:
         """
         learn_lock = os.path.join(tempfile.gettempdir(), "slm-learn-reminder")
         old_ts = int(time.time()) - (_LEARN_INTERVAL + 60)
-        with open(learn_lock, "w") as f:
+        with open(learn_lock, "w", encoding="utf-8") as f:
             f.write(str(old_ts))
 
         stdin_data = json.dumps({"tool_input": {}})
@@ -667,12 +667,12 @@ class TestHookCheckpoint:
         """Within 15 minutes, no recall reminder."""
         recall_lock = os.path.join(tempfile.gettempdir(), "slm-recall-reminder")
         recent_ts = int(time.time()) - 60  # 1 minute ago
-        with open(recall_lock, "w") as f:
+        with open(recall_lock, "w", encoding="utf-8") as f:
             f.write(str(recent_ts))
 
         # Also suppress learn reminder
         learn_lock = os.path.join(tempfile.gettempdir(), "slm-learn-reminder")
-        with open(learn_lock, "w") as f:
+        with open(learn_lock, "w", encoding="utf-8") as f:
             f.write(str(recent_ts))
 
         stdin_data = json.dumps({"tool_input": {}})
@@ -690,7 +690,7 @@ class TestHookCheckpoint:
         # Suppress reminders by setting recent locks
         for name in ("slm-recall-reminder", "slm-learn-reminder"):
             lock = os.path.join(tempfile.gettempdir(), name)
-            with open(lock, "w") as f:
+            with open(lock, "w", encoding="utf-8") as f:
                 f.write(str(int(time.time())))
 
         stdin_data = json.dumps({"tool_input": {"content": "some code"}})
@@ -710,7 +710,7 @@ class TestHookCheckpoint:
         # Suppress reminders
         for name in ("slm-recall-reminder", "slm-learn-reminder"):
             lock = os.path.join(tempfile.gettempdir(), name)
-            with open(lock, "w") as f:
+            with open(lock, "w", encoding="utf-8") as f:
                 f.write(str(int(time.time())))
 
         with patch("sys.stdin") as mock_stdin:
@@ -730,13 +730,13 @@ class TestHookCheckpoint:
         file_a = "/project/src/a.py"
         hash_a = _safe_hash(file_a)
         lock_a = os.path.join(tempfile.gettempdir(), f"slm-obs-{hash_a}")
-        with open(lock_a, "w") as f:
+        with open(lock_a, "w", encoding="utf-8") as f:
             f.write(str(now))
 
         # Suppress reminders
         for name in ("slm-recall-reminder", "slm-learn-reminder"):
             lock = os.path.join(tempfile.gettempdir(), name)
-            with open(lock, "w") as f:
+            with open(lock, "w", encoding="utf-8") as f:
                 f.write(str(now))
 
         # File B should still fire (no lock)
@@ -838,7 +838,7 @@ class TestHookStop:
         mock_daemon.return_value = True
 
         now = int(time.time())
-        with open(_ACTIVITY_LOG, "w") as f:
+        with open(_ACTIVITY_LOG, "w", encoding="utf-8") as f:
             f.write(f"{now}|engine.py\n{now}|config.py\n{now}|engine.py\n")
 
         mock_run.return_value = MagicMock(stdout="", returncode=0)
@@ -857,7 +857,7 @@ class TestHookStop:
     def test_cleans_up_markers_after_stop(self, mock_run, mock_daemon, mock_consolidate):
         # Create all marker files
         for p in (_MARKER, _START_TIME, _ACTIVITY_LOG):
-            with open(p, "w") as f:
+            with open(p, "w", encoding="utf-8") as f:
                 f.write("data")
 
         mock_run.return_value = MagicMock(stdout="", returncode=0)
@@ -875,7 +875,7 @@ class TestHookStop:
         tmp = tempfile.gettempdir()
         # Create rate-limit lock files
         for name in ("slm-obs-abc12345", "slm-recall-reminder", "slm-learn-reminder"):
-            with open(os.path.join(tmp, name), "w") as f:
+            with open(os.path.join(tmp, name), "w", encoding="utf-8") as f:
                 f.write("123")
 
         mock_run.return_value = MagicMock(stdout="", returncode=0)
@@ -973,7 +973,7 @@ class TestMaybeConsolidate:
         monkeypatch.setattr(
             "superlocalmemory.hooks.hook_handlers._LAST_CONSOLIDATION", last_file,
         )
-        with open(last_file, "w") as f:
+        with open(last_file, "w", encoding="utf-8") as f:
             f.write(str(int(time.time()) - 3600))
         calls = []
         monkeypatch.setattr(
@@ -990,7 +990,7 @@ class TestMaybeConsolidate:
         monkeypatch.setattr(
             "superlocalmemory.hooks.hook_handlers._LAST_CONSOLIDATION", last_file,
         )
-        with open(last_file, "w") as f:
+        with open(last_file, "w", encoding="utf-8") as f:
             f.write(str(int(time.time()) - 100_000))
         calls = []
         monkeypatch.setattr(

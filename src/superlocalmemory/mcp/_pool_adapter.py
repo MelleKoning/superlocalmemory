@@ -115,8 +115,9 @@ def pool_recall(query: str, limit: int = 10, **kwargs: Any) -> PoolRecallRespons
         _recall_kwargs["include_shared"] = kwargs["include_shared"]
     if kwargs.get("window"):
         _recall_kwargs["window"] = kwargs["window"]
-    # #150: a project filter / preference, forwarded only when set.
-    for _name in ("project", "prefer_project"):
+    # #150: a project filter / preference, forwarded only when set. A named
+    # profile is per-request routing (the active profile is not moved).
+    for _name in ("project", "prefer_project", "profile_id"):
         if (kwargs.get(_name) or "").strip():
             _recall_kwargs[_name] = kwargs[_name].strip()
     # S-M2: a context load (session start, auto-injection) is not a question.

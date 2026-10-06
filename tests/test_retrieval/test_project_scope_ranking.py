@@ -27,7 +27,7 @@ import pytest
 
 from superlocalmemory.retrieval.facets import Facets
 
-PROJECT_PATH = "/Users/dev/work/acme-billing"
+PROJECT_PATH = "/Users/alice/work/acme-billing"
 PROJECT_FACTS = (
     ("Invoice retries back off exponentially and stop after six attempts.", "acme-billing"),
     ("Invoice PDFs are rendered by the render service before the invoice email is sent.",
@@ -203,7 +203,7 @@ def test_measured_ranking_before_and_after(store) -> None:
 def test_a_project_with_no_saved_memories_changes_nothing(store) -> None:
     query = "what happens to an invoice"
     plain = _recall(store, query)
-    preferred = _recall(store, query, prefer_project="/Users/dev/work/ghost-project")
+    preferred = _recall(store, query, prefer_project="/Users/alice/work/ghost-project")
     assert _contents(preferred) == _contents(plain) and _contents(plain)
     assert preferred.project_scope["prefer"]["matched"] == 0
 

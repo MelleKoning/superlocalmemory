@@ -75,7 +75,7 @@ class TestStructuredLogging:
 
         log_file = log_dir / "daemon.json.log"
         assert log_file.exists()
-        content = log_file.read_text()
+        content = log_file.read_text(encoding="utf-8")
         assert "hello structured" in content
         assert '"operation": "test"' in content
 

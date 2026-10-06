@@ -529,7 +529,10 @@ def test_a_failure_between_owner_closes_changes_nothing(deleted_fact, monkeypatc
     assert _erase_rows(engine, erasure_id) == before_rows
 
 
-def test_another_profiles_erasure_is_left_alone(engine_with_mock_deps):
+def test_an_erasure_of_a_profile_that_no_longer_exists_is_left_alone(engine_with_mock_deps):
+    """Every existing profile's erasures are re-proven
+    (test_erase_redrive_every_profile.py); a profile that is gone has none to
+    prove them in."""
     engine = engine_with_mock_deps
     _seed_erase_rows(
         engine, "erase-other-profile", "their-fact", state="failed",

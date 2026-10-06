@@ -95,12 +95,16 @@ def _legacy_memory_write_worker(
     results: multiprocessing.queues.Queue,
     count: int,
 ) -> None:
-    """Use the legacy short-lived ``memory_write`` path in a spawned process."""
-    from superlocalmemory.storage.memory_write import memory_write
+    """Use the legacy short-lived ``memory_write`` path in a spawned process.
 
+    Everything, the import included, runs inside the try: any failure reaches
+    the parent as a named error, never as a bare exit code.
+    """
     started = time.monotonic()
     max_operation_seconds = 0.0
     try:
+        from superlocalmemory.storage.memory_write import memory_write
+
         if not start.wait(timeout=_PROCESS_DEADLINE_SECONDS):
             raise TimeoutError("parent did not release the legacy writer")
         for sequence in range(count):
@@ -138,13 +142,18 @@ def _legacy_database_manager_worker(
     results: multiprocessing.queues.Queue,
     count: int,
 ) -> None:
-    """Use a separate legacy ``DatabaseManager`` in a spawned process."""
-    from superlocalmemory.storage.database import DatabaseManager
+    """Use a separate legacy ``DatabaseManager`` in a spawned process.
 
-    db = DatabaseManager(db_path)
+    The import and the manager's construction run inside the try, so a
+    failure opening the database is reported by name like any other.
+    """
     started = time.monotonic()
     max_operation_seconds = 0.0
+    db = None
     try:
+        from superlocalmemory.storage.database import DatabaseManager
+
+        db = DatabaseManager(db_path)
         if not start.wait(timeout=_PROCESS_DEADLINE_SECONDS):
             raise TimeoutError("parent did not release the legacy manager")
         for sequence in range(count):
@@ -174,7 +183,8 @@ def _legacy_database_manager_worker(
             }
         )
     finally:
-        db.close()
+        if db is not None:
+            db.close()
 
 
 def _actor():
@@ -338,21 +348,30 @@ def test_386_canonical_remember_survives_legacy_multiprocess_contention(
 
         for child in children:
             child.join(timeout=_PROCESS_DEADLINE_SECONDS)
-            assert child.exitcode == 0, f"{child.name} failed with {child.exitcode}"
         child_results = []
         for _ in children:
             try:
                 child_results.append(results.get(timeout=1.0))
-            except Empty as exc:
-                pytest.fail(f"legacy worker did not report a result: {exc}")
-
-        child_errors = [str(result["error"]) for result in child_results if not result["ok"]]
+            except Empty:
+                break
+        child_errors = [
+            f"{result['worker']}: {result['error']}" for result in child_results if not result["ok"]
+        ]
+        # A child's own error names the failure; check it before exit codes.
+        assert not child_errors, f"legacy child failures: {child_errors!r}"
+        for child in children:
+            assert child.exitcode == 0, (
+                f"{child.name} exited with {child.exitcode} before reporting; "
+                f"reports received: {child_results!r} (its traceback is in captured stderr)"
+            )
+        assert len(child_results) == len(children), (
+            f"legacy workers reported {len(child_results)} of {len(children)} results"
+        )
         assert not foreground_errors, (
             "foreground remember failures: "
             f"{[_exception_chain(error) for error in foreground_errors]!r}"
         )
         assert not reader_errors, f"strict read failures: {reader_errors!r}"
-        assert not child_errors, f"legacy child failures: {child_errors!r}"
         _assert_no_busy([*foreground_errors, *reader_errors, *child_errors])
         assert foreground_elapsed
         assert max(foreground_elapsed) < _REMEMBER_DEADLINE_MS / 1_000 + 0.5

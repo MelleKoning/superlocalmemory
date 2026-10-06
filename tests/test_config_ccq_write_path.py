@@ -103,13 +103,13 @@ class TestForgettingRoundTrip:
             "base_dir": str(tmp_path),
             "future_vendor_extension": {"enabled": True, "count": 42},
         }
-        config_path.write_text(json.dumps(raw))
+        config_path.write_text(json.dumps(raw), encoding="utf-8")
 
         cfg = SLMConfig.load(config_path)
         cfg.forgetting = ForgettingConfig(alpha=5.0)
         cfg.save(config_path)
 
-        saved = json.loads(config_path.read_text())
+        saved = json.loads(config_path.read_text(encoding="utf-8"))
         assert saved.get("future_vendor_extension") == {"enabled": True, "count": 42}
 
         reloaded = SLMConfig.load(config_path)

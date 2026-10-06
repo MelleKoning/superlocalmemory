@@ -120,10 +120,10 @@ def test_session_init_prefers_its_project_and_names_it_in_the_query() -> None:
     with patch("superlocalmemory.hooks.rules_engine.RulesEngine", return_value=rules), \
          patch("superlocalmemory.mcp._pool_adapter.pool_recall", fake_pool_recall), \
          patch("superlocalmemory.mcp.tools_active._emit_event", create=True):
-        asyncio.run(srv.tools["session_init"](project_path="/Users/dev/work/acme-billing"))
+        asyncio.run(srv.tools["session_init"](project_path="/Users/alice/work/acme-billing"))
         asyncio.run(srv.tools["session_init"](query="release plan"))
     assert seen[0] == {"query": "project context acme-billing", "fast": None,
-                       "prefer_project": "/Users/dev/work/acme-billing"}
+                       "prefer_project": "/Users/alice/work/acme-billing"}
     assert seen[1]["query"] == "release plan" and "prefer_project" not in seen[1]
 
 
@@ -179,11 +179,11 @@ def test_http_session_open_prefers_the_project(engine_with_mock_deps, monkeypatc
 
     monkeypatch.setattr(engine_with_mock_deps, "recall", fake_recall)
     with _client(engine_with_mock_deps) as client:
-        r = client.post("/session/open", json={"project_path": "/Users/dev/work/acme-billing"})
+        r = client.post("/session/open", json={"project_path": "/Users/alice/work/acme-billing"})
     assert r.status_code == 200, r.text
     query, kwargs = seen[0]
     assert query == "project context acme-billing"
-    assert kwargs["facets"].as_dict() == {"prefer_project": "/Users/dev/work/acme-billing"}
+    assert kwargs["facets"].as_dict() == {"prefer_project": "/Users/alice/work/acme-billing"}
 
 
 @pytest.mark.parametrize("given,stored", [(" /Users/x/acme-billing/ ", "/Users/x/acme-billing/"),
@@ -262,7 +262,7 @@ def test_context_builder_asks_for_the_projects_memories() -> None:
         return [{"text": f"hit for {query}", "score": 0.5}]
 
     payload = build_payload("default", "project", None, recall_fn=recall,
-                            project="/Users/dev/work/acme-billing")
+                            project="/Users/alice/work/acme-billing")
     assert [q for q, _ in calls] == ["acme-billing topics", "acme-billing entities",
                                      "acme-billing recent decisions", "acme-billing memories"]
     assert all(kw == {"project": "acme-billing"} for _, kw in calls)
@@ -329,14 +329,14 @@ def test_stop_hook_saves_the_summary_under_its_project(mock_run, mock_post, _con
                                                        monkeypatch) -> None:
     from superlocalmemory.hooks.hook_handlers import handle_hook
 
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/Users/dev/work/acme-billing")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/Users/alice/work/acme-billing")
     mock_run.return_value = MagicMock(stdout="", returncode=0)
     mock_post.return_value = True
     with pytest.raises(SystemExit):
         handle_hook("stop")
     path, body = mock_post.call_args_list[0][0][:2]
     assert path == "/remember"
-    assert body["metadata"] == {"project": "/Users/dev/work/acme-billing"}
+    assert body["metadata"] == {"project": "/Users/alice/work/acme-billing"}
     assert body["content"].startswith("[acme-billing] session ended")
 
 

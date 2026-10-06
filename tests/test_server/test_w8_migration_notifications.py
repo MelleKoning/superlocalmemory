@@ -58,7 +58,7 @@ class TestMigrationNotificationHelpers:
 
         assert log_file is not None
         assert log_file.exists()
-        content = log_file.read_text()
+        content = log_file.read_text(encoding="utf-8")
         assert "M041_foo" in content or "migration" in content.lower()
 
     def test_write_migration_error_log_filename_pattern(self, tmp_path):
@@ -109,7 +109,7 @@ class TestMigrationFailureWritesErrorLog:
         )
 
         assert log_path.exists()
-        assert "M041_bad_migration" in log_path.read_text()
+        assert "M041_bad_migration" in log_path.read_text(encoding="utf-8")
 
     def test_error_log_content_includes_backup_path(self, tmp_path):
         """Error log content references the backup directory."""
@@ -124,7 +124,7 @@ class TestMigrationFailureWritesErrorLog:
             slm_home=tmp_path,
         )
 
-        content = log_path.read_text()
+        content = log_path.read_text(encoding="utf-8")
         assert "pre-4.1.0-20260819" in content or "backup" in content.lower()
 
     def test_error_message_references_slm_doctor(self, tmp_path):
@@ -140,6 +140,6 @@ class TestMigrationFailureWritesErrorLog:
             slm_home=tmp_path,
         )
 
-        content = log_path.read_text()
+        content = log_path.read_text(encoding="utf-8")
         # Must mention how to get help (slm doctor is the 4.0.9 recovery path)
         assert "slm doctor" in content.lower() or "slm" in content.lower()

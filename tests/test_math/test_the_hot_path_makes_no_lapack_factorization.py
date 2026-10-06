@@ -80,9 +80,10 @@ def _build_counter(symbols: list[str], where: Path) -> Path:
     assembly += [".section __DATA,__interpose", ".p2align 3"]
     for index, name in enumerate(symbols):
         assembly += [f"    .quad _slm_count_{index}", f'    .quad "_{name}"']
-    (where / "counter.s").write_text("\n".join(assembly) + "\n")
+    (where / "counter.s").write_text("\n".join(assembly) + "\n", encoding="utf-8")
     (where / "counter.c").write_text(
-        f"#include <stdint.h>\nuint64_t slm_counts[{len(symbols)}];\n"
+        f"#include <stdint.h>\nuint64_t slm_counts[{len(symbols)}];\n",
+        encoding="utf-8",
     )
     library = where / "libslmcounter.dylib"
     subprocess.run(

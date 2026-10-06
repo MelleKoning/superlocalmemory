@@ -53,9 +53,16 @@ _LEDGERS = frozenset({"erasure_receipts", "projection_tombstones", "profiles"})
 def open_compare(memory_db: Path, snapshot: Path) -> sqlite3.Connection:
     """Live store as ``main`` (read-only) with the copy attached as ``snap``."""
     conn = sqlite3.connect(f"{Path(memory_db).absolute().as_uri()}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    conn.execute("ATTACH DATABASE ? AS snap",
-                 (f"{Path(snapshot).absolute().as_uri()}?mode=ro&immutable=1",))
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("ATTACH DATABASE ? AS snap",
+                     (f"{Path(snapshot).absolute().as_uri()}?mode=ro&immutable=1",))
+    except BaseException:
+        # A damaged live store fails here. Closed now, not when the exception
+        # (and anything that keeps it, such as a log record) is released: on
+        # Windows the open file would stop the restore replacing the store.
+        conn.close()
+        raise
     return conn
 
 

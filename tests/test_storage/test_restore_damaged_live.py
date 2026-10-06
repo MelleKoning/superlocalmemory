@@ -82,7 +82,7 @@ def test_a_request_made_before_the_damage_still_restores_and_adds_back(tmp_path)
     assert outcome.status == "restored", outcome.message
     assert not list(tmp_path.glob("restore-intent.failed-*.json")), "never set aside"
     added = [json.loads(line)["memory_id"] for line in
-             (Path(outcome.delta_dir) / "memories.jsonl").read_text().splitlines()]
+             (Path(outcome.delta_dir) / "memories.jsonl").read_text(encoding="utf-8").splitlines()]
     assert added == ["later"] and outcome.reimport_pending, "the request-time export is used"
     assert integrity(memory_db) == "ok"
 

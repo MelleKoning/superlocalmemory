@@ -21,6 +21,7 @@ is a single, un-nested ``${VAR:-default}`` by the time the second pass sees it.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Callable, Mapping
@@ -54,10 +55,35 @@ def declared_server(mcp_json: Path) -> dict:
     return data["mcpServers"]["superlocalmemory"]
 
 
-def expanded_argv(mcp_json: Path, plugin_root: str, env: Mapping[str, str]) -> list[str]:
-    """The argv the host would spawn, or AssertionError if anything is unresolved."""
+def env_lookup(env: Mapping[str, str], *, case_insensitive: bool) -> Callable[[str], str | None]:
+    """How the host reads a variable from ``env``.
+
+    Windows variable names are case-insensitive, and a Node host sees them that
+    way (``process.env.ComSpec``). A Python copy of the environment does not:
+    ``dict(os.environ)`` on Windows holds ``COMSPEC``, so a plain ``dict.get``
+    would miss ``ComSpec`` and wrongly take the POSIX default.
+    """
+    if not case_insensitive:
+        return env.get
+    folded = {key.upper(): value for key, value in env.items()}
+    return lambda name: folded.get(name.upper())
+
+
+def expanded_argv(
+    mcp_json: Path,
+    plugin_root: str,
+    env: Mapping[str, str],
+    *,
+    case_insensitive: bool | None = None,
+) -> list[str]:
+    """The argv the host would spawn, or AssertionError if anything is unresolved.
+
+    ``case_insensitive`` defaults to how variable names behave on this OS.
+    """
     server = declared_server(mcp_json)
-    lookup = env.get
+    if case_insensitive is None:
+        case_insensitive = os.name == "nt"
+    lookup = env_lookup(env, case_insensitive=case_insensitive)
     out: list[str] = []
     for raw in [server["command"], *server.get("args", [])]:
         value, missing = expand(raw, plugin_root, lookup)

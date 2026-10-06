@@ -89,20 +89,22 @@ def _is_embedding_worker_alive() -> bool:
         pid_file = _embedding_pid_file()
         if not pid_file.exists():
             return False
-        pid = int(pid_file.read_text().strip())
-        os.kill(pid, 0)  # Signal 0 = check if alive
+        pid = int(pid_file.read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        pid = 0  # PID file unreadable or invalid: treat as stale
+    from superlocalmemory.core.platform_utils import is_pid_alive
+
+    if is_pid_alive(pid):
         return True
-    except (ValueError, OSError, ProcessLookupError):
-        # PID file invalid or process dead — clean up stale file
-        _embedding_pid_file().unlink(missing_ok=True)
-        return False
+    _embedding_pid_file().unlink(missing_ok=True)  # stale file
+    return False
 
 
 def register_embedding_worker_pid(pid: int) -> None:
     """Write the embedding worker PID to the machine-wide PID file."""
     pid_file = _embedding_pid_file()
     pid_file.parent.mkdir(parents=True, exist_ok=True)
-    pid_file.write_text(str(pid))
+    pid_file.write_text(str(pid), encoding="utf-8")
 
 
 def acquire_embedding_lock(timeout: float = 5.0) -> bool:
@@ -760,7 +762,7 @@ class EmbeddingService:
             else:
                 # Linux/other: use /proc/meminfo or psutil
                 try:
-                    with open("/proc/meminfo") as f:
+                    with open("/proc/meminfo", encoding="utf-8") as f:
                         for line in f:
                             if line.startswith("MemAvailable:"):
                                 available_kb = int(line.split()[1])
@@ -931,7 +933,7 @@ class EmbeddingService:
                 if (
                     proc is not None
                     and pid_file.exists()
-                    and pid_file.read_text().strip() == str(proc.pid)
+                    and pid_file.read_text(encoding="utf-8").strip() == str(proc.pid)
                 ):
                     pid_file.unlink(missing_ok=True)
             except (OSError, ValueError):

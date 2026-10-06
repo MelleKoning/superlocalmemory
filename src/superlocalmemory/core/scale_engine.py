@@ -96,7 +96,7 @@ class ScaleEngineManager:
         if self.staging_root.exists():
             for path in sorted(self.staging_root.glob(f"*/{self.MANIFEST_NAME}")):
                 try:
-                    manifests.append(json.loads(path.read_text()))
+                    manifests.append(json.loads(path.read_text(encoding="utf-8")))
                 except (OSError, json.JSONDecodeError):
                     manifests.append({"stage_id": path.parent.name, "state": "corrupt"})
         return manifests
@@ -692,7 +692,7 @@ class ScaleEngineManager:
     def _load_stage(self, stage_id: str) -> tuple[Path, dict[str, Any]]:
         stage_dir = self.staging_root / stage_id
         try:
-            manifest = json.loads((stage_dir / self.MANIFEST_NAME).read_text())
+            manifest = json.loads((stage_dir / self.MANIFEST_NAME).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ScaleEngineError(f"invalid scale stage: {stage_id}") from exc
         return stage_dir, manifest
@@ -700,7 +700,7 @@ class ScaleEngineManager:
     def _write_manifest(self, stage_dir: Path, manifest: dict[str, Any]) -> None:
         target = stage_dir / self.MANIFEST_NAME
         temporary = target.with_suffix(".tmp")
-        temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(temporary, target)
 
     def _validate_manifest(self, manifest: dict[str, Any], *, state: str) -> None:
@@ -749,17 +749,18 @@ class ScaleEngineManager:
     def _clear_dead_legacy_adoption_lock(lock_path: Path) -> bool:
         """Recover only a lock whose recorded process no longer exists."""
         try:
-            owner = json.loads(lock_path.read_text())
+            owner = json.loads(lock_path.read_text(encoding="utf-8"))
             pid = owner.get("pid")
-            if not isinstance(pid, int) or pid <= 0:
-                return False
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            lock_path.unlink(missing_ok=True)
-            return True
         except (OSError, ValueError, json.JSONDecodeError):
             return False
-        return False
+        if not isinstance(pid, int) or pid <= 0:
+            return False
+        from superlocalmemory.core.platform_utils import is_pid_alive
+
+        if is_pid_alive(pid):
+            return False
+        lock_path.unlink(missing_ok=True)
+        return True
 
     def recover_interrupted_promotion(self) -> str | None:
         """Recover a durable promotion journal before opening projection paths."""
@@ -774,7 +775,7 @@ class ScaleEngineManager:
         if not self.promotion_journal_path.exists():
             return None
         try:
-            journal = json.loads(self.promotion_journal_path.read_text())
+            journal = json.loads(self.promotion_journal_path.read_text(encoding="utf-8"))
             backup_id = str(journal["backup_id"])
             state = str(journal["state"])
         except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
@@ -870,7 +871,7 @@ class ScaleEngineManager:
     @staticmethod
     def _write_json_durable(target: Path, payload: dict[str, Any]) -> None:
         temporary = target.with_suffix(target.suffix + ".tmp")
-        with temporary.open("w") as handle:
+        with temporary.open("w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
             handle.write("\n")
             handle.flush()

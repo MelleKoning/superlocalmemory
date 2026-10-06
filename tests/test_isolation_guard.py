@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._portable import child_env_base
+
 from tests import conftest
 from tests.isolation_guard import LiveRootGuard, live_data_roots
 
@@ -73,7 +75,8 @@ def test_the_account_store_is_protected_even_if_home_was_redirected() -> None:
     """Setting HOME or SLM_DATA_DIR before pytest must not unguard the real store."""
     fake_env = {"SLM_DATA_DIR": "/nonexistent/slm-elsewhere", "HOME": "/nonexistent/h"}
     roots = live_data_roots(fake_env)
-    assert Path("/nonexistent/slm-elsewhere") in roots
+    # Resolved, as the guard stores it: on Windows a rooted path gains a drive.
+    assert Path("/nonexistent/slm-elsewhere").resolve(strict=False) in roots
     if sys.platform != "win32":
         import pwd
         account = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".superlocalmemory"
@@ -109,11 +112,13 @@ def _run_without_root_conftest(tmp_path: Path, *, pinned: bool) -> Path:
     test_file = tmp_path / ("test_pinned.py" if pinned else "test_unpinned.py")
     test_file.write_text(_RUNTIME_WRITER.format(fixture_import=(
         "from tests.isolation_guard import explicit_slm_root  # noqa: F401"
-        if pinned else "")))
+        if pinned else "")), encoding="utf-8")
     env = {k: v for k, v in os.environ.items()
            if k not in ("SLM_DATA_DIR", "SL_MEMORY_PATH", "SLM_HOME")}
     env.update(HOME=str(home),
                PYTHONPATH=os.pathsep.join([str(REPO_ROOT / "src"), str(REPO_ROOT)]))
+    if os.name == "nt":
+        env["USERPROFILE"] = str(home)  # where Path.home() looks on Windows
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
          "--noconftest", "--rootdir", str(tmp_path), str(test_file)],
@@ -167,9 +172,10 @@ def _run_noconftest(tmp_path: Path, name: str, *, prelude: str, extra: list[str]
     home.mkdir(parents=True)
     live.mkdir()
     test_file = case / f"test_{name}.py"
-    test_file.write_text(_LOCK_WRITER.format(prelude=prelude))
+    test_file.write_text(_LOCK_WRITER.format(prelude=prelude), encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith(("SLM_", "SL_MEMORY"))}
-    env.update(HOME=str(home), SLM_DATA_DIR=str(live), FAKE_LIVE_ROOT=str(live),
+    env.update(child_env_base(home))  # HOME, and USERPROFILE on Windows
+    env.update(SLM_DATA_DIR=str(live), FAKE_LIVE_ROOT=str(live),
                SLM_DAEMON_PORT="48733",
                PYTHONPATH=os.pathsep.join([str(REPO_ROOT / "src"), str(REPO_ROOT)]))
     proc = subprocess.run(

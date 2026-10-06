@@ -19,6 +19,12 @@
   /* Keep force-layout work bounded even when a user asks to render "All". */
   var PHYSICS_MAX_NODES = 160;
   var PRE_SETTLE_TICKS = 24;
+  /* Pixel-width budget for a node's label (not a word/char count — "webhook
+     signing secret" and "mutable account balances" are 3-4 words each and
+     still ran into their neighbours at the default font). Chosen as roughly
+     the gap the force layout settles neighbouring tier-2 nodes to at
+     scale=1; wide enough that short labels never get touched. */
+  var LABEL_MAX_WIDTH = 92;
 
   /* ---- 16-colour categorical palette (Tableau-inspired, accessible) ---- */
   var CAT_PALETTE = [
@@ -132,7 +138,7 @@
         // Delegation wired in wireControls() so buttons survive re-renders.
         '<div id="odg-insights-panel" style="border-top:1px solid var(--border);' +
           'padding:10px 12px 8px">' +
-          '<div style="font-size:10.5px;font-weight:600;color:var(--fg-3);' +
+          '<div style="font-size:10.5px;font-weight:600;color:var(--fg-2);' +
             'text-transform:uppercase;letter-spacing:0.06em;margin-bottom:7px">' +
             'Quick Insights</div>' +
           '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:7px">' +
@@ -180,6 +186,21 @@
   /* ---------------- data -> tiered graph (real fields only) ---------------- */
   function shortWords(s, n) {
     return String(s || '').trim().split(/\s+/).slice(0, n || 4).join(' ');
+  }
+
+  /* Clip `text` to fit `maxWidth` CSS px under ctx's CURRENT font, appending
+     an ellipsis, via binary search over measureText — exact for whatever
+     font is active rather than guessing a character count. Caller sets
+     ctx.font first; this does not touch it. */
+  function clipLabel(ctx, text, maxWidth) {
+    if (ctx.measureText(text).width <= maxWidth) return text;
+    var lo = 0, hi = text.length;
+    while (lo < hi) {
+      var mid = (lo + hi + 1) >> 1;
+      if (ctx.measureText(text.slice(0, mid) + '…').width <= maxWidth) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo > 0 ? text.slice(0, lo) + '…' : '…';
   }
   function catColor(cat) {
     if (cat === 'episodic' || cat === 'temporal') return 'episode';
@@ -352,7 +373,22 @@
       if (n.tier < 3 || n === hover || n === selected || scale > 1.6) {
         ctx.fillStyle = PAL.fg;
         ctx.font = (n.tier === 1 ? '650 ' : '500 ') + (n.tier === 1 ? 13 : 11.5) + 'px -apple-system,system-ui,sans-serif';
-        ctx.textAlign = 'center'; ctx.fillText(n.label, p[0], p[1] + r + 13);
+        ctx.textAlign = 'center';
+        // Basic collision avoidance: a dense cluster of tier-2 entity nodes
+        // ("webhook signing secret", "mutable account balances", ...) drew
+        // every label at full width with no gap check, so neighbouring
+        // labels routinely overlapped or ran past the canvas edge
+        // (docs/screenshots/4.1.21/03-knowledge-graph.png). True pairwise
+        // overlap detection would mean measuring every visible label
+        // against every other one, every animated frame, for a live force
+        // layout — a real feature, not a small fix. This instead keeps the
+        // common case cheap: the node under the cursor or the one selected
+        // (the one the user is actually reading) always gets its full
+        // label; every other label is clipped to LABEL_MAX_WIDTH px with an
+        // ellipsis, which removes most overlap without new per-frame cost,
+        // and the full name is one hover away.
+        var label = (n === hover || n === selected) ? n.label : clipLabel(ctx, n.label, LABEL_MAX_WIDTH);
+        ctx.fillText(label, p[0], p[1] + r + 13);
       }
     });
   }

@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._portable import assert_owner_only
+
 from superlocalmemory.infra.local_diagnostics import LocalDiagnostics
 
 
@@ -68,7 +70,7 @@ def test_export_is_byte_deterministic_and_private(tmp_path: Path) -> None:
     diagnostics.export_json(second)
 
     assert first.read_bytes() == second.read_bytes()
-    assert first.stat().st_mode & 0o077 == 0
+    assert_owner_only(first)
     payload = json.loads(first.read_text(encoding="utf-8"))
     assert "generated_at" not in payload
     assert "path" not in _flatten(payload).lower()
@@ -117,3 +119,21 @@ def test_diagnostics_module_has_no_network_reporting_surface() -> None:
     for forbidden in ("requests", "httpx", "urllib", "socket", "webhook"):
         assert forbidden not in source
 
+
+
+def test_the_export_is_made_owner_only_before_it_is_written(tmp_path, monkeypatch) -> None:
+    """Through infra.owner_only_acl, so Windows gets an owner-only access list."""
+    from superlocalmemory.infra import owner_only_acl
+
+    sizes: list[int] = []
+    real = owner_only_acl.restrict_to_owner
+
+    def recording(path):
+        sizes.append(Path(path).stat().st_size)
+        real(path)
+
+    monkeypatch.setattr(owner_only_acl, "restrict_to_owner", recording)
+    diagnostics = LocalDiagnostics(tmp_path / "diagnostics.db")
+    diagnostics.record("activation", client="cursor")
+    diagnostics.export_json(tmp_path / "out.json")
+    assert sizes == [0]

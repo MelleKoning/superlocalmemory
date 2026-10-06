@@ -39,7 +39,7 @@ class RulesEngine:
         if config:
             self._rules = {**DEFAULT_RULES, **config}
         elif config_path and config_path.exists():
-            data = json.loads(config_path.read_text())
+            data = json.loads(config_path.read_text(encoding="utf-8"))
             self._rules = {**DEFAULT_RULES, **data.get("rules", {})}
         else:
             self._rules = dict(DEFAULT_RULES)
@@ -87,12 +87,12 @@ class RulesEngine:
     def save(self, config_path: Path) -> None:
         """Save rules to config file."""
         if config_path.exists():
-            data = json.loads(config_path.read_text())
+            data = json.loads(config_path.read_text(encoding="utf-8"))
         else:
             data = {}
         data["rules"] = self._rules
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(json.dumps(data, indent=2))
+        config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def to_dict(self) -> dict:
         """Export rules as dict."""

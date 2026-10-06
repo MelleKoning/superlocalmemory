@@ -42,7 +42,7 @@ def _fresh_warning_state(monkeypatch):
 
 def _write(tmp_path: Path, math: dict) -> Path:
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({"mode": "a", "math": math}))
+    path.write_text(json.dumps({"mode": "a", "math": math}), encoding="utf-8")
     return path
 
 
@@ -84,7 +84,7 @@ def test_an_old_dump_that_already_had_it_off_is_not_reported(tmp_path, caplog):
 
 
 def test_the_docs_say_what_turning_it_off_changes_in_mode_a():
-    doc = (Path(__file__).resolve().parents[2] / "docs" / "configuration.md").read_text()
+    doc = (Path(__file__).resolve().parents[2] / "docs" / "configuration.md").read_text(encoding="utf-8")
     section = doc[doc.index("## Consistency Checking at Store Time"):]
     section = section[: section.index("\n## ", 3)]
     assert "Mode A" in section
