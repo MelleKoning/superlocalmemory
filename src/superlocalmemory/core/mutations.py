@@ -448,12 +448,12 @@ def _finalize_erasure(
 def _refuse_if_correction_protected(db: Any, profile_id: str, fact_id: str) -> None:
     """Refuse before the erasure removes a single projection (see module doc)."""
     from superlocalmemory.core.correction_protection import (
-        protecting_cases,
+        blocking_cases,
         protection_message,
     )
     from superlocalmemory.core.remember_runtime import CanonicalMutationConflict
 
-    cases = protecting_cases(db, profile_id, fact_id)
+    cases = blocking_cases(db, profile_id, fact_id)
     if cases:
         raise CanonicalMutationConflict(protection_message(cases))
 
@@ -573,6 +573,12 @@ def delete_fact_authorized(
                 if not content_preview:
                     content_preview = str(result.get("content_preview", ""))
             else:
+                from superlocalmemory.core.overtaken_cases import cases_naming, overtake
+
+                with engine._db.transaction():  # the user's delete closes machine proposals
+                    overtake(engine._db, cases_naming(engine._db, [fact_id]),
+                             user_action="delete", actor_id=trusted_actor_id,
+                             operation_id=f"delete:{fact_id}")
                 engine._db.delete_fact(fact_id, profile_id=profile_id)
 
         # Purge projections for a fresh delete and re-run (idempotently) for a

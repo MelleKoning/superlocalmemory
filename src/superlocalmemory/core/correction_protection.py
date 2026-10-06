@@ -20,32 +20,30 @@ from typing import Any
 _MAX_NAMED = 3
 
 
+def _named(rows: list[dict], profile_id: str) -> list[tuple[str, str]]:
+    return [(str(r["case_id"]) if str(r["profile_id"]) == profile_id else "(another workspace)",
+             str(r["status"])) for r in rows]
+
+
 def protecting_cases(db: Any, profile_id: str, fact_id: str) -> list[tuple[str, str]]:
     """``(case_id, status)`` of every case naming the fact, oldest first.
 
     Matches the foreign key exactly: it restricts by fact id whatever profile
-    the case is filed under. A case from another profile still refuses the
-    delete, but its id is not shown here (``"(another workspace)"``).
+    the case is filed under. A case from another profile is not named here
+    (``"(another workspace)"``).
     """
-    try:
-        rows = db.execute(
-            "SELECT case_id, status, profile_id FROM correction_cases "
-            "WHERE predecessor_fact_id = ? OR successor_fact_id = ? "
-            "ORDER BY created_at, case_id",
-            (fact_id, fact_id),
-        )
-    except Exception as exc:
-        if "no such table" in str(exc).lower():
-            return []
-        raise
-    out = []
-    for raw in rows:
-        r = dict(raw)
-        if str(r["profile_id"]) == profile_id:
-            out.append((str(r["case_id"]), str(r["status"])))
-        else:
-            out.append(("(another workspace)", str(r["status"])))
-    return out
+    from superlocalmemory.core.overtaken_cases import cases_naming
+
+    return _named(cases_naming(db, [fact_id]), profile_id)
+
+
+def blocking_cases(db: Any, profile_id: str, fact_id: str) -> list[tuple[str, str]]:
+    """The cases that still refuse a user's delete: proposed by a person, or
+    already decided. A pending machine proposal is overtaken by the user's
+    action instead (core/overtaken_cases.py)."""
+    from superlocalmemory.core.overtaken_cases import blocking, cases_naming
+
+    return _named(blocking(cases_naming(db, [fact_id])), profile_id)
 
 
 def protection_message(cases: list[tuple[str, str]]) -> str:
@@ -58,9 +56,10 @@ def protection_message(cases: list[tuple[str, str]]) -> str:
     more = f" and {len(cases) - _MAX_NAMED} more" if len(cases) > _MAX_NAMED else ""
     return (
         "fact is protected by correction history: it is part of correction case "
-        f"{named}{more}, and correction history is kept on purpose, so this memory "
-        "cannot be deleted. Nothing was changed."
+        f"{named}{more}, which a person proposed or which was already decided, and "
+        "correction history is kept on purpose, so this memory cannot be deleted. "
+        "Nothing was changed."
     )
 
 
-__all__ = ["protecting_cases", "protection_message"]
+__all__ = ["blocking_cases", "protecting_cases", "protection_message"]

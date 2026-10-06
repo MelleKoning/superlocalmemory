@@ -83,10 +83,13 @@ def _routed_daemon_call(method: str, path: str, body: dict | None = None) -> dic
     not in it) is an answer, returned with its code so the caller does not
     retry it; ``None`` still means the daemon did not answer.
     """
-    from superlocalmemory.cli.daemon import DaemonNotFound, daemon_request
+    from superlocalmemory.cli.daemon import DaemonConflict, DaemonNotFound, daemon_request
 
     try:
-        return daemon_request(method, path, body, preserve_not_found=True)
+        return daemon_request(method, path, body, preserve_not_found=True,
+                              preserve_conflict=True)
+    except DaemonConflict as exc:  # a refusal (409) is an answer too, with its reason
+        return {"success": False, "code": "CONFLICT", "retryable": False, "error": exc.detail}
     except DaemonNotFound as exc:
         # The route's own code (unknown_profile) when it gave one.
         return {"success": False, "code": exc.error_code or exc.code, "retryable": False,
@@ -1308,12 +1311,8 @@ def register_core_tools(server, get_engine: Callable) -> None:
                 path = "/api/memories/" + urllib.parse.quote(fact_id, safe="")
                 if named:
                     path += "?profile_id=" + urllib.parse.quote(named, safe="")
-                    result = await asyncio.to_thread(_routed_daemon_call, "DELETE", path)
-                else:
-                    result = await asyncio.to_thread(
-                        daemon_request, "DELETE", path,
-                    )
-                if named and isinstance(result, dict) and result.get("code"):
+                result = await asyncio.to_thread(_routed_daemon_call, "DELETE", path)
+                if isinstance(result, dict) and result.get("code"):
                     return result
                 if isinstance(result, dict) and result.get("success"):
                     # The daemon's DELETE route announces it (once, for every

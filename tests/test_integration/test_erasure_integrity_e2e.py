@@ -300,3 +300,64 @@ def test_cli_delete_prints_the_refusal_not_an_outage(daemon: RealDaemon) -> None
     assert envelope["error"]["retryable"] is False
     assert _count(daemon, "SELECT COUNT(*) FROM atomic_facts WHERE fact_id = ?", (fact_id,)) == 1
 
+
+
+# -- the user's action wins over a machine proposal (Varun, 2026-10-06) ------
+
+def _machine_case(daemon: RealDaemon, pred: str, succ: str) -> str:
+    """A pending case recorded exactly as SLM's own detectors record it."""
+    from superlocalmemory.storage.correction_cases import CorrectionActor, propose_on_connection
+
+    own = _ro(daemon, "SELECT case_id, reason_code, proposed_by_actor_kind FROM correction_cases "
+              "WHERE predecessor_fact_id = ? AND status = 'proposed'", (pred,))
+    if own:  # SLM already proposed one by itself between these synthetic memories
+        assert own[0][2] == "host_attested", own
+        return str(own[0][0])
+    case_id = uuid.uuid4().hex
+    conn = sqlite3.connect(daemon.data_root / "memory.db", timeout=30, isolation_level=None)
+    try:
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("BEGIN IMMEDIATE")
+        propose_on_connection(
+            conn, case_id=case_id, profile_id="default", scope="personal",
+            predecessor_fact_id=pred, successor_fact_id=succ,
+            reason_code="consolidation_supersede",
+            actor=CorrectionActor(actor_id="canonical-writer", actor_kind="host_attested",
+                                  trust_tier="canonical_writer"),
+            idempotency_key=f"e2e-{case_id}", is_profile_active=lambda p: True,
+            is_actor_trusted=lambda a: True)
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
+    return case_id
+
+
+def _overtaken(daemon: RealDaemon, case_id: str) -> list[tuple]:
+    return _ro(daemon, "SELECT user_action, closed_reason FROM correction_cases_overtaken "
+               "WHERE case_id = ?", (case_id,))
+
+
+def test_delete_and_edit_go_through_a_machine_proposal(daemon: RealDaemon) -> None:
+    tag = uuid.uuid4().hex[:6]
+    first = _remember_complete(daemon, f"Synthetic wren tally {tag} north hedge note", "")[0]
+    second = _remember_complete(daemon, f"Synthetic finch tally {tag} south hedge note", "")[0]
+    third = _remember_complete(daemon, f"Synthetic robin tally {tag} west hedge note", "")[0]
+    deleting = _machine_case(daemon, first, second)
+    editing = _machine_case(daemon, third, second)
+
+    cli = subprocess.run([sys.executable, "-m", "superlocalmemory.cli.main", "delete", first,
+                          "--yes", "--json"], env=daemon.env, cwd=str(REPO_ROOT),
+                         capture_output=True, text=True, timeout=180)
+    assert cli.returncode == 0, (cli.stdout, cli.stderr)
+    assert _count(daemon, "SELECT COUNT(*) FROM atomic_facts WHERE fact_id = ?", (first,)) == 0
+    assert _overtaken(daemon, deleting) == [("delete", "overtaken by a user action")]
+
+    for _ in range(45):
+        code, body = daemon.request("PATCH", f"/api/memories/{third}",
+                                    {"content": f"Synthetic robin tally {tag} east hedge note"})
+        if code != 503:
+            break
+        time.sleep(2)
+    assert code in (200, 202), body
+    assert _overtaken(daemon, editing) == [("update", "overtaken by a user action")]
