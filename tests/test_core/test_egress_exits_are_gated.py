@@ -141,9 +141,15 @@ def test_mode_b_summary_to_a_lan_ollama_is_screened(wire, monkeypatch) -> None:
     assert all(httpx.URL(r["url"]).host == "192.168.1.50" for r in wire)
 
 
-def test_mode_b_summary_to_this_machine_is_sent_as_written(wire) -> None:
+def test_mode_b_summary_to_this_machine_is_sent_as_written(wire, monkeypatch) -> None:
     from superlocalmemory.core.summarizer import Summarizer
+    from superlocalmemory.llm import ollama_reachability
 
+    # Whether a real Ollama happens to be running on whatever machine runs
+    # this suite is not what this test is about -- it is about content
+    # staying unredacted for a genuinely local destination, which is
+    # exactly the case where the request must actually be attempted.
+    monkeypatch.setattr(ollama_reachability, "ollama_reachable", lambda *a, **k: True)
     Summarizer(_llm_cfg("b", "ollama", "http://localhost:11434")).summarize_cluster(
         [{"content": _MEMORY}])
     assert wire and _KEY in wire[0]["body"]

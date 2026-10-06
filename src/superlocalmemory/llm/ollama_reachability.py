@@ -25,9 +25,13 @@ from __future__ import annotations
 import threading
 import time
 
-#: Long enough to get an answer from a server that is actually up; short
-#: enough that a host with nothing listening is not mistaken for a hang.
-PROBE_TIMEOUT_S = 0.3
+#: Long enough to get an answer from a server that is actually up -- even a
+#: healthy, listening one occasionally takes a moment to answer on a loaded
+#: machine (confirmed: 0.3 s measured real false negatives under a heavy
+#: parallel test run, silently degrading a Mode B extraction to Mode A's
+#: path for that one call) -- short enough that a host with nothing
+#: listening is not mistaken for a hang.
+PROBE_TIMEOUT_S = 1.5
 #: How long one answer is trusted before the next call pays for a fresh
 #: probe. Bounded so an Ollama started mid-session is noticed reasonably
 #: soon, without re-probing on every one of many per-fact calls in between.
