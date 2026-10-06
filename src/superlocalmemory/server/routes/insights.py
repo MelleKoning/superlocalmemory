@@ -45,24 +45,45 @@ def _action_changed_this_week(
 
     # New facts
     try:
+        # Q5 (2026-10-06): the "Changed This Week" row showed the raw legacy
+        # fact_type ("episodic"/"semantic"/...) instead of the memory kind
+        # ("Decision", "Rule", ...) every other surface (recall, CLI, MCP,
+        # the Memories table) already shows. Stores without the M052 kind
+        # columns (a pre-4.1.19 store that has not been backfilled yet)
+        # fall back to selecting fact_type alone, same as memories.py's own
+        # degraded-lexical fallback, so this never errors on an unknown
+        # column.
+        has_kind_columns = any(
+            row["name"] == "memory_kind"
+            for row in conn.execute("PRAGMA table_info(atomic_facts)").fetchall()
+        )
+        kind_select = (
+            ", memory_kind, memory_kind_source, memory_kind_confidence"
+            if has_kind_columns else ""
+        )
         rows = conn.execute(
-            "SELECT fact_id, content, fact_type, created_at, session_id, confidence "
+            "SELECT fact_id, content, fact_type, created_at, session_id, "
+            f"confidence{kind_select} "
             "FROM atomic_facts "
             "WHERE profile_id = ? AND created_at >= datetime('now', ?) "
             "ORDER BY created_at DESC LIMIT ?",
             (pid, f"-{days} days", limit),
         ).fetchall()
-        items = [
-            {
-                "fact_id": dict(r)["fact_id"],
-                "content": (dict(r).get("content") or "")[:200],
-                "fact_type": dict(r).get("fact_type", ""),
-                "created_at": dict(r).get("created_at", ""),
-                "session_id": dict(r).get("session_id", ""),
-                "confidence": round(float(dict(r).get("confidence", 0)), 3),
+        items = []
+        for r in rows:
+            row = dict(r)
+            item = {
+                "fact_id": row["fact_id"],
+                "content": (row.get("content") or "")[:200],
+                "fact_type": row.get("fact_type", ""),
+                "created_at": row.get("created_at", ""),
+                "session_id": row.get("session_id", ""),
+                "confidence": round(float(row.get("confidence", 0)), 3),
             }
-            for r in rows
-        ]
+            if has_kind_columns:
+                from superlocalmemory.storage.memory_kinds import kind_fields
+                item.update(kind_fields(row))
+            items.append(item)
     except Exception as exc:
         logger.debug("changed_this_week new facts failed: %s", exc)
 
