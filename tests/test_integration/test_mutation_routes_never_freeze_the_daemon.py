@@ -64,6 +64,9 @@ def daemon(tmp_path_factory):
     try:
         real.wait_ready()
         real.wait_health_fast()
+        # A first recall loads the search models; that cold start is not what
+        # this file measures, so it is paid here, before any store is held.
+        real.request("GET", "/recall", params={"q": "warm up", "limit": 1}, timeout=300)
         yield real
     finally:
         real.stop(foreign)
