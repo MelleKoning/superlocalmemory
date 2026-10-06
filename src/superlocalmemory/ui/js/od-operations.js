@@ -103,11 +103,16 @@
       // ══════ LIFECYCLE TAB ══════════════════════════════════════════════
       '<section class="tabpane active" data-od-pane="lifecycle">' +
 
+        // Every "dim" in this file was .dim (--fg-3, 4.09:1 here — under
+        // WCAG AA 4.5:1): loading states, error messages, reasons,
+        // timestamps and sublabels are all informational — the user is
+        // meant to read them, not just sense a loading flicker — so this
+        // file uses .muted-info (--fg-2) throughout instead.
         // State KPI strip: 5 lifecycle buckets
         '<div class="kpi-strip" ' +
           'style="margin-bottom:16px;grid-template-columns:repeat(5,1fr)" ' +
           'id="od-lc-states">' +
-          '<div class="dim" style="padding:12px">Loading…</div>' +
+          '<div class="muted-info" style="padding:12px">Loading…</div>' +
         '</div>' +
 
         // Two-column: age table + compaction preview
@@ -124,7 +129,7 @@
                   '<th>Oldest (d)</th>' +
                 '</tr></thead>' +
                 '<tbody>' +
-                  '<tr><td colspan="4" class="dim" style="text-align:center;padding:20px">Loading…</td></tr>' +
+                  '<tr><td colspan="4" class="muted-info" style="text-align:center;padding:20px">Loading…</td></tr>' +
                 '</tbody>' +
               '</table>' +
             '</div>' +
@@ -159,7 +164,7 @@
                 '<th>Memory</th><th>Transition</th><th>Reason</th><th>When</th>' +
               '</tr></thead>' +
               '<tbody>' +
-                '<tr><td colspan="4" class="dim" style="text-align:center;padding:20px">Loading…</td></tr>' +
+                '<tr><td colspan="4" class="muted-info" style="text-align:center;padding:20px">Loading…</td></tr>' +
               '</tbody>' +
             '</table>' +
           '</div>' +
@@ -185,7 +190,7 @@
         '<div class="card" style="max-width:640px">' +
           '<div class="card-head"><h3>Trust enforcement</h3></div>' +
           '<div class="card-pad" id="od-trust-ctl">' +
-            '<div class="dim" style="padding:20px;text-align:center">Loading trust data…</div>' +
+            '<div class="muted-info" style="padding:20px;text-align:center">Loading trust data…</div>' +
           '</div>' +
         '</div>' +
 
@@ -209,7 +214,7 @@
         '<div class="kpi-strip" ' +
           'style="margin-bottom:16px;grid-template-columns:repeat(3,1fr)" ' +
           'id="od-comp-kpi">' +
-          '<div class="dim" style="padding:12px">Loading…</div>' +
+          '<div class="muted-info" style="padding:12px">Loading…</div>' +
         '</div>' +
 
         // Retention policies table with New policy button
@@ -232,7 +237,7 @@
                 '<th></th>' +
               '</tr></thead>' +
               '<tbody>' +
-                '<tr><td colspan="5" class="dim" style="text-align:center;padding:20px">Loading…</td></tr>' +
+                '<tr><td colspan="5" class="muted-info" style="text-align:center;padding:20px">Loading…</td></tr>' +
               '</tbody>' +
             '</table>' +
           '</div>' +
@@ -287,7 +292,7 @@
                 '<th>Result</th>' +
               '</tr></thead>' +
               '<tbody id="od-audit-body">' +
-                '<tr><td colspan="6" class="dim" style="text-align:center;padding:20px">Loading…</td></tr>' +
+                '<tr><td colspan="6" class="muted-info" style="text-align:center;padding:20px">Loading…</td></tr>' +
               '</tbody>' +
             '</table>' +
           '</div>' +
@@ -394,7 +399,7 @@
 
     if (ageKeys.length === 0) {
       ageTbody.innerHTML =
-        '<tr><td colspan="4" class="dim" style="text-align:center;padding:16px">' +
+        '<tr><td colspan="4" class="muted-info" style="text-align:center;padding:16px">' +
         'No age data available yet.</td></tr>';
       return;
     }
@@ -427,7 +432,7 @@
 
     if (trans.length === 0) {
       transTbody.innerHTML =
-        '<tr><td colspan="4" class="dim" style="text-align:center;padding:16px">' +
+        '<tr><td colspan="4" class="muted-info" style="text-align:center;padding:16px">' +
         'No recent transitions. Transitions appear here when memories change lifecycle state.' +
         '</td></tr>';
       return;
@@ -442,8 +447,8 @@
         '<tr>' +
           '<td class="mono dim">' + idLabel + '</td>' +
           '<td><span class="badge neutral">' + transition + '</span></td>' +
-          '<td class="dim">' + reason + '</td>' +
-          '<td class="dim">' + when + '</td>' +
+          '<td class="muted-info">' + reason + '</td>' +
+          '<td class="muted-info">' + when + '</td>' +
         '</tr>'
       );
     }).join('');
@@ -490,7 +495,7 @@
           .then(function (data) {
             if (data && data.success === false) {
               if (summaryEl) summaryEl.innerHTML =
-                '<span class="dim">' + esc(data.error || 'Compaction unavailable.') + '</span>';
+                '<span class="muted-info">' + esc(data.error || 'Compaction unavailable.') + '</span>';
               return;
             }
             var recs = Number(data.candidates || 0);
@@ -558,7 +563,7 @@
           .then(function (data) {
             if (data && data.success === false) {
               if (summaryEl) summaryEl.innerHTML =
-                '<span class="dim">' + esc(data.error || 'Compaction failed.') + '</span>';
+                '<span class="muted-info">' + esc(data.error || 'Compaction failed.') + '</span>';
               return;
             }
             var n = Number(data.applied || 0);
@@ -688,7 +693,7 @@
         '<div class="od-ops-ctl">' +
           '<div>' +
             '<b>' + esc(label) + '</b>' +
-            '<div class="dim" style="font-size:12.5px">' + esc(sublabel) + '</div>' +
+            '<div class="muted-info" style="font-size:12.5px">' + esc(sublabel) + '</div>' +
           '</div>' +
           control +
         '</div>'
@@ -771,7 +776,7 @@
 
     if (policies.length === 0) {
       retTbody.innerHTML =
-        '<tr><td colspan="5" class="dim" style="text-align:center;padding:20px">' +
+        '<tr><td colspan="5" class="muted-info" style="text-align:center;padding:20px">' +
         'No retention policies configured. Use the set_retention_policy MCP tool to add one.' +
         '</td></tr>';
       return;
@@ -838,7 +843,7 @@
   function fetchAndRenderAudit(eventType) {
     var auditTbody = document.getElementById('od-audit-body');
     if (!auditTbody) return;
-    auditTbody.innerHTML = '<tr><td colspan="6" class="dim" style="text-align:center;padding:16px">Loading…</td></tr>';
+    auditTbody.innerHTML = '<tr><td colspan="6" class="muted-info" style="text-align:center;padding:16px">Loading…</td></tr>';
     var url = '/api/compliance/audit?limit=100';
     if (eventType && eventType !== 'all') url += '&event_type=' + encodeURIComponent(eventType);
     fetch(url)
@@ -850,7 +855,7 @@
         showAuditChainStatus(d);
       })
       .catch(function () {
-        if (auditTbody) auditTbody.innerHTML = '<tr><td colspan="6" class="dim" style="text-align:center;padding:16px">Failed to load audit trail.</td></tr>';
+        if (auditTbody) auditTbody.innerHTML = '<tr><td colspan="6" class="muted-info" style="text-align:center;padding:16px">Failed to load audit trail.</td></tr>';
       });
   }
 
@@ -858,7 +863,7 @@
   function renderAuditRows(tbody, events) {
     if (events.length === 0) {
       tbody.innerHTML =
-        '<tr><td colspan="6" class="dim" style="text-align:center;padding:20px">' +
+        '<tr><td colspan="6" class="muted-info" style="text-align:center;padding:20px">' +
         'No audit events recorded yet.</td></tr>';
       return;
     }
@@ -884,7 +889,7 @@
           '<td><span class="badge ' + evc + '">' + esc(ev.event_type || '') + '</span></td>' +
           '<td class="mono" style="font-size:12px">' + esc(ev.actor || '') + '</td>' +
           '<td>' + esc(ev.action || '') + '</td>' +
-          '<td class="dim">' + esc(ev.target || '') + '</td>' +
+          '<td class="muted-info">' + esc(ev.target || '') + '</td>' +
           '<td><span class="badge ' + resultCls + '">' + esc(ev.result || '') + '</span></td>' +
         '</tr>'
       );

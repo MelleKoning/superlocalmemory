@@ -149,7 +149,7 @@
         '<div>' +
           '<b style="font-size:13.5px">' + escapeHtml(label) + '</b>' +
           (sub
-            ? '<div class="dim" style="font-size:12.5px;margin-top:2px">' + escapeHtml(sub) + '</div>'
+            ? '<div class="muted-info" style="font-size:12.5px;margin-top:2px">' + escapeHtml(sub) + '</div>'
             : '') +
         '</div>' +
         '<button class="switch" data-switch-id="' + escapeHtml(switchId) + '"' +
@@ -184,13 +184,13 @@
           ' style="display:none;background:var(--warn-soft);border:1px solid var(--warn);' +
                   'border-radius:var(--r-md);padding:12px 16px;margin-bottom:16px;' +
                   'align-items:center;justify-content:space-between;gap:12px">' +
-          '<span style="color:var(--warn);font-size:13.5px" id="od-opt-sav-err-msg">' +
+          '<span style="color:var(--warn-text);font-size:13.5px" id="od-opt-sav-err-msg">' +
             'Service unavailable' +
           '</span>' +
           '<button id="od-opt-sav-retry"' +
             ' style="padding:5px 12px;font-size:12.5px;border-radius:var(--r-md);' +
                     'border:1px solid var(--warn);background:transparent;' +
-                    'color:var(--warn);cursor:pointer;font-weight:600">' +
+                    'color:var(--warn-text);cursor:pointer;font-weight:600">' +
             'Retry' +
           '</button>' +
         '</div>' +
@@ -263,13 +263,13 @@
             // Config error band
             '<div id="od-opt-cfg-err"' +
               ' style="display:none;padding:10px 20px;border-bottom:1px solid var(--border)">' +
-              '<span style="color:var(--danger);font-size:13px" id="od-opt-cfg-err-msg">' +
+              '<span style="color:var(--danger-text);font-size:13px" id="od-opt-cfg-err-msg">' +
                 'Could not load config' +
               '</span>' +
               '<button id="od-opt-cfg-retry"' +
                 ' style="margin-left:12px;padding:3px 10px;font-size:12px;' +
                         'border-radius:5px;border:1px solid var(--danger);' +
-                        'background:transparent;color:var(--danger);cursor:pointer">' +
+                        'background:transparent;color:var(--danger-text);cursor:pointer">' +
                 'Retry' +
               '</button>' +
             '</div>' +
@@ -285,7 +285,7 @@
               // CRIT C1: restart hint for master + proxy (shared, shown on either toggle)
               '<div id="od-opt-restart-hint"' +
                 ' style="display:none;padding:8px 12px;background:var(--warn-soft);' +
-                        'border-radius:var(--r-sm);font-size:12.5px;color:var(--warn);margin:6px 0">' +
+                        'border-radius:var(--r-sm);font-size:12.5px;color:var(--warn-text);margin:6px 0">' +
                 'Restart required — run <code>slm restart</code> to apply this change.' +
               '</div>' +
 
@@ -313,7 +313,7 @@
               '<div class="ctl">' +
                 '<div>' +
                   '<b style="font-size:13.5px">Compression mode</b>' +
-                  '<div class="dim" style="font-size:12.5px;margin-top:2px">' +
+                  '<div class="muted-info" style="font-size:12.5px;margin-top:2px">' +
                     'safe = lossless structural; aggressive may reduce output fidelity' +
                   '</div>' +
                 '</div>' +
@@ -328,7 +328,7 @@
             // Clear cache button
             '<div style="padding:16px 20px 20px;border-top:1px solid var(--border)">' +
               '<button id="od-opt-clear-cache" class="btn ghost"' +
-                ' style="color:var(--danger);border-color:var(--danger)">' +
+                ' style="color:var(--danger-text);border-color:var(--danger-text)">' +
                 'Clear cache (llmcache.db)' +
               '</button>' +
               '<span id="od-opt-clear-msg"' +
@@ -373,11 +373,11 @@
             '<div class="bars" id="od-opt-bars" style="height:110px"></div>' +
             '<div style="display:flex;gap:20px;margin-top:12px;font-size:12.5px">' +
               '<span><b class="num" id="od-opt-stat-hits">—</b>' +
-                ' <span class="dim">hits</span></span>' +
+                ' <span class="muted-info">hits</span></span>' +
               '<span><b class="num" id="od-opt-stat-misses">—</b>' +
-                ' <span class="dim">misses</span></span>' +
+                ' <span class="muted-info">misses</span></span>' +
               '<span><b class="num" id="od-opt-stat-runs">—</b>' +
-                ' <span class="dim">CCR objects stored</span></span>' +
+                ' <span class="muted-info">CCR objects stored</span></span>' +
             '</div>' +
           '</div>' +
         '</div>' +
@@ -392,7 +392,7 @@
       return (
         '<tr>' +
           '<td><b>' + escapeHtml(p.name) + '</b></td>' +
-          '<td class="mono dim">' + escapeHtml(p.price) + '</td>' +
+          '<td class="mono muted-info">' + escapeHtml(p.price) + '</td>' +
           '<td>' +
             '<span style="display:inline-block;vertical-align:middle;width:70px;height:6px;' +
               'border-radius:99px;background:var(--card-2);overflow:hidden;margin-right:8px">' +
