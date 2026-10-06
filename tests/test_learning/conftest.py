@@ -34,13 +34,15 @@ from tests.fixtures.lgb_mock import (
 )
 
 
-@pytest.fixture(autouse=True, scope="session")
+@pytest.fixture(autouse=True, scope="package")
 def _mock_lgb_training_for_learning_tests():
     """Patch lightgbm.Dataset and lightgbm.train for this test directory.
 
-    Scope is session so the patch is applied once and held for all tests
-    in tests/test_learning/. Both the top-level lightgbm package and the
-    local aliases used by the retrain modules are patched.
+    Scope is package: applied once and held for every test in
+    tests/test_learning/, then removed. It was session scope, which held it
+    for the rest of the run - every directory collected after this one got
+    the mock too, so a test elsewhere that trains a real model persisted the
+    fixed mock model instead and ranked everything alike.
     """
     with (
         patch("lightgbm.Dataset", MockDataset),
