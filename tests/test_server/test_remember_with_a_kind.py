@@ -75,18 +75,9 @@ def test_mcp_remember_refuses_an_unknown_kind_before_saving(monkeypatch) -> None
     assert out["success"] is False and out["code"] == "INVALID_KIND"
 
 
-def test_mcp_remember_sends_the_kind_to_the_daemon(monkeypatch) -> None:
-    from superlocalmemory.mcp import _daemon_proxy, tools_core
-    from superlocalmemory.storage.memory_kinds import METADATA_KEY
+def _mcp_remember():
+    from superlocalmemory.mcp import tools_core
 
-    sent = {}
-
-    class _Pool:
-        def store(self, content, metadata):
-            sent.update(metadata)
-            return {"ok": True, "fact_ids": ["f1"], "count": 1}
-
-    monkeypatch.setattr(_daemon_proxy, "choose_pool", lambda: _Pool())
     captured = {}
 
     class _Server:
@@ -97,8 +88,103 @@ def test_mcp_remember_sends_the_kind_to_the_daemon(monkeypatch) -> None:
             return deco
 
     tools_core.register_core_tools(_Server(), lambda: None)
-    asyncio.run(captured["remember"](CONTENT, kind="decision"))
-    assert sent.get(METADATA_KEY) == "decision"
+    return captured["remember"]
+
+
+def test_mcp_remember_sends_the_kind_as_the_request_field(monkeypatch) -> None:
+    """4.1.21 put the kind in metadata, where the daemon strips reserved keys,
+    so it never arrived. It must travel as the request's own ``kind`` field.
+    The composed path is proven in
+    tests/test_integration/test_mcp_declared_kind_transport.py."""
+    from superlocalmemory.cli import daemon
+    from superlocalmemory.storage.memory_kinds import METADATA_KEY
+
+    sent = {}
+
+    def fake_request(method, path, body=None, **flags):
+        sent.update(body=body, flags=flags)
+        return {"ok": True, "fact_ids": ["f1"], "count": 1, "status": "stored"}
+
+    monkeypatch.setattr(daemon, "is_daemon_running", lambda: True)
+    monkeypatch.setattr(daemon, "daemon_request", fake_request)
+    asyncio.run(_mcp_remember()(CONTENT, kind="Decision"))
+    assert sent["body"]["kind"] == "decision"
+    assert METADATA_KEY not in sent["body"]["metadata"]
+    assert sent["flags"].get("preserve_unprocessable") is True
+
+
+def test_mcp_remember_without_a_kind_sends_no_kind_field(monkeypatch) -> None:
+    from superlocalmemory.cli import daemon
+
+    sent = {}
+
+    def fake_request(method, path, body=None, **flags):
+        sent.update(body=body, flags=flags)
+        return {"ok": True, "fact_ids": ["f1"], "count": 1, "status": "stored"}
+
+    monkeypatch.setattr(daemon, "is_daemon_running", lambda: True)
+    monkeypatch.setattr(daemon, "daemon_request", fake_request)
+    asyncio.run(_mcp_remember()(CONTENT))
+    assert "kind" not in sent["body"]
+    assert "preserve_unprocessable" not in sent["flags"]
+
+
+def test_mcp_remember_fallback_passes_the_kind_to_the_proxy(monkeypatch) -> None:
+    from superlocalmemory.cli import daemon
+    from superlocalmemory.mcp import _daemon_proxy
+    from superlocalmemory.storage.memory_kinds import METADATA_KEY
+
+    sent = {}
+
+    class _Pool:
+        def store(self, content, metadata, **kwargs):
+            sent.update(metadata=metadata, kwargs=kwargs)
+            return {"ok": True, "fact_ids": ["f1"], "count": 1}
+
+    monkeypatch.setattr(daemon, "is_daemon_running", lambda: False)
+    monkeypatch.setattr(_daemon_proxy, "choose_pool", lambda: _Pool())
+    asyncio.run(_mcp_remember()(CONTENT, kind="decision"))
+    assert sent["kwargs"] == {"kind": "decision"}
+    assert METADATA_KEY not in sent["metadata"]
+
+
+def test_mcp_derived_key_includes_the_kind_only_when_one_is_declared(monkeypatch) -> None:
+    from superlocalmemory.cli import daemon
+
+    keys = []
+
+    def fake_request(method, path, body=None, **flags):
+        keys.append(body["idempotency_key"])
+        return {"ok": True, "fact_ids": ["f1"], "count": 1, "status": "stored"}
+
+    monkeypatch.setattr(daemon, "is_daemon_running", lambda: True)
+    monkeypatch.setattr(daemon, "daemon_request", fake_request)
+    remember = _mcp_remember()
+    for kind in ("", "", "rule", "rule", "decision"):
+        asyncio.run(remember(CONTENT, kind=kind, agent_id="agent-x"))
+    plain, plain_again, rule, rule_again, decision = keys
+    assert plain == plain_again and rule == rule_again
+    assert len({plain, rule, decision}) == 3
+
+
+def test_proxy_store_sends_a_declared_kind_and_never_promotes_metadata(monkeypatch) -> None:
+    from superlocalmemory.cli import daemon
+    from superlocalmemory.mcp._daemon_proxy import DaemonPoolProxy
+    from superlocalmemory.storage.memory_kinds import METADATA_KEY
+
+    sent = []
+
+    def fake_request(method, path, body=None, **flags):
+        sent.append((body, flags))
+        return {"ok": True, "fact_ids": ["f1"]}
+
+    monkeypatch.setattr(daemon, "daemon_request", fake_request)
+    proxy = DaemonPoolProxy(port=1)
+    proxy.store(CONTENT, {"idempotency_key": "k1"}, kind="rule")
+    proxy.store(CONTENT, {"idempotency_key": "k2", METADATA_KEY: "rule"})
+    (declared, declared_flags), (forged, forged_flags) = sent
+    assert declared["kind"] == "rule" and declared_flags.get("preserve_unprocessable") is True
+    assert "kind" not in forged and "preserve_unprocessable" not in forged_flags
 
 
 def test_cli_remember_refuses_an_unknown_kind_before_contacting_slm(monkeypatch, capsys) -> None:
