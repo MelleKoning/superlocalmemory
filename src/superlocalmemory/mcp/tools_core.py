@@ -514,6 +514,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
         about: str = "",
         kind: str = "",
         prefer_project: str = "",
+        project_strict: bool = False,
     ) -> dict:
         """Search memories through hybrid retrieval, RRF fusion, and reranking.
 
@@ -572,6 +573,11 @@ def register_core_tools(server, get_engine: Callable) -> None:
         and ``project_scope.filter.applied`` is false with a ``note`` saying
         so - never a silent empty answer. A name matches the same project saved
         as a full path, ignoring case.
+        ``project_strict=True`` (4.1.22) turns that fall-back off: only that
+        project's memories, even if none - for automations that must never
+        act on another project's memories. ``project_scope.filter.identity``
+        says which name was matched and warns when one name stands for more
+        than one saved project path.
 
         ``kind`` (4.1.19 WP8) keeps only results whose kind — the same nine
         values ``remember``'s ``kind`` parameter takes — equals this value,
@@ -673,6 +679,8 @@ def register_core_tools(server, get_engine: Callable) -> None:
                                                  ("about", about),
                                                  ("prefer_project", prefer_project))
                        if (v or "").strip()},
+                    **({"project_strict": True}
+                       if project_strict and (project or "").strip() else {}),
                     # 4.1.19 WP8: the already-validated, normalized kind.
                     **({"kind": _kind} if _kind else {}),
                 )

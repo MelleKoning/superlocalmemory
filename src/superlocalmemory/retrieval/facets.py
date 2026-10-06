@@ -19,7 +19,8 @@ profile. ``saved_by``, ``about`` and ``kind`` are hard filters: only memories
 that match are kept, even if that leaves none, because the caller asked for
 exactly that. ``project`` filters too, but recall falls back to unfiltered
 results - and says so - when nothing it found was saved under the project
-(``retrieval.project_scope``). ``prefer_project`` never filters; it only ranks
+(``retrieval.project_scope``), unless ``project_strict`` asks it to keep
+only that project's memories even if that leaves none. ``prefer_project`` never filters; it only ranks
 that project's memories higher. Reads only; ``matching_fact_ids`` never raises
 (a failure keeps nothing rather than everything).
 """
@@ -63,12 +64,18 @@ class Facets:
     kind: str | None = None
     #: 4.1.21 (#150): rank this project's memories higher; never a filter.
     prefer_project: str | None = None
+    #: 4.1.22: ``project`` keeps only that project's memories even when that
+    #: leaves none, like every other filter. Off: the 4.1.21 fall-back.
+    project_strict: bool = False
 
     @classmethod
     def of(cls, project: object = None, agent: object = None, about: object = None,
-          kind: object = None, prefer_project: object = None) -> "Facets":
-        return cls(_clean_project(project), _clean(agent), _clean(about), _clean(kind),
-                   _clean_project(prefer_project))
+          kind: object = None, prefer_project: object = None,
+          project_strict: object = False) -> "Facets":
+        clean = _clean_project(project)
+        return cls(clean, _clean(agent), _clean(about), _clean(kind),
+                   _clean_project(prefer_project),
+                   bool(project_strict) and clean is not None)
 
     @property
     def narrows(self) -> bool:
@@ -85,7 +92,7 @@ class Facets:
         return {k: v for k, v in (("project", self.project), ("agent", self.agent),
                                   ("about", self.about), ("kind", self.kind),
                                   ("prefer_project", self.prefer_project))
-                if v is not None}
+                if v is not None} | ({"project_strict": "true"} if self.project_strict else {})
 
 
 def _chunks(items: list[str], size: int = 500) -> Iterable[list[str]]:

@@ -94,6 +94,7 @@ class DaemonPoolProxy:
         about: str = "",
         kind: str = "",
         prefer_project: str = "",
+        project_strict: bool = False,
     ) -> dict[str, Any]:
         if self._unavailable:
             return self._unavailable_response()
@@ -129,6 +130,10 @@ class DaemonPoolProxy:
                                           ("prefer_project", prefer_project)):
             if (_facet_value or "").strip():
                 _params[_facet_name] = _facet_value.strip()
+        # 4.1.22: sent only when set, so every other recall's query string is
+        # unchanged.
+        if project_strict and (project or "").strip():
+            _params["project_strict"] = "true"
         # 4.1.19 WP8: sent only when set, so an unset kind keeps the query
         # string byte-identical to before this filter existed.
         if (kind or "").strip():

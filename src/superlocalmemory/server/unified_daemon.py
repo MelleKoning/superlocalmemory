@@ -1055,7 +1055,7 @@ from superlocalmemory.server.recall_core import (  # noqa: E402
 
 
 def _facet_kwargs(project: str, saved_by: str, about: str, kind: str | None = None,
-                  prefer_project: str = "") -> dict:
+                  prefer_project: str = "", project_strict: bool = False) -> dict:
     """{"facets": ...} when any recall facet was given, else {} (stand-ins
     of the engine need not know about facets).
 
@@ -1070,7 +1070,7 @@ def _facet_kwargs(project: str, saved_by: str, about: str, kind: str | None = No
     from superlocalmemory.retrieval.facets import Facets
 
     facets = Facets.of(project=project, agent=saved_by, about=about, kind=kind,
-                       prefer_project=prefer_project)
+                       prefer_project=prefer_project, project_strict=project_strict)
     return {} if facets.empty else {"facets": facets}
 
 
@@ -4694,6 +4694,9 @@ def _register_daemon_routes(application: FastAPI) -> None:
         # 4.1.21 (#150): rank this project's memories above others of similar
         # relevance; removes nothing.
         prefer_project: str = "",
+        # 4.1.22: with ``project``, keep only that project's memories even when
+        # that leaves none (no fall-back to unfiltered results).
+        project_strict: bool = False,
         # 4.1.19 WP8: only memories whose DISPLAYED kind matches. Refused
         # before any retrieval when it does not parse (never silently
         # ignored). See core.kind_query / retrieval.kind_filter.
@@ -4834,7 +4837,8 @@ def _register_daemon_routes(application: FastAPI) -> None:
             include_global=include_global, include_shared=include_shared,
             window=window, as_of=as_of, known_as_of=known_as_of, valid_at=valid_at,
             include_unknown=include_unknown,
-            facets=_facet_kwargs(project, saved_by, about, _kind, prefer_project).get("facets"),
+            facets=_facet_kwargs(project, saved_by, about, _kind, prefer_project,
+                                 project_strict).get("facets"),
             skip_answer_check=_skip_check, no_reorder=_check_request == "no_reorder",
             full=full, include_source=include_source,
             include_marker=bool(session_id),
