@@ -22,6 +22,12 @@ logger = logging.getLogger(__name__)
 _MIN_RETRY_SECONDS = 0.05
 _MAX_RETRY_SECONDS = 30.0
 
+#: Pause between batches, at most. Until the fill completes, link lookups scan
+#: the facts table (exact, but 60 ms or more per entity on a large store), so
+#: the fill should finish in minutes; a batch holds the write lock for about
+#: 50 ms, so a 0.25 s pause still leaves the store free four fifths of the time.
+MAX_TICK_SECONDS = 0.25
+
 
 def _publish(application, status: dict, **extra) -> None:
     application.state.entity_index_status = {
@@ -57,7 +63,7 @@ async def run_entity_index_backfill(
         _publish(application, status, retry_attempt=0, retry_delay_seconds=0.0)
         if status["state"] == "complete":
             return
-        await asyncio.sleep(max(0.0, float(tick_seconds)))
+        await asyncio.sleep(min(MAX_TICK_SECONDS, max(0.0, float(tick_seconds))))
 
 
 __all__ = ["run_entity_index_backfill"]
