@@ -189,21 +189,52 @@ def test_release_of_an_unwithheld_fact_is_refused(tmp_path: Path, monkeypatch) -
     assert ok is False and "nothing to release" in message
 
 
-@pytest.mark.parametrize("fact", [
-    "Publish with approval from the release owner",
-    "Ship the Android build before the iOS build",
-])
-def test_polarity_damage_is_withheld(tmp_path: Path, fact: str) -> None:
-    from superlocalmemory.core.source_fidelity_guard import withhold_if_unfaithful
+POLICY_SOURCE = ("Never publish without approval from the release owner. "
+                 "Ship the iOS build before the Android build. Costs were $12.50.")
 
+
+def _one_fact(tmp_path: Path, fact: str) -> DatabaseManager:
     db = _db(tmp_path / "memory.db")
-    source = ("Never publish without approval from the release owner. "
-              "Ship the iOS build before the Android build.")
     db.execute("INSERT INTO memories (memory_id,profile_id,content) VALUES ('m','default',?)",
-               (source,))
+               (POLICY_SOURCE,))
     db.execute("INSERT INTO atomic_facts (fact_id,memory_id,profile_id,content,fact_type) "
                "VALUES ('f','m','default',?,'semantic')", (fact,))
-    reason = withhold_if_unfaithful(db, profile_id="default", fact_id="f", content=fact,
-                                    raw_content=source)
-    assert reason and reason.startswith("source_fidelity:")
-    assert _state(db)["f"][0] == 1
+    return db
+
+
+@pytest.mark.parametrize(("fact", "reason"), [
+    ("Publish with approval from the release owner", "negation_lost"),
+    ("Ship the Android build before the iOS build", "order_reversed"),
+    ("Costs were $21.50", "unsupported_number"),
+])
+def test_heuristic_findings_flag_but_never_withhold(tmp_path: Path, fact: str,
+                                                    reason: str) -> None:
+    """Only number_became_date withholds; the rest stay in answers, marked."""
+    from superlocalmemory.core.source_fidelity_guard import withhold_if_unfaithful
+
+    db = _one_fact(tmp_path, fact)
+    got = withhold_if_unfaithful(db, profile_id="default", fact_id="f", content=fact,
+                                 raw_content=POLICY_SOURCE)
+    assert got == f"source_fidelity_unverified:{reason}"
+    assert _state(db)["f"][0] == 0, "a heuristic finding must not take a fact out of answers"
+
+
+def test_recall_marks_unverified_results_and_leaves_the_rest(tmp_path: Path) -> None:
+    from superlocalmemory.retrieval.source_fidelity_flags import flag_unverified
+    from superlocalmemory.storage.models import AtomicFact, RetrievalResult
+
+    db = _one_fact(tmp_path, "Publish with approval from the release owner")
+    db.execute("INSERT INTO atomic_facts (fact_id,memory_id,profile_id,content,fact_type) "
+               "VALUES ('v','m','default',?,'semantic')", (POLICY_SOURCE,))
+    results = [RetrievalResult(fact=AtomicFact(fact_id=i, content=""), score=1.0,
+                               evidence_chain=["bm25"]) for i in ("f", "v")]
+    out = flag_unverified(results, db, "default")
+    assert out[0].evidence_chain == ["bm25", "source_fidelity_unverified:negation_lost"]
+    assert out[1].evidence_chain == ["bm25"], "the verbatim memory is never marked"
+    assert [r.score for r in out] == [1.0, 1.0] and results[0].evidence_chain == ["bm25"]
+    # a released fact is not marked, and an error never costs the recall
+    db.execute("INSERT INTO derivation_lineage (lineage_id,profile_id,object_type,object_id,"
+               "operation_id,source_status,unresolved_reason) VALUES "
+               "('l','default','fact','f','op','unresolved','source_fidelity_released:x')")
+    assert flag_unverified(results, db, "default")[0].evidence_chain == ["bm25"]
+    assert flag_unverified(results, object(), "default") is results

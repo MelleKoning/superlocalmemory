@@ -2,14 +2,19 @@
 # Licensed under AGPL-3.0-or-later - see LICENSE file
 # Part of SuperLocalMemory V3 | https://qualixar.com | https://varunpratap.com
 
-"""Withhold a derived fact that changes what its source memory said.
+"""Withhold or flag a derived fact that changes what its source memory said.
 
 Runs where a remember is checkpointed, for every final fact that is not an
-exact span of the raw text the caller sent. A fact that turns a number into a
-date, introduces a date or measurement the source never stated, or drops a
-"never" / reverses an order / loses a "previously" is not stored as a trusted
-answer: it is withheld (``quarantined = 1``) and the reason is written to its
-derivation lineage as ``source_fidelity:<reasons>``.
+exact span of the raw text the caller sent.
+
+* A fact that turns a source number into a date (``number_became_date``, the
+  proven 4.1.21 harm: "2004.6 ms" stored as June 2004) is withheld
+  (``quarantined = 1``); its lineage reason is ``source_fidelity:<reasons>``.
+* Every other finding — a date or measurement the source never stated, a
+  dropped "never", a reversed order, a lost "previously" — is a heuristic with
+  known faithful-paraphrase hits ("is not enabled" -> "is disabled"). The fact
+  stays in answers; its lineage reason is ``source_fidelity_unverified:<reasons>``
+  and recall marks it unverified (``retrieval/source_fidelity_flags.py``).
 
 Withholding is reversible and loses nothing. The row, its text and its
 provenance stay on disk; the memory's own verbatim fact, which is an exact
@@ -30,6 +35,10 @@ logger = logging.getLogger(__name__)
 REASON_PREFIX = "source_fidelity:"
 #: Prefix once the user released it (``slm db fidelity --release``).
 RELEASED_PREFIX = "source_fidelity_released:"
+#: Prefix for a fact that stays in answers, marked unverified.
+FLAGGED_PREFIX = "source_fidelity_unverified:"
+#: The only findings precise enough to take a fact out of answers.
+WITHHOLD_REASONS = frozenset({"number_became_date"})
 
 
 def _released_reason(db: Any, profile_id: str, fact_id: str) -> str | None:
@@ -61,7 +70,7 @@ def withhold_if_unfaithful(
     content: str,
     raw_content: str,
 ) -> str | None:
-    """Return the lineage reason when the fact was withheld, else None.
+    """Return the lineage reason when the fact was withheld or flagged, else None.
 
     Never raises: a failure to check leaves the fact as it was and is logged,
     because a fidelity check must never cost the user a write.
@@ -76,6 +85,8 @@ def withhold_if_unfaithful(
     released = _released_reason(db, profile_id, fact_id)
     if released:
         return released  # the user judged it correct; never withhold it again
+    if not WITHHOLD_REASONS & set(report.reasons):
+        return FLAGGED_PREFIX + "+".join(report.reasons)
     reason = REASON_PREFIX + "+".join(report.reasons)
     if _has_quarantine_column(db):
         db.execute(
@@ -90,4 +101,5 @@ def withhold_if_unfaithful(
     return reason
 
 
-__all__ = ["REASON_PREFIX", "RELEASED_PREFIX", "withhold_if_unfaithful"]
+__all__ = ["FLAGGED_PREFIX", "REASON_PREFIX", "RELEASED_PREFIX", "WITHHOLD_REASONS",
+           "withhold_if_unfaithful"]

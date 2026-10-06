@@ -75,8 +75,7 @@ POLICY_EXTRACTION = [
     {"text": "The team uses GitHub Actions", "fact_type": "semantic",
      "entities": ["GitHub Actions"], "importance": 6, "confidence": 0.9},
 ]
-BAD_TEXTS = {
-    "The recall happened on June 1st, 2004",
+POLICY_DAMAGE = {
     "Publish with approval from the release owner",
     "Ship the Android build before the iOS build",
     "The team uses Jenkins",
@@ -276,29 +275,42 @@ class TestModeBModelExtraction:
         assert contents, "the memory is still found"
         assert not any("2004-06" in c or "June 1st, 2004" in c for c in contents), contents
 
-    def test_negation_order_and_status_are_preserved(self, mode_b_daemon) -> None:
+    def test_polarity_damage_stays_in_answers_marked_unverified(self, mode_b_daemon) -> None:
+        """Heuristic findings never withhold; recall marks them in evidence_chain."""
         _remember_and_enrich(mode_b_daemon, POLICY, "g03-b-policy")
-        facts = _memory_facts(mode_b_daemon, POLICY)
-        by_text = {f["content"]: f for f in facts}
-        for text in BAD_TEXTS & set(by_text):
-            assert by_text[text]["quarantined"] == 1, text
-        assert BAD_TEXTS & set(by_text), "the stub's damaged facts reached the store"
+        by_text = {f["content"]: f for f in _memory_facts(mode_b_daemon, POLICY)}
+        damaged = POLICY_DAMAGE & set(by_text)
+        assert damaged == POLICY_DAMAGE, "the stub's damaged facts reached the store"
+        for text in damaged:
+            assert by_text[text]["quarantined"] == 0, text
+            assert by_text[text]["unresolved_reason"].startswith("source_fidelity_unverified:")
         assert by_text["The team uses GitHub Actions"]["quarantined"] == 0
         assert by_text[POLICY]["quarantined"] == 0, "the verbatim memory is never withheld"
-        contents = _recall_contents(mode_b_daemon, "publish approval release owner")
-        assert "Publish with approval from the release owner" not in contents
-        assert any("Never publish without approval" in c for c in contents), contents
 
-    def test_withheld_facts_are_offered_for_review(self, mode_b_daemon) -> None:
+        items = []
+        for query in ("publish approval release owner", "ship iOS Android build order",
+                      "team Jenkins GitHub Actions"):
+            items += mode_b_daemon.recall(query, profile_id="default").get("results", [])
+        seen = {str(i.get("content", "")): i for i in items}
+        assert any("Never publish without approval" in c for c in seen), sorted(seen)
+        flagged = [t for t in damaged if t in seen]
+        assert flagged, "at least one damaged fact is recalled so its mark can be checked"
+        for text in flagged:
+            assert any(str(e).startswith("source_fidelity_unverified:")
+                       for e in seen[text].get("evidence_chain", [])), seen[text]
+        for text in ({POLICY} | GOOD_TEXTS) & set(seen):
+            assert not any(str(e).startswith("source_fidelity")
+                           for e in seen[text].get("evidence_chain", [])), seen[text]
+
+    def test_withheld_and_unverified_facts_are_offered_for_review(self, mode_b_daemon) -> None:
         listing = _fidelity_listing(mode_b_daemon)
         withheld_ids = {f["fact_id"] for f in listing["withheld"]["facts"]}
         stored = _rows(mode_b_daemon, "SELECT fact_id FROM atomic_facts WHERE quarantined = 1")
-        assert withheld_ids == {r["fact_id"] for r in stored}
-        assert listing["withheld"]["total"] >= 4
-        reasons = {r for f in listing["withheld"]["facts"] for r in f["reasons"]}
-        assert {"number_became_date", "negation_lost", "order_reversed",
-                "status_lost"} <= reasons, reasons
-
+        assert withheld_ids == {r["fact_id"] for r in stored} and withheld_ids
+        withheld_reasons = {r for f in listing["withheld"]["facts"] for r in f["reasons"]}
+        assert withheld_reasons == {"number_became_date"}, withheld_reasons
+        review_reasons = {r for f in listing["to_review"]["facts"] for r in f["reasons"]}
+        assert {"negation_lost", "order_reversed", "status_lost"} <= review_reasons
 
     def test_correction_apply_and_rollback_keep_the_measurement(self, mode_b_daemon) -> None:
         facts = _memory_facts(mode_b_daemon, KESTREL)

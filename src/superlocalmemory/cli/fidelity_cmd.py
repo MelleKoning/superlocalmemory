@@ -10,14 +10,17 @@
 
 The listing is read-only and safe while the daemon runs. It shows two groups:
 
-* **withheld** — derived facts the write path kept out of answers because they
-  changed the source (a number read as a date, an invented measurement, a lost
-  "never");
-* **to review** — older facts, written before that check existed, that fail it
-  today. Nothing about them is changed automatically: a model must not rewrite
-  what you stored. ``--withhold FACT_ID`` takes one out of answers (undo with
-  ``--release``); or correct it with ``slm update FACT_ID "..."`` (a
-  reviewable, undoable correction) and finish with ``slm review-correction``.
+* **withheld** — derived facts the write path kept out of answers because a
+  source number was turned into a date ("2004.6 ms" stored as June 2004);
+* **to review** — facts still in answers that fail the check today: an unstated
+  date or measurement, a dropped "never", a reversed order, a lost
+  "previously". Recall marks each one ``source_fidelity_unverified:<reasons>``
+  in its ``evidence_chain``. Older facts, written before the check existed,
+  are listed here too. Nothing about them is changed automatically: a model
+  must not rewrite what you stored. ``--withhold FACT_ID`` takes one out of
+  answers (undo with ``--release``); or correct it with ``slm update FACT_ID
+  "..."`` (a reviewable, undoable correction) and finish with
+  ``slm review-correction``.
 
 ``--release`` puts a withheld fact back into answers when you judge it correct.
 It is recorded, so the same fact is not withheld again.
@@ -234,7 +237,7 @@ def cmd_db_fidelity(args: Namespace) -> int:
         return 0
     _print_group("Withheld from answers", withheld_total, withheld,
                  "Correct ones: slm db fidelity --release FACT_ID (with SLM stopped)")
-    _print_group("Older facts to review", review_total, review,
+    _print_group("In answers, marked unverified", review_total, review,
                  "Review: slm db fidelity --withhold FACT_ID (undoable), or "
                  'slm update FACT_ID "the right text" then slm review-correction')
     if not withheld_total and not review_total:
