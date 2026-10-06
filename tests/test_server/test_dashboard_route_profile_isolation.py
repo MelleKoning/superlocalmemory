@@ -17,7 +17,6 @@ rebinds synchronously — and that ``WorkerPool`` is never touched by them.
 
 from __future__ import annotations
 
-import asyncio
 import json
 
 import pytest
@@ -301,9 +300,8 @@ def test_cluster_summary_never_uses_worker_pool(engine_with_mock_deps) -> None:
     )
     memories_module.get_active_profile = lambda: "alpha"
     try:
-        result = asyncio.run(
-            memories_module.get_cluster_detail(request, "scene-1", limit=50)
-        )
+        # A sync route since 4.1.22: FastAPI runs it off the request loop.
+        result = memories_module.get_cluster_detail(request, "scene-1", limit=50)
     finally:
         memories_module.get_db_connection = original_get_conn
         memories_module.get_active_profile = original_get_profile

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 
 def _function_block(source: str, function_name: str) -> str:
-    start = source.index(f"async def {function_name}")
+    start = source.index(f"def {function_name}(")  # a sync or an async route
     next_route = source.find("\n@router.", start + 1)
     return source[start: next_route if next_route != -1 else None]
 
