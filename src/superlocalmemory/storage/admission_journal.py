@@ -495,13 +495,15 @@ class AdmissionJournal:
             recovered += 1
         return recovered
 
-    def quarantine(self, journal_id: str) -> AdmissionEntry:
+    def quarantine(
+        self, journal_id: str, *, deadline: float | None = None,
+    ) -> AdmissionEntry:
         """Set aside an entry whose command cannot be read; nothing is deleted."""
         logger.error(
             "a saved memory cannot be read back by this machine's key and was set "
             "aside (journal entry %s); its original bytes are kept", journal_id,
         )
-        return self.mark_rejected(journal_id, UNREADABLE_COMMAND)
+        return self.mark_rejected(journal_id, UNREADABLE_COMMAND, deadline=deadline)
 
     def quarantined_count(self) -> int:
         """How many saves were set aside as unreadable."""

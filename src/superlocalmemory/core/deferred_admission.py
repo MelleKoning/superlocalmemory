@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -41,6 +42,23 @@ CommitFn = Callable[[AdmissionEntry, RememberRequest], Mapping[str, Any]]
 _FIRST_BACKOFF_SECONDS = 0.05
 _MAX_BACKOFF_SECONDS = 2.0
 _STOP_JOIN_SECONDS = 10.0
+#: H2 (2026-10-06): bookkeeping stamps (mark_committed/mark_rejected/
+#: quarantine) used to pass no deadline at all, so a locked journal file made
+#: the writer's own BEGIN IMMEDIATE ride out its full unbounded busy wait
+#: (journal_writer._UNBOUNDED_BUSY_SECONDS, 5s) once per attempt -- and
+#: remember_runtime.stop() joins this worker thread before releasing the
+#: writer lease, so that 5s was directly on the shutdown path. These are
+#: pure background stamps (the underlying remember was already durably
+#: committed by self._commit() before any of them run): giving up early and
+#: retrying costs nothing but a short delay, since the next attempt (or the
+#: journal's own replay_pending at the next start) redoes the same
+#: idempotent stamp. A short, bounded deadline is strictly better than an
+#: unbounded wait here.
+_BOOKKEEPING_DEADLINE_SECONDS = 2.0
+
+
+def _bookkeeping_deadline() -> float:
+    return time.monotonic() + _BOOKKEEPING_DEADLINE_SECONDS
 
 
 class DeferredCommitter:
@@ -139,10 +157,12 @@ class DeferredCommitter:
             if entry.state in {"committed", "rejected"}:
                 return True
             receipt = self._commit(entry, self._journal.request_for(entry))
-            self._journal.mark_committed(journal_id, receipt)
+            self._journal.mark_committed(journal_id, receipt, deadline=_bookkeeping_deadline())
             return True
         except TerminalAdmissionError as exc:
-            self._journal.mark_rejected(journal_id, exc.error_code)
+            self._journal.mark_rejected(
+                journal_id, exc.error_code, deadline=_bookkeeping_deadline(),
+            )
             logger.warning(
                 "an accepted remember was rejected by deterministic policy (%s)",
                 exc.error_code,
@@ -151,7 +171,7 @@ class DeferredCommitter:
         except AdmissionPayloadError:
             # Retrying cannot help. Set it aside with its bytes kept, so it is
             # counted in status and never replayed (or blocks a start) again.
-            self._journal.quarantine(journal_id)
+            self._journal.quarantine(journal_id, deadline=_bookkeeping_deadline())
             return True
         except Exception as exc:  # contention, a stalled writer, I/O
             logger.warning(
