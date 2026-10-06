@@ -414,6 +414,7 @@ class IngestionOperationRepository:
         derivation_state: dict[str, bool],
         lease_owner: str,
         lease_seconds: float,
+        lineage_plan: Any = None,  # derivation_lineage.checkpoint_with_lineage
     ) -> IngestionOperation:
         """Durably checkpoint relational derivation before external indexes."""
         rows = self.db.execute(
@@ -435,16 +436,9 @@ class IngestionOperationRepository:
         if not rows:
             raise InvalidStateTransition("enriching checkpoint lost ownership")
         operation = self._from_row(rows[0])
-        from superlocalmemory.core.derivation_lineage import capture_operation_lineage
+        from superlocalmemory.core.derivation_lineage import apply_checkpoint_lineage
 
-        capture_operation_lineage(
-            self.db,
-            operation_id=operation.operation_id,
-            profile_id=operation.profile_id,
-            raw_content=operation.raw_content,
-            fact_ids=operation.final_fact_ids,
-            derivation_version=operation.derivation_version,
-        )
+        apply_checkpoint_lineage(self.db, operation, lineage_plan)
         return operation
 
     def renew_enriching_lease(
@@ -949,15 +943,17 @@ class IngestionCommand:
                 name for name, complete in derivation_state.items()
                 if not complete
             )
-            with self.repository.db.transaction():
-                checkpointed = self.repository.checkpoint_enriching(
-                    operation_id,
-                    final_fact_ids=fact_ids,
-                    derivation_version=self._derivation_version,
-                    derivation_state=derivation_state,
-                    lease_owner=self._owner,
-                    lease_seconds=self._lease_seconds,
-                )
+            from superlocalmemory.core.derivation_lineage import checkpoint_with_lineage
+
+            # Lineage is read and checked first; the one transaction only writes.
+            checkpointed = checkpoint_with_lineage(
+                self.repository, enriching,
+                final_fact_ids=fact_ids,
+                derivation_version=self._derivation_version,
+                derivation_state=derivation_state,
+                lease_owner=self._owner,
+                lease_seconds=self._lease_seconds,
+            )
             if materialization_error or incomplete:
                 error = materialization_error or (
                     "incomplete derivation stages: " + ", ".join(incomplete)

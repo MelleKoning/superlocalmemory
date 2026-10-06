@@ -16,6 +16,7 @@ import os
 import uuid
 from typing import TYPE_CHECKING, Protocol
 
+from superlocalmemory.core.derivation_lineage import checkpoint_with_lineage
 from superlocalmemory.core.ingestion_command import (
     IngestionCommand,
     IngestionOperation,
@@ -674,8 +675,8 @@ def build_engine_ingestion_command(
             checkpoint_fact_ids: tuple[str, ...],
             state: dict[str, bool],
         ) -> None:
-            repository.checkpoint_enriching(
-                operation.operation_id,
+            checkpoint_with_lineage(
+                repository, operation,
                 final_fact_ids=checkpoint_fact_ids,
                 derivation_version=_DERIVATION_VERSION,
                 derivation_state=state,
@@ -772,10 +773,7 @@ def build_engine_ingestion_command(
             operation.operation_id,
             final_fact_ids=(),
             derivation_version=_DERIVATION_VERSION,
-            derivation_state={
-                "pipeline_started": True,
-                "pipeline": False,
-            },
+            derivation_state={"pipeline_started": True, "pipeline": False},
             lease_owner=operation.lease_owner,
             lease_seconds=900.0,
         )
@@ -793,8 +791,8 @@ def build_engine_ingestion_command(
             fact_ids: tuple[str, ...],
             state: dict[str, bool],
         ) -> None:
-            repository.checkpoint_enriching(
-                operation.operation_id,
+            checkpoint_with_lineage(
+                repository, operation,
                 final_fact_ids=fact_ids,
                 derivation_version=_DERIVATION_VERSION,
                 derivation_state=state,
