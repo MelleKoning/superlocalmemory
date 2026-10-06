@@ -47,9 +47,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Limits:
-    batch_size: int = 200
+    batch_size: int = 100
     pause_s: float = 0.05
     max_seconds: float | None = None
+    confirm_s: float = 2.0
 
 
 @dataclass
@@ -57,8 +58,14 @@ class RunStats:
     run_id: str
     started: float = field(default_factory=time.monotonic)
     holds_ms: list[float] = field(default_factory=list)
+    step_max_ms: dict[str, float] = field(default_factory=dict)
+    step: str = ""
     done: dict[str, int] = field(default_factory=dict)
     stopped: bool = False
+
+    def hold(self, ms: float) -> None:
+        self.holds_ms.append(ms)
+        self.step_max_ms[self.step] = round(max(ms, self.step_max_ms.get(self.step, 0.0)), 1)
 
     def add(self, key: str, n: int) -> None:
         if n:
@@ -100,7 +107,7 @@ class Repair:
                 conn.execute("ROLLBACK")
                 raise
             finally:
-                stats.holds_ms.append((time.monotonic() - t0) * 1000.0)
+                stats.hold((time.monotonic() - t0) * 1000.0)
         time.sleep(self.limits.pause_s)
 
     # -- steps ----------------------------------------------------------------
@@ -111,17 +118,22 @@ class Repair:
             for k in census.ORPHAN_CLASSES:
                 if k.action != census.REMOVE:
                     continue
-                while True:
-                    rowids = census.orphan_rowids(conn, k, self.limits.batch_size)
-                    if not rowids:
-                        break
+                # Listed once, then confirmed after a pause: a writer that
+                # commits a child row a moment before its parent (another
+                # transaction still open) is never mistaken for an orphan. The
+                # orphan check is repeated again inside each write.
+                candidates = census.orphan_rowids(conn, k, 10**9)
+                if not candidates:
+                    continue
+                time.sleep(self.limits.confirm_s)
+                step = self.limits.batch_size
+                for start in range(0, len(candidates), step):
                     with self._held(stats, conn):
-                        removed = self._remove_batch(conn, stats.run_id, k, rowids)
+                        removed = self._remove_batch(conn, stats.run_id, k,
+                                                     candidates[start:start + step])
                     stats.add(f"orphans.{k.table}", removed)
                     if self.on_batch:
                         self.on_batch(f"orphans.{k.table}", removed)
-                    if removed == 0:
-                        break  # every listed row got its parent back meanwhile
         finally:
             conn.close()
 
@@ -158,10 +170,13 @@ class Repair:
                 stats.add("vectors.skipped_no_extension", 1)
                 return
             conn.isolation_level = None
-            while True:
-                rowids = unreferenced_rowids(conn, self.limits.batch_size)
-                if not rowids:
-                    return
+            candidates = unreferenced_rowids(conn)
+            if not candidates:
+                return
+            time.sleep(self.limits.confirm_s)  # see _orphans; re-checked in the write too
+            step = self.limits.batch_size
+            for start in range(0, len(candidates), step):
+                rowids = candidates[start:start + step]
                 with self._held(stats, conn):
                     refs = {int(r[0]) for t in ("embedding_metadata", "vector_row_map")
                             for r in conn.execute(f"SELECT vec_rowid FROM {t}")}  # noqa: S608
@@ -173,8 +188,6 @@ class Repair:
                                      {"rows": len(gone), "rowids": gone}, {"rows": 0},
                                      undoable=False)
                 stats.add("vectors.fact_embeddings", len(gone))
-                if not gone:
-                    return
 
     def _erased_text(self, stats: RunStats) -> None:
         from superlocalmemory.core import erasure_scrub
@@ -200,7 +213,7 @@ class Repair:
                         "?, 'words of an erased memory were still stored', ?, ?, 0, ?)",
                         (stats.run_id, fact_id, '{"copies": %d}' % sum(counts.values()),
                          json.dumps(counts, sort_keys=True), time.time()))
-                stats.holds_ms.append((time.monotonic() - t0) * 1000.0)
+                stats.hold((time.monotonic() - t0) * 1000.0)
             stats.add("erased_text.copies_scrubbed", sum(counts.values()))
             time.sleep(self.limits.pause_s)
 
@@ -287,6 +300,7 @@ class Repair:
         status = "finished"
         try:
             for step in self.STEPS:
+                stats.step = step
                 getattr(self, f"_{step}")(stats)
         except _OutOfTime:
             status = "stopped"
@@ -302,6 +316,7 @@ class Repair:
                     "run_id": stats.run_id, "status": status, "done": stats.done,
                     "batches": len(stats.holds_ms),
                     "max_lock_hold_ms": round(max(stats.holds_ms, default=0.0), 1),
+                    "max_lock_hold_ms_by_step": stats.step_max_ms,
                     "seconds": round(time.monotonic() - stats.started, 2),
                     "before": before, "after": after,
                 }

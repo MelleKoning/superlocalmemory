@@ -34,7 +34,7 @@ def register_db_integrity_parsers(db_sub: Any) -> None:
     r.add_argument("--apply", action="store_true", help="Make the changes the preview lists")
     r.add_argument("--undo", default="", metavar="RUN_ID", help="Put back what a run changed")
     r.add_argument("--root", default="", help="The data folder to change (required to change)")
-    r.add_argument("--batch-size", type=int, default=200, help="Rows per short write")
+    r.add_argument("--batch-size", type=int, default=100, help="Rows per short write")
     r.add_argument("--pause-ms", type=int, default=50, help="Pause between writes")
     r.add_argument("--max-seconds", type=float, default=None,
                    help="Stop after this long; run again to continue")

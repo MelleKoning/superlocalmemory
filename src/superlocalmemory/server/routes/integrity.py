@@ -24,7 +24,7 @@ router = APIRouter(prefix="/api/integrity", tags=["integrity"])
 class RepairRequest(BaseModel):
     root: str = Field(..., min_length=1, max_length=4096)
     undo_run_id: str = Field("", max_length=64)
-    batch_size: int = Field(200, ge=1, le=5000)
+    batch_size: int = Field(100, ge=1, le=5000)
     pause_ms: int = Field(50, ge=0, le=10_000)
     max_seconds: float | None = Field(None, gt=0)
 
