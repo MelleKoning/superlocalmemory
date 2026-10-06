@@ -15,6 +15,7 @@ in turn and require one answer.
 from __future__ import annotations
 
 import os
+import sqlite3
 import subprocess
 import sys
 import time
@@ -301,3 +302,26 @@ class TestTheBackfill:
         asyncio.run(run_entity_index_backfill(app, path, batch_size=20, tick_seconds=0.0))
         assert app.state.entity_index_status["state"] == "complete"
         assert app.state.entity_index_status["inserted"] == 6 * 5 + 30 * 3 + 30
+
+    def test_a_batch_is_bounded_by_pairs_not_facts(self, tmp_path: Path, monkeypatch) -> None:
+        """A batch of entity-heavy facts must still be a short transaction."""
+        path = tmp_path / "old.db"
+        build_store(path).execute("DELETE FROM fact_entity_associations")
+        monkeypatch.setattr(entity_index, "MAX_PAIRS_PER_BATCH", 6)
+        first = entity_index.backfill(path, batch_size=250, max_batches=1)
+        assert first["scanned"] == 1 and first["inserted"] == 5  # a seed: 5 pairs
+        while not entity_index.backfill(path, batch_size=250, max_batches=1)["complete"]:
+            pass
+        assert entity_index.status(path)["inserted"] == 6 * 5 + 30 * 3 + 30
+
+
+def test_a_snapshot_that_cannot_open_still_finds_the_bridges(db, monkeypatch) -> None:
+    from superlocalmemory.storage import memory_write
+
+    expected = _discover(db)
+
+    def refuse(_path):
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr(memory_write, "memory_read", refuse)
+    assert _discover(db) == expected
