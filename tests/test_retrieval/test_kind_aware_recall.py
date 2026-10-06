@@ -327,3 +327,56 @@ def test_clamp_boost(raw, expected) -> None:
 def test_a_zero_boost_moves_nothing() -> None:
     res = [_r("a", 0.90), _r("d", 0.89, "decision")]
     assert _ids(apply_kind_awareness(res, "what did we decide", boost=0.0)) == ["a", "d"]
+
+
+# --- 4.1.22 G10: newer confirmed rules, and questions about a current value ---
+
+@pytest.mark.parametrize("query,current", [
+    ("What is the recall latency ceiling?", True),
+    ("what's the remember ceiling", True),
+    ("Which editor do we use?", True),
+    ("How many embedding workers run?", True),
+    ("What was the recall ceiling in August?", False),
+    ("Tell me about Laya", False),
+    ("Who maintains the bounded loops server?", False),
+])
+def test_a_question_about_a_current_value_is_recognised(query, current) -> None:
+    assert query_intent(query).current_value is current
+
+
+def test_a_current_value_question_puts_the_newer_confirmed_rule_first() -> None:
+    old = _r("ceiling-2s", 0.95, "rule", created="2026-08-20")
+    new = _r("ceiling-3s", 0.70, "rule", created="2026-10-03")
+    out = apply_kind_awareness([old, new], "What is the recall latency ceiling?",
+                               subject=frozenset({"e_slm"}))
+    assert _ids(out) == ["ceiling-3s", "ceiling-2s"]
+    assert "newer:ceiling-3s" in out[1].evidence_chain
+
+
+def test_a_current_value_question_never_reorders_suggested_kinds() -> None:
+    old = _r("ceiling-2s", 0.95, "rule", "rules", created="2026-08-20")
+    new = _r("ceiling-3s", 0.70, "rule", "rules", created="2026-10-03")
+    out = apply_kind_awareness([old, new], "What is the recall latency ceiling?",
+                               subject=frozenset({"e_slm"}))
+    assert _ids(out) == ["ceiling-2s", "ceiling-3s"]
+
+
+def test_a_question_about_the_past_keeps_the_older_rule_where_it_was() -> None:
+    old = _r("ceiling-2s", 0.95, "rule", created="2026-08-20")
+    new = _r("ceiling-3s", 0.70, "rule", created="2026-10-03")
+    out = apply_kind_awareness([old, new], "What was the recall ceiling in August?",
+                               subject=frozenset({"e_slm"}))
+    assert _ids(out) == ["ceiling-2s", "ceiling-3s"]
+
+
+def test_a_current_value_question_never_boosts_a_kind_by_itself() -> None:
+    results = [_r("plain", 0.90), _r("d", 0.85, "decision")]
+    assert _ids(apply_kind_awareness(results, "what is the release process")) == ["plain", "d"]
+
+
+def test_a_newer_rule_does_not_pass_an_older_decision() -> None:
+    decision = _r("decision-old", 0.9, "decision", created="2026-09-01")
+    rule = _r("rule-new", 0.5, "rule", created="2026-10-01")
+    out = apply_kind_awareness([decision, rule], "what is the recall ceiling",
+                               subject=frozenset({"e_slm"}))
+    assert _ids(out) == ["decision-old", "rule-new"]
