@@ -514,6 +514,8 @@ def register_core_tools(server, get_engine: Callable) -> None:
         about: str = "",
         kind: str = "",
         prefer_project: str = "",
+        tags: "str | list[str]" = "",
+        tags_match: str = "all",
     ) -> dict:
         """Search memories through hybrid retrieval, RRF fusion, and reranking.
 
@@ -578,6 +580,17 @@ def register_core_tools(server, get_engine: Callable) -> None:
         including memories SLM only mapped from their legacy type. Refused
         (``INVALID_KIND``) before anything is retrieved if it does not parse.
         Composes with ``project``/``saved_by``/``about`` as AND.
+
+        ``tags`` (4.1.22): only memories saved with these exact labels (a
+        comma-separated string, or a list — a label containing a comma needs
+        the list form). Matched by canonical identity: case, surrounding
+        whitespace and how the tag happened to be stored (a CSV string, a
+        JSON-array string, or a real list) never matter. ``tags_match`` is
+        ``"all"`` (every label must be present — the default) or ``"any"``.
+        A hard filter that composes with every other facet as AND; unlike
+        ``project`` it never falls back to unfiltered results — an empty
+        answer says why in ``tag_scope`` (nobody ever saved that tag, versus
+        something has it but not among this question's matches).
         """
         # v3.6.10: resolve "mcp_client" sentinel → URL path (HTTP) or env var (stdio)
         if agent_id == "mcp_client":
@@ -675,6 +688,13 @@ def register_core_tools(server, get_engine: Callable) -> None:
                        if (v or "").strip()},
                     # 4.1.19 WP8: the already-validated, normalized kind.
                     **({"kind": _kind} if _kind else {}),
+                    # 4.1.22 (G05): forwarded only when set, same as every
+                    # other facet above.
+                    **({"tags": tags if isinstance(tags, list) else tags.strip()}
+                       if (tags if isinstance(tags, list) else (tags or "").strip())
+                       else {}),
+                    **({"tags_match": tags_match.strip()}
+                       if (tags_match or "").strip().lower() == "any" else {}),
                 )
 
             result = await asyncio.to_thread(

@@ -315,6 +315,8 @@ def register_v3_tools(server, get_engine: Callable) -> None:
         project: str = "",
         prefer_project: str = "",
         profile_id: str = "",
+        tags: "str | list[str]" = "",
+        tags_match: str = "all",
     ) -> dict:
         """Recall with per-channel score breakdown.
 
@@ -332,6 +334,8 @@ def register_v3_tools(server, get_engine: Callable) -> None:
                 ``same_project``; ``project_scope`` says what was applied.
             profile_id: recall another profile (empty = the active one), as
                 ``recall`` takes it; the active profile is not moved.
+            tags / tags_match: exactly as ``recall`` takes them (4.1.22);
+                ``tag_scope`` says what the filter did.
         """
         try:
             import asyncio
@@ -366,6 +370,12 @@ def register_v3_tools(server, get_engine: Callable) -> None:
                                                  ("prefer_project", prefer_project),
                                                  ("profile_id", profile_id))
                        if (v or "").strip()},
+                    # 4.1.22 (G05): sent only when set, same as the facets above.
+                    **({"tags": tags if isinstance(tags, list) else tags.strip()}
+                       if (tags if isinstance(tags, list) else (tags or "").strip())
+                       else {}),
+                    **({"tags_match": tags_match.strip()}
+                       if (tags_match or "").strip().lower() == "any" else {}),
                 )
             )
             if ((profile_id or "").strip() and isinstance(raw, dict)
