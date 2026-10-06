@@ -35,6 +35,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from superlocalmemory.core.config import EncodingConfig
 from superlocalmemory.encoding import llm_kind_hint
+from superlocalmemory.encoding.date_resolution import keep_supported_dates, try_parse_date
 from superlocalmemory.encoding.prospective_markers import looks_prospective
 from superlocalmemory.storage.models import AtomicFact, FactType, Mode, SignalType
 
@@ -148,7 +149,14 @@ _SYSTEM_PROMPT = (
     "5. Extract relationships between people when mentioned.\n"
     "6. Extract preferences, opinions, and experiences as SEPARATE facts.\n"
     "7. Skip greetings, filler, social pleasantries, and confirmations.\n"
-    "8. For opinions, include a confidence between 0.0-1.0.\n\n"
+    "8. For opinions, include a confidence between 0.0-1.0.\n"
+    "9. Copy every number exactly as written, with its unit: measurements, "
+    "durations, amounts, percentages, versions, ports and ids. A number is "
+    "never a date: '2004.6 ms' stays '2004.6 ms', 'v4.1.21' stays 'v4.1.21'. "
+    "Only words that name a time ('yesterday', 'next Tuesday') are resolved.\n"
+    "10. Keep the meaning: never drop 'never', 'not', 'no' or 'without'; keep "
+    "the stated order of steps ('A before B'); keep 'previously' and "
+    "'currently' on what was and what is.\n\n"
     "Classify each fact:\n"
     "- episodic: personal event or experience (visited, attended, did)\n"
     "- semantic: objective fact about the world (jobs, locations, relations)\n"
@@ -189,79 +197,9 @@ def _extract_date_string(text: str) -> str | None:
     return None
 
 
-def _try_parse_date(raw: str, reference_date: str | None = None) -> str | None:
-    """Attempt to resolve a date string to ISO format.
-
-    Uses dateutil.parser for structured dates and dateparser for
-    relative expressions ("last Monday", "next week").
-    Returns None on failure — never raises.
-    """
-    if not raw:
-        return None
-
-    # Fast path: already ISO
-    iso_match = re.match(r"^\d{4}-\d{2}-\d{2}$", raw.strip())
-    if iso_match:
-        return raw.strip()
-
-    # dateutil for structured dates (March 15, 2026 / 3/15/2026)
-    try:
-        from dateutil import parser as du_parser
-        result = du_parser.parse(raw, fuzzy=True)
-        return result.date().isoformat()
-    except Exception:
-        pass
-
-    # V3.3.21: Rule-based relative date resolution (no dateparser dependency).
-    # Handles the 90% case: yesterday, today, tomorrow, last X, next X.
-    raw_lower = raw.strip().lower()
-    if reference_date:
-        try:
-            from datetime import datetime, timedelta
-            ref_dt = du_parser.parse(reference_date)
-            _RELATIVE_MAP: dict[str, int] = {
-                "yesterday": -1, "today": 0, "tomorrow": 1,
-                "the day before": -2, "the other day": -2,
-                "day before yesterday": -2,
-            }
-            if raw_lower in _RELATIVE_MAP:
-                resolved = ref_dt + timedelta(days=_RELATIVE_MAP[raw_lower])
-                return resolved.date().isoformat()
-            # "last week" = -7, "last month" ≈ -30, "last year" = -365
-            if raw_lower == "last week":
-                return (ref_dt - timedelta(days=7)).date().isoformat()
-            if raw_lower == "last month":
-                month = ref_dt.month - 1 or 12
-                year = ref_dt.year if ref_dt.month > 1 else ref_dt.year - 1
-                return f"{year}-{month:02d}-{ref_dt.day:02d}"
-            if raw_lower == "last year":
-                return f"{ref_dt.year - 1}-{ref_dt.month:02d}-{ref_dt.day:02d}"
-            if raw_lower == "next week":
-                return (ref_dt + timedelta(days=7)).date().isoformat()
-            if raw_lower == "next month":
-                month = ref_dt.month + 1 if ref_dt.month < 12 else 1
-                year = ref_dt.year if ref_dt.month < 12 else ref_dt.year + 1
-                return f"{year}-{month:02d}-{ref_dt.day:02d}"
-        except Exception:
-            pass
-
-    # dateparser for complex relative dates (optional dependency)
-    try:
-        import dateparser
-        settings: dict[str, Any] = {"PREFER_DATES_FROM": "past"}
-        if reference_date:
-            ref = dateparser.parse(reference_date)
-            if ref:
-                settings["RELATIVE_BASE"] = ref
-        result = dateparser.parse(raw, settings=settings)
-        if result:
-            return result.date().isoformat()
-    except ImportError:
-        pass
-    except Exception:
-        pass
-
-    return None
+#: Date resolution lives in ``date_resolution`` with the guard that keeps
+#: measurements ("2004.6 ms", "4.1.21", "$12.50") away from the date parser.
+_try_parse_date = try_parse_date
 
 
 def _extract_interval(text: str, ref_date: str | None = None) -> tuple[str | None, str | None]:
@@ -683,6 +621,7 @@ class FactExtractor:
             f"- Each fact must make sense WITHOUT the original conversation.\n"
             f"- For dates mentioned (\"yesterday\", \"next week\"), resolve to "
             f"ISO format relative to {session_date or 'today'}.\n"
+            "- Copy numbers, units, versions and ids exactly; a number is never a date.\n"
             f"- Skip greetings, filler, and confirmations.\n"
             f"- importance: 1 (trivial) to 10 (critical)\n"
             f"- confidence: 0.0 (uncertain) to 1.0 (definite)\n\n"
@@ -703,7 +642,8 @@ class FactExtractor:
                 think=False,
             )
             facts = self._parse_llm_response(raw, session_id, session_date)
-            return self._reflexion_refine(conversation_text, facts)
+            return keep_supported_dates(self._reflexion_refine(conversation_text, facts),
+                                        conversation_text)
         except Exception as exc:
             logger.warning("LLM fact extraction failed: %s", exc)
             return []

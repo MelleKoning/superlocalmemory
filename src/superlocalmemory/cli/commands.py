@@ -121,10 +121,10 @@ def _cmd_db_dispatch(args: Namespace) -> None:
         if rc:
             sys.exit(rc)
         return
-    if sub in ("restore-points", "restore", "prepare-downgrade"):
-        from superlocalmemory.cli import upgrade_cmd
+    if sub in ("restore-points", "restore", "prepare-downgrade", "fidelity"):
+        from superlocalmemory.cli import fidelity_cmd, upgrade_cmd
         handler = {"restore-points": upgrade_cmd.cmd_db_restore_points,
-                   "restore": upgrade_cmd.cmd_db_restore,
+                   "restore": upgrade_cmd.cmd_db_restore, "fidelity": fidelity_cmd.cmd_db_fidelity,
                    "prepare-downgrade": upgrade_cmd.cmd_db_prepare_downgrade}[sub]
         rc = handler(args)
         if rc:
@@ -135,7 +135,7 @@ def _cmd_db_dispatch(args: Namespace) -> None:
         "| slm db scale <action> "
         "| slm db regraph [--check] [--profile NAME] "
         "| slm db reembed [--missing-only] [--all-profiles] [--limit N] "
-        "| slm db compact [--offline]"
+        "| slm db compact [--offline] | slm db fidelity [--withhold|--release ID]"
     )
     sys.exit(2)
 

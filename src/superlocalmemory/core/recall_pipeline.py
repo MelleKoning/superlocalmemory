@@ -1487,13 +1487,12 @@ def run_recall(
     # pinned just above; retrieval.kind_aware=False skips it (retrieval/kind_aware).
     if response.results:
         from superlocalmemory.core.working_memory import ADMIT_TOP_N as _KTOP
-        from superlocalmemory.retrieval import kind_aware as _kind_aware
-
+        from superlocalmemory.retrieval import kind_aware, source_fidelity_flags
         _shown_before_kind = [r.fact.fact_id for r in response.results[:_KTOP]
                               if getattr(r, "fact", None) is not None]
-        response.results = _kind_aware.apply_for_recall(
+        response.results = source_fidelity_flags.flag_unverified(kind_aware.apply_for_recall(
             response.results, query, profile_id, getattr(config, "retrieval", None),
-            engine=retrieval_engine, db=db)
+            engine=retrieval_engine, db=db), db, profile_id)  # G03: unverified source
         _resettle_shown_after_bias(play_sink, profile_id, response.results,
                                    _shown_before_kind)
     _mark("learning+ranking")

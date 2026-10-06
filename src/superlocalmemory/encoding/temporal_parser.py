@@ -25,6 +25,7 @@ from typing import Any
 from dateutil.parser import parse as dateutil_parse, ParserError
 from dateutil.relativedelta import relativedelta
 
+from superlocalmemory.encoding.typed_values import looks_like_calendar_date
 from superlocalmemory.storage.models import AtomicFact, TemporalEvent
 
 logger = logging.getLogger(__name__)
@@ -353,8 +354,12 @@ class TemporalParser:
     # ------------------------------------------------------------------
 
     def _try_parse(self, text: str) -> datetime | None:
-        """Attempt to parse a text fragment as a date."""
-        if not text or len(text.strip()) < 3:
+        """Attempt to parse a text fragment as a date.
+
+        Only date-shaped fragments reach the fuzzy parser: "from 1,234 to
+        2,000 ms" is a range of measurements, not the years 234 to 2000.
+        """
+        if not text or len(text.strip()) < 3 or not looks_like_calendar_date(text):
             return None
         try:
             return dateutil_parse(text, fuzzy=True)
