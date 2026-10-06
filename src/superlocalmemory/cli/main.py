@@ -397,6 +397,8 @@ def main() -> None:
     )
     from superlocalmemory.cli.fidelity_cmd import register_db_fidelity_parser
     register_db_fidelity_parser(db_sub)  # 4.1.22: facts that changed their memory
+    from superlocalmemory.cli.integrity_cmd import register_db_integrity_parsers
+    register_db_integrity_parsers(db_sub)  # 4.1.22: store health and receipted repair
 
     db_reembed_p = db_sub.add_parser(
         "reembed",
