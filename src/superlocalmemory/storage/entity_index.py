@@ -50,6 +50,20 @@ logger = logging.getLogger(__name__)
 #: The backfill's row in ``fact_entity_association_repair_state``.
 REPAIR_KEY = "entity-index-coverage"
 
+#: Q7 (2026-10-06): a separate, NEVER-terminal row for the continuous gap
+#: sweep below. REPAIR_KEY's ``target_fact_rowid`` is a one-time snapshot
+#: taken when the row is first created (``INSERT OR IGNORE``, never
+#: refreshed): a fact written by any path that bypasses the real-time
+#: ``record_fact_entities`` hook -- an older version reached by a downgrade,
+#: a restore or import that inserts rows directly -- after that snapshot
+#: falls outside the range REPAIR_KEY will ever scan again once it reports
+#: "complete". This key's sweep re-derives its target to the current
+#: ``MAX(rowid)`` at the end of every lap and wraps its cursor back to the
+#: start instead of stopping, so it keeps revisiting the whole table and
+#: will catch a gap introduced at any time, not only the one that existed
+#: when it first ran.
+GAP_REPAIR_KEY = "entity-index-coverage-gap"
+
 #: Fact/entity pairs written per backfill transaction. Each costs about 0.1 ms
 #: (two indexes and the foreign keys), so a batch holds the write lock for
 #: about 50 ms and a remember waiting behind it barely notices. Bounding by
@@ -194,6 +208,118 @@ def _backfill_batch(conn: sqlite3.Connection, batch_size: int,
         (int(rows[done - 1][0]), done, inserted, _now(), REPAIR_KEY),
     )
     return {"scanned": done, "inserted": inserted, "complete": False}
+
+
+def _ensure_gap_state(conn: sqlite3.Connection) -> None:
+    target = int(conn.execute(
+        "SELECT COALESCE(MAX(rowid), 0) FROM atomic_facts",
+    ).fetchone()[0])
+    conn.execute(
+        "INSERT OR IGNORE INTO fact_entity_association_repair_state "
+        "(repair_key,state,target_fact_rowid,updated_at) VALUES (?,?,?,?)",
+        (GAP_REPAIR_KEY, "pending", target, _now()),
+    )
+
+
+def _gap_sweep_batch(conn: sqlite3.Connection, batch_size: int,
+                     max_pairs: int) -> dict[str, Any]:
+    """One bounded step of the never-ending coverage sweep (Q7).
+
+    Re-applies the same idempotent insert ``record_fact_entities`` would
+    have made, for a bounded window of facts in rowid order. A fact already
+    fully indexed costs one cheap ``INSERT OR IGNORE`` no-op per entity; a
+    fact missing some or all of its pairs (written by a path that bypassed
+    the real-time hook) gets them filled -- no separate "detect a gap"
+    query is needed, because attempting the fill IS the detection. At the
+    end of a lap the target is re-derived to the current ``MAX(rowid)`` and
+    the cursor wraps back to the start, so the sweep never permanently
+    stops the way the one-time ``REPAIR_KEY`` backfill does.
+    """
+    _ensure_gap_state(conn)
+    cursor, target = conn.execute(
+        "SELECT last_fact_rowid,target_fact_rowid "
+        "FROM fact_entity_association_repair_state WHERE repair_key=?",
+        (GAP_REPAIR_KEY,),
+    ).fetchone()
+    rows = conn.execute(
+        "SELECT rowid,fact_id,profile_id,canonical_entities_json "
+        "FROM atomic_facts WHERE rowid>? ORDER BY rowid LIMIT ?",
+        (int(cursor), batch_size),
+    ).fetchall()
+    if not rows:
+        new_target = int(conn.execute(
+            "SELECT COALESCE(MAX(rowid), 0) FROM atomic_facts",
+        ).fetchone()[0])
+        conn.execute(
+            "UPDATE fact_entity_association_repair_state SET "
+            "last_fact_rowid=0,target_fact_rowid=?,state='complete',"
+            "last_error='',updated_at=? WHERE repair_key=?",
+            (new_target, _now(), GAP_REPAIR_KEY),
+        )
+        return {"scanned": 0, "inserted": 0, "lap_complete": True}
+    inserted = pairs = done = 0
+    for rowid, fact_id, profile_id, raw in rows:
+        entities = entity_ids(raw)
+        if done and pairs + len(entities) > max_pairs:
+            break  # the rest is the next batch's; one fact always fits
+        inserted += _insert_pairs(conn.execute, fact_id, profile_id,
+                                  entities, "gap-sweep")
+        pairs += len(entities)
+        done += 1
+    conn.execute(
+        "UPDATE fact_entity_association_repair_state SET state='running',"
+        "last_fact_rowid=?,scanned=scanned+?,inserted=inserted+?,"
+        "last_error='',updated_at=? WHERE repair_key=?",
+        (int(rows[done - 1][0]), done, inserted, _now(), GAP_REPAIR_KEY),
+    )
+    return {"scanned": done, "inserted": inserted, "lap_complete": False}
+
+
+def repair_coverage_gap(db_path: Path, *, batch_size: int = 250,
+                        max_batches: int = 1) -> dict[str, Any]:
+    """Run up to ``max_batches`` short gap-sweep batches. Safe to repeat.
+
+    Unlike ``backfill``, this never reaches a terminal "nothing more to do
+    ever" state: it is meant to be called repeatedly (by the daemon, in the
+    background, indefinitely) so a coverage gap introduced at any time --
+    not only the one that existed the first time this ran -- is eventually
+    found and repaired.
+    """
+    from superlocalmemory.storage.memory_write import memory_write
+
+    if batch_size < 1 or max_batches < 1:
+        raise ValueError("batch_size and max_batches must be positive")
+    totals: dict[str, Any] = {"scanned": 0, "inserted": 0, "laps_completed": 0}
+    for _ in range(max_batches):
+        with memory_write(Path(db_path)) as conn:
+            conn.execute("PRAGMA foreign_keys=ON")
+            result = _gap_sweep_batch(conn, batch_size, MAX_PAIRS_PER_BATCH)
+        totals["scanned"] += result["scanned"]
+        totals["inserted"] += result["inserted"]
+        if result["lap_complete"]:
+            totals["laps_completed"] += 1
+    return totals
+
+
+def gap_sweep_status(db_path: Path) -> dict[str, Any]:
+    """Durable gap-sweep progress, for the daemon's status report."""
+    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    try:
+        row = conn.execute(
+            "SELECT state,target_fact_rowid,last_fact_rowid,scanned,inserted,"
+            "last_error,updated_at FROM fact_entity_association_repair_state "
+            "WHERE repair_key=?", (GAP_REPAIR_KEY,),
+        ).fetchone()
+    except sqlite3.Error:
+        row = None
+    finally:
+        conn.close()
+    keys = ("state", "target_fact_rowid", "last_fact_rowid", "scanned",
+            "inserted", "last_error", "updated_at")
+    if row is None:
+        return {"state": "pending", "target_fact_rowid": 0, "last_fact_rowid": 0,
+                "scanned": 0, "inserted": 0, "last_error": "", "updated_at": ""}
+    return dict(zip(keys, row))
 
 
 def backfill(db_path: Path, *, batch_size: int = 250,
@@ -351,5 +477,6 @@ def facts_for_entity(
     return [(str(fid), entity_ids(ents)) for fid, ents in _rows(db, conn, sql, args)]
 
 
-__all__ = ["REPAIR_KEY", "backfill", "entity_ids", "facts_for_entity",
-           "is_complete", "lookup_session", "record_fact_entities", "record_rewritten_fact", "status"]
+__all__ = ["GAP_REPAIR_KEY", "REPAIR_KEY", "backfill", "entity_ids",
+           "facts_for_entity", "gap_sweep_status", "is_complete", "lookup_session",
+           "record_fact_entities", "record_rewritten_fact", "repair_coverage_gap", "status"]

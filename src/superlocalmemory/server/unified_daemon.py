@@ -1563,9 +1563,21 @@ async def _fact_entity_association_repair_loop(
         # Then index every fact M028 never reached (storage/entity_index.py).
         from superlocalmemory.server.entity_index_repair import (
             run_entity_index_backfill,
+            run_entity_index_gap_sweep,
         )
 
         await run_entity_index_backfill(
+            application, memory_db_path,
+            batch_size=batch_size, tick_seconds=tick_seconds,
+        )
+        # Q7: the one-time backfill above only ever covers facts up to the
+        # rowid snapshot it took when it first ran. This runs for the rest
+        # of the process's life, in bounded batches, so a fact written by a
+        # path that bypasses the real-time indexing hook (an older version
+        # reached by a downgrade, a restore, a direct import) is found and
+        # repaired whenever it was introduced, not only if it existed at
+        # this one startup.
+        await run_entity_index_gap_sweep(
             application, memory_db_path,
             batch_size=batch_size, tick_seconds=tick_seconds,
         )
@@ -5600,6 +5612,12 @@ def _register_daemon_routes(application: FastAPI) -> None:
             # Background fill of the entity index bridge discovery reads.
             "entity_index_backfill": getattr(
                 application.state, "entity_index_status", None,
+            ),
+            # Q7: the never-terminal sweep that runs after the backfill
+            # above completes, catching a coverage gap introduced later
+            # (a downgrade, a restore, a direct import).
+            "entity_index_gap_sweep": getattr(
+                application.state, "entity_index_gap_status", None,
             ),
             # v3.8.2: zero-pain self-heal progress (embeddings/expansion/vector
             # index backfill after an upgrade). Dashboard renders a plain
