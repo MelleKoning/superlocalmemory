@@ -59,6 +59,10 @@ def _capture_backbone(monkeypatch, provider: str, api_base: str) -> list[dict]:
     sent: list[dict] = []
     backbone = LLMBackbone(LLMConfig(provider=provider, model="m", api_key="k",
                                      api_base=api_base))
+    # This test is about what a request contains, not whether a real local
+    # Ollama happens to be reachable on the machine running it -- that is
+    # ollama_reachability's own concern, covered by its own tests.
+    monkeypatch.setattr(backbone, "is_available", lambda: True)
 
     def _send(url, headers, payload):
         sent.append({"url": url, "payload": payload})
