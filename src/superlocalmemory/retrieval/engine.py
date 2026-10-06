@@ -690,7 +690,8 @@ class RetrievalEngine:
         # recall (core.recall_pipeline -> project_scope.prefer_in_final_order),
         # after learned ranking has rewritten every score. Here it only chose
         # which candidates made the cut (boost_order above).
-        results = self._build_results(final_top, facts, strat)
+        results = self._build_results(final_top, facts, strat,
+                                      reranked=reranker_applied)
         ms = (time.monotonic() - t0) * 1000.0
         stage_ms["retrieval_total"] = round(ms, 1)
         no_match = floor_enabled and len(results) == 0
@@ -1542,7 +1543,7 @@ class RetrievalEngine:
 
     def _build_results(
         self, fused: list[FusionResult], fact_map: dict[str, AtomicFact],
-        strat: QueryStrategy,
+        strat: QueryStrategy, *, reranked: bool = False,
     ) -> list[RetrievalResult]:
         from datetime import UTC, datetime
         now = datetime.now(UTC)
@@ -1656,6 +1657,7 @@ class RetrievalEngine:
                 memory_confidence=fact.confidence,
                 evidence_chain=evidence,
                 trust_score=raw_trust,
+                rerank_score=fr.fused_score if reranked else None,
             ))
         # ranking_score incorporates every modifier computed in this loop
         # (Ebbinghaus decay, quality, trust, and the query-type-conditioned

@@ -461,6 +461,9 @@ class RetrievalResult:
     # can validate that a fact_id observed in tool output really came from
     # this install. Empty string by default preserves backward-compat.
     marker: str = ""
+    # The cross-encoder's score for this result, when it ran: what later
+    # layers may reorder only within a bound (retrieval/reranker_lead.py).
+    rerank_score: float | None = None
 
 
 @dataclass

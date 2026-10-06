@@ -1402,6 +1402,12 @@ def run_recall(
     # Bound before the try: everything after it reads the sink, and an empty
     # sink is the "no play recorded" case every reader already handles.
     play_sink: dict = {}
+    # What the cross-encoder scored, read before the learned layers rebuild
+    # the results; their order may then overturn only a near-tie of it.
+    _rerank_anchors = {
+        r.fact.fact_id: r.rerank_score for r in response.results
+        if getattr(r, "rerank_score", None) is not None
+    }
     try:
         import os as _os
         import uuid as _uuid
@@ -1417,6 +1423,13 @@ def run_recall(
         )
     except Exception as exc:
         logger.debug("Ranking pipeline skipped: %s", exc)
+    if _rerank_anchors and response.results:
+        from superlocalmemory.retrieval.reranker_lead import hold_reranker_lead
+
+        _shown_before_lead = _top_ids(response.results)
+        response.results = hold_reranker_lead(response.results, _rerank_anchors)
+        _resettle_shown_after_bias(play_sink, profile_id, response.results,
+                                   _shown_before_lead)
 
     # Continuity of attention, applied after every learned layer and outside
     # the ranking-version switch: a session's recent memories bias this answer
