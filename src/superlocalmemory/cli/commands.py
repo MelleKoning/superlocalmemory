@@ -753,6 +753,7 @@ def cmd_serve(args: Namespace) -> None:
     from superlocalmemory.cli.daemon import (
         is_daemon_running, ensure_daemon, stop_daemon,
         read_descriptor, _descriptor_process_is_alive,
+        owned_daemon_process_alive,
     )
 
     action = getattr(args, 'action', 'start')
@@ -784,6 +785,20 @@ def cmd_serve(args: Namespace) -> None:
                 "Daemon is still starting and did not respond to stop in "
                 "time; it may still be running. Run `slm serve stop` again, "
                 "or `slm doctor`."
+            )
+        elif owned_daemon_process_alive():
+            # Q10 (2026-10-06): stop_daemon() returning False here does NOT
+            # mean there was no daemon -- owned_daemon_process_alive() just
+            # proved the opposite (PID/start-token liveness, no HTTP
+            # involved). Reproduced live: a write burst exhausted the
+            # loopback rate-limit budget, and the very next POST /stop got
+            # HTTP 429 too (daemon_request() has no 429 handling, so it
+            # looks exactly like "no response"); the daemon itself never
+            # stopped. A dropped stop request must never be reported as
+            # "was not running" (see g02-final-measurements.md §1b).
+            print(
+                "Daemon is running but did not stop; the request may have "
+                "been dropped. Run `slm serve stop` again, or `slm doctor`."
             )
         else:
             print("Daemon was not running.")

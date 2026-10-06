@@ -233,6 +233,11 @@ logger = logging.getLogger("superlocalmemory.unified_daemon")
 _DEFAULT_PORT = 8765
 _LEGACY_PORT = 8767
 _ACTIVE_DAEMON_DESCRIPTOR: DaemonDescriptor | None = None
+# Q10 (2026-10-06): daemon-control paths, never data writes. A burst of real
+# memory writes must never make the daemon's own stop/health plumbing look
+# like "no daemon" to an already-authenticated caller -- see the
+# rate_limit_middleware comment at the call site for the reproduced bug.
+_RATE_LIMIT_EXEMPT_PATHS = frozenset({"/stop"})
 _SOURCE_QUALITY_MAX_BATCH_SIZE = 250
 _SOURCE_QUALITY_PROFILE_REFRESH_SECONDS = 60.0
 _FACT_ENTITY_REPAIR_MIN_RETRY_SECONDS = 0.05
@@ -3966,6 +3971,20 @@ def _register_dashboard_routes(application: FastAPI) -> None:
 
         @application.middleware("http")
         async def rate_limit_middleware(request, call_next):
+            # Q10 (2026-10-06): a daemon-control call, not a data write, must
+            # never be rejected by the same budget a burst of memory writes
+            # can exhaust. Reproduced live: a seeding burst drained the
+            # loopback write budget (300/60s); the very next POST /stop was
+            # counted as just another write and got HTTP 429 too, which the
+            # CLI's daemon_request() cannot distinguish from "no daemon"
+            # (its HTTPError handling special-cases 401/403/409/404/422, not
+            # 429) -- so `slm serve stop` reported "Daemon was not running"
+            # while the process was still alive and listening. /stop is
+            # already authenticated by a private per-instance capability
+            # header (_require_daemon_actor), not by request volume, so
+            # exempting it from the limiter loses no security guarantee.
+            if request.url.path in _RATE_LIMIT_EXEMPT_PATHS:
+                return await call_next(request)
             client_ip = request.client.host if request.client else "unknown"
             # Remote-listener callers all carry the same placeholder peer;
             # count each real peer address separately.
