@@ -23,10 +23,16 @@ import sys
 import tempfile
 import time
 import urllib.error
-import urllib.request
-from pathlib import Path
+import urllib.request  # noqa: F401 - patched by callers and tests
+from pathlib import Path  # noqa: F401 - kept for callers of this module
 
-from superlocalmemory import __version__
+from superlocalmemory import __version__  # noqa: F401 - re-exported for callers
+from superlocalmemory.hooks.hook_deadline import HookDeadline, Watchdog
+
+# 4.1.22 end-to-end deadlines, each under the host's limit (Claude Code reads
+# hook timeouts in seconds: SessionStart 15 s, Stop 10 s).
+CLAUDE_START_DEADLINE_S = 12.0
+CLAUDE_STOP_DEADLINE_S = 8.0
 
 # ---------------------------------------------------------------------------
 # Cross-platform temp paths
@@ -114,7 +120,12 @@ def _daemon_post(path: str, body: dict, timeout: float = 3.0) -> bool:
     try:
         from superlocalmemory.cli.daemon import daemon_request
 
-        response = daemon_request("POST", path, body)
+        # 4.1.22: the timeout is honoured (it was ignored: 30 s per call), and a
+        # hook never waits out a daemon start — it is best effort by design.
+        response = daemon_request(
+            "POST", path, body,
+            timeout_seconds=max(0.5, float(timeout)), start_wait_seconds=0,
+        )
         return isinstance(response, dict) and bool(
             response.get("ok", True)
         )
@@ -180,160 +191,30 @@ def handle_hook(action: str) -> None:
     handler()
 
 
-def _codex_payload() -> dict:
-    """Read Codex's documented JSON hook payload without failing closed."""
-    try:
-        value = json.load(sys.stdin)
-        return value if isinstance(value, dict) else {}
-    except Exception:
-        return {}
-
-
-def _apply_codex_session(payload: dict) -> str:
-    """Map Codex lifecycle fields onto the shared SLM session primitives."""
-    project_dir = payload.get("cwd")
-    if not isinstance(project_dir, str) or not project_dir:
-        project_dir = os.getcwd()
-    os.environ["CLAUDE_PROJECT_DIR"] = project_dir
-    session_id = payload.get("session_id")
-    if isinstance(session_id, str) and session_id:
-        # Shared handlers use this neutral lifecycle identity despite its
-        # historical environment-variable name.  It is never sent to a host.
-        os.environ["CLAUDE_SESSION_ID"] = session_id
-        # Presence is separate from memory correctness and is deliberately
-        # fail-open.  It lets the portable Living Brain show that Codex is
-        # genuinely active, rather than pretending an installed hook is a
-        # connected client.
-        try:
-            from superlocalmemory.hooks.session_registry import (
-                mark_active,
-                resolve_active_profile,
-            )
-            mark_active(
-                session_id,
-                agent_type="codex",
-                profile_id=resolve_active_profile(),
-            )
-        except Exception:
-            pass
-    return project_dir
-
-
-def _codex_mcp_session_init(project_dir: str, payload: dict) -> dict:
-    """Open SLM lifecycle attribution through packaged ``slm mcp``.
-
-    This mirrors MCP clients instead of embedding a personal executable path.
-    Hook failure is intentionally fail-open: Codex sessions remain usable if
-    the local daemon or MCP server is unavailable.
-    """
-    query = payload.get("prompt") or payload.get("user_prompt") or Path(project_dir).name
-    if not isinstance(query, str):
-        query = Path(project_dir).name
-    proc = None
-    try:
-        proc = subprocess.Popen(
-            ["slm", "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True,
-        )
-        assert proc.stdin is not None and proc.stdout is not None
-        proc.stdin.write(json.dumps({
-            "jsonrpc": "2.0", "id": 1, "method": "initialize",
-            "params": {"protocolVersion": "2024-11-05", "capabilities": {},
-                       "clientInfo": {
-                           "name": "superlocalmemory-codex-hook",
-                           "version": __version__,
-                       }},
-        }) + "\n")
-        proc.stdin.flush()
-        proc.stdout.readline()
-        proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}) + "\n")
-        proc.stdin.write(json.dumps({
-            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-            "params": {"name": "session_init", "arguments": {
-                "project_path": project_dir, "query": query[:500],
-                "max_results": 10, "max_age_days": 30,
-            }},
-        }) + "\n")
-        proc.stdin.flush()
-        deadline = time.monotonic() + 12
-        while time.monotonic() < deadline:
-            line = proc.stdout.readline()
-            if not line:
-                break
-            response = json.loads(line)
-            if response.get("id") == 2:
-                content = response.get("result", {}).get("content", [])
-                if content and isinstance(content[0], dict):
-                    return json.loads(content[0].get("text") or "{}")
-                return response.get("result", {})
-    except Exception:
-        return {}
-    finally:
-        if proc is not None:
-            try:
-                proc.kill()
-                proc.wait(timeout=1)
-            except Exception:
-                pass
-    return {}
+# Codex lifecycle hooks live in codex_handlers (4.1.22); names re-exported.
+from superlocalmemory.hooks.codex_handlers import (  # noqa: E402, F401 - re-exported
+    _apply_codex_session,
+    _codex_mcp_session_init,
+    _codex_payload,
+)
 
 
 def _hook_codex_start() -> None:
-    """Codex SessionStart: create lifecycle session and inject fast context."""
-    payload = _codex_payload()
-    project_dir = _apply_codex_session(payload)
-    session = _codex_mcp_session_init(project_dir, payload)
-    context = ""
-    try:
-        result = subprocess.run(
-            ["slm", "session-context", Path(project_dir).name or "general"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode == 0:
-            context = result.stdout.strip()
-    except Exception:
-        pass
-    session_msg = "SLM session_init unavailable"
-    if session.get("session_id"):
-        session_msg = (
-            f"SLM session_init OK: {session['session_id']} "
-            f"({session.get('memory_count', 0)} memories, "
-            f"{session.get('retrieval_mode', 'unknown')})"
-        )
-        # session_init already carries the answer-check judge's verdict
-        # (abstained / abstention_reason) — this summary must not drop it
-        # just because it only quotes 3 of the dict's fields. "" when no
-        # judge is configured, or when the judge found a confident answer.
-        if session.get("abstention_reason") == "judged_insufficient":
-            session_msg += (
-                " — answer check: none of these memories answers the query."
-            )
-    print(json.dumps({
-        "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": (
-            f"{session_msg}\n\n" + (context or "(SLM context unavailable.)")
-        )},
-        "systemMessage": session_msg,
-    }))
+    from superlocalmemory.hooks.codex_handlers import hook_codex_start
+
+    hook_codex_start()
 
 
 def _hook_codex_prompt() -> None:
-    """Codex prompt event: retain existing topic and rehash signals."""
-    payload = _codex_payload()
-    _apply_codex_session(payload)
-    for action in ("user_prompt_rehash", "topic_shift"):
-        try:
-            proc = subprocess.run(["slm", "hook", action], input=json.dumps(payload),
-                                  text=True, capture_output=True, timeout=4)
-            if proc.stdout.strip():
-                print(proc.stdout.strip())
-        except Exception:
-            continue
+    from superlocalmemory.hooks.codex_handlers import hook_codex_prompt
+
+    hook_codex_prompt()
 
 
 def _hook_codex_stop() -> None:
-    """Codex Stop: reuse the daemon-backed session checkpoint handler."""
-    _apply_codex_session(_codex_payload())
-    _hook_stop()
+    from superlocalmemory.hooks.codex_handlers import hook_codex_stop
+
+    hook_codex_stop(_hook_stop)
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +287,7 @@ def _hook_mandate() -> None:
 
 def _hook_start() -> None:
     """Clean markers, inject SQL-fast context, print session_init guidance."""
+    deadline = HookDeadline(CLAUDE_START_DEADLINE_S)
     # Clean stale markers from previous sessions
     for f in (_MARKER, _START_TIME, _ACTIVITY_LOG):
         try:
@@ -421,23 +303,10 @@ def _hook_start() -> None:
     with open(_ACTIVITY_LOG, "w", encoding="utf-8") as f:
         f.write("")
 
-    # Reap orphan MCP processes (background, best-effort)
-    try:
-        if sys.platform != "win32":
-            subprocess.Popen(
-                ["sh", "-c",
-                 "ps -eo pid,args 2>/dev/null"
-                 " | grep -E 'node.*\\.bin/|node.*slm |uv tool uvx'"
-                 " | grep -v grep"
-                 " | awk '{print $1, $NF}'"
-                 " | sort -k2,2 -k1,1rn"
-                 " | awk '{if($2==p)print $1; p=$2}'"
-                 " | xargs kill 2>/dev/null"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-    except Exception:
-        pass
+    # 4.1.22: the orphan "reaper" that killed node/slm processes by matching
+    # their command lines is gone. It could end another live session's MCP
+    # server (parallel Claude/Codex starts), and orphans are already handled
+    # by each MCP server's own parent watchdog and stdin-EOF monitor.
 
     # Print session context (SQL-fast path, <500ms)
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
@@ -445,7 +314,8 @@ def _hook_start() -> None:
     try:
         result = subprocess.run(
             ["slm", "session-context", project_name],
-            capture_output=True, text=True, timeout=12,
+            capture_output=True, text=True,
+            timeout=max(0.5, deadline.remaining(reserve=0.5)),
         )
         if result.stdout.strip():
             print(result.stdout.strip())
@@ -555,14 +425,14 @@ def _hook_checkpoint() -> None:
 
             # v3.4.13: Route through daemon HTTP (not subprocess) to prevent
             # memory blast from concurrent embedding_worker spawns.
-            _daemon_post("/remember", {
+            _daemon_post("/remember", {  # PostToolUse limit: 5 s
                 "content": f"File changed: {basename}",
                 "tags": "hook-file-change",
                 "idempotency_key": (
                     f"hook-file-change:{_safe_hash(file_path)}:"
                     f"{now // max(_OBSERVE_COOLDOWN, 1)}"
                 ),
-            })
+            }, timeout=2.0)
 
             # Log to session activity
             try:
@@ -595,8 +465,23 @@ def _hook_checkpoint() -> None:
 # 5. STOP — Stop hook (session end)
 # ---------------------------------------------------------------------------
 
-def _hook_stop() -> None:
-    """Save rich session summary + trigger auto-consolidation."""
+def _hook_stop(deadline: "HookDeadline | None" = None) -> None:
+    """Save rich session summary + trigger auto-consolidation.
+
+    4.1.22: every step reads one deadline (Claude Code's Stop limit is 10 s);
+    a watchdog ends the process quietly if anything still overruns. Codex's
+    wrapper passes its own deadline and owns its own watchdog.
+    """
+    watchdog = None
+    if deadline is None:
+        deadline = HookDeadline(CLAUDE_STOP_DEADLINE_S)
+        watchdog = Watchdog(CLAUDE_STOP_DEADLINE_S + 1.0, lambda: "").start()
+
+    def _git_timeout() -> float:
+        return max(0.2, min(3.0, deadline.remaining(reserve=4.0)))
+
+    def _post_timeout() -> float:
+        return max(0.5, min(3.0, deadline.remaining(reserve=0.5)))
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
     project_name = os.path.basename(project_dir)
     timestamp = time.strftime("%Y-%m-%d %H:%M")
@@ -611,36 +496,27 @@ def _hook_stop() -> None:
         return s.strip().rsplit("\n", 1)[-1].strip() if s.strip() else ""
     try:
         with ThreadPoolExecutor(max_workers=3) as _pool:
+            _gt = _git_timeout()
             fut_branch = _pool.submit(
                 _run_quiet,
-                ["git", "-C", project_dir, "branch", "--show-current"],
+                ["git", "-C", project_dir, "branch", "--show-current"], _gt,
             )
             fut_diff = _pool.submit(
                 _run_quiet,
-                ["git", "-C", project_dir, "diff", "--stat"],
+                ["git", "-C", project_dir, "diff", "--stat"], _gt,
                 postprocess=_diff_pp,
             )
             fut_log = _pool.submit(
                 _run_quiet,
                 ["git", "-C", project_dir, "log", "--oneline", "-5",
-                 "--since=3 hours ago"],
+                 "--since=3 hours ago"], _gt,
             )
-            git_branch = fut_branch.result(timeout=6)
-            git_diff = fut_diff.result(timeout=6)
-            recent_commits = fut_log.result(timeout=6)
+            git_branch = fut_branch.result(timeout=_gt + 1)
+            git_diff = fut_diff.result(timeout=_gt + 1)
+            recent_commits = fut_log.result(timeout=_gt + 1)
     except Exception:
         # Defensive fallback to the original serial path.
-        git_branch = _run_quiet(
-            ["git", "-C", project_dir, "branch", "--show-current"]
-        )
-        git_diff = _run_quiet(
-            ["git", "-C", project_dir, "diff", "--stat"],
-            postprocess=_diff_pp,
-        )
-        recent_commits = _run_quiet(
-            ["git", "-C", project_dir, "log", "--oneline", "-5",
-             "--since=3 hours ago"],
-        )
+        git_branch = git_diff = recent_commits = ""
 
     # --- Files from activity log ---
     modified = ""
@@ -680,16 +556,16 @@ def _hook_stop() -> None:
             f"hook-session-end:{session_id}"
             if session_id else f"hook-session-end:{_safe_hash(summary)}"
         ),
-    }, timeout=5.0)
+    }, timeout=_post_timeout())
 
     # --- Post-session skill evolution trigger (best-effort, via tool-event) ---
-    if session_id:
+    if session_id and deadline.remaining() > 1.0:
         _daemon_post("/api/v3/tool-event", {
             "tool_name": "session_end",
             "event_type": "session_end",
             "session_id": session_id,
             "output_summary": summary[:500],
-        })
+        }, timeout=_post_timeout())
 
         # LLD-11 opt-in post-session evolution (MASTER-PLAN D3).
         # Only fires when the user explicitly enabled evolution. The env
@@ -707,7 +583,8 @@ def _hook_stop() -> None:
                 )
 
     # --- Auto-consolidation (if >24h since last run) ---
-    _maybe_consolidate()
+    if deadline.remaining() > 1.0:
+        _maybe_consolidate()
 
     # --- Clean up session markers ---
     for f in (_MARKER, _START_TIME, _ACTIVITY_LOG):
@@ -730,6 +607,8 @@ def _hook_stop() -> None:
             except OSError:
                 pass
 
+    if watchdog is not None:
+        watchdog.cancel()
     sys.exit(0)
 
 

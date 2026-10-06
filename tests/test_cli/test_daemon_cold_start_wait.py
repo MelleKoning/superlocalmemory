@@ -1,0 +1,387 @@
+"""4.1.22: daemon-backed calls made while the daemon is still starting.
+
+Before 4.1.22 the first ``remember`` after an MCP host started SLM failed at
+once with ``DAEMON_UNAVAILABLE (daemon_unreachable)``, because the daemon the
+MCP server had just spawned needed seconds to answer ``/health`` and every
+call waited only for one 2 s probe. These tests pin the replacement contract:
+
+* a start in progress (descriptor ``starting`` + live process, or this process
+  spawning) gets a bounded wait, then the call proceeds;
+* the wait is bounded, is not repeated by back-to-back retries, and ends
+  with a truthful ``daemon_starting`` diagnosis — never a fake success;
+* nothing starting means no wait (old behaviour), and the wait never spawns.
+
+Slow-start daemons are small stub processes (a real PID that answers
+``/health`` with the descriptor's identity after a delay); one test drives the
+real ``slm mcp`` server against a real cold daemon.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import queue
+import socket
+import subprocess
+import sys
+import threading
+import time
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+
+from superlocalmemory.infra.daemon_identity import (
+    build_descriptor,
+    process_create_time_for,
+    write_descriptor,
+)
+from superlocalmemory.infra.process_identity import process_start_token_for
+
+_STUB = r"""
+import json, pathlib, socket, sys, time
+port, delay, mode = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3]
+health_path = pathlib.Path(sys.argv[4])
+time.sleep(delay)
+if mode == "exit":
+    sys.exit(0)
+srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("127.0.0.1", port)); srv.listen(16)
+while True:
+    conn, _ = srv.accept()
+    if mode == "silent":
+        continue  # accept, never answer: a port reserved before HTTP is up
+    data = conn.recv(65536).decode("latin-1")
+    health = health_path.read_text()
+    stopping = data.startswith("POST /stop")
+    if data.startswith("GET /health"):
+        body = health
+    elif stopping:
+        body = json.dumps({"status": "stopping"})
+    else:
+        body = json.dumps({"ok": True, "fact_ids": ["stub-fact"]})
+    raw = body.encode()
+    conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                 + str(len(raw)).encode() + b"\r\nConnection: close\r\n\r\n" + raw)
+    conn.close()
+    if stopping:
+        srv.close()
+        sys.exit(0)
+"""
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+def _publish(descriptor, proc):
+    """Publish ``descriptor`` for ``proc`` (the PID is only known after spawn)."""
+    final = replace(
+        descriptor,
+        pid=proc.pid,
+        process_create_time=process_create_time_for(proc.pid),
+        process_start_token=process_start_token_for(proc.pid),
+    )
+    write_descriptor(final, data_root=Path(os.environ["SLM_DATA_DIR"]))
+    return final
+
+
+@pytest.fixture
+def no_spawn(monkeypatch):
+    """Any spawn attempt during these tests is a defect."""
+    from superlocalmemory.cli import daemon
+
+    def _forbidden(*_a, **_k):
+        raise AssertionError("a starting daemon must never trigger a second spawn")
+
+    monkeypatch.setattr(daemon, "_start_daemon_subprocess", _forbidden)
+
+
+def _identity_stub(work: Path, *, delay, mode="serve", state="starting"):
+    """Spawn a stub whose health echoes the descriptor it is published under.
+
+    The descriptor holds the PID, which is only known after the spawn, so the
+    stub reads its health body from a file written right after.
+    """
+    from superlocalmemory import __version__
+
+    port = _free_port()
+    work.mkdir(parents=True, exist_ok=True)
+    health_file = work / "health.json"
+    script = work / "stub.py"
+    script.write_text(_STUB, encoding="utf-8")
+    proc = subprocess.Popen(
+        [sys.executable, str(script), str(port), str(delay), mode, str(health_file)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    base = build_descriptor(port=port, version=__version__, pid=proc.pid, state=state)
+    descriptor = _publish(base, proc)
+    health_file.write_text(
+        json.dumps({"status": "ok", **descriptor.public_health_fields()}), encoding="utf-8",
+    )
+    return proc, descriptor
+
+
+@pytest.fixture
+def stubs(tmp_path):
+    started: list[subprocess.Popen] = []
+
+    def start(**kwargs):
+        proc, descriptor = _identity_stub(tmp_path / f"stub{len(started)}", **kwargs)
+        started.append(proc)
+        return proc, descriptor
+
+    yield start
+    for proc in started:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
+
+
+def test_a_starting_daemon_is_waited_for_and_the_call_goes_through(stubs, no_spawn):
+    from superlocalmemory.cli import daemon
+
+    _proc, _descriptor = stubs(delay=1.5)
+    began = time.monotonic()
+    response = daemon.daemon_request("POST", "/remember", {"content": "probe"})
+    took = time.monotonic() - began
+
+    assert response is not None and response.get("fact_ids") == ["stub-fact"], response
+    assert 1.0 <= took < 8.0, took
+
+
+def test_the_wait_is_bounded_and_ends_with_a_truthful_starting_answer(
+    stubs, no_spawn, monkeypatch,
+):
+    from superlocalmemory.cli import daemon
+    from superlocalmemory.mcp._daemon_proxy import daemon_unavailable_error
+
+    monkeypatch.setenv("SLM_DAEMON_START_WAIT_S", "1.5")
+    proc, _descriptor = stubs(delay=600)  # never listens within the test
+    began = time.monotonic()
+    assert daemon.daemon_request("POST", "/remember", {"content": "probe"}) is None
+    took = time.monotonic() - began
+    assert 1.4 <= took < 2.5, took
+
+    diagnosis = daemon.describe_daemon_unavailability()
+    assert diagnosis["reason"] == "daemon_starting"
+    assert str(proc.pid) in diagnosis["message"]
+    assert "not sent" in diagnosis["message"]
+    assert "Retry in about" in diagnosis["hint"]
+    assert daemon_unavailable_error().startswith("DAEMON_UNAVAILABLE (daemon_starting):")
+
+    # remember retries three times inside one tool call; they must not each
+    # wait the whole budget again.
+    began = time.monotonic()
+    assert daemon.daemon_request("POST", "/remember", {"content": "probe"}) is None
+    assert time.monotonic() - began < 0.5
+
+
+def test_a_port_reserved_before_http_is_up_cannot_stretch_the_wait(
+    stubs, no_spawn, monkeypatch,
+):
+    """Connects succeed and then hang: each probe is cut to the time left."""
+    from superlocalmemory.cli import daemon
+
+    monkeypatch.setenv("SLM_DAEMON_START_WAIT_S", "1")
+    stubs(delay=0, mode="silent")
+    time.sleep(0.5)  # let the stub bind
+    began = time.monotonic()
+    assert daemon.daemon_request("GET", "/health") is None
+    # one pre-existing 2 s probe + a 1 s budget + scheduling slack
+    assert time.monotonic() - began < 2.5  # 0.5 s first probe + 1 s budget + slack
+
+
+def test_nothing_starting_keeps_the_old_fail_fast_behaviour(stubs, no_spawn):
+    from superlocalmemory.cli import daemon
+
+    stubs(delay=600, state="ready")  # alive, "ready", never answers
+    began = time.monotonic()
+    assert daemon.daemon_request("POST", "/remember", {"content": "probe"}) is None
+    assert time.monotonic() - began < 1.0
+    assert daemon.describe_daemon_unavailability()["reason"] == "daemon_unreachable"
+
+
+def test_a_daemon_that_dies_while_starting_ends_the_wait_early(
+    stubs, no_spawn, monkeypatch,
+):
+    from superlocalmemory.cli import daemon
+
+    monkeypatch.setenv("SLM_DAEMON_START_WAIT_S", "15")
+    proc, _descriptor = stubs(delay=0.5, mode="exit")
+    began = time.monotonic()
+    assert daemon.daemon_request("POST", "/remember", {"content": "probe"}) is None
+    assert time.monotonic() - began < 5.0
+    proc.wait(timeout=5)
+    assert daemon.describe_daemon_unavailability()["reason"] == "daemon_process_exited"
+
+
+def test_a_pinned_descriptor_never_waits(stubs, no_spawn):
+    """``slm serve stop`` pins the descriptor it inspected; it must not stall."""
+    from superlocalmemory.cli import daemon
+
+    _proc, descriptor = stubs(delay=600)
+    began = time.monotonic()
+    assert daemon.daemon_request("POST", "/stop", expected_descriptor=descriptor) is None
+    assert time.monotonic() - began < 1.0
+
+
+def test_an_in_process_spawn_is_waited_for_and_never_duplicated(no_spawn, monkeypatch):
+    """A second thread of the process that is spawning must not spawn again."""
+    from superlocalmemory.cli import daemon, daemon_startup
+
+    monkeypatch.setenv("SLM_TEST_ALLOW_DAEMON_SPAWN", "1")
+    monkeypatch.setenv("SLM_DAEMON_START_WAIT_S", "1")
+    with daemon_startup.spawning():
+        assert daemon.describe_daemon_unavailability()["reason"] == "daemon_starting"
+        began = time.monotonic()
+        assert daemon.ensure_daemon() is False  # bounded wait, no second spawn
+        assert daemon.daemon_request("GET", "/health") is None
+        assert time.monotonic() - began < 3.5
+    assert not daemon_startup.this_process_is_spawning()
+
+
+def test_stop_waits_for_a_starting_daemon_instead_of_leaving_it_running(stubs):
+    """Before 4.1.22 `slm serve stop` during a start said "not running" and the
+    daemon kept running (it leaked from this very test file once)."""
+    from superlocalmemory.cli import daemon
+
+    proc, _descriptor = stubs(delay=1.5)
+    began = time.monotonic()
+    assert daemon.stop_daemon() is True
+    assert 1.0 <= time.monotonic() - began < 20.0
+    proc.wait(timeout=5)
+    assert proc.returncode == 0
+
+
+@pytest.mark.parametrize(
+    ("raw", "cap", "expected"),
+    [
+        ("", None, 20.0), ("5", None, 5.0), ("0", None, 0.0), ("-3", None, 0.0),
+        ("999", None, 45.0), ("nan", None, 20.0), ("junk", None, 20.0), ("", 3.0, 3.0),
+    ],
+)
+def test_the_start_wait_budget_is_clamped(monkeypatch, raw, cap, expected):
+    from superlocalmemory.cli.daemon_startup import start_wait_budget
+
+    monkeypatch.setenv("SLM_DAEMON_START_WAIT_S", raw)
+    assert start_wait_budget(cap) == expected
+
+
+# ---------------------------------------------------------------------------
+# The real composed path: a host starts `slm mcp` on an empty data root and
+# calls remember at once, while the daemon it just spawned is still starting.
+# ---------------------------------------------------------------------------
+
+def _mcp_env(tmp_path: Path, port: int) -> dict[str, str]:
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SLM_")}
+    home = tmp_path / "home"
+    cache = home / ".cache"
+    home.mkdir()
+    (tmp_path / "data").mkdir()
+    src = Path(__file__).resolve().parents[2] / "src"
+    env.update(
+        HOME=str(home), USERPROFILE=str(home), SLM_DATA_DIR=str(tmp_path / "data"),
+        SLM_DAEMON_PORT=str(port), SLM_DISABLE_LEGACY_PORT="1",
+        SLM_NON_INTERACTIVE="1", HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1",
+        HF_HOME=str(cache / "huggingface"), XDG_CACHE_HOME=str(cache),
+        OMP_NUM_THREADS="1", TOKENIZERS_PARALLELISM="false",
+        PYTHONPATH=os.pathsep.join(filter(None, [str(src), env.get("PYTHONPATH", "")])),
+    )
+    return env
+
+
+def _stop_spawned_daemon(env: dict[str, str], data_root: Path) -> None:
+    """Stop the daemon this test caused, by its own data dir; never leak it.
+
+    ``slm serve stop`` is the supported path (it waits out a start). If a
+    descriptor still names a live process afterwards, that exact PID — and
+    only it — is terminated.
+    """
+    import psutil
+
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "superlocalmemory.cli.main", "serve", "stop"],
+            env=env, capture_output=True, text=True, timeout=150,
+        )
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        pid = int(json.loads((data_root / "daemon.json").read_text(encoding="utf-8"))["pid"])
+    except (OSError, ValueError, KeyError, TypeError):
+        pid_file = data_root / "daemon.pid"
+        try:
+            pid = int(pid_file.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            return
+    try:
+        owned = psutil.Process(pid)
+        if "superlocalmemory.server.unified_daemon" not in " ".join(owned.cmdline()):
+            return
+        children = owned.children(recursive=True)
+        owned.terminate()
+        _gone, alive = psutil.wait_procs([owned, *children], timeout=20)
+        for leftover in alive:
+            leftover.kill()
+    except psutil.Error:
+        pass
+
+
+def test_first_remember_after_a_real_cold_start_succeeds(tmp_path):
+    port = _free_port()
+    env = _mcp_env(tmp_path, port)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "superlocalmemory.cli.main", "mcp"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        text=True, env=env,
+    )
+    lines: "queue.Queue[str]" = queue.Queue()
+    threading.Thread(target=lambda: [lines.put(x) for x in proc.stdout], daemon=True).start()
+
+    def send(message: dict) -> None:
+        proc.stdin.write(json.dumps(message) + "\n")
+        proc.stdin.flush()
+
+    def reply(request_id: int, limit: float = 90.0) -> dict:
+        end = time.monotonic() + limit
+        while time.monotonic() < end:
+            try:
+                message = json.loads(lines.get(timeout=1))
+            except (queue.Empty, ValueError):
+                continue
+            if message.get("id") == request_id:
+                return message
+        raise AssertionError(f"no reply to request {request_id}")
+
+    def tool(request_id: int, name: str, arguments: dict) -> dict:
+        send({"jsonrpc": "2.0", "id": request_id, "method": "tools/call",
+              "params": {"name": name, "arguments": arguments}})
+        content = reply(request_id)["result"]["content"]
+        return json.loads(content[0]["text"])
+
+    try:
+        send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+              "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                         "clientInfo": {"name": "cold-start-test", "version": "0"}}})
+        reply(1)
+        send({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
+        began = time.monotonic()
+        stored = tool(2, "remember", {"content": "The cold start probe shelf code is K-77."})
+        took = time.monotonic() - began
+        assert stored.get("success") is True, stored
+        assert stored.get("fact_ids"), stored
+        # Bounded: far inside the ~60 s a host allows a tool call.
+        assert took < 50.0, took
+        found = tool(3, "recall", {"query": "cold start probe shelf code"})
+        assert found.get("success") is True, found
+    finally:
+        try:
+            proc.stdin.close()
+            proc.wait(timeout=15)
+        except Exception:
+            proc.kill()
+            proc.wait(timeout=5)
+        _stop_spawned_daemon(env, tmp_path / "data")

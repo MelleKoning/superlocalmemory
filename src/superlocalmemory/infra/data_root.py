@@ -94,6 +94,21 @@ def canonical_data_root(
     return _legacy_configured_root(default_root) or default_root
 
 
+def is_implicit_default_root(*, home: str | Path | None = None) -> bool:
+    """Whether this process serves the root an UNCONFIGURED process would use.
+
+    That is precedence steps 5-6 of :func:`canonical_data_root`: the legacy
+    ``~/.superlocalmemory/config.json:base_dir`` relocation if present, else
+    ``~/.superlocalmemory``. An environment selection that names that same
+    folder still counts; any other selected root does not. Old clients that
+    predate data roots can only ever mean this one.
+    """
+    home_path = _canonical_path(home if home is not None else Path.home())
+    default_root = _canonical_path(home_path / ".superlocalmemory")
+    implicit = _legacy_configured_root(default_root) or default_root
+    return canonical_data_root(home=home_path) == implicit
+
+
 def _durable_markers(root: Path) -> tuple[Path, ...]:
     """Return bounded evidence that ``root`` contains durable SLM state.
 

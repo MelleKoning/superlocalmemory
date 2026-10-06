@@ -167,6 +167,9 @@ def _wrap_python_cmd(hook_name: str) -> str:
 def _hook_definitions(include_gate: bool = False) -> dict[str, list]:
     """Build Claude Code hook entries.
 
+    ``timeout`` is in SECONDS (Claude Code hooks spec). Before 4.1.22 these
+    were written as milliseconds, so "15000" gave a hook about four hours.
+
     Critical path (gate, init-done): Shell built-ins. Cannot crash.
     Value-add (start, checkpoint, stop): Python with error wrapper.
     """
@@ -180,7 +183,7 @@ def _hook_definitions(include_gate: bool = False) -> dict[str, list]:
                     {
                         "type": "command",
                         "command": _wrap_python_cmd("mandate"),
-                        "timeout": 5000,
+                        "timeout": 5,
                     }
                 ]
             },
@@ -189,7 +192,7 @@ def _hook_definitions(include_gate: bool = False) -> dict[str, list]:
                     {
                         "type": "command",
                         "command": _wrap_python_cmd("start"),
-                        "timeout": 15000,
+                        "timeout": 15,
                     }
                 ]
             },
@@ -201,7 +204,7 @@ def _hook_definitions(include_gate: bool = False) -> dict[str, list]:
                     {
                         "type": "command",
                         "command": _wrap_python_cmd("checkpoint"),
-                        "timeout": 5000,
+                        "timeout": 5,
                     }
                 ],
             },
@@ -215,7 +218,7 @@ def _hook_definitions(include_gate: bool = False) -> dict[str, list]:
                     {
                         "type": "command",
                         "command": _wrap_python_cmd("post_tool_outcome"),
-                        "timeout": 5000,
+                        "timeout": 5,
                     }
                 ],
             },
@@ -227,7 +230,7 @@ def _hook_definitions(include_gate: bool = False) -> dict[str, list]:
                     {
                         "type": "command",
                         "command": _wrap_python_cmd("user_prompt_rehash"),
-                        "timeout": 5000,
+                        "timeout": 5,
                     }
                 ]
             },
@@ -242,7 +245,7 @@ def _hook_definitions(include_gate: bool = False) -> dict[str, list]:
                     {
                         "type": "command",
                         "command": _wrap_python_cmd("topic_shift"),
-                        "timeout": 3000,
+                        "timeout": 3,
                     }
                 ]
             },
@@ -253,13 +256,13 @@ def _hook_definitions(include_gate: bool = False) -> dict[str, list]:
                     {
                         "type": "command",
                         "command": _wrap_python_cmd("stop"),
-                        "timeout": 10000,
+                        "timeout": 10,
                     },
                     # LLD-09 Track A.2 — finalize pending outcomes at end.
                     {
                         "type": "command",
                         "command": _wrap_python_cmd("stop_outcome"),
-                        "timeout": 10000,
+                        "timeout": 10,
                     },
                     # Commit temporal summaries so session decisions survive beyond
                     # the git-state snapshot written by `slm hook stop`.
@@ -270,7 +273,7 @@ def _hook_definitions(include_gate: bool = False) -> dict[str, list]:
                             if sys.platform == "win32"
                             else "slm session close 2>/dev/null || true"
                         ),
-                        "timeout": 15000,
+                        "timeout": 15,
                     },
                 ]
             }
@@ -289,7 +292,7 @@ def _hook_definitions(include_gate: bool = False) -> dict[str, list]:
                 {
                     "type": "command",
                     "command": _wrap_python_cmd("before_web"),
-                    "timeout": 5000,
+                    "timeout": 5,
                 }
             ],
         }
@@ -302,7 +305,7 @@ def _hook_definitions(include_gate: bool = False) -> dict[str, list]:
                 {
                     "type": "command",
                     "command": _gate_cmd(),
-                    "timeout": 500,
+                    "timeout": 2,
                 }
             ],
         })
@@ -312,7 +315,7 @@ def _hook_definitions(include_gate: bool = False) -> dict[str, list]:
                 {
                     "type": "command",
                     "command": _init_done_cmd(),
-                    "timeout": 500,
+                    "timeout": 2,
                 }
             ],
         })

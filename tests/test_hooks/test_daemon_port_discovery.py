@@ -52,8 +52,8 @@ def test_hook_daemon_post_uses_owned_identity_client(
 ) -> None:
     captured = {}
 
-    def _owned_request(method, path, body=None):
-        captured.update(method=method, path=path, body=body)
+    def _owned_request(method, path, body=None, **options):
+        captured.update(method=method, path=path, body=body, options=options)
         return {"ok": True}
 
     monkeypatch.setattr(
@@ -76,6 +76,9 @@ def test_hook_daemon_post_uses_owned_identity_client(
         "method": "POST",
         "path": "/remember",
         "body": {"content": "checkpoint"},
+        # 4.1.22: the hook's own timeout reaches the request, and a hook never
+        # waits out a daemon start (its host gives it seconds, not a minute).
+        "options": {"timeout_seconds": 3.0, "start_wait_seconds": 0},
     }
 
 
