@@ -8,10 +8,10 @@ WHY. After the cross-encoder scores the pool, recall still multiplies each
 result by recency (0.8-1.1x), content length (0.3-1x), trust (0.5-1.5x) and,
 for time questions, a recency prior (up to 1.5x), and then the learned layers
 re-score the list again. Together they could move a memory by up to 20x, so on
-the owner's eval a memory the cross-encoder put first by a clear margin was
-pushed below one it scored lower; three questions went from right to wrong
-that way. Each layer is a fair tie-breaker; none of them read the question, so
-none should overturn the one stage that did.
+the owner's eval a memory the cross-encoder put first was pushed below one it
+scored lower, and the answer went from right to wrong on eight questions. Each
+layer is a fair tie-breaker; none of them read the question, so none should
+overturn the one stage that did.
 
 THE RULE. The order the later layers chose is kept, except that a memory may
 not stand above another whose reranker score exceeds its own by more than
@@ -29,14 +29,16 @@ from typing import Any
 
 #: The largest reranker-score ratio the later layers may overturn.
 #:
-#: Chosen from the multipliers themselves and checked on the eval: recency and
-#: trust between two ordinary memories (a few weeks apart in age, trust within
-#: 0.4-0.6) differ by at most about 1.25x, which is the near-tie the later
-#: layers exist to break. On the owner's dev and held-out sets every
-#: right-to-wrong flip they caused overturned a lead of 1.27x or more, and every
-#: wrong-to-right one overturned a lead below 1.2x. See the measurement record
-#: in the 4.1.21 release notes; the bound was not fitted per question.
-LEAD_BOUND: float = 1.25
+#: Measured on the owner's store over the 50 dev and 97 held-out questions,
+#: with this rule off: the later layers overturned the reranker's first result
+#: on 42 questions. Where that decided right or wrong, the layers were right
+#: at leads of 1.001 and 1.026, and wrong at 1.014, 1.031, 1.033, 1.068, 1.077,
+#: 1.096, 1.137 and 1.201. Below about 1.05 the two are mixed; above it the
+#: reranker was right every time. So the layers keep ties within 5%, which is
+#: also the size of the recency and trust differences between two memories of
+#: similar age and standing, and lose everything larger. No single factor
+#: separates every case: at 1.05 the 1.014, 1.031 and 1.033 ones stay wrong.
+LEAD_BOUND: float = 1.05
 
 
 def _anchor(result: Any, anchors: Mapping[str, float]) -> float | None:

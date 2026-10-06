@@ -41,7 +41,7 @@ def test_the_bound_is_exactly_the_factor() -> None:
 def test_only_what_is_blocked_moves() -> None:
     # c leads d clearly; a and b are a near-tie the later layers flipped.
     results = [_r("b", 4), _r("a", 3), _r("d", 2), _r("c", 1)]
-    anchors = {"a": 0.80, "b": 0.75, "c": 0.50, "d": 0.10}
+    anchors = {"a": 0.80, "b": 0.80 / LEAD_BOUND, "c": 0.50, "d": 0.10}
     assert _ids(hold_reranker_lead(results, anchors)) == ["b", "a", "c", "d"]
 
 
