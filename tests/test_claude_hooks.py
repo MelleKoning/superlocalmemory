@@ -171,16 +171,16 @@ class TestHookDefinitions:
         defs = hooks_mod._hook_definitions()
         # v3.6.18: [0] = mandate (5000ms), [1] = start (15000ms)
         mandate_hook = defs["SessionStart"][0]["hooks"][0]
-        assert mandate_hook["timeout"] == 5000
+        assert mandate_hook["timeout"] == 5  # seconds (Claude Code hooks spec)
         assert mandate_hook["type"] == "command"
         start_hook = defs["SessionStart"][1]["hooks"][0]
-        assert start_hook["timeout"] == 15000
+        assert start_hook["timeout"] == 15  # seconds (Claude Code hooks spec)
         assert start_hook["type"] == "command"
 
     def test_stop_has_timeout(self):
         defs = hooks_mod._hook_definitions()
         stop_hook = defs["Stop"][0]["hooks"][0]
-        assert stop_hook["timeout"] == 10000
+        assert stop_hook["timeout"] == 10  # seconds (Claude Code hooks spec)
 
     def test_checkpoint_matcher(self):
         defs = hooks_mod._hook_definitions()
@@ -197,13 +197,13 @@ class TestHookDefinitions:
     def test_gate_timeout_is_fast(self):
         defs = hooks_mod._hook_definitions(include_gate=True)
         gate_hook = defs["PreToolUse"][0]["hooks"][0]
-        assert gate_hook["timeout"] == 500
+        assert gate_hook["timeout"] == 2  # seconds (Claude Code hooks spec)
 
     def test_init_done_timeout_is_fast(self):
         defs = hooks_mod._hook_definitions(include_gate=True)
         init_done = defs["PostToolUse"][0]
         assert init_done["matcher"] == "mcp__superlocalmemory__session_init"
-        assert init_done["hooks"][0]["timeout"] == 500
+        assert init_done["hooks"][0]["timeout"] == 2  # seconds (Claude Code hooks spec)
 
     def test_commands_use_error_wrapping(self):
         """Value-add hooks should have error absorption wrappers."""

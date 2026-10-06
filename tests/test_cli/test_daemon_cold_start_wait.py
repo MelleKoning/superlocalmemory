@@ -40,7 +40,8 @@ from superlocalmemory.infra.process_identity import process_start_token_for
 
 _STUB = r"""
 import json, pathlib, socket, sys, time
-port, delay, mode, health_path = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3], pathlib.Path(sys.argv[4])
+port, delay, mode = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3]
+health_path = pathlib.Path(sys.argv[4])
 time.sleep(delay)
 if mode == "exit":
     sys.exit(0)

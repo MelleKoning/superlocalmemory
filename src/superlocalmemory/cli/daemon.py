@@ -562,7 +562,10 @@ def daemon_request(
     starting means no wait. Callers pinning a descriptor never wait.
     """
     unpinned = expected_descriptor is _EXPECTED_DESCRIPTOR_UNSET and expected_legacy is None
-    wait_cap = timeout_seconds if start_wait_seconds is None else min(start_wait_seconds, timeout_seconds)
+    wait_cap = (
+        timeout_seconds if start_wait_seconds is None
+        else min(start_wait_seconds, timeout_seconds)
+    )
     legacy = None
     if expected_legacy is not None:
         # Legacy daemons have no capability header. Bind the compatibility
@@ -953,7 +956,7 @@ def _wait_for_daemon(timeout: int = 60) -> bool:
 
 # The diagnosis tables and body live in daemon_diagnosis (4.1.22); these names
 # stay importable from here.
-from superlocalmemory.cli.daemon_diagnosis import (  # noqa: E402
+from superlocalmemory.cli.daemon_diagnosis import (  # noqa: E402, F401 - re-exported
     _GENERIC_UNAVAILABLE,
     _LIVENESS_DIAGNOSIS,
 )
