@@ -33,6 +33,7 @@ from superlocalmemory.core.config import (
 )
 from superlocalmemory.retrieval import channel_status as chstat
 from superlocalmemory.retrieval.fusion import FusionResult, weighted_rrf
+from superlocalmemory.retrieval.rerank_pool import rerank_pool
 from superlocalmemory.retrieval.strategy import QueryStrategy, QueryStrategyClassifier
 from superlocalmemory.retrieval.temporal_validity_filter import (
     CorrectionAdmissionCache,
@@ -373,6 +374,9 @@ class RetrievalEngine:
         # channels (entity+temporal, entity+semantic, temporal+semantic).
         if strat.query_type == "multi_hop" and len(ch_results) >= 2:
             fused = self._apply_cross_channel_intersection(fused, ch_results, strat)
+        # What the channels themselves found, before bridges and scenes add
+        # neighbours. The rerank pool keeps room for these (rerank_pool).
+        found_ids = frozenset(fr.fact_id for fr in fused)
 
         # Bridge discovery for multi-hop queries
         # V3.3.19: Only bridge.discover() (86ms). Removed bridge.spreading_activation()
@@ -576,8 +580,11 @@ class RetrievalEngine:
             _em("facets")
 
         # 4. Load facts for rerank pool
-        pool = min(len(fused), max(effective_limit * 3, 30))
-        top = fused[:pool]
+        # Search results and added neighbours each get ``pool`` slots, so a
+        # large scene cannot push a found memory out before the cross-encoder
+        # reads it (retrieval/rerank_pool.py).
+        pool = max(effective_limit * 3, 30)
+        top = rerank_pool(fused, found=found_ids, size=pool)
         facts = self._load_facts(
             top,
             profile_id,
@@ -683,7 +690,8 @@ class RetrievalEngine:
         # recall (core.recall_pipeline -> project_scope.prefer_in_final_order),
         # after learned ranking has rewritten every score. Here it only chose
         # which candidates made the cut (boost_order above).
-        results = self._build_results(final_top, facts, strat)
+        results = self._build_results(final_top, facts, strat,
+                                      reranked=reranker_applied)
         ms = (time.monotonic() - t0) * 1000.0
         stage_ms["retrieval_total"] = round(ms, 1)
         no_match = floor_enabled and len(results) == 0
@@ -1535,7 +1543,7 @@ class RetrievalEngine:
 
     def _build_results(
         self, fused: list[FusionResult], fact_map: dict[str, AtomicFact],
-        strat: QueryStrategy,
+        strat: QueryStrategy, *, reranked: bool = False,
     ) -> list[RetrievalResult]:
         from datetime import UTC, datetime
         now = datetime.now(UTC)
@@ -1649,6 +1657,7 @@ class RetrievalEngine:
                 memory_confidence=fact.confidence,
                 evidence_chain=evidence,
                 trust_score=raw_trust,
+                rerank_score=fr.fused_score if reranked else None,
             ))
         # ranking_score incorporates every modifier computed in this loop
         # (Ebbinghaus decay, quality, trust, and the query-type-conditioned
