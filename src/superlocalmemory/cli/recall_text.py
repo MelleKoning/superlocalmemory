@@ -72,6 +72,10 @@ def remember_receipt_text(result: dict) -> str:
     if state in ("queryable", "enriching"):
         line += ("\nFindable now by its words; meaning-based search catches "
                  "up when background indexing finishes (usually seconds).")
+    conflict = result.get("kind_conflict")
+    if isinstance(conflict, dict):
+        line += (f"\nThese exact words were already saved as '{conflict.get('kept')}', "
+                 f"which was kept; '{conflict.get('requested')}' was not recorded.")
     return line
 
 

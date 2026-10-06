@@ -109,6 +109,25 @@ def assign_kinds(facts: list, *, metadata: dict | None, source_type: str,
             for fact, assignment in zip(facts, _suggestions(facts, declared, classifier))]
 
 
+def store_fact_keeping_kind(db: Any, fact: Any, *, metadata: dict | None,
+                            request: Any) -> str:
+    """``db.store_fact(fact)``, never silently dropping a declared kind.
+
+    Identical words fold onto the fact already holding them; a kind this save
+    declares then confirms that fact if nothing had confirmed it
+    (``core/kind_on_resave.py``). Runs in the save's own transaction.
+    """
+    submitted = fact.fact_id
+    stored = db.store_fact(fact)
+    declared = caller_kind(metadata, request.source_type)
+    if declared is not None and stored != submitted and _has_columns(db):
+        from superlocalmemory.core.kind_on_resave import confirm_on_resave
+
+        confirm_on_resave(db, fact_id=stored, profile_id=fact.profile_id,
+                          declared=declared, actor=request.trusted_actor_id)
+    return stored
+
+
 def kind_update_columns(fact: Any, db: Any) -> dict[str, Any]:
     """The kind columns to write with a fact update, or {} (I3)."""
     if getattr(fact, "memory_kind", None) is None or not _has_columns(db):
@@ -119,4 +138,4 @@ def kind_update_columns(fact: Any, db: Any) -> dict[str, Any]:
 
 
 __all__ = ["KIND_TRUSTED_SOURCES", "assign_kinds", "caller_kind", "kind_update_columns",
-           "with_assignment"]
+           "store_fact_keeping_kind", "with_assignment"]

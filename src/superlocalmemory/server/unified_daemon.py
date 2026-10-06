@@ -5309,6 +5309,13 @@ def _register_daemon_routes(application: FastAPI) -> None:
             if replaced is not None:
                 # Only when asked, so a plain remember response is unchanged.
                 response["replaced"] = replaced
+            if declared_kind is not None:  # never silent: core/kind_on_resave.py
+                from superlocalmemory.core.kind_on_resave import kind_conflict
+                conflict = await asyncio.to_thread(
+                    kind_conflict, engine._db, fact_ids=fact_ids,
+                    profile_id=write_profile, declared=declared_kind.value)
+                if conflict is not None:
+                    response["kind_conflict"] = conflict
             return response
         except Exception as exc:
             from superlocalmemory.core.remember_admission import AdmissionRejected

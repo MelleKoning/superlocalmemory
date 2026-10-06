@@ -231,7 +231,7 @@ def build_immediate_admission_handler(
                 created_at=now,
             )
 
-        from superlocalmemory.core.kind_assignment import assign_kinds
+        from superlocalmemory.core.kind_assignment import assign_kinds, store_fact_keeping_kind
 
         # A kind declared on the save is confirmed on the searchable fact now.
         fact = assign_kinds([fact], metadata=metadata, source_type=request.source_type,
@@ -271,7 +271,7 @@ def build_immediate_admission_handler(
                 shared_with=list(request.shared_with) or None,
             )
             fact.memory_id = db.store_memory(record)
-        return [db.store_fact(fact)]
+        return [store_fact_keeping_kind(db, fact, metadata=metadata, request=request)]
 
     return write_queryable
 

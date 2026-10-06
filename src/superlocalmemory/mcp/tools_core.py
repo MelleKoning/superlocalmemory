@@ -365,9 +365,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
                                 else "Queryable now; canonical enrichment is still running."
                             ),
                         }
-                        if resp.get("replaced") is not None:
-                            stored_reply["replaced"] = resp["replaced"]
-                        return stored_reply
+                        return rk.with_receipt_notes(stored_reply, resp)
                     if attempt < 2:
                         await _asyncio.sleep(0.05 * (attempt + 1))
                 return {
@@ -483,9 +481,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     else "Queryable now; canonical enrichment is still running."
                 ),
             }
-            if stored.get("replaced") is not None:
-                pool_reply["replaced"] = stored["replaced"]
-            return pool_reply
+            return rk.with_receipt_notes(pool_reply, stored)
         except Exception:
             logger.exception("remember failed")
             return {

@@ -222,17 +222,15 @@ def test_the_same_words_saved_again_with_another_kind_and_no_key_are_a_new_reque
     assert lane.kind_of(first["fact_ids"][0]) == ("status", "caller")
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "Known defect outside the transport, on every door (HTTP and CLI too): "
-    "identical words are stored once (DatabaseManager.store_fact folds them onto "
-    "the existing fact), so a second save declaring a different kind reports "
-    "success while the first kind silently stays. Needs a product decision."))
 def test_identical_words_declared_as_another_kind_do_not_silently_keep_the_first(lane):
+    # Identical words are one fact. Its first confirmed kind is kept, and the
+    # second save says so instead of reporting a kind it did not record.
     words = f"Fixture record QKY{RUN}: the shared verification code is C548."
     first = lane.tool("remember", content=words, kind="status")
     second = lane.tool("remember", content=words, kind="opinion")
-    assert second["success"] is False or lane.kind_of(second["fact_ids"][0]) == (
-        "opinion", "caller"), (first, second)
+    assert second["success"] is True, (first, second)
+    assert second["kind_conflict"] == {"kept": "status", "requested": "opinion"}, second
+    assert lane.kind_of(second["fact_ids"][0]) == ("status", "caller")
 
 
 def test_a_named_profile_keeps_the_declared_kind(lane):
