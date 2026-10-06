@@ -1075,6 +1075,8 @@ def create_all_tables(conn: sqlite3.Connection) -> None:
     # succeeded.
     _add_missing_columns(conn)
     _create_memory_kind_index(conn)
+    from superlocalmemory.storage.fts_residue import enable_quietly
+    enable_quietly(conn)  # a deleted memory's words leave the keyword index at once
 
     # Seed schema version on first run.
     existing = conn.execute(
