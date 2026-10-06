@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/slm-run\" hook mandate || true",
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       },
@@ -23,7 +23,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/slm-run\" hook start || true",
-            "timeout": 15000
+            "timeout": 15
           }
         ]
       }
@@ -35,7 +35,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/slm-run\" hook checkpoint || true",
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       },
@@ -45,7 +45,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/slm-run\" hook post_tool_outcome || true",
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       }
@@ -56,7 +56,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/slm-run\" hook user_prompt_rehash || true",
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       },
@@ -65,7 +65,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/slm-run\" hook topic_shift || true",
-            "timeout": 3000
+            "timeout": 3
           }
         ]
       }
@@ -76,12 +76,12 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/slm-run\" hook stop || true",
-            "timeout": 10000
+            "timeout": 10
           },
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/slm-run\" hook stop_outcome || true",
-            "timeout": 10000
+            "timeout": 10
           }
         ]
       }
@@ -93,7 +93,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/slm-run\" hook before_web || true",
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       }
