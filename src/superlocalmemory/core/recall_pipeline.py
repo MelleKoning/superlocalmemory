@@ -1160,6 +1160,8 @@ def _completeness_of(response: RecallResponse) -> dict:
         # #150: a project filter that fell back to unfiltered results must
         # still say so after a rebuild.
         "project_scope": getattr(response, "project_scope", None),
+        # 4.1.22 (G05): a tag filter's note/reason must survive a rebuild too.
+        "tag_scope": getattr(response, "tag_scope", None),
     }
 
 

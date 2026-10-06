@@ -76,6 +76,31 @@ class TestPoolAdapter:
 
         assert fake.recall_calls == [("hello", 5, "s-1", True)]
 
+    def test_pool_recall_forwards_tags_only_when_set(self, monkeypatch):
+        """4.1.22 (G05): tags/tags_match forwarded like project/prefer_project —
+        present only when the caller actually asked for them."""
+        from superlocalmemory.mcp import _pool_adapter
+
+        class _TagFakePool:
+            def recall(self, query: str, limit: int = 10, session_id: str = "",
+                      fast=None, **kwargs):
+                self.seen = kwargs
+                return {"ok": True, "results": []}
+
+        fake = _TagFakePool()
+        monkeypatch.setattr(_pool_adapter, "_pool", lambda: fake)
+
+        _pool_adapter.pool_recall("hello", limit=5)
+        assert "tags" not in fake.seen
+
+        _pool_adapter.pool_recall("hello", limit=5, tags="decision,status")
+        assert fake.seen["tags"] == "decision,status"
+        assert "tags_match" not in fake.seen
+
+        _pool_adapter.pool_recall("hello", limit=5, tags=["a", "b"], tags_match="any")
+        assert fake.seen["tags"] == ["a", "b"]
+        assert fake.seen["tags_match"] == "any"
+
     def test_pool_store_returns_fact_ids(self, monkeypatch):
         from superlocalmemory.mcp import _pool_adapter
         fake = _FakePool()

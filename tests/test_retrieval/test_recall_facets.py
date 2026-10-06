@@ -286,6 +286,45 @@ def test_mcp_proxy_sends_only_the_facets_that_were_set(monkeypatch) -> None:
     assert "saved_by" not in paths[0]
 
 
+def test_mcp_proxy_sends_a_csv_tags_string_as_is(monkeypatch) -> None:
+    from superlocalmemory.cli import daemon
+    from superlocalmemory.mcp import _daemon_proxy
+
+    paths = []
+    monkeypatch.setattr(daemon, "daemon_request",
+                        lambda method, path, *a, **k: paths.append(path) or {"results": []})
+    proxy = _daemon_proxy.DaemonPoolProxy(port=8765)
+    proxy.recall("q", tags="decision,status")
+    assert "tags=decision%2Cstatus" in paths[0]
+    assert "tags_match" not in paths[0]
+
+
+def test_mcp_proxy_sends_a_tags_list_as_repeated_params(monkeypatch) -> None:
+    from superlocalmemory.cli import daemon
+    from superlocalmemory.mcp import _daemon_proxy
+
+    paths = []
+    monkeypatch.setattr(daemon, "daemon_request",
+                        lambda method, path, *a, **k: paths.append(path) or {"results": []})
+    proxy = _daemon_proxy.DaemonPoolProxy(port=8765)
+    proxy.recall("q", tags=["release, 4.1.22", "decision"], tags_match="any")
+    assert paths[0].count("tags=") == 2
+    assert "tags_match=any" in paths[0]
+
+
+def test_mcp_proxy_sends_no_tags_param_when_unset(monkeypatch) -> None:
+    from superlocalmemory.cli import daemon
+    from superlocalmemory.mcp import _daemon_proxy
+
+    paths = []
+    monkeypatch.setattr(daemon, "daemon_request",
+                        lambda method, path, *a, **k: paths.append(path) or {"results": []})
+    proxy = _daemon_proxy.DaemonPoolProxy(port=8765)
+    proxy.recall("q")
+    assert "tags=" not in paths[0]
+    assert "tags_match" not in paths[0]
+
+
 def test_cli_recall_adds_the_facets_to_the_request(monkeypatch) -> None:
     from superlocalmemory.cli import commands, daemon
 

@@ -117,12 +117,17 @@ def _fetch_candidates(db, pid: str, query: str, pool_limit: int) -> list[dict]:
 
 
 def _apply_facets(engine, db, pid, candidates, facets
-                  ) -> tuple[list[dict], str | None, dict | None]:
+                  ) -> tuple[list[dict], str | None, dict | None, dict | None]:
     """Narrow like full recall does (``retrieval.project_scope.narrow``). A
     facet that cannot be verified keeps NOTHING rather than silently serving
     the unfiltered pool; ``project`` falls back and reports it, exactly as in
     full recall. This path has no scores, so ``prefer_project`` reorders
-    nothing here - its report says how many it would have preferred."""
+    nothing here - its report says how many it would have preferred.
+
+    4.1.22 (G05): ``tags`` is folded into ``narrow``'s own
+    ``matching_fact_ids`` call (it never falls back, so needs no special
+    casing there); the 4th return value is its ``tag_scope`` report, built
+    from the same ``scoped.kept`` count — no extra narrowing pass."""
     try:
         from superlocalmemory.core.kind_query import engine_display_min_confidence
         from superlocalmemory.retrieval.project_scope import narrow
@@ -132,9 +137,14 @@ def _apply_facets(engine, db, pid, candidates, facets
             display_min_confidence=engine_display_min_confidence(engine),
         )
         keep = set(scoped.kept)
-        return [c for c in candidates if c["fact_id"] in keep], None, scoped.report
+        tag_scope = None
+        if getattr(facets, "tags", None):
+            from superlocalmemory.retrieval.tag_scope import build_report
+            tag_scope = build_report(db, pid, facets, len(scoped.kept))
+        return ([c for c in candidates if c["fact_id"] in keep], None, scoped.report,
+                tag_scope)
     except Exception as exc:  # noqa: BLE001 - must cost results, never skip
-        return [], type(exc).__name__, None
+        return [], type(exc).__name__, None, None
 
 
 def recall_keyword_fallback(
@@ -153,6 +163,7 @@ def recall_keyword_fallback(
     has_facets = facets is not None and not facets.empty
     facet_filter_error: str | None = None
     project_scope: dict | None = None
+    tag_scope: dict | None = None
     try:
         db = engine._db
         pid = profile_id or engine.profile_id
@@ -161,7 +172,7 @@ def recall_keyword_fallback(
         pool_limit = overfetch_limit(limit) if has_facets else limit
         candidates = _fetch_candidates(db, pid, query, pool_limit)
         if has_facets:
-            candidates, facet_filter_error, project_scope = _apply_facets(
+            candidates, facet_filter_error, project_scope, tag_scope = _apply_facets(
                 engine, db, pid, candidates, facets)
         for pos, d in enumerate(candidates[:limit], start=1):
             results.append({
@@ -187,6 +198,7 @@ def recall_keyword_fallback(
         incomplete_channels=tuple(abandoned["incomplete_channels"]),
         channel_status=abandoned["channel_status"],
         project_scope=project_scope,
+        tag_scope=tag_scope,
     ))
     return {
         **contract,
