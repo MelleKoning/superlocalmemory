@@ -139,3 +139,23 @@ def test_a_supplement_that_cannot_run_leaves_the_answer_unchanged(store) -> None
     base = {"semantic": [("x", 0.9)]}
     assert kind_scope.supplement(eng, base, query="q", query_embedding=None,
                                  profile_id=REQ, kind="decision") == base
+
+
+def test_the_warm_visible_count_is_the_sql_count_through_every_change(store) -> None:
+    from superlocalmemory.storage.database import DatabaseManager
+
+    membership = kind_scope.KindMembership(store.db)
+    sql = lambda: DatabaseManager.get_fact_count(  # noqa: E731 -- the SQL path itself
+        SimpleNamespace(execute=store.db.execute, visible_fact_clause=store.db.visible_fact_clause),
+        REQ)
+    assert membership.count_if_ready(REQ) is None          # never builds on its own
+    membership.ids_of(REQ, "decision", 0.2)
+    store.db.visible_count = membership.count_if_ready
+    assert store.db.get_fact_count(REQ) == sql()
+    ids = store.ids("L")
+    store.db.execute("UPDATE atomic_facts SET quarantined = 1 WHERE fact_id = ?", (ids[0],))
+    store.db.execute("DELETE FROM atomic_facts WHERE fact_id = ?", (ids[1],))
+    assert store.db.get_fact_count(REQ) == sql() == len(ids) - 2
+    assert store.db.get_fact_count(REQ, include_global=True) == DatabaseManager.get_fact_count(
+        SimpleNamespace(execute=store.db.execute, visible_fact_clause=store.db.visible_fact_clause),
+        REQ, include_global=True)

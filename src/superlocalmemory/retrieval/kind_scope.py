@@ -90,6 +90,18 @@ class KindMembership(ChangeTrackedCache[_Kinds]):
                 part.by_threshold[threshold] = sets
             return sets.get(kind, frozenset())
 
+    def count_if_ready(self, profile_id: str) -> int | None:
+        """The profile's visible-fact count, only if already built (never builds,
+        never waits on a build); None tells the caller to count in SQL."""
+        if profile_id not in self._parts or not self._lock.acquire(blocking=False):
+            return None
+        try:
+            return len(self._fresh(profile_id).raw)
+        except Exception:  # noqa: BLE001 -- the SQL count stays the authority
+            return None
+        finally:
+            self._lock.release()
+
     def _columns(self) -> str:
         present = {str(dict(r).get("name")) for r in
                    self._db.execute("PRAGMA table_info(atomic_facts)")}
@@ -243,6 +255,10 @@ def attach(engine: Any, db: Any, vectors: Any, dimension: int) -> None:
     engine._kind_vectors = index if index.available else None
     membership = KindMembership(db)
     engine._kind_membership = membership if membership.available else None
+    if engine._kind_membership is not None:
+        # The same fresh set answers "how many visible memories" for personal
+        # scope, which recall asks several times (Hopfield, the graph stage).
+        db.visible_count = membership.count_if_ready
 
 
 def warm(engine: Any, profile_id: str) -> None:
