@@ -100,9 +100,33 @@ def starting_descriptor() -> Any | None:
     return descriptor if _d._descriptor_process_is_alive(descriptor) else None
 
 
+def lock_is_held_by_another_process() -> bool:
+    """Is some OTHER process holding the start lock, with no descriptor yet?
+
+    The gap this closes (4.1.22): right after another process wins
+    ``daemon.lock`` and before it writes a descriptor, neither
+    ``this_process_is_spawning()`` (that flag lives in the OTHER process's
+    memory) nor ``starting_descriptor()`` (nothing written yet) sees
+    anything -- so without this check, a caller in THIS process saw "no
+    evidence of starting" and either waited the old unbounded 60 s
+    (``ensure_daemon``'s lock-contention branch) or reported "no daemon" (the
+    diagnosis) while a start was genuinely under way.
+    """
+    from superlocalmemory.cli import daemon as _d
+
+    try:
+        return _d.start_lock_is_held()
+    except Exception:
+        return False
+
+
 def start_in_progress() -> bool:
     """Evidence that the daemon is starting right now."""
-    return this_process_is_spawning() or starting_descriptor() is not None
+    return (
+        this_process_is_spawning()
+        or starting_descriptor() is not None
+        or lock_is_held_by_another_process()
+    )
 
 
 def _recently_expired(instance_id: str) -> bool:
@@ -150,7 +174,12 @@ def wait_for_starting_daemon(
     from superlocalmemory.cli import daemon as _d
 
     first = starting_descriptor()
-    if first is None and not this_process_is_spawning():
+    lock_held = (
+        first is None
+        and not this_process_is_spawning()
+        and lock_is_held_by_another_process()
+    )
+    if first is None and not this_process_is_spawning() and not lock_held:
         return None
     if seconds is None and first is not None and _recently_expired(first.instance_id):
         return None
@@ -166,8 +195,8 @@ def wait_for_starting_daemon(
             health = probe_health(_d, descriptor.port, deadline - time.monotonic())
             if health is not None and _d.descriptor_matches_health(descriptor, health):
                 return descriptor, health
-        elif not this_process_is_spawning():
-            return None  # no descriptor and nobody here is starting one
+        elif not this_process_is_spawning() and not lock_is_held_by_another_process():
+            return None  # no descriptor and nobody — by any signal — is starting one
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             if last_instance:
