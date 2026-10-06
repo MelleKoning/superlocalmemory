@@ -5,6 +5,112 @@ All notable changes to SuperLocalMemory will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.21] — Recall that knows your project, and memories that stay findable
+
+### Added
+
+- **Recall knows your project** (#150). Memories saved for the project you are
+  working in rank ahead of cross-project trivia; `project=` filters to one
+  project, and a filter that matched nothing says so instead of returning an
+  empty list. Recall trace explains the same order recall returns.
+- **Saved views and summaries** (#113). Save a recall query as a named view and
+  re-run it from the CLI (`slm view`), MCP or the dashboard, with the same
+  answer from each. Daily, session and project summaries trace every line back
+  to the memories it came from.
+- **`slm provider set custom`** (#112): point Mode B or Mode C at your own
+  OpenAI-compatible server (llama.cpp, vLLM, LM Studio) from the CLI, with or
+  without a key. Its connection test goes through the same no-redirect gate as
+  every other request.
+- **Measure answer quality on your own memories.** Label your own questions and
+  see whether the right memory comes first, and set each answer check's
+  threshold from your own results instead of a default.
+
+### Changed
+
+- **The same question returns the same memories every time.** Linking
+  memories through the people, projects and things they share used to stop at
+  a time limit, so a busy machine could return different memories for the same
+  question. It now does a fixed amount of work in a fixed order, and a
+  background fill of the entity index after the upgrade keeps it fast. Until
+  that fill finishes, a few minutes after the first start, recall uses the
+  exact scan, which can be slower on a busy machine.
+- **Better first answers.** Memories a search actually found can no longer be
+  pushed out of the reranker's shortlist by loosely related neighbours, and
+  when the reranker clearly puts one memory first, recency and quality
+  adjustments can only break near-ties, not overturn it. On a large real
+  store: right memory first on 27 of 50 questions (was 23), and the right
+  memory in the top 3 on 17 of 97 held-out questions (was 11).
+- A question that resembles none of your memories no longer gets graph matches
+  started from unrelated memories, so the result is the same with and without
+  the vector extension.
+- **The semantic cache makes the same choice on every platform and every
+  run.** After a run of correct hits it serves a stored answer at similarity
+  0.98 and above every time, where before it skipped it at random (up to 43% of
+  the time at 0.98).
+- **Modes are named by what you get, not by a vendor** (#112), in setup, the
+  CLI and the dashboard.
+- **Remote access works on the key's profile for every tool**, whatever profile
+  this computer is using.
+- In Settings, ticking a Jev option while Laya is chosen asks whether to
+  switch; "Try it" shows where the time went; a memory kind below the shared
+  confidence threshold shows as unconfirmed.
+- The dashboard's live events show saved, captured, corrected and deleted
+  memories from every surface, and its filter offers only events SLM sends.
+- Every dashboard text meets readable contrast in light and dark themes.
+- The README leads with the answer check (Laya on your Mac, Jev on Windows,
+  Linux and macOS), lists platform support plainly, and brings back the
+  architecture diagram and the walkthrough video.
+
+### Fixed
+
+- **Background maintenance no longer moves memories you still use into the
+  archive**, where recall could not find them. On a large store most memories
+  had drifted there, and questions about them came back with the wrong answer
+  or none.
+- A question about a version number ("what changed in 4.1.20") finds the memory
+  about that version.
+- A new or changed link is used by the next recall instead of a cached answer.
+- Erasure: unfinished deletions are re-checked and closed in every profile,
+  back off instead of retrying forever, heal entity erasures, and an unreadable
+  vector store never counts as erased (PR #149, thanks @bgausden). `slm ops`
+  and the Ops Health page say what each entry is and what to do.
+- `slm ops resolve` rejects a bad operation ID cleanly instead of crashing
+  (#148); a broken daemon response is no longer reported as a bad ID.
+- Re-verified the Mode B / Ollama, daemon-start and migration fixes reported in
+  #128 and #125.
+- On a computer shared by several accounts, SLM never sends data to, starts
+  against, or adopts another account's daemon.
+- Restore points, backups, remote secrets, the answer-check key and config are
+  readable only by you, including files older versions left open.
+- Remote access closes a connection that stalls before TLS within 10 seconds.
+- Shutting down while another program holds the memory database no longer
+  fails; a save waiting for it is kept for the next start.
+- **Windows:** output to a pipe or file is UTF-8 and never crashes on a
+  character; the dashboard and SLM's files read and write UTF-8; process checks
+  never send Ctrl+C; profiles, restores, embedding migrations, backups and the
+  benchmark close their database files so they can finish; the code graph
+  records forward-slash paths; bounded-loops receipts import; the Answer Check
+  demo says plainly that it needs an Apple silicon Mac.
+- **macOS:** no native matrix factorization on the recall and cache paths can
+  corrupt process memory.
+- **Windows:** `slm serve stop` and the idle timeout shut the daemon down
+  cleanly instead of killing it, so it leaves no stale state behind; a model
+  download started by the daemon's self-repair stops when the daemon stops.
+- The Summaries picker lists projects saved on your memories, not only the
+  folders an agent worked in.
+- Each dashboard page opens at its first line instead of under the top bar.
+
+### Security
+
+- Installs and upgrades get fsspec 2026.6.0 or later, which closes a remote
+  code execution advisory (GHSA-27vj-qcqg-25rc) in a package SLM uses
+  indirectly.
+- `config.json` and the answer-check and feedback keys that an older release
+  left readable by other accounts are made private when SLM starts.
+
+Thanks to @bgausden for the erasure fix in PR #149 and for #148 and #150, to
+@tianjueak for #128, and to @unfall103-debug for #112, #113 and #125.
+
 ## [4.1.20] — Answers you can check, from any computer
 
 ### Added
