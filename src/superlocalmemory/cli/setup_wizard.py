@@ -123,6 +123,17 @@ def _ollama_available() -> bool:
 # Model download
 # ---------------------------------------------------------------------------
 
+#: First statement of every download child: exit when the process that started
+#: it is gone. The daemon's self-heal starts these downloads (up to 10 minutes)
+#: from a background thread; without this, stopping or killing the daemon left
+#: the download running on its own, and on Windows nothing else reaps it.
+_EXIT_WITH_PARENT = (
+    "import sys; "
+    "from superlocalmemory.core.platform_utils import start_parent_watchdog; "
+    "start_parent_watchdog(); "
+)
+
+
 def _download_model(model_name: str, label: str) -> bool:
     """Download a HuggingFace model with visible progress.
 
@@ -136,8 +147,8 @@ def _download_model(model_name: str, label: str) -> bool:
     # H-03: pass the model name as argv, never interpolated into executed
     # source, so a crafted model_name cannot become arbitrary Python.
     script = (
-        "import sys; "
-        "from sentence_transformers import SentenceTransformer; "
+        _EXIT_WITH_PARENT
+        + "from sentence_transformers import SentenceTransformer; "
         "m = SentenceTransformer(sys.argv[1], trust_remote_code=True); "
         "d = m.get_sentence_embedding_dimension(); "
         "print(f'OK dim={d}'); "
@@ -179,7 +190,8 @@ def _download_reranker(model_name: str) -> bool:
 
     # H-03: model name via argv, never interpolated into executed source.
     script = (
-        "import sys; from sentence_transformers import CrossEncoder; "
+        _EXIT_WITH_PARENT
+        + "from sentence_transformers import CrossEncoder; "
         "m = CrossEncoder(sys.argv[1], trust_remote_code=True); "
         "print('OK'); "
     )
