@@ -43,6 +43,12 @@ def run_warmup_recalls(engine: Any, profile_runtime: Any, *,
 
 def _recalls(engine: Any, profile_runtime: Any,
              warm_spreading_activation: Callable[[Any, Any], Any]) -> None:
+    # The in-memory vector and kind indexes first (retrieval/kind_scope): built
+    # here, the warm-up recalls below and the first real one find them ready
+    # instead of waiting behind the build past the channel guard.
+    from superlocalmemory.retrieval import kind_scope
+
+    kind_scope.warm(engine, str(getattr(engine, "profile_id", "") or "default"))
     for query in WARMUP_QUERIES:
         with profile_runtime.operation_nowait() as snapshot:
             if snapshot is None:
