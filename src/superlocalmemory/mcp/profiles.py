@@ -100,9 +100,9 @@ _PROFILE_FULL: frozenset[str] = frozenset({
     # and a view is a convenience over recall, which core already has.
     "run_view", "manage_view",
     # prestage_context remains registered but deliberately raw-server-only.
-}) | _PROFILE_FULL_MESH | _PROFILE_KINDS  # 54
+}) | _PROFILE_FULL_MESH | _PROFILE_KINDS  # 56
 
-_PROFILE_POWER: frozenset[str] = _PROFILE_FULL | frozenset({  # 66
+_PROFILE_POWER: frozenset[str] = _PROFILE_FULL | frozenset({  # 68
     "get_version", "get_mode", "health", "consistency_check", "recall_trace",
     "get_lifecycle_status", "set_retention_policy", "compact_memories",
     "get_behavioral_patterns", "audit_trail", "quantize", "get_retention_stats",
