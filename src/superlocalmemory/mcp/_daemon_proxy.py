@@ -192,8 +192,13 @@ class DaemonPoolProxy:
         return data
 
     def store(
-        self, content: str, metadata: dict | None = None,
+        self, content: str, metadata: dict | None = None, *, kind: str = "",
     ) -> dict[str, Any]:
+        """``kind`` is a kind the caller declared, already validated. It is
+        sent as the request's own ``kind`` field - the only place the daemon
+        accepts one from. A ``_slm_memory_kind`` inside ``metadata`` is never
+        promoted to it: the daemon strips that key, and lifting it here would
+        let any metadata a client forwards confirm a kind."""
         if self._unavailable:
             return self._unavailable_response()
         meta = dict(metadata or {})
@@ -227,6 +232,9 @@ class DaemonPoolProxy:
         if replaces is not None:
             body["replaces"] = replaces
             flags["preserve_unprocessable"] = True
+        from superlocalmemory.mcp._remember_kind import with_declared_kind
+
+        body, flags = with_declared_kind(body, flags, (kind or "").strip())
         # One identity-aware daemon client owns descriptor validation,
         # capability delivery, and exact-instance targeting. A raw urllib POST
         # here previously became unauthenticated when /remember was hardened

@@ -193,19 +193,13 @@ def register_core_tools(server, get_engine: Callable) -> None:
             "agent_id": agent_id,
             "session_id": session_id,
         }
-        if (kind or "").strip():
-            from superlocalmemory.storage.memory_kinds import METADATA_KEY, MemoryKind, parse_kind
+        # Sent as the request's own ``kind`` field, never inside metadata (the
+        # daemon strips reserved keys there): see mcp/_remember_kind.py.
+        from superlocalmemory.mcp import _remember_kind as rk
 
-            parsed_kind = parse_kind(kind)
-            if parsed_kind is None:
-                return {
-                    "success": False,
-                    "code": "INVALID_KIND",
-                    "retryable": False,
-                    "error": "Unknown memory kind. Use one of: "
-                             + ", ".join(k.value for k in MemoryKind),
-                }
-            meta[METADATA_KEY] = parsed_kind.value
+        declared_kind, kind_error = rk.parse_declared_kind(kind)
+        if kind_error is not None:
+            return kind_error
         replaces_id = None
         if replaces is not None:
             from superlocalmemory.core.replaces_input import (
@@ -229,7 +223,8 @@ def register_core_tools(server, get_engine: Callable) -> None:
             # ``replaces`` is part of what was asked: the same words replacing a
             # different memory are a different request. Added only when set,
             # so every key derived for a plain call is unchanged.
-            replaces_part = f"\0replaces={replaces_id}" if replaces_id is not None else ""
+            replaces_part = (f"\0replaces={replaces_id}" if replaces_id is not None else ""
+                             ) + rk.kind_key_part(declared_kind)  # so is the kind
             if session_id:
                 material = (
                     f"{agent_id}\0{session_id}\0{scope or ''}\0{shared_with}\0{content}"
@@ -292,6 +287,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
                         # which must surface, not read as an outage.
                         body["replaces"] = replaces_id
                         request_flags["preserve_unprocessable"] = True
+                    body, request_flags = rk.with_declared_kind(body, request_flags, declared_kind)
                     resp = None
                     try:
                         resp = await _asyncio.to_thread(
@@ -428,7 +424,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
 
             def _store_via_daemon_pool():
                 pool = choose_pool()
-                return pool.store(content, worker_meta)
+                return pool.store(content, worker_meta, **rk.store_kwargs(declared_kind))
 
             stored = await _asyncio.to_thread(_store_via_daemon_pool)
             if not isinstance(stored, dict) or not stored.get("ok"):
