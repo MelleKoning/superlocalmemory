@@ -221,8 +221,9 @@ class TestTheEntityIndex:
             )
 
     def test_an_entity_list_rewrite_is_indexed(self, db) -> None:
-        db.update_fact("b-00-1", {"canonical_entities_json": ["E00", "E29"]}, "default")
         entity_index.backfill(db.db_path, batch_size=500, max_batches=10)
+        assert entity_index.is_complete(db)  # so only the update can index it
+        db.update_fact("b-00-1", {"canonical_entities_json": ["E00", "E29"]}, "default")
         ids = [f for f, _ in entity_index.facts_for_entity(
             db, "E29", "default", limit=50, indexed=True)]
         assert "b-00-1" in ids
