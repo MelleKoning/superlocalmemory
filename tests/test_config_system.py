@@ -73,6 +73,26 @@ def test_config_creates_parent_dirs(tmp_path):
     assert nested.exists()
 
 
+def test_migrate_to_3mode_defaults_a_fresh_install_to_mode_a(tmp_path):
+    # Every CI runner, and every user's first boot, starts here: no
+    # config.json has ever been written. This used to default to Mode B
+    # pointed at http://localhost:11434 for both the LLM and embeddings,
+    # with no reachability check before use (LLMBackbone.is_available()
+    # always returns True for the "ollama" provider), so a machine with no
+    # local model silently got Mode B anyway — breaking Mode A's own
+    # promise and leaving enrichment unable to ever reach "complete" when
+    # nothing answers on that port. This pins the fix: a fresh install
+    # matches SLMConfig.default()'s own Mode A, everywhere else in this
+    # module.
+    assert not (tmp_path / "config.json").exists()
+    migrated = SLMConfig.migrate_to_3mode(tmp_path)
+    assert migrated is True
+    config = SLMConfig.load(tmp_path / "config.json")
+    assert config.mode == Mode.A
+    assert config.llm.provider == ""
+    assert SLMConfig.read_current_mode(tmp_path) == "a"
+
+
 def test_mode_c_default_embedding_is_local_nomic():
     """Mode C with no embedding overrides must default to a model the local
     sentence-transformers worker can actually load. The prior default
