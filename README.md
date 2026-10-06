@@ -67,6 +67,20 @@ Real output from a fresh Mode A install, trimmed. Scores rank; they are not prob
 
 Five minutes: install, setup, recall, cache and compression.
 
+### The dashboard, on real 4.1.21
+
+Captured from a 4.1.21 install in Mode A, with Laya running on the Mac and a store of fictional project memories. Nothing is mocked: each verdict, score and timing is what SLM returned.
+
+| Memories that answer the question | Memories that do not: "I don't have that" |
+|---|---|
+| ![Answer Check: Laya judges that the memories answer "When is Project Kestrel going live?" with confidence 0.85, in 1.4 s of the 3 s limit](docs/screenshots/dashboard-4.1.21/answer-check-answered.png) | ![Answer Check: for "How much did the Kestrel pilot cost?" Laya finds no memory that answers it and SLM says "I don't have that"](docs/screenshots/dashboard-4.1.21/answer-check-dont-have-that.png) |
+
+| Recall Lab: why each memory was chosen | Every memory with its kind and project |
+|---|---|
+| ![Recall Lab: per-channel scores for "what did we decide about the database"](docs/screenshots/dashboard-4.1.21/recall-lab.png) | ![Memories table filtered by kind: decisions, rules, corrections, facts, with the project each belongs to](docs/screenshots/dashboard-4.1.21/memories-kinds-projects.png) |
+
+![Saved views: a saved question that runs the same search your agent uses and shows the memory each result came from](docs/screenshots/dashboard-4.1.21/saved-views.png)
+
 ## Why SuperLocalMemory: the moats
 
 A vector store answers "what is similar". AI agent memory must also answer: is this still true, who may see it, can it be erased with proof, and does the agent actually have the answer?
