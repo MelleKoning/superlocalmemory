@@ -106,11 +106,31 @@ def record_fact_entities(db: DatabaseManager, fact_id: str, profile_id: str,
     entities = tuple(dict.fromkeys(str(e) for e in canonical_entities if e))
     if not entities or not _has_index_table(db):
         return
-    for entity_id in entities:
-        db.execute(
-            _INSERT_PAIR,
-            (profile_id, fact_id, entity_id, "store", profile_id, entity_id),
-        )
+
+    def _write() -> None:
+        _insert_pairs(db.execute, fact_id, profile_id, entities, "store")
+
+    # Joins the caller's transaction when there is one (store_fact), so the
+    # fact and its index rows commit together; otherwise one of its own.
+    db._atomically(_write)
+
+
+def record_rewritten_fact(db: DatabaseManager, fact_id: str,
+                          profile_id: str | None, raw_entities: object) -> None:
+    """Index a fact whose entity list an update just replaced.
+
+    A fact that now names more entities must be findable under them; the row
+    of an entity it no longer names goes stale and the lookup's JSON test
+    filters it. ``profile_id`` None means the caller did not scope the update.
+    """
+    owner = db.execute("SELECT profile_id FROM atomic_facts WHERE fact_id=?",
+                       (fact_id,))
+    if not owner:
+        return
+    fact_profile = str(dict(owner[0])["profile_id"])
+    if profile_id is not None and fact_profile != profile_id:
+        return
+    record_fact_entities(db, fact_id, fact_profile, entity_ids(raw_entities))
 
 
 # -- background backfill ---------------------------------------------------------
@@ -217,6 +237,13 @@ def is_complete(db: DatabaseManager) -> bool:
     return bool(rows) and str(dict(rows[0])["state"]) == "complete"
 
 
+def _owner_profile(db: DatabaseManager, entity_id: str) -> str | None:
+    rows = db.execute(
+        "SELECT profile_id FROM canonical_entities WHERE entity_id=?", (entity_id,),
+    )
+    return str(dict(rows[0])["profile_id"]) if rows else None
+
+
 def facts_for_entity(
     db: DatabaseManager, entity_id: str, profile_id: str, *, limit: int,
     indexed: bool, include_global: bool = False, include_shared: bool = False,
@@ -225,35 +252,35 @@ def facts_for_entity(
 
     Same answer either way: the facts in scope whose ``canonical_entities_json``
     holds the id, newest first, ``fact_id`` breaking a tie so the order never
-    depends on how SQLite happens to scan. ``indexed`` picks the index (about
-    0.3 ms) over the full scan (17-81 ms on the author's store). The JSON test
-    stays on the indexed path too, so an association a later rewrite of the
-    fact made stale can never produce a match the scan would not.
+    depends on how SQLite happens to scan. ``indexed`` permits the index (about
+    0.3 ms) over the full scan (17-81 ms on the author's store), and it is used
+    only where it is provably complete: the entity belongs to this profile and
+    only this profile's facts are visible. Every write indexes a fact under the
+    entities of its own profile, so a fact naming another profile's entity, a
+    deleted entity, or a global or shared fact is reachable only by the scan,
+    and gets it. The JSON test stays on the indexed path too, so an association
+    a later rewrite of the fact made stale can never produce a match the scan
+    would not.
     """
     from superlocalmemory.storage.database import _scope_where
 
     where, params = _scope_where(profile_id, include_global=include_global,
                                  include_shared=include_shared, prefix="af")
     needle = f'%"{entity_id}"%'
-    if indexed:
-        profiles = [profile_id]
-        if include_global or include_shared:
-            # Global and shared facts belong to other profiles; seek every
-            # profile that has an association, read from the index itself.
-            profiles = sorted({profile_id, *(
-                str(dict(r)["profile_id"]) for r in db.execute(
-                    "SELECT DISTINCT profile_id FROM fact_entity_associations")
-            )})
-        marks = ",".join("?" * len(profiles))
+    use_index = (
+        indexed and not include_global and not include_shared
+        and _owner_profile(db, entity_id) == profile_id
+    )
+    if use_index:
         sql = (
             "SELECT af.fact_id AS fact_id, af.canonical_entities_json AS ents "
             "FROM fact_entity_associations AS fea "
             "JOIN atomic_facts AS af ON af.fact_id = fea.fact_id "
-            f"WHERE fea.profile_id IN ({marks}) AND fea.entity_id = ? "
+            "WHERE fea.profile_id = ? AND fea.entity_id = ? "
             f"AND {where} AND af.canonical_entities_json LIKE ? "
             "ORDER BY af.created_at DESC, af.fact_id LIMIT ?"
         )
-        args: tuple[Any, ...] = (*profiles, entity_id, *params, needle, int(limit))
+        args: tuple[Any, ...] = (profile_id, entity_id, *params, needle, int(limit))
     else:
         sql = (
             "SELECT af.fact_id AS fact_id, af.canonical_entities_json AS ents "
@@ -269,4 +296,4 @@ def facts_for_entity(
 
 
 __all__ = ["REPAIR_KEY", "backfill", "entity_ids", "facts_for_entity",
-           "is_complete", "record_fact_entities", "status"]
+           "is_complete", "record_fact_entities", "record_rewritten_fact", "status"]

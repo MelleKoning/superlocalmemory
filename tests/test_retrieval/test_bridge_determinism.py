@@ -200,3 +200,103 @@ class TestTheEntityIndex:
         # It records that a pair exists; it never counts a fact again.
         assert dict(store.execute(
             "SELECT entity_id, fact_count FROM canonical_entities")) == counts
+
+    def test_the_index_answers_only_where_it_is_complete(self, db, monkeypatch) -> None:
+        """A fact naming another profile's entity is never indexed; the scan
+        must answer for that entity, and for global or shared recall."""
+        db.execute("INSERT OR IGNORE INTO profiles(profile_id, name) VALUES ('other', 'other')")
+        db.store_entity(CanonicalEntity(entity_id="X01", canonical_name="x",
+                                        profile_id="other"))
+        db.store_fact(AtomicFact(fact_id="cross", memory_id="m0", content="cross",
+                                 canonical_entities=["X01"]))
+        entity_index.backfill(db.db_path, batch_size=500, max_batches=10)
+        assert entity_index.is_complete(db)
+        found = entity_index.facts_for_entity(db, "X01", "default", limit=5, indexed=True)
+        assert [fid for fid, _ in found] == ["cross"]
+        for kw in ({"include_global": True}, {"include_shared": True}):
+            assert entity_index.facts_for_entity(
+                db, "E00", "default", limit=5, indexed=True, **kw,
+            ) == entity_index.facts_for_entity(
+                db, "E00", "default", limit=5, indexed=False, **kw,
+            )
+
+    def test_an_entity_list_rewrite_is_indexed(self, db) -> None:
+        db.update_fact("b-00-1", {"canonical_entities_json": ["E00", "E29"]}, "default")
+        entity_index.backfill(db.db_path, batch_size=500, max_batches=10)
+        ids = [f for f, _ in entity_index.facts_for_entity(
+            db, "E29", "default", limit=50, indexed=True)]
+        assert "b-00-1" in ids
+        assert ids == [f for f, _ in entity_index.facts_for_entity(
+            db, "E29", "default", limit=50, indexed=False)]
+        # The entity it no longer names keeps a stale row; the lookup drops it.
+        db.update_fact("b-00-1", {"canonical_entities_json": ["E29"]}, "default")
+        assert "b-00-1" not in [f for f, _ in entity_index.facts_for_entity(
+            db, "E00", "default", limit=50, indexed=True)]
+
+    def test_an_immutable_insert_is_indexed(self, db) -> None:
+        db.insert_fact_immutable(AtomicFact(fact_id="succ", memory_id="m0",
+                                            content="successor",
+                                            canonical_entities=["E07"]))
+        rows = db.execute("SELECT 1 FROM fact_entity_associations "
+                          "WHERE fact_id='succ' AND entity_id='E07'")
+        assert rows
+
+
+def test_an_index_row_is_counted_once_after_a_partial_migration(tmp_path: Path) -> None:
+    """store_fact writes the pair uncounted; the counting path must still
+    count it once when M028's repair row is missing, and only once."""
+    from superlocalmemory.core.store_pipeline import _record_fact_entity_association
+
+    store = DatabaseManager(tmp_path / "memory.db")
+    store.initialize(real_schema)
+    store.store_entity(CanonicalEntity(entity_id="E00", canonical_name="e0"))
+    store.store_memory(MemoryRecord(memory_id="m0", content="parent"))
+    store.store_fact(AtomicFact(fact_id="f1", memory_id="m0", content="f1",
+                                canonical_entities=["E00"]))
+    store.execute("DELETE FROM fact_entity_association_repair_state "
+                  "WHERE repair_key='historical-backfill'")
+    before = int(dict(store.execute(
+        "SELECT fact_count FROM canonical_entities WHERE entity_id='E00'")[0])["fact_count"])
+    for _ in range(2):
+        _record_fact_entity_association(store, operation_id="op-1", profile_id="default",
+                                        fact_id="f1", entity_id="E00")
+    after = int(dict(store.execute(
+        "SELECT fact_count FROM canonical_entities WHERE entity_id='E00'")[0])["fact_count"])
+    assert after == before + 1
+
+
+class TestTheBackfill:
+    def test_it_resumes_and_indexes_writes_made_while_it_runs(self, tmp_path: Path) -> None:
+        path = tmp_path / "old.db"
+        store = build_store(path)
+        store.execute("DELETE FROM fact_entity_associations")
+        first = entity_index.backfill(path, batch_size=7, max_batches=1)
+        assert not first["complete"] and first["scanned"] == 7
+        # A remember while the backfill is half done: indexed by its own write.
+        store.store_fact(AtomicFact(fact_id="late", memory_id="m0", content="late",
+                                    canonical_entities=["E03", "E17"]))
+        # A fresh process resumes from the durable cursor, never from the start.
+        assert entity_index.status(path)["last_fact_rowid"] > 0
+        while not entity_index.backfill(path, batch_size=7, max_batches=1)["complete"]:
+            pass
+        assert entity_index.status(path)["scanned"] == 6 + 90  # each fact once
+        for n in range(30):
+            eid = f"E{n:02d}"
+            assert entity_index.facts_for_entity(
+                store, eid, "default", limit=500, indexed=True,
+            ) == entity_index.facts_for_entity(
+                store, eid, "default", limit=500, indexed=False,
+            ), eid
+
+    def test_the_daemon_loop_publishes_progress_and_finishes(self, tmp_path: Path) -> None:
+        import asyncio
+        from types import SimpleNamespace
+
+        from superlocalmemory.server.entity_index_repair import run_entity_index_backfill
+
+        path = tmp_path / "old.db"
+        build_store(path).execute("DELETE FROM fact_entity_associations")
+        app = SimpleNamespace(state=SimpleNamespace())
+        asyncio.run(run_entity_index_backfill(app, path, batch_size=20, tick_seconds=0.0))
+        assert app.state.entity_index_status["state"] == "complete"
+        assert app.state.entity_index_status["inserted"] == 6 * 5 + 30 * 3 + 30
