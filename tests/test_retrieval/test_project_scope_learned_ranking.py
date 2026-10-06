@@ -53,9 +53,11 @@ def _trained_model(store) -> tuple[bytes, list[str]]:
     a platform's build happens to land on, nothing stops every one of those
     ten close points from landing in the SAME bin there even though they
     land in ten different leaves here - and when that happens every
-    prediction for this fixture comes back identical. That is exactly what
-    CI (ubuntu, Python 3.14) measured: every one of the ten scores in
-    test_the_seeded_model_is_really_active came back 0.3636741782759984.
+    prediction for this fixture comes back identical.
+
+    (The 0.3636741782759984 that CI measured for all ten scores in
+    test_the_seeded_model_is_really_active was not that, though: it was a
+    leaked LightGBM mock - see the guard at the top of this function.)
 
     Training directly on the rows this fixture's own (non-learning) recall
     produces - oversampled, each copy nudged by noise far smaller than the
@@ -66,6 +68,17 @@ def _trained_model(store) -> tuple[bytes, list[str]]:
     import lightgbm as lgb
 
     from superlocalmemory.learning.features import FEATURE_NAMES, FeatureExtractor
+
+    # tests/test_learning and tests/test_api mock lightgbm.train for their
+    # own directories. When that mock leaked (session scope) into this one,
+    # the "trained" model was the mock's fixed two-tree model, and every
+    # score below came back 0.3636741782759984 on CI, where those
+    # directories run first. Say so here rather than three asserts later.
+    assert lgb.train.__module__ == "lightgbm.engine" and \
+        lgb.Dataset.__module__ == "lightgbm.basic", (
+            f"lightgbm is mocked here ({lgb.train!r}, {lgb.Dataset!r}): a "
+            "test directory's LightGBM mock outlived that directory"
+        )
 
     with pytest.MonkeyPatch.context() as mp:
         # Explicit, regardless of ambient state: these are the plain
@@ -120,13 +133,17 @@ def _trained_model(store) -> tuple[bytes, list[str]]:
     # here, not assumed, so a platform-specific collapse like the one above
     # fails loudly at fixture setup instead of as a confusing assertion deep
     # in a parametrized test.
-    predicted = booster.predict(base)
+    state = booster.model_to_string()
+    # Predict with the model as recall will load it - from its saved text -
+    # not with the in-memory booster: a stand-in booster can score the rows
+    # one way and save a different model.
+    predicted = lgb.Booster(model_str=state).predict(base)
     assert len(set(round(float(p), 6) for p in predicted)) > 3, (
         "freshly trained booster predicts a near-constant score for the "
         f"fixture's own memories: {predicted!r}"
     )
 
-    return booster.model_to_string().encode("utf-8"), list(FEATURE_NAMES)
+    return state.encode("utf-8"), list(FEATURE_NAMES)
 
 
 @pytest.fixture()

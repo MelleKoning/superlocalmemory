@@ -11,6 +11,7 @@ cache key did not say which, so one path's cached walk answered the other's.
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from superlocalmemory.retrieval.spreading_activation import (
@@ -18,7 +19,7 @@ from superlocalmemory.retrieval.spreading_activation import (
     SpreadingActivationConfig,
     _seed_score,
 )
-from tests.test_retrieval.cross_scope_fixture import REQ, PartitionedVS, build_store
+from tests.test_retrieval.cross_scope_fixture import REQ, PartitionedVS, build_store, cosine
 
 
 @pytest.fixture(autouse=True)
@@ -64,3 +65,28 @@ def test_the_cache_key_names_the_path(store) -> None:
     seeds = vec._seed_search(q, REQ, include_global=False, include_shared=False)
     assert (vec._compute_query_hash(q, REQ, seeds=seeds)
             != sql._compute_query_hash(q, REQ, seeds=seeds))
+
+
+class _TiesTheOtherWay(PartitionedVS):
+    """A vector index that breaks score ties in its own order, as vec0 does
+    (by its internal row order), not by fact id as the SQL fallback does."""
+
+    def search(self, q, top_k: int = 10, profile_id: str | None = None):
+        out = [(f, max(0.0, cosine(q, self._embs[f]))) for f in reversed(self._ids)]
+        out.sort(key=lambda x: -x[1])
+        return out[:top_k]
+
+
+def test_a_question_that_resembles_nothing_walks_nothing_on_either_path(store) -> None:
+    """A seed at similarity 0 is no evidence, yet one sigmoid round lifted it
+    to ~0.45 and it spread like a match. Which zero-scored facts took the seed
+    slots was a tie-break each path broke differently, so the same question
+    answered differently on a machine without sqlite-vec (macOS CI)."""
+    local = store.ids("L")
+    q = -np.sum([store.embs[f] for f in local], axis=0)
+    assert all(cosine(q, store.embs[f]) <= 0.0 for f in local), "precondition"
+    cfg = SpreadingActivationConfig()
+    vec = SpreadingActivation(store.db, _TiesTheOtherWay(store.embs, local), cfg)
+    sql = SpreadingActivation(store.db, None, cfg)
+    assert vec.search(q.tolist(), REQ, top_k=10) == []
+    assert sql.search(q.tolist(), REQ, top_k=10) == []

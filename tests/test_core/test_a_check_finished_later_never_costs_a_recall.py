@@ -31,10 +31,16 @@ from tests.helpers.owned_python import owned_environment
 
 #: Seconds the fake worker spends on each memory.
 DOC_S = 0.3
-#: What a live recall has left of its budget when its check starts. One whole
-#: judgement (3 x DOC_S) fits, with room for one memory's wait in front of it,
-#: but not for a whole judgement's wait (the defect).
-LEFT_S = 1.5
+#: Room for a slow machine in what a live recall has left of its budget when
+#: its check starts: its own judgement, one memory's wait in front of it, and
+#: this. The budget used to be 1.5 s for a three-memory question behind a
+#: three-memory check - 0.3 s (one memory) between the right behaviour and the
+#: defect - and a macOS CI runner, whose sleeps run long, used all of it: a
+#: recall that had waited for one memory came back "unavailable". A longer
+#: check finished later (ALPHA_LONG) gives the defect (waiting for all of it)
+#: a wait of five memories or more, so the budget carries this much slack and
+#: is still well short of what the defect needs.
+SLACK_S = 0.8
 
 _WORKER = r'''
 import json, os, sys, time
@@ -90,8 +96,9 @@ def laya(tmp_path, monkeypatch):
     monkeypatch.setenv("FAKE_LAYA_LOG", str(log))
     monkeypatch.setenv("FAKE_LAYA_DOC_S", str(DOC_S))
     monkeypatch.setattr(laya_mod, "_WARMUP_BACKOFF_S", 0.01)
+    # top_k holds ALPHA_LONG whole; every other question here has three memories.
     judge = LayaSufficiencyJudge(python=str(owned_environment(tmp_path / "env")),
-                                 worker_path=worker,
+                                 worker_path=worker, top_k=len(ALPHA_LONG),
                                  timeout_s=5.0, start=False)
     judge.start_warmup()
     assert _wait(lambda: judge.ready), "fake worker did not load"
@@ -113,6 +120,14 @@ def _response(*texts: str) -> SimpleNamespace:
 
 ALPHA = ("alpha fact one", "alpha fact two", "alpha fact three")
 BETA = ("beta fact one", "beta fact two", "beta fact three")
+#: A check finished later that is long enough that waiting for all of it (the
+#: defect) costs far more than waiting for one of its memories.
+ALPHA_LONG = ALPHA + ("alpha fact four", "alpha fact five", "alpha fact six")
+
+
+def _one_memory_and(texts) -> float:
+    """A recall's budget: its own judgement, one memory's wait, and SLACK_S."""
+    return len(texts) * DOC_S + DOC_S + SLACK_S
 
 
 def _documents(judge, texts) -> list:
@@ -120,7 +135,7 @@ def _documents(judge, texts) -> list:
     return _top_documents(judge, _response(*texts))
 
 
-def _live_recall(judge, query: str, texts, left_s: float = LEFT_S) -> acs.JudgeOutcome:
+def _live_recall(judge, query: str, texts, left_s: float) -> acs.JudgeOutcome:
     """A recall whose retrieval left ``left_s`` of the budget for its check."""
     started = (time.monotonic() - acs.RECALL_CEILING_S + acs.POST_JUDGE_RESERVE_S + left_s)
     engine = SimpleNamespace(_sufficiency_judge=judge)
@@ -137,18 +152,23 @@ def _start_deferred(judge, log: Path, query: str, texts) -> threading.Thread:
 class TestALiveRecallComesFirst:
     def test_a_new_question_during_a_deferred_check_is_judged(self, laya) -> None:
         judge, log = laya
-        _start_deferred(judge, log, "what is alpha?", ALPHA)
-        out = _live_recall(judge, "what is beta?", BETA)
+        _start_deferred(judge, log, "what is alpha?", ALPHA_LONG)
+        out = _live_recall(judge, "what is beta?", BETA, left_s=_one_memory_and(BETA))
         assert out.status == acs.STATUS_JUDGED, out
         assert out.detail == acs.DETAIL_NONE
+        # It waited for one memory of the deferred check, not for the check.
+        assert len([e for e in _events(log) if e["event"] == "end"
+                    and e["query"] == "what is alpha?"
+                    and e["at"] < _starts(log, "what is beta?")[0]["at"]]) == 1
         # The deferred check carried on afterwards and finished.
         _join_finishers()
-        assert memo.lookup(judge, "what is alpha?", _documents(judge, ALPHA)) is not None
+        assert memo.lookup(judge, "what is alpha?", _documents(judge, ALPHA_LONG)) is not None
 
     def test_the_same_question_during_a_deferred_check_is_judged(self, laya) -> None:
         judge, log = laya
-        _start_deferred(judge, log, "what is alpha?", ALPHA)
-        out = _live_recall(judge, "what is alpha?", ALPHA)
+        _start_deferred(judge, log, "what is alpha?", ALPHA_LONG)
+        out = _live_recall(judge, "what is alpha?", ALPHA_LONG,
+                           left_s=_one_memory_and(ALPHA_LONG))
         assert out.status == acs.STATUS_JUDGED, out
 
     def test_a_recall_that_arrives_mid_check_finds_the_worker_free(self, laya) -> None:

@@ -53,6 +53,20 @@ def _seed_score(cosine: float, vector_path: bool = True) -> float:
     return max(0.0, cosine)
 
 
+def _evidence_seeds(seeds: list[tuple[str, float]]) -> list[tuple[str, float]]:
+    """Only seeds the question actually resembles start the walk.
+
+    A seed scored 0 (cosine <= 0) carries no evidence, yet one sigmoid round
+    lifts it to ``sigmoid(-theta)`` ~ 0.45 and it then spreads like a real
+    match. Which zero-scored facts fill the ``top_m`` seed slots is an
+    arbitrary tie-break, and the vec0 index and the SQL fallback break that
+    tie differently, so a question that resembled nothing came back with a
+    different spreading-activation answer on a machine without sqlite-vec.
+    Dropping them makes that answer "nothing" on every backend.
+    """
+    return [(fact_id, score) for fact_id, score in seeds if score > 0.0]
+
+
 # ---------------------------------------------------------------------------
 # Configuration (frozen dataclass, Rule 10)
 # ---------------------------------------------------------------------------
@@ -190,6 +204,7 @@ class SpreadingActivation:
                 seed_results = list(
                     {fact_id: score for fact_id, score in seed_results}.items()
                 )
+            seed_results = _evidence_seeds(seed_results)
             if not seed_results:
                 return []
 
