@@ -128,7 +128,7 @@ REVIEWED: dict[tuple[str, str, str], tuple[int, str]] = {
     (_S + "server/unified_daemon.py", "_register_dashboard_routes.v3_auto_detect",
      "httpx.get"):
         (1, "PROBE: is a local Ollama running (GET /api/tags)"),
-    (_S + "server/unified_daemon.py", "_start_legacy_redirect._handle_client",
+    (_S + "server/legacy_port.py", "start_legacy_redirect._handle_client",
      "asyncio.open_connection"):
         (1, "RELAY: relays the legacy port to the daemon on 127.0.0.1"),
 }

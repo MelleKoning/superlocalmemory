@@ -559,8 +559,8 @@ def build_engine_ingestion_command(
             return MaterializationResult(
                 operation.final_fact_ids, state, operation.last_error,
             )
-        facts = engine._db.get_facts_by_ids(
-            list(operation.final_fact_ids), operation.profile_id,
+        facts = engine._db.get_facts_by_ids(  # withheld facts are still this op's facts
+            list(operation.final_fact_ids), operation.profile_id, include_quarantined=True,
         )
         if len(facts) != len(operation.final_fact_ids):
             state["relational"] = False
@@ -641,7 +641,7 @@ def build_engine_ingestion_command(
         # memory is only for a fault before the checkpoint captured final IDs.
         if operation.final_fact_ids:
             facts = engine._db.get_facts_by_ids(
-                list(operation.final_fact_ids), operation.profile_id,
+                list(operation.final_fact_ids), operation.profile_id, include_quarantined=True,
             )
             if len(facts) != len(operation.final_fact_ids):
                 return MaterializationResult(
@@ -979,7 +979,7 @@ def build_engine_ingestion_command(
     def project(operation: IngestionOperation) -> dict[str, bool]:
         facts = engine._db.get_facts_by_ids(
             list(operation.final_fact_ids),
-            operation.profile_id,
+            operation.profile_id, include_quarantined=True,  # a withheld fact is still indexed
         )
         if len(facts) != len(operation.final_fact_ids):
             raise RuntimeError("external projection facts are missing")

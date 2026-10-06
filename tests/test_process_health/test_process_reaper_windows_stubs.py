@@ -40,7 +40,9 @@ def test_it_finds_nothing(windows_reaper):
     assert windows_reaper.find_orphans(config) == []
 
 
-@pytest.mark.parametrize("pid", [0, 1, os.getpid(), 4242])
+@pytest.mark.parametrize(
+    "pid", [0, 1, os.getpid(), 4242], ids=["zero", "init", "this-process", "other"]
+)
 def test_it_never_kills_and_says_it_is_unsupported(windows_reaper, pid):
     outcome = windows_reaper.kill_orphan(pid)
     assert outcome["killed"] is False

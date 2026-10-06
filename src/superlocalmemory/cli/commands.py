@@ -121,10 +121,10 @@ def _cmd_db_dispatch(args: Namespace) -> None:
         if rc:
             sys.exit(rc)
         return
-    if sub in ("restore-points", "restore", "prepare-downgrade"):
-        from superlocalmemory.cli import upgrade_cmd
+    if sub in ("restore-points", "restore", "prepare-downgrade", "fidelity"):
+        from superlocalmemory.cli import fidelity_cmd, upgrade_cmd
         handler = {"restore-points": upgrade_cmd.cmd_db_restore_points,
-                   "restore": upgrade_cmd.cmd_db_restore,
+                   "restore": upgrade_cmd.cmd_db_restore, "fidelity": fidelity_cmd.cmd_db_fidelity,
                    "prepare-downgrade": upgrade_cmd.cmd_db_prepare_downgrade}[sub]
         rc = handler(args)
         if rc:
@@ -135,7 +135,7 @@ def _cmd_db_dispatch(args: Namespace) -> None:
         "| slm db scale <action> "
         "| slm db regraph [--check] [--profile NAME] "
         "| slm db reembed [--missing-only] [--all-profiles] [--limit N] "
-        "| slm db compact [--offline]"
+        "| slm db compact [--offline] | slm db fidelity [--withhold|--release ID]"
     )
     sys.exit(2)
 
@@ -3039,33 +3039,9 @@ def _installed_plugin_versions() -> dict:
     Best effort by design: an editor this does not know about should produce
     "not detected", never an error.
     """
-    import json
-    from pathlib import Path
+    from superlocalmemory.cli.doctor_hosts import installed_plugin_versions
 
-    found: dict[str, str] = {}
-    roots = (
-        # Claude Code: marketplace installs and directly-added plugins.
-        Path.home() / ".claude" / "plugins",
-        # Codex and VS Code copies, when placed by hand.
-        Path.home() / ".codex" / "plugins",
-        Path.home() / ".vscode" / "extensions",
-    )
-    for root in roots:
-        if not root.is_dir():
-            continue
-        for manifest in list(root.glob("*/.claude-plugin/plugin.json")) + \
-                list(root.glob("*/plugin.json")) + \
-                list(root.glob("*/*/.claude-plugin/plugin.json")):
-            try:
-                data = json.loads(manifest.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001 — a sibling plugin's bad json is not ours
-                continue
-            if str(data.get("name", "")) != "superlocalmemory":
-                continue
-            found[str(manifest.parent.parent.name)] = str(
-                data.get("version", "unknown")
-            )
-    return found
+    return installed_plugin_versions()
 
 
 def _detect_all_installs() -> list:
@@ -3494,29 +3470,13 @@ def cmd_doctor(args: Namespace) -> None:
             # pending on it by definition, so this is not a finding.
             _check("Projection queue", "PASS", "not applicable to this store")
 
-    # 11. PEP 668 advisory: detect EXTERNALLY-MANAGED marker and
-    #     recommend pipx when the system Python is managed by the OS package
-    #     manager (e.g. Homebrew, Debian/Ubuntu, Fedora 38+).
+    # 11. PEP 668 advisory (only for the system Python; a venv is exempt)
+    #     and whether this Python can load SQLite extensions at all.
     try:
-        import sysconfig as _sc
-        _stdlib = _sc.get_path("stdlib")
-        if _stdlib:
-            _em_marker = Path(_stdlib) / "EXTERNALLY-MANAGED"
-            if _em_marker.exists():
-                _check(
-                    "PEP 668 / Install method",
-                    "WARN",
-                    "System Python is externally managed (EXTERNALLY-MANAGED marker found). "
-                    "pip install may fail with PEP 668 error.",
-                    "Use an isolated install: pipx install superlocalmemory  "
-                    "or uv tool install superlocalmemory",
-                )
-            else:
-                _check(
-                    "PEP 668 / Install method",
-                    "PASS",
-                    "No EXTERNALLY-MANAGED marker — standard pip install supported",
-                )
+        from superlocalmemory.cli import doctor_hosts as _dh
+
+        _check("PEP 668 / Install method", *_dh.install_method_finding())
+        _check("SQLite extensions (vector search)", *_dh.sqlite_extension_finding())
     except Exception:
         pass  # advisory only — never fail doctor on this check
 
@@ -3654,7 +3614,9 @@ def cmd_doctor(args: Namespace) -> None:
                 _check(
                     "plugin_skills",
                     "PASS",
-                    f"plugin content matches the package ({_pkg_version})",
+                    f"plugin content matches the package ({_pkg_version}): "
+                    + ", ".join(sorted(_pl)) + " (found on disk; not proof "
+                    "that the host runs its hooks)",
                 )
     except Exception as _pl_exc:  # noqa: BLE001 — never break doctor
         _check("plugin_skills", "WARN", f"could not probe plugins: {_pl_exc}")
