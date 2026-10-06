@@ -2270,11 +2270,13 @@ def cmd_delete(args: Namespace) -> None:
     import urllib.parse
 
     from superlocalmemory.cli.daemon import (
+        DaemonConflict,
         DaemonNotFound,
         daemon_request,
         ensure_daemon,
         is_daemon_running,
     )
+    from superlocalmemory.cli.mutation_conflict import exit_conflict
 
     use_json = getattr(args, 'json', False)
     fact_id = args.fact_id.strip()
@@ -2317,9 +2319,12 @@ def cmd_delete(args: Namespace) -> None:
                 return
 
         try:
-            result = daemon_request("DELETE", path, preserve_not_found=True)
+            result = daemon_request("DELETE", path, preserve_not_found=True,
+                                    preserve_conflict=True)
         except DaemonNotFound:
             _memory_not_found("delete", fact_id, use_json)
+        except DaemonConflict as exc:
+            exit_conflict("delete", exc.detail, use_json)
         if not isinstance(result, dict) or not result.get("success"):
             _daemon_unavailable("delete", use_json)
         if use_json:
@@ -2349,6 +2354,7 @@ def cmd_update(args: Namespace) -> None:
     import urllib.parse
 
     from superlocalmemory.cli.daemon import (
+        DaemonConflict,
         DaemonNotFound,
         daemon_request,
         ensure_daemon,
@@ -2371,9 +2377,13 @@ def cmd_update(args: Namespace) -> None:
         path = "/api/memories/" + urllib.parse.quote(fact_id, safe="")
         try:
             body = {"content": new_content}
-            result = daemon_request("PATCH", path, body, preserve_not_found=True)
+            result = daemon_request("PATCH", path, body, preserve_not_found=True,
+                                    preserve_conflict=True)
         except DaemonNotFound:
             _memory_not_found("update", fact_id, use_json)
+        except DaemonConflict as exc:
+            from superlocalmemory.cli.mutation_conflict import exit_conflict
+            exit_conflict("update", exc.detail, use_json)
         if not isinstance(result, dict) or not result.get("success"):
             _daemon_unavailable("update", use_json)
         if use_json:

@@ -445,6 +445,19 @@ def _finalize_erasure(
         }
 
 
+def _refuse_if_correction_protected(db: Any, profile_id: str, fact_id: str) -> None:
+    """Refuse before the erasure removes a single projection (see module doc)."""
+    from superlocalmemory.core.correction_protection import (
+        protecting_cases,
+        protection_message,
+    )
+    from superlocalmemory.core.remember_runtime import CanonicalMutationConflict
+
+    cases = protecting_cases(db, profile_id, fact_id)
+    if cases:
+        raise CanonicalMutationConflict(protection_message(cases))
+
+
 def delete_fact_authorized(
     engine: Any,
     fact_id: str,
@@ -489,6 +502,8 @@ def delete_fact_authorized(
     exists = bool(rows)
     content_preview = dict(rows[0]).get("content", "")[:80] if exists else ""
     memory_id = dict(rows[0]).get("memory_id") if exists else None
+    if exists:
+        _refuse_if_correction_protected(engine._db, profile_id, fact_id)
 
     erasure_id = uuid.uuid4().hex
     requested_at = _time.time()
