@@ -203,6 +203,30 @@ class TestSLMConfigForMode:
         assert cfg.embedding.dimension == 768
         assert cfg.embedding.model_name == "nomic-ai/nomic-embed-text-v1.5"
 
+    def test_mode_b_honours_a_custom_ollama_base_url(self) -> None:
+        """4.1.22: a non-default ollama_base_url (another host, another port)
+        must survive the template, not silently revert to localhost:11434."""
+        cfg = SLMConfig.for_mode(
+            Mode.B, embedding_ollama_base_url="http://ollama-box:9999",
+            embedding_ollama_model="mxbai-embed-large",
+        )
+        assert cfg.embedding.ollama_base_url == "http://ollama-box:9999"
+        assert cfg.embedding.ollama_model == "mxbai-embed-large"
+
+    def test_mode_b_defaults_the_ollama_base_url_when_unset(self) -> None:
+        cfg = SLMConfig.for_mode(Mode.B)
+        assert cfg.embedding.ollama_base_url == "http://localhost:11434"
+        assert cfg.embedding.ollama_model == "nomic-embed-text"
+
+    def test_mode_a_with_an_explicit_ollama_provider_honours_the_base_url(self) -> None:
+        """Mode A can also auto-detect provider="ollama" for embeddings; the
+        same custom host must survive there too, not just in Mode B."""
+        cfg = SLMConfig.for_mode(
+            Mode.A, embedding_provider="ollama",
+            embedding_ollama_base_url="http://ollama-box:9999",
+        )
+        assert cfg.embedding.ollama_base_url == "http://ollama-box:9999"
+
 
 # ---------------------------------------------------------------------------
 # db_path auto-computed
@@ -251,6 +275,22 @@ class TestV332OnnxCrossEncoderConfig:
     def test_mode_c_cross_encoder_unchanged(self) -> None:
         cfg = SLMConfig.for_mode(Mode.C)
         assert cfg.retrieval.use_cross_encoder is True
+
+    def test_save_then_load_round_trips_a_custom_ollama_base_url(self, tmp_path: Path) -> None:
+        """4.1.22: a persisted embedding.ollama_base_url (and ollama_model)
+        used to be written and then silently dropped on the next load,
+        always reverting to http://localhost:11434 -- the save/load pair
+        is now a real round trip."""
+        cfg = SLMConfig.for_mode(
+            Mode.B, base_dir=tmp_path,
+            embedding_ollama_base_url="http://ollama-box:9999",
+            embedding_ollama_model="mxbai-embed-large",
+        )
+        cfg_path = tmp_path / "config.json"
+        cfg.save(cfg_path, mode_change=True)
+        loaded = SLMConfig.load(cfg_path)
+        assert loaded.embedding.ollama_base_url == "http://ollama-box:9999"
+        assert loaded.embedding.ollama_model == "mxbai-embed-large"
 
     def test_save_persists_onnx_fields(self, tmp_path: Path) -> None:
         import json
