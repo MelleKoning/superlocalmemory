@@ -61,6 +61,12 @@ const NEW_SKILLS = [
   'slm-remember',
   'slm-session',
   'slm-status',
+  // GB7: cursorPlan() requires every CURSOR_SKILLS name to exist in the
+  // rendered skills plan (fails loudly otherwise, like the missing-logo
+  // check) — these three are the curated-set members not already above.
+  'slm-bot-memory',
+  'slm-getting-started-bot',
+  'slm-scope',
 ];
 
 // Minimal fixture manifest — DOC-CORRECT layout
@@ -256,19 +262,27 @@ describe('renderMarketplaceJson', () => {
 // TEST 4 — buildPlan: 7 skills in plugin/skills/, no commands/, marketplace at root
 // ---------------------------------------------------------------------------
 describe('buildPlan', () => {
-  test('builds 7 skills in plugin/skills/ + plugin.json + marketplace.json + agents + extras', async () => {
+  test('builds every fixture skill in plugin/skills/ + plugin.json + marketplace.json + agents + extras', async () => {
     const { buildPlan } = await getModule();
     const tmp = makeTmp();
     const manifest = setupFixture(tmp);
     const plan = buildPlan(tmp, manifest);
 
-    // 7 skill SKILL.md files
-    const skillFiles = [...plan.keys()].filter(k => k.endsWith('SKILL.md'));
-    assert.equal(skillFiles.length, 7, `expected 7 SKILL.md, got ${skillFiles.length}`);
+    // One SKILL.md per fixture skill, in plugin/skills/ specifically — NOT
+    // plugin/cursor-skills/, the GB7 curated subset, which also ends in
+    // "SKILL.md" and would otherwise double-count here.
+    const skillsDir = `plugin${path.sep}skills${path.sep}`;
+    const skillFiles = [...plan.keys()].filter(
+      (k) => k.endsWith('SKILL.md') && k.includes(skillsDir),
+    );
+    assert.equal(
+      skillFiles.length, NEW_SKILLS.length,
+      `expected ${NEW_SKILLS.length} SKILL.md, got ${skillFiles.length}`,
+    );
 
     // All in plugin/skills/
     for (const f of skillFiles) {
-      assert.ok(f.includes(`plugin${path.sep}skills${path.sep}`), `SKILL.md must be in plugin/skills/: ${f}`);
+      assert.ok(f.includes(skillsDir), `SKILL.md must be in plugin/skills/: ${f}`);
     }
 
     // plugin/.claude-plugin/plugin.json

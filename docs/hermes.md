@@ -21,7 +21,7 @@ hermes plugins pack show qualixar-agent-reliability-hermes-pack.yaml
 hermes plugins pack install qualixar-agent-reliability-hermes-pack.yaml
 ```
 
-The plugin registers 12 namespaced skills, four on-demand Hermes child-agent
+The plugin registers 14 namespaced skills, four on-demand Hermes child-agent
 roles, `/slm <command>`, and `/slm-<command>` aliases for the public SLM CLI.
 It calls only the configured `superlocalmemory` MCP server. Grant that server
 to this plugin when Hermes asks; no wildcard MCP grant is needed.

@@ -23,8 +23,10 @@ Regenerate: `npm run build:copilot-plugin` (or `node scripts/build-copilot-plugi
 - `.github/agents/slm-optimize-advisor.agent.md`
 - `.github/copilot-instructions.md`
 - `.github/hooks/slm-hooks.json`
+- `.github/prompts/slm-bot-memory.prompt.md`
 - `.github/prompts/slm-cache.prompt.md`
 - `.github/prompts/slm-compress.prompt.md`
+- `.github/prompts/slm-getting-started-bot.prompt.md`
 - `.github/prompts/slm-governance.prompt.md`
 - `.github/prompts/slm-graph.prompt.md`
 - `.github/prompts/slm-loop.prompt.md`

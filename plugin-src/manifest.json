@@ -12,11 +12,19 @@
   ],
   "skills": [
     {
+      "name": "slm-bot-memory",
+      "hasReadme": false
+    },
+    {
       "name": "slm-cache",
       "hasReadme": false
     },
     {
       "name": "slm-compress",
+      "hasReadme": false
+    },
+    {
+      "name": "slm-getting-started-bot",
       "hasReadme": false
     },
     {

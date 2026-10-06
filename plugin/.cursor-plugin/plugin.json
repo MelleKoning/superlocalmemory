@@ -19,6 +19,6 @@
   "mcpServers": "./mcp.cursor.json",
   "name": "superlocalmemory",
   "repository": "https://github.com/qualixar/superlocalmemory",
-  "skills": "./skills/",
+  "skills": "./cursor-skills/",
   "version": "4.1.21"
 }
