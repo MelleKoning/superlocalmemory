@@ -56,9 +56,9 @@ def test_no_cursor_file_contains_a_placeholder() -> None:
         assert "${" not in path.read_text(encoding="utf-8"), path
 
 
-def test_the_server_identifies_grok_bot_and_never_repoints_the_store() -> None:
+def test_the_server_names_the_plugin_format_and_never_repoints_the_store() -> None:
     env = _server()["env"]
-    assert env["SLM_AGENT_ID"] == "grok_bot"
+    assert env["SLM_AGENT_ID"] == "cursor_plugin"
     assert env["SLM_MCP_PROFILE"] == "core"
     assert env["SLM_NON_INTERACTIVE"] == "1"
     assert env["UV_TORCH_BACKEND"] == "cpu"

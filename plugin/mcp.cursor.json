@@ -9,7 +9,7 @@
       ],
       "command": "uvx",
       "env": {
-        "SLM_AGENT_ID": "grok_bot",
+        "SLM_AGENT_ID": "cursor_plugin",
         "SLM_MCP_PROFILE": "core",
         "SLM_NON_INTERACTIVE": "1",
         "TOKENIZERS_PARALLELISM": "false",

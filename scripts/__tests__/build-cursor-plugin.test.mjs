@@ -55,9 +55,9 @@ describe('Cursor MCP definition', () => {
     for (const s of allStrings(server)) assert.ok(!s.includes('${'), s);
   });
 
-  test('names the host, the core profile, non-interactive and CPU torch', () => {
+  test('names the plugin format, the core profile, non-interactive and CPU torch', () => {
     assert.deepEqual(server.env, { ...CURSOR_SERVER_ENV });
-    assert.equal(server.env.SLM_AGENT_ID, 'grok_bot');
+    assert.equal(server.env.SLM_AGENT_ID, 'cursor_plugin');
     assert.equal(server.env.SLM_MCP_PROFILE, 'core');
     assert.equal(server.env.SLM_NON_INTERACTIVE, '1');
     assert.equal(server.env.UV_TORCH_BACKEND, 'cpu');

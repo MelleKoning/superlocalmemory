@@ -23,9 +23,12 @@ import path from 'node:path';
 
 /** Who is calling, for attribution, and what a shared bot computer needs. */
 export const CURSOR_SERVER_ENV = Object.freeze({
-  // Attribution: memories written from Grok Bot are told apart from other hosts.
-  SLM_AGENT_ID: 'grok_bot',
-  // The smallest tool set: a bot host lists every tool to the model.
+  // Attribution. Grok Bot and the Cursor editor both read this manifest and
+  // the definition cannot tell them apart, so it names the plugin format.
+  SLM_AGENT_ID: 'cursor_plugin',
+  // The 18-tool core set: Grok Bot lists every tool to the model on a shared,
+  // memory-tight computer. The one documented exception to "a plugin never
+  // narrows the tool set" (tests/test_packaging/test_no_plugin_hijacks_your_install.py).
   SLM_MCP_PROFILE: 'core',
   // Never wait on a prompt (setup_wizard.is_interactive honours it).
   SLM_NON_INTERACTIVE: '1',
