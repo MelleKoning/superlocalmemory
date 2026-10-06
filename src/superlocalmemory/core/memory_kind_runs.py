@@ -130,12 +130,43 @@ def status_view(db: Any, store: Any, cfg: MemoryKindConfig, choice: Any, profile
         return out
     counts = store.counts(profile_id, display_min_confidence=cfg.display_min_confidence)
     out["counts"] = {"kind": counts["kind"], "untyped": counts["untyped"],
-                     "legacy": counts["legacy"], "by_source": by_source(db, profile_id)}
+                     "legacy": counts["legacy"],
+                     "legacy_no_kind": counts.get("legacy_no_kind", 0),
+                     "by_source": by_source(db, profile_id)}
     active = active_run(db, profile_id)
     out["active_run"] = with_eta(active, cfg) if active else None
     out["recent_runs"] = store.recent_runs(profile_id, limit=5)
     out["history_rows"] = history_rows(db, profile_id)
     return out
 
-__all__ = ["ACTIVE", "REVERTIBLE", "active_run", "advance", "by_source", "materializer_due",
+def explain_counts(out: dict[str, Any]) -> dict[str, Any]:
+    """Say in words what the counts mean, so ``untyped: 0`` is never misread.
+
+    ``untyped`` counts facts with no kind at all; ``legacy`` counts facts
+    shown by their pre-4.1.19 type because their suggestion is below the
+    display threshold (or there is none). Both can be non-zero, either or
+    neither: ``untyped: 0`` with legacy facts left is normal after a run.
+    """
+    counts = out.get("counts") or {}
+    untyped, legacy = int(counts.get("untyped") or 0), int(counts.get("legacy") or 0)
+    no_kind = min(legacy, int(counts.get("legacy_no_kind") or 0))
+    if not out.get("schema_ready"):
+        text = out.get("reason") or "Memory kinds are not ready yet."
+    elif untyped == 0 and legacy == 0:
+        text = "Every memory has a kind."
+    else:
+        parts = []
+        if no_kind:
+            parts.append(f"{no_kind} older memories have no kind of their own yet and are "
+                         "shown by their older type until they are classified")
+        if legacy - no_kind:
+            parts.append(f"{legacy - no_kind} are shown by their older type because the kind "
+                         "suggested for them is not confident enough to show")
+        if untyped:
+            parts.append(f"{untyped} have neither a kind nor an older type")
+        text = "; ".join(parts) + ". Recall finds all of them either way."
+    return {**out, "explanation": text}
+
+
+__all__ = ["ACTIVE", "REVERTIBLE", "active_run", "explain_counts", "advance", "by_source", "materializer_due",
            "note", "record_error", "status_view", "transition", "with_eta"]

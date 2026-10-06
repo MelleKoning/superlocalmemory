@@ -101,6 +101,19 @@ def _checkpoint_after(db: "DatabaseManager") -> None:
         pass
 
 
+def _begin_immediate(conn: sqlite3.Connection) -> tuple[float, float]:
+    """Take the write lock; return ``(held-since clock, ms spent waiting for it)``.
+
+    A batch's write time used to start before BEGIN IMMEDIATE, so time spent
+    waiting behind another writer (up to 6.9 s on a large store) was reported,
+    and paced, as if the batch itself had held the lock that long.
+    """
+    asked = time.perf_counter()
+    conn.execute("BEGIN IMMEDIATE")
+    started = time.perf_counter()
+    return started, (started - asked) * 1000.0
+
+
 def _held_ms(started: float) -> float:
     return (time.perf_counter() - started) * 1000.0
 
@@ -133,8 +146,7 @@ def apply_batch(
     applied = 0
     skipped = 0
     with _batch_connection(db) as conn:
-        started = time.perf_counter()
-        conn.execute("BEGIN IMMEDIATE")
+        started, wait_ms = _begin_immediate(conn)
         try:
             for change in changes:
                 cols = change.new.as_columns(now)
@@ -191,12 +203,13 @@ def apply_batch(
                 conn.execute("ROLLBACK")
                 result = BatchResult(
                     applied=0, skipped=len(changes), cursor=new_cursor, run_still_active=False,
-                    write_ms=_held_ms(started),
+                    write_ms=_held_ms(started), wait_ms=wait_ms,
                 )
             else:
                 conn.commit()
                 result = BatchResult(applied=applied, skipped=skipped, cursor=new_cursor,
-                                     run_still_active=True, write_ms=_held_ms(started))
+                                     run_still_active=True, write_ms=_held_ms(started),
+                                     wait_ms=wait_ms)
         except Exception:
             conn.rollback()
             raise
@@ -220,8 +233,7 @@ def revert_batch(
 
     now = _now_iso()
     with _batch_connection(db) as conn:
-        started = time.perf_counter()
-        conn.execute("BEGIN IMMEDIATE")
+        started, wait_ms = _begin_immediate(conn)
         try:
             run_row = conn.execute(
                 "SELECT revert_cursor FROM memory_kind_runs WHERE run_id = ?", (run_id,),
@@ -303,7 +315,7 @@ def revert_batch(
     _checkpoint_after(db)
     return BatchResult(
         applied=applied, skipped=skipped, cursor=last_history_id, run_still_active=not finished,
-        write_ms=held,
+        write_ms=held, wait_ms=wait_ms,
     )
 
 

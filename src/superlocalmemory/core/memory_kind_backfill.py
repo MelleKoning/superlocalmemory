@@ -57,6 +57,12 @@ STARTING = "The memory engine is starting; try again in a moment."
 ONLINE_PAUSE = ("Settings changed so that typing would now send memories online. "
                 "Cancel this run and start a new one to confirm that.")
 _POLL_S, _YIELD_S, _REVERT_PACE_S, _MAX_BACKLOG_YIELD_S = 1.0, 0.25, 0.05, 10.0
+#: Pacing from the measured lock hold: after holding the write lock H, a batch
+#: waits at least H x this before the next (the backfill's share of the lock
+#: stays under 1 / (1 + this)), and x ``_BACKLOG_SHARE`` while new memories
+#: wait to be enriched. It used to wait a flat 10 s per batch under any
+#: backlog: 21,500 rows took 81 minutes on a large store.
+_LOCK_SHARE, _BACKLOG_SHARE = 4.0, 19.0
 
 
 class BackfillRefused(Exception):
@@ -110,6 +116,11 @@ class BackfillRunner:
         self._materializer_due: Callable[[Any], bool] = runs.materializer_due
         #: Write-lock hold of each batch (BEGIN IMMEDIATE to COMMIT), in ms.
         self.batch_write_ms: collections.deque[float] = collections.deque(maxlen=4096)
+        #: Time each batch waited for the write lock behind other writers, in ms.
+        self.batch_wait_ms: collections.deque[float] = collections.deque(maxlen=4096)
+        self._last_hold_s = 0.0
+        #: What the one automatic classification check found, per profile.
+        self.upgrade: dict[str, dict] = {}
 
     # -- thread ------------------------------------------------------------
 
@@ -133,6 +144,7 @@ class BackfillRunner:
         return True
 
     def _loop(self) -> None:
+        self._ensure_typed_once()
         while not self._stop.is_set():
             try:
                 step = self.run_once()
@@ -210,7 +222,14 @@ class BackfillRunner:
         task = getattr(engine, "_kind_reconcile", None)
         out["confirmed_kind_check"] = task.snapshot() if task is not None else {
             "state": "not_started"}
-        return out
+        out["automatic_classification"] = self.upgrade.get(profile_id, {"state": "not_checked"})
+        try:
+            waits = tuple(self.batch_wait_ms)
+        except RuntimeError:
+            waits = ()
+        out["batch_write_ms"] = {**out.get("batch_write_ms", {}),
+                                 "lock_wait_max": max(waits, default=None)}
+        return runs.explain_counts(out)
 
     # -- one step --------------------------------------------------------------
 
@@ -249,8 +268,10 @@ class BackfillRunner:
                 db, run_id, "running", ("queued",), started=True):
             return StepResult("yield", 0.0, run_id)
         if self._materializer_due(db):
-            self._backlog_since = self._backlog_since or self._clock()
-            if self._clock() - self._backlog_since < _MAX_BACKLOG_YIELD_S:
+            if self._backlog_since is None:
+                self._backlog_since = self._clock()
+            gap = min(_MAX_BACKLOG_YIELD_S, max(_YIELD_S, self._last_hold_s * _BACKLOG_SHARE))
+            if self._clock() - self._backlog_since < gap:
                 return StepResult("yield", _YIELD_S, run_id)
         self._backlog_since = None
         backend, cursor = choice.active, int(run["cursor_rowid"])
@@ -273,13 +294,15 @@ class BackfillRunner:
                                     new_cursor=batch[-1].rowid, actor="backfill",
                                     examined=len(batch))
                   if changes else runs.advance(db, run_id, batch[-1].rowid, len(batch)))
-        self._adapt(backend, _lock_ms(result, t0), configured)
+        self._adapt(backend, _lock_ms(result, t0), configured,
+                    float(getattr(result, "wait_ms", 0.0) or 0.0))
         if not result.run_still_active:
             return StepResult("stopped", 0.0, run_id)
         if note:
             runs.note(db, run_id, note)
         pace = len(batch) / float(cfg.rate_per_second.get(backend, 8.0))
-        return StepResult("batch", max(0.0, pace - (self._clock() - started)), run_id)
+        pace = max(pace - (self._clock() - started), self._last_hold_s * _LOCK_SHARE)
+        return StepResult("batch", max(0.0, pace), run_id)
 
     def _classify(self, engine: Any, batch: list, backend: str,
                   key: tuple[str, int]) -> tuple[list | None, Any]:
@@ -314,12 +337,16 @@ class BackfillRunner:
         limit = min(self._revert_batch_size, self._sizes.get("revert", self._revert_batch_size))
         t0 = time.perf_counter()
         result = store.revert_batch(run["run_id"], run["profile_id"], limit=limit)
-        self._adapt("revert", _lock_ms(result, t0), self._revert_batch_size)
-        return StepResult("revert", _REVERT_PACE_S, run["run_id"])
+        self._adapt("revert", _lock_ms(result, t0), self._revert_batch_size,
+                    float(getattr(result, "wait_ms", 0.0) or 0.0))
+        return StepResult("revert", max(_REVERT_PACE_S, self._last_hold_s * _LOCK_SHARE),
+                          run["run_id"])
 
-    def _adapt(self, key: str, write_ms: float, configured: int) -> None:
+    def _adapt(self, key: str, write_ms: float, configured: int, wait_ms: float = 0.0) -> None:
         """Keep each batch write near the lock target (median of recent writes)."""
         self.batch_write_ms.append(write_ms)
+        self.batch_wait_ms.append(wait_ms)
+        self._last_hold_s = write_ms / 1000.0
         recent = (self._recent.get(key, ()) + (write_ms,))[-plan.WINDOW:]
         decided = plan.next_batch_size(self._sizes.get(key, configured), recent, configured)
         if decided is None:
@@ -346,6 +373,20 @@ class BackfillRunner:
         return StepResult("error", float(min(60, 2 ** self._errors)), run_id)
 
     # -- helpers ---------------------------------------------------------------
+
+    def _ensure_typed_once(self) -> None:
+        """Queue each profile's one automatic classification, if it needs one."""
+        try:
+            from superlocalmemory.core.kind_upgrade import ensure_store_typed
+
+            engine, db, store = self._parts(required=False)
+            if db is None:
+                return
+            cfg = self._config_for(engine)
+            self.upgrade = ensure_store_typed(db, store, self._choice(engine, cfg),
+                                              bool(cfg.enabled))
+        except Exception as exc:  # noqa: BLE001 - the runner must keep running
+            logger.warning("Automatic classification check skipped (%s)", type(exc).__name__)
 
     def _preempted(self) -> bool:
         if self._stop.is_set() or self._preempt():

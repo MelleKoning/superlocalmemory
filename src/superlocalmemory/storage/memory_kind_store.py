@@ -85,6 +85,8 @@ class BatchResult:
     #: How long the batch held the store's write lock (BEGIN IMMEDIATE to
     #: COMMIT), in milliseconds; 0.0 when nothing was written.
     write_ms: float = 0.0
+    #: How long it waited for that lock behind other writers, in milliseconds.
+    wait_ms: float = 0.0
 
 
 def _row_dict(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
@@ -126,17 +128,21 @@ class MemoryKindStore:
         )
         untyped = 0
         legacy = 0
+        legacy_no_kind = 0  # of ``legacy``: no kind of their own (a run can type them)
         # Counted exactly as every surface shows them (kind_fields).
         for row in rows:
-            fields = kind_fields(_row_dict(row), display_min_confidence=display_min_confidence)
+            d = _row_dict(row)
+            fields = kind_fields(d, display_min_confidence=display_min_confidence)
             state = fields["memory_kind_state"]
             if state in ("confirmed", "suggested"):
                 kind_counts[str(fields["memory_kind"])][state] += 1
             elif state == "legacy":
                 legacy += 1
+                legacy_no_kind += d.get("memory_kind") is None
             else:
                 untyped += 1
-        return {"schema_ready": True, "kind": kind_counts, "untyped": untyped, "legacy": legacy}
+        return {"schema_ready": True, "kind": kind_counts, "untyped": untyped, "legacy": legacy,
+                "legacy_no_kind": legacy_no_kind}
 
     def suggestions(
         self, profile_id: str, *, kind: MemoryKind | None, limit: int,
@@ -277,6 +283,34 @@ class MemoryKindStore:
              requested_by, now, now),
         )
         return self.get_run(run_id) or {}
+
+    def create_run_once(
+        self, profile_id: str, *, backend: str, recipe_id: str, requested_by: str,
+        total_estimate: int,
+    ) -> dict[str, Any] | None:
+        """Queue the automatic ``untyped`` run, only if this profile never had a run.
+
+        One statement, so two processes starting at once can never both queue
+        one, and a run that finishes in between still counts: a profile whose
+        memories were classified (or whose run was cancelled or undone) is
+        never classified again automatically. ``None`` = not queued.
+        """
+        run_id = uuid.uuid4().hex[:16]
+        now = datetime.now(UTC).isoformat()
+        try:
+            rows = self.db.execute(
+                "INSERT INTO memory_kind_runs (run_id, profile_id, status, backend, recipe_id, "
+                "mode, cursor_rowid, revert_cursor, total_estimate, processed, changed, skipped, "
+                "errors, last_error, requested_by, created_at, started_at, finished_at, "
+                "updated_at) SELECT ?,?,'queued',?,?,'untyped',0,NULL,?,0,0,0,0,NULL,?,?,NULL,"
+                "NULL,? WHERE NOT EXISTS (SELECT 1 FROM memory_kind_runs WHERE profile_id = ?) "
+                "RETURNING run_id",
+                (run_id, profile_id, backend, recipe_id, total_estimate, requested_by, now, now,
+                 profile_id),
+            )
+        except sqlite3.IntegrityError:  # another process queued one this instant
+            return None
+        return self.get_run(run_id) if rows else None
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         rows = self.db.execute("SELECT * FROM memory_kind_runs WHERE run_id = ?", (run_id,))
