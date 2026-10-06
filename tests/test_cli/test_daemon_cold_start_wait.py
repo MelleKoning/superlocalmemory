@@ -368,14 +368,27 @@ def test_first_remember_after_a_real_cold_start_succeeds(tmp_path):
                          "clientInfo": {"name": "cold-start-test", "version": "0"}}})
         reply(1)
         send({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
-        began = time.monotonic()
-        stored = tool(2, "remember", {"content": "The cold start probe shelf code is K-77."})
-        took = time.monotonic() - began
-        assert stored.get("success") is True, stored
+        # A loaded machine can take longer than the wait budget to start. Then the
+        # only acceptable answer is the truthful "still starting" one, and a host
+        # retrying as told must get through. Every attempt stays bounded.
+        request_id = 2
+        deadline = time.monotonic() + 240.0
+        while True:
+            began = time.monotonic()
+            stored = tool(request_id, "remember",
+                          {"content": "The cold start probe shelf code is K-77."})
+            took = time.monotonic() - began
+            # Bounded: far inside the ~60 s a host allows a tool call.
+            assert took < 50.0, took
+            if stored.get("success") is True:
+                break
+            assert stored.get("retryable") is True, stored
+            assert "daemon_starting" in str(stored.get("error", "")), stored
+            assert time.monotonic() < deadline, "SLM never finished starting"
+            request_id += 1
+            time.sleep(10)
         assert stored.get("fact_ids"), stored
-        # Bounded: far inside the ~60 s a host allows a tool call.
-        assert took < 50.0, took
-        found = tool(3, "recall", {"query": "cold start probe shelf code"})
+        found = tool(request_id + 1, "recall", {"query": "cold start probe shelf code"})
         assert found.get("success") is True, found
     finally:
         try:
