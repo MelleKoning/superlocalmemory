@@ -150,3 +150,15 @@ def changed_fact_ids(db: Any, after: int, upto: int, what: str) -> list[str]:
         (after, upto, what),
     )
     return [str(dict(r)["fact_id"]) for r in rows]
+
+
+def changed_fact_ids_among(db: Any, after: int, fact_ids: tuple[str, ...]) -> list[str]:
+    """Which of ``fact_ids`` changed (in any watched way) after ``after``."""
+    if not fact_ids:
+        return []
+    marks = ",".join("?" for _ in fact_ids)
+    rows = db.execute(
+        f"SELECT DISTINCT fact_id FROM {TABLE} WHERE seq > ? AND fact_id IN ({marks})",
+        (after, *fact_ids),
+    )
+    return [str(dict(r)["fact_id"]) for r in rows]

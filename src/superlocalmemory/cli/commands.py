@@ -1892,9 +1892,8 @@ def _answer_check_line(result: dict) -> str:
     "uncalibrated"``) so plain-text output is byte-identical to before this
     existed — that is the overwhelming majority of installs today.
 
-    Results are never removed from the printed list; this is an additional
-    line, not a filter. Abstention is a signal for the reader, not a reason
-    to hide what was actually retrieved.
+    Results are never removed from the printed list; this is an extra line, not
+    a filter: abstention is a signal for the reader, never a reason to hide results.
     """
     if result.get("calibration_status", "uncalibrated") == "uncalibrated":
         return _not_checked_line(result)
@@ -1906,7 +1905,8 @@ def _answer_check_line(result: dict) -> str:
             f"(confidence {confidence:.2f}). Say you don't have it, or ask "
             "— don't present these as the answer."
         )
-    if not result.get("abstained", False):
+    from superlocalmemory.retrieval.answerability import is_supported as _checked
+    if not result.get("abstained", False) and _checked(result):  # a checked answer only
         return f"Answer check: likely answered (confidence {confidence:.2f})."
     return ""
 
@@ -3851,8 +3851,8 @@ def cmd_trace(args: Namespace) -> None:
                         "abstention_reason": result.get("abstention_reason"),
                         **{k: result[k] for k in (
                             "answer_check_status", "answer_check_ran",
-                            "answer_check_reason", "answer_check_note",
-                        ) if k in result},
+                            "answer_check_reason", "answer_check_note", "answerability",
+                            "answerability_reason") if k in result},
                     }, next_actions=[
                         {
                             "command": "slm recall '<query>' --json",

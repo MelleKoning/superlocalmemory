@@ -31,6 +31,8 @@ _ENVELOPE_4_1_20 = _ENVELOPE_4_1_19 | {
 }
 #: 4.1.21 (#150): what a recall's project filter or preference did.
 _ENVELOPE_4_1_21 = _ENVELOPE_4_1_20 | {"project_scope"}
+#: 4.1.22: whether the answer was checked, in one word, and why.
+_ENVELOPE_4_1_22 = _ENVELOPE_4_1_21 | {"answerability", "answerability_reason"}
 
 
 @pytest.fixture(autouse=True)
@@ -112,7 +114,7 @@ def test_no_results_is_explained(mode_a_config, monkeypatch) -> None:
 def test_envelope_adds_only_the_check_explanation(mode_a_config, monkeypatch) -> None:
     out = _run(_SlowJudge(), mode_a_config, monkeypatch)
     meta = recall_response_metadata(out)
-    assert set(meta) == _ENVELOPE_4_1_21
+    assert set(meta) == _ENVELOPE_4_1_22
     assert "answer_check_trace" not in repr(meta)
 
 
