@@ -30,6 +30,7 @@ host's limit, and it covers the 5-11 s cold start measured on a developer Mac.
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -188,17 +189,25 @@ def probe_health(d: Any, port: int, remaining: float) -> dict | None:
 def health_probe_timeout(descriptor: Any) -> float:
     """Health read limit for ``descriptor``.
 
-    Short (``STARTING_PROBE_S``) whenever there is no proof this daemon is
-    already answering HTTP: while it is starting (the polling loop needs
-    each attempt to stay quick) and equally when nothing suggests a start is
-    even in progress (the ordinary fail-fast path, where a bare "nobody is
-    listening" answer should cost the same small amount of patience on every
-    platform -- see ``STARTING_PROBE_S``'s comment). A caller that already
-    knows the daemon to be alive and merely wants to tolerate a slow-to-
-    answer, busy event loop uses ``verify_health=False`` instead of a longer
-    timeout here.
+    Short (``STARTING_PROBE_S``) while the descriptor says it is starting
+    (the polling loop needs each attempt to stay quick), and ALSO short on
+    Windows specifically when nothing suggests a start is in progress (the
+    ordinary fail-fast path): a bare "nobody is listening" answer is not
+    fast there the way it is on POSIX (see ``STARTING_PROBE_S``'s comment),
+    so the old 2 s default cost that path the same latency as an actual
+    stuck start. POSIX refuses that connect immediately regardless of the
+    timeout value, so shortening it there gains nothing and only narrows
+    the window for a real, busy-but-alive daemon's /health to answer -- a
+    genuine regression the Windows fix must not cause on macOS/Linux. A
+    caller that already knows the daemon to be alive and merely wants to
+    tolerate a slow-to-answer, busy event loop uses ``verify_health=False``
+    instead of a longer timeout here.
     """
-    return STARTING_PROBE_S
+    if getattr(descriptor, "state", "") == "starting":
+        return STARTING_PROBE_S
+    if sys.platform == "win32":
+        return STARTING_PROBE_S
+    return 2.0
 
 
 def wait_for_starting_daemon(
