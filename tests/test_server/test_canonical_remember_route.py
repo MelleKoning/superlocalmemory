@@ -521,7 +521,22 @@ def test_remember_under_a_held_write_lock_is_202_accepted_then_saved_once(
     assert payload["queryable"] is False
     assert payload["fact_ids"] == []
     assert payload["idempotency_key"] == "held-lock-route-1"
-    assert elapsed <= 1.5, f"acknowledgement took {elapsed:.3f}s"
+    # The 1.5 s remember ceiling is a property of the route's own constants:
+    # it answers "accepted" when the admission wait runs out, and that wait
+    # is set inside the ceiling with room for the response. Pinned exactly.
+    from superlocalmemory.server import unified_daemon as daemon
+
+    admission_s = daemon._REMEMBER_ADMISSION_DEADLINE_MS / 1000.0
+    journal_s = daemon._REMEMBER_JOURNAL_DEADLINE_MS / 1000.0
+    ceiling_s = daemon._REMEMBER_TOTAL_CEILING_SECONDS
+    assert admission_s < ceiling_s < journal_s
+    # The product's own ceiling (remember <= 1.5 s) is the bound, not the
+    # longer journal deadline: a route that sat out the journal deadline
+    # instead of the admission timer takes at least journal_s, so this still
+    # catches that regression. Loosening the assertion to journal_s would
+    # silently accept an acknowledgement anywhere up to 2.0 s, which breaks
+    # the remember <= 1.5 s product contract this test exists to pin.
+    assert elapsed < ceiling_s, f"acknowledgement took {elapsed:.3f}s"
     assert final.status_code == 200, final.text
     assert final.json()["status"] == "queryable"
     assert len(final.json()["fact_ids"]) >= 1
