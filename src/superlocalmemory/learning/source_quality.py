@@ -154,9 +154,15 @@ class SourceQualityScorer:
         conn = sqlite3.connect(str(self._db_path), timeout=10)
         # Install the busy handler before journal negotiation. On a fresh
         # database, PRAGMA journal_mode itself may contend with another scorer.
-        conn.execute("PRAGMA busy_timeout=10000")
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA busy_timeout=10000")
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.row_factory = sqlite3.Row
+        except BaseException:
+            # Setup failed: close it now, or the file stays open (Windows
+            # then cannot delete or replace it) for as long as the error lives.
+            conn.close()
+            raise
         return conn
 
     # ------------------------------------------------------------------

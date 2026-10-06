@@ -403,9 +403,15 @@ class LearningSignals:
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path, timeout=10)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.row_factory = sqlite3.Row
+        except BaseException:
+            # Setup failed: close it now, or the file stays open (Windows
+            # then cannot delete or replace it) for as long as the error lives.
+            conn.close()
+            raise
         return conn
 
     # ------------------------------------------------------------------

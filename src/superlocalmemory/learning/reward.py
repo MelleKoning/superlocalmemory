@@ -302,13 +302,20 @@ class EngagementRewardModel:
                 isolation_level=None,  # autocommit — we manage txns ourselves
                 check_same_thread=False,
             )
-            self._conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS * 10}")
-            # M-P-02: daemon bootstrap owns journal_mode=WAL; flipping it
-            # here contradicts ``hooks/_outcome_common.py``'s policy ("must
-            # not flip the journal mode under a live daemon"). synchronous
-            # is connection-scoped and safe to keep.
-            self._conn.execute("PRAGMA synchronous=NORMAL")
-            self._conn.row_factory = sqlite3.Row
+            try:
+                self._conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS * 10}")
+                # M-P-02: daemon bootstrap owns journal_mode=WAL; flipping it
+                # here contradicts ``hooks/_outcome_common.py``'s policy ("must
+                # not flip the journal mode under a live daemon"). synchronous
+                # is connection-scoped and safe to keep.
+                self._conn.execute("PRAGMA synchronous=NORMAL")
+                self._conn.row_factory = sqlite3.Row
+            except BaseException:
+                # Setup failed: close it now, or the file stays open (Windows
+                # then cannot delete or replace it) for as long as the error lives.
+                self._conn.close()
+                self._conn = None
+                raise
         return self._conn
 
     def close(self) -> None:

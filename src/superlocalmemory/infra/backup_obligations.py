@@ -83,9 +83,15 @@ class BackupObligationStore:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self._db_path))
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA synchronous=NORMAL")
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("PRAGMA synchronous=NORMAL")
+        except BaseException:
+            # Setup failed: close it now, or the file stays open (Windows
+            # then cannot delete or replace it) for as long as the error lives.
+            conn.close()
+            raise
         return conn
 
     def _ensure_schema(self) -> None:

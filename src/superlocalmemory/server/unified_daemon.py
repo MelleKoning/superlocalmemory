@@ -1261,6 +1261,19 @@ _observe_buffer = ObserveBuffer(
 _last_activity = time.monotonic()
 
 
+def _request_graceful_shutdown() -> None:
+    """Ask this process's server to shut down the way Ctrl+C would.
+
+    ``os.kill(os.getpid(), SIGTERM)`` is that request on POSIX, but on Windows
+    it is ``TerminateProcess``: the process dies on the spot, the lifespan
+    shutdown never runs, nothing is flushed, and the daemon's descriptor, PID
+    and port files are left behind for the next start to trip over.
+    ``signal.raise_signal`` delivers SIGTERM inside this process on every
+    platform, to the handler the server installed for it.
+    """
+    signal.raise_signal(signal.SIGTERM)
+
+
 def _start_idle_watchdog(timeout_sec: int) -> None:
     """Auto-shutdown after idle. Only if timeout > 0."""
     if timeout_sec <= 0:
@@ -1272,7 +1285,7 @@ def _start_idle_watchdog(timeout_sec: int) -> None:
             idle = time.monotonic() - _last_activity
             if idle > timeout_sec:
                 logger.info("Daemon idle for %ds, shutting down", int(idle))
-                os.kill(os.getpid(), signal.SIGTERM)
+                _request_graceful_shutdown()
                 break
 
     t = threading.Thread(target=_watch, daemon=True, name="idle-watchdog")
@@ -5795,8 +5808,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
         _require_daemon_actor(request)
         logger.info("Stop requested via API")
         _observe_buffer.flush_sync()
-        # Signal uvicorn to shut down gracefully
-        os.kill(os.getpid(), signal.SIGTERM)
+        _request_graceful_shutdown()
         return {"status": "stopping"}
 
     @application.post("/api/daemon/restart")

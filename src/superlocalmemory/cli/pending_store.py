@@ -69,41 +69,47 @@ def _get_db(base_dir: Path | None = None) -> sqlite3.Connection:
     d.mkdir(parents=True, exist_ok=True)
     db_path = d / _PENDING_DB
     conn = sqlite3.connect(str(db_path), timeout=5)
-    conn.execute("PRAGMA journal_mode=WAL")
-    # C4: pending queue can hold not-yet-materialized memory content owner-only.
     try:
-        from superlocalmemory.core.security_primitives import harden_db_perms
-        harden_db_perms(db_path)
-    except Exception:
-        pass
-    conn.execute(_SCHEMA)
-    columns = {
-        row[1]
-        for row in conn.execute("PRAGMA table_info(pending_memories)").fetchall()
-    }
-    if "next_retry_at" not in columns:
+        conn.execute("PRAGMA journal_mode=WAL")
+        # C4: pending queue can hold not-yet-materialized memory content owner-only.
+        try:
+            from superlocalmemory.core.security_primitives import harden_db_perms
+            harden_db_perms(db_path)
+        except Exception:
+            pass
+        conn.execute(_SCHEMA)
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(pending_memories)").fetchall()
+        }
+        if "next_retry_at" not in columns:
+            conn.execute(
+                "ALTER TABLE pending_memories ADD COLUMN "
+                "next_retry_at REAL DEFAULT 0"
+            )
+            conn.commit()
+        # Per-profile isolation: a queued item must materialize under the profile
+        # that was active when it was enqueued — never under whatever profile is
+        # active at drain time. Existing rows backfill to 'default'.
+        if "profile_id" not in columns:
+            conn.execute(
+                "ALTER TABLE pending_memories ADD COLUMN "
+                "profile_id TEXT NOT NULL DEFAULT 'default'"
+            )
+            conn.commit()
+        # Pre-V3.7 rows were terminally hidden after three failures. Restore them
+        # to the retry queue; M018 makes replay idempotent and no raw evidence may
+        # remain stranded solely because an older version exhausted its counter.
         conn.execute(
-            "ALTER TABLE pending_memories ADD COLUMN "
-            "next_retry_at REAL DEFAULT 0"
+            "UPDATE pending_memories SET status='pending', next_retry_at=0 "
+            "WHERE status='failed'"
         )
         conn.commit()
-    # Per-profile isolation: a queued item must materialize under the profile
-    # that was active when it was enqueued — never under whatever profile is
-    # active at drain time. Existing rows backfill to 'default'.
-    if "profile_id" not in columns:
-        conn.execute(
-            "ALTER TABLE pending_memories ADD COLUMN "
-            "profile_id TEXT NOT NULL DEFAULT 'default'"
-        )
-        conn.commit()
-    # Pre-V3.7 rows were terminally hidden after three failures. Restore them
-    # to the retry queue; M018 makes replay idempotent and no raw evidence may
-    # remain stranded solely because an older version exhausted its counter.
-    conn.execute(
-        "UPDATE pending_memories SET status='pending', next_retry_at=0 "
-        "WHERE status='failed'"
-    )
-    conn.commit()
+    except BaseException:
+        # Setup failed: close it now, or the file stays open (Windows
+        # then cannot delete or replace it) for as long as the error lives.
+        conn.close()
+        raise
     return conn
 
 

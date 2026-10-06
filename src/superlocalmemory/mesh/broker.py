@@ -159,8 +159,14 @@ class MeshBroker:
             self._db_path,
             timeout=_WRITE_BUSY_TIMEOUT_MS / 1000,
         )
-        conn.execute(f"PRAGMA busy_timeout={_WRITE_BUSY_TIMEOUT_MS}")
-        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute(f"PRAGMA busy_timeout={_WRITE_BUSY_TIMEOUT_MS}")
+            conn.row_factory = sqlite3.Row
+        except BaseException:
+            # Setup failed: close it now, or the file stays open (Windows
+            # then cannot delete or replace it) for as long as the error lives.
+            conn.close()
+            raise
         return conn
 
     @staticmethod

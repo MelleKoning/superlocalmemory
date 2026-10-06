@@ -16,6 +16,7 @@ import pytest
 from superlocalmemory.storage.embedding_migrator import (
     _NO_MODEL,
     _REINDEX_BATCH_SIZE,
+    EmbeddingMigrationAborted,
     _model_signature,
     _read_stored_signature,
     _write_stored_signature,
@@ -511,9 +512,73 @@ class TestModeConfigDefaults:
         assert cfg.embedding.provider == "sentence-transformers"
 
 
+def _sqlite_vec_loads() -> bool:
+    """Some CPython builds (the macOS CI runners' among them) ship sqlite3
+    without loadable-extension support, so sqlite-vec cannot be activated."""
+    import sqlite3
+
+    try:
+        import sqlite_vec
+    except ImportError:
+        return False
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        return True
+    except (AttributeError, sqlite3.Error):
+        return False
+    finally:
+        conn.close()
+
+
+def _one_fact_db_with_old_signature(tmp_path):
+    from superlocalmemory.storage import schema
+    from superlocalmemory.storage.database import DatabaseManager
+
+    db = DatabaseManager(tmp_path / "memory.db")
+    db.initialize(schema)
+    db.execute("INSERT INTO memories (memory_id, profile_id, content, created_at, "
+               "metadata_json, scope) VALUES ('m1', 'default', 'witness', "
+               "'2026-01-01T00:00:00Z', '{}', 'personal')")
+    db.execute("INSERT INTO atomic_facts (fact_id, memory_id, profile_id, content, "
+               "lifecycle, created_at, scope) VALUES ('f1', 'm1', 'default', 'witness', "
+               "'active', '2026-01-01T00:00:00Z', 'personal')")
+    _write_stored_signature(tmp_path, "old-model::2")
+    return db
+
+
+def test_an_aborted_activation_still_closes_the_staging_database(tmp_path, monkeypatch):
+    """When sqlite-vec cannot be loaded the migration must abort, keep the old
+    embedding space, and still leave nothing open in its staging folder."""
+    import sqlite_vec
+
+    from superlocalmemory.storage import embedding_migrator
+    from tests._portable import record_files_open_at_tempdir_cleanup
+
+    still_open = record_files_open_at_tempdir_cleanup(monkeypatch, embedding_migrator)
+    db = _one_fact_db_with_old_signature(tmp_path)
+
+    def _refuse(_conn):
+        raise RuntimeError("extension loading is not supported")
+
+    monkeypatch.setattr(sqlite_vec, "load", _refuse)
+    cfg = _make_config(tmp_path, model_name="new-model", dimension=2)
+    embedder = MagicMock()
+    embedder.embed_batch.return_value = [[0.0, 1.0]]
+
+    with pytest.raises(EmbeddingMigrationAborted):
+        run_embedding_migration(cfg, db, embedder)
+    assert still_open == [], f"open when its folder was removed: {still_open}"
+    assert _read_stored_signature(tmp_path) == "old-model::2"
+
+
 def test_the_staging_database_is_closed_before_its_folder_is_removed(tmp_path, monkeypatch):
     """On Windows an open file cannot be deleted, so the migration aborted
     after activating the new vectors and never recorded the new signature."""
+    if not _sqlite_vec_loads():
+        pytest.skip("this Python cannot load sqlite-vec; the abort path is "
+                    "covered by test_an_aborted_activation_still_closes_the_staging_database")
     from superlocalmemory.storage import embedding_migrator, schema
     from superlocalmemory.storage.database import DatabaseManager
     from tests._portable import record_files_open_at_tempdir_cleanup

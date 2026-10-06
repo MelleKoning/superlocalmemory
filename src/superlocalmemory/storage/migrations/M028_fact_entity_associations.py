@@ -117,8 +117,14 @@ def _connect_read(db_path: Path) -> sqlite3.Connection:
         ms = 10000
     conn = sqlite3.connect(str(db_path), timeout=ms / 1000.0)
     conn.row_factory = sqlite3.Row
-    conn.execute(f"PRAGMA busy_timeout={ms}")
-    conn.execute("PRAGMA foreign_keys=ON")
+    try:
+        conn.execute(f"PRAGMA busy_timeout={ms}")
+        conn.execute("PRAGMA foreign_keys=ON")
+    except BaseException:
+        # Setup failed: close it now, or the file stays open (Windows
+        # then cannot delete or replace it) for as long as the error lives.
+        conn.close()
+        raise
     return conn
 
 

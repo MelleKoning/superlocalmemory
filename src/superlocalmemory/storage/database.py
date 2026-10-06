@@ -555,41 +555,47 @@ class DatabaseManager:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=_BUSY_TIMEOUT_MS / 1000)
         conn.row_factory = sqlite3.Row
-        conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
-        conn.execute("PRAGMA foreign_keys=ON")
-        # wal_autocheckpoint is a PER-CONNECTION pragma and is NOT persisted in
-        # the database file (unlike journal_mode=WAL).  Setting it only on the
-        # short-lived initialisation connection left every working connection
-        # on SQLite's default of 1000 frames.  With checkpoint-on-close
-        # disabled below, autocheckpoint is the ONLY remaining checkpoint path,
-        # so the intended value must be set where the writes actually happen.
-        conn.execute("PRAGMA wal_autocheckpoint=400")
-        # Deadlock hardening (postmortem 2026-08-13, Option B): WAL close
-        # triggers a checkpoint that can wait indefinitely on reader marks
-        # pinned by another process/thread — while holding SQLite's
-        # process-global VFS mutex, which convoys every later connect().
-        # busy_timeout does NOT apply to the close path. NO_CKPT_ON_CLOSE
-        # makes close() checkpoint-free so it can never block; normal
-        # checkpointing continues via the wal_autocheckpoint set above.
-        # Available since Python 3.12 / SQLite 3.31; guarded for portability.
         try:
-            conn.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, 1)  # type: ignore[attr-defined]
-        except (AttributeError, sqlite3.OperationalError):
-            # Silent degradation would hide an inactive deadlock guard.
-            # requires-python is >=3.12 (Connection.setconfig support
-            # starts there), so this branch is a defensive fallback for an
-            # interpreter that bypassed that floor, not an expected path.
-            # Warn once, not per connection.
-            global _NO_CKPT_WARNED
-            if not _NO_CKPT_WARNED:
-                _NO_CKPT_WARNED = True
-                logger.warning(
-                    "SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE unavailable (Python %s, "
-                    "SQLite %s); WAL close-path deadlock hardening is INACTIVE. "
-                    "Python 3.12+ is required for this protection.",
-                    platform.python_version(),
-                    sqlite3.sqlite_version,
-                )
+            conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+            conn.execute("PRAGMA foreign_keys=ON")
+            # wal_autocheckpoint is a PER-CONNECTION pragma and is NOT persisted in
+            # the database file (unlike journal_mode=WAL).  Setting it only on the
+            # short-lived initialisation connection left every working connection
+            # on SQLite's default of 1000 frames.  With checkpoint-on-close
+            # disabled below, autocheckpoint is the ONLY remaining checkpoint path,
+            # so the intended value must be set where the writes actually happen.
+            conn.execute("PRAGMA wal_autocheckpoint=400")
+            # Deadlock hardening (postmortem 2026-08-13, Option B): WAL close
+            # triggers a checkpoint that can wait indefinitely on reader marks
+            # pinned by another process/thread — while holding SQLite's
+            # process-global VFS mutex, which convoys every later connect().
+            # busy_timeout does NOT apply to the close path. NO_CKPT_ON_CLOSE
+            # makes close() checkpoint-free so it can never block; normal
+            # checkpointing continues via the wal_autocheckpoint set above.
+            # Available since Python 3.12 / SQLite 3.31; guarded for portability.
+            try:
+                conn.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, 1)  # type: ignore[attr-defined]
+            except (AttributeError, sqlite3.OperationalError):
+                # Silent degradation would hide an inactive deadlock guard.
+                # requires-python is >=3.12 (Connection.setconfig support
+                # starts there), so this branch is a defensive fallback for an
+                # interpreter that bypassed that floor, not an expected path.
+                # Warn once, not per connection.
+                global _NO_CKPT_WARNED
+                if not _NO_CKPT_WARNED:
+                    _NO_CKPT_WARNED = True
+                    logger.warning(
+                        "SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE unavailable (Python %s, "
+                        "SQLite %s); WAL close-path deadlock hardening is INACTIVE. "
+                        "Python 3.12+ is required for this protection.",
+                        platform.python_version(),
+                        sqlite3.sqlite_version,
+                    )
+        except BaseException:
+            # Setup failed: close it now, or the file stays open (Windows
+            # then cannot delete or replace it) for as long as the error lives.
+            conn.close()
+            raise
         return conn
 
     @contextmanager

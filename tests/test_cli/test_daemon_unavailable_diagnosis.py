@@ -24,6 +24,7 @@ from superlocalmemory.infra.daemon_identity import (
 )
 
 RECORDED_CREATE_TIME = 1785680165.85
+RECORDED_PID = 612
 LIVE_TOKEN = "lx1:9f3a2c1e-0000-4000-8000-000000000001:44219"
 OTHER_TOKEN = "lx1:9f3a2c1e-0000-4000-8000-000000000001:98877"
 
@@ -36,13 +37,26 @@ def _running_process(create_time: float) -> MagicMock:
     return process
 
 
+def _only_the_daemon_pid(process: MagicMock):
+    """Stand in for the recorded daemon PID only. Windows learns this
+    account's name by asking psutil about this very process, so a fake that
+    answered for every PID would make the descriptor look like another
+    account's and hide the diagnosis under test."""
+    real = psutil.Process
+
+    def _process(pid=None):
+        return process if pid == RECORDED_PID else real(pid)
+
+    return _process
+
+
 def _write_owned_descriptor(port: int, *, token: str | None):
     root = Path(os.environ["SLM_DATA_DIR"])
     descriptor = build_descriptor(
         data_root=root,
         port=port,
         version="3.8.11",
-        pid=612,
+        pid=RECORDED_PID,
         process_create_time=RECORDED_CREATE_TIME,
         process_start_token=token,
         instance_id="diagnosed-instance",
@@ -77,7 +91,7 @@ def test_recycled_pid_is_reported_as_pid_reuse() -> None:
     process = _running_process(RECORDED_CREATE_TIME)
 
     with patch.object(_daemon, "_is_pid_alive", return_value=True), patch(
-        "psutil.Process", return_value=process,
+        "psutil.Process", side_effect=_only_the_daemon_pid(process),
     ), patch.object(_daemon, "process_start_token_for", return_value=OTHER_TOKEN):
         diagnosis = _daemon.describe_daemon_unavailability()
 
@@ -105,7 +119,7 @@ def test_identity_mismatch_message_points_at_clock_drift() -> None:
     process = _running_process(RECORDED_CREATE_TIME + 35.0)
 
     with patch.object(_daemon, "_is_pid_alive", return_value=True), patch(
-        "psutil.Process", return_value=process,
+        "psutil.Process", side_effect=_only_the_daemon_pid(process),
     ), patch.object(
         _daemon, "process_start_token_for", return_value=None,
     ), patch.object(_daemon, "_fetch_health", return_value=None):
@@ -123,7 +137,7 @@ def test_live_owned_daemon_that_will_not_answer_is_reported_as_unreachable() -> 
     process = _running_process(RECORDED_CREATE_TIME)
 
     with patch.object(_daemon, "_is_pid_alive", return_value=True), patch(
-        "psutil.Process", return_value=process,
+        "psutil.Process", side_effect=_only_the_daemon_pid(process),
     ), patch.object(
         _daemon, "process_start_token_for", return_value=LIVE_TOKEN,
     ), patch.object(_daemon, "_fetch_health", return_value=None):
@@ -142,7 +156,7 @@ def test_foreign_daemon_on_the_port_is_distinguished() -> None:
     foreign["instance_id"] = "someone-elses-daemon"
 
     with patch.object(_daemon, "_is_pid_alive", return_value=True), patch(
-        "psutil.Process", return_value=process,
+        "psutil.Process", side_effect=_only_the_daemon_pid(process),
     ), patch.object(
         _daemon, "process_start_token_for", return_value=LIVE_TOKEN,
     ), patch.object(_daemon, "_fetch_health", return_value=foreign):

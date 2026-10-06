@@ -125,15 +125,28 @@ def test_a_stale_pid_file_naming_another_accounts_process_is_not_adopted(
     from superlocalmemory.cli import daemon as cli_daemon
 
     port, server = daemon
-    pid = os.getpid()  # a live PID; the process below claims to be the other account's
+    # A live PID that is not this process: the process below claims to be the
+    # other account's. It must not be this process's own PID, because Windows
+    # learns this account's name by asking psutil about this process, and a
+    # fake standing in for every PID would make this process "another account"
+    # too, so the two would match.
+    pid = os.getppid()
+    assert pid != os.getpid()
     (data_root / "daemon.pid").write_text(str(pid), encoding="utf-8")
     (data_root / "daemon.port").write_text(str(port), encoding="utf-8")
     server.health = {"status": "ok", "pid": pid}  # a pre-identity daemon's health
 
     import psutil
 
+    real_process = psutil.Process
+
     class _OtherAccountsDaemon:
-        def __init__(self, _pid) -> None:
+        def __new__(cls, process_pid=None):
+            if process_pid != pid:
+                return real_process(process_pid)
+            return super().__new__(cls)
+
+        def __init__(self, _pid=None) -> None:
             pass
 
         def cmdline(self):

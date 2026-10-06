@@ -118,11 +118,17 @@ class SignalWorker:
             timeout=10,
             check_same_thread=True,
         )
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=10000")
-        conn.execute("PRAGMA foreign_keys=ON")
-        self._conn_thread_id = threading.get_ident()
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=10000")
+            conn.execute("PRAGMA foreign_keys=ON")
+            self._conn_thread_id = threading.get_ident()
+        except BaseException:
+            # Setup failed: close it now, or the file stays open (Windows
+            # then cannot delete or replace it) for as long as the error lives.
+            conn.close()
+            raise
         return conn
 
     def _run(self) -> None:

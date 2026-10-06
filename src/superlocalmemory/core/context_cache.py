@@ -196,16 +196,22 @@ class ContextCache:
         conn = sqlite3.connect(
             str(self._db_path), isolation_level=None, timeout=5.0,
         )
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA temp_store=MEMORY")
-        conn.execute("PRAGMA cache_size=-32768")
-        conn.execute("PRAGMA busy_timeout=500")
-        # 64 MB writer mmap — reader opens with defaults to keep budget tight.
         try:
-            conn.execute("PRAGMA mmap_size=67108864")
-        except sqlite3.Error:  # pragma: no cover — some builds disable mmap
-            pass
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA temp_store=MEMORY")
+            conn.execute("PRAGMA cache_size=-32768")
+            conn.execute("PRAGMA busy_timeout=500")
+            # 64 MB writer mmap — reader opens with defaults to keep budget tight.
+            try:
+                conn.execute("PRAGMA mmap_size=67108864")
+            except sqlite3.Error:  # pragma: no cover — some builds disable mmap
+                pass
+        except BaseException:
+            # Setup failed: close it now, or the file stays open (Windows
+            # then cannot delete or replace it) for as long as the error lives.
+            conn.close()
+            raise
         return conn
 
     def _bootstrap_schema_and_meta(self) -> None:

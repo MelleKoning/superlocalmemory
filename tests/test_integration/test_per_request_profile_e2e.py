@@ -51,6 +51,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_integration._process_tree import descendants_of, reap_survivors
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = REPO_ROOT / "src"
 
@@ -483,6 +485,9 @@ class RealDaemon:
 
     def stop(self, foreign_before: set[int]) -> None:
         """Stop the daemon and PROVE machine state was restored."""
+        # Windows has no process group to sweep afterwards, so note the
+        # daemon's descendants now (workers, a self-heal model download).
+        descendants = [] if os.name == "posix" else descendants_of(self.proc.pid)
         # 1. Graceful stop via the daemon's own capability-bound route.
         try:
             self.request("POST", "/stop", body={}, timeout=10)
@@ -524,6 +529,11 @@ class RealDaemon:
                 leaked = self._group_members()
             assert leaked == [], (
                 f"daemon process group {self.proc.pid} leaked members: {leaked}"
+            )
+        else:
+            leaked = reap_survivors(descendants, grace=30)
+            assert leaked == [], (
+                f"daemon {self.proc.pid} left descendants running: {leaked}"
             )
 
         # 3. Graceful stop removes exactly the ephemeral lifecycle identity.
