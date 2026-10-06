@@ -34,7 +34,10 @@ exactly as it would for a row it inserted itself, so counts are unchanged.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -42,8 +45,17 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from superlocalmemory.storage.database import DatabaseManager
 
+logger = logging.getLogger(__name__)
+
 #: The backfill's row in ``fact_entity_association_repair_state``.
 REPAIR_KEY = "entity-index-coverage"
+
+#: Fact/entity pairs written per backfill transaction. Each costs about 0.1 ms
+#: (two indexes and the foreign keys), so a batch holds the write lock for
+#: about 50 ms and a remember waiting behind it barely notices. Bounding by
+#: facts alone did not do that: facts name up to ~300 entities, and on the
+#: author's store one 250-fact batch was 65,000 pairs and held the lock 6.6 s.
+MAX_PAIRS_PER_BATCH = 500
 
 _INSERT_PAIR = (
     "INSERT OR IGNORE INTO fact_entity_associations "
@@ -146,7 +158,8 @@ def _ensure_state(conn: sqlite3.Connection) -> None:
     )
 
 
-def _backfill_batch(conn: sqlite3.Connection, batch_size: int) -> dict[str, Any]:
+def _backfill_batch(conn: sqlite3.Connection, batch_size: int,
+                    max_pairs: int) -> dict[str, Any]:
     _ensure_state(conn)
     cursor, target = conn.execute(
         "SELECT last_fact_rowid,target_fact_rowid "
@@ -165,17 +178,22 @@ def _backfill_batch(conn: sqlite3.Connection, batch_size: int) -> dict[str, Any]
             (_now(), REPAIR_KEY),
         )
         return {"scanned": 0, "inserted": 0, "complete": True}
-    inserted = 0
+    inserted = pairs = done = 0
     for rowid, fact_id, profile_id, raw in rows:
+        entities = entity_ids(raw)
+        if done and pairs + len(entities) > max_pairs:
+            break  # the rest is the next batch's; one fact always fits
         inserted += _insert_pairs(conn.execute, fact_id, profile_id,
-                                  entity_ids(raw), "coverage-backfill")
+                                  entities, "coverage-backfill")
+        pairs += len(entities)
+        done += 1
     conn.execute(
         "UPDATE fact_entity_association_repair_state SET state='running',"
         "last_fact_rowid=?,scanned=scanned+?,inserted=inserted+?,"
         "last_error='',updated_at=? WHERE repair_key=?",
-        (int(rows[-1][0]), len(rows), inserted, _now(), REPAIR_KEY),
+        (int(rows[done - 1][0]), done, inserted, _now(), REPAIR_KEY),
     )
-    return {"scanned": len(rows), "inserted": inserted, "complete": False}
+    return {"scanned": done, "inserted": inserted, "complete": False}
 
 
 def backfill(db_path: Path, *, batch_size: int = 250,
@@ -193,7 +211,7 @@ def backfill(db_path: Path, *, batch_size: int = 250,
     for _ in range(max_batches):
         with memory_write(Path(db_path)) as conn:
             conn.execute("PRAGMA foreign_keys=ON")
-            result = _backfill_batch(conn, batch_size)
+            result = _backfill_batch(conn, batch_size, MAX_PAIRS_PER_BATCH)
         totals["scanned"] += result["scanned"]
         totals["inserted"] += result["inserted"]
         totals["complete"] = result["complete"]
@@ -237,16 +255,57 @@ def is_complete(db: DatabaseManager) -> bool:
     return bool(rows) and str(dict(rows[0])["state"]) == "complete"
 
 
-def _owner_profile(db: DatabaseManager, entity_id: str) -> str | None:
-    rows = db.execute(
-        "SELECT profile_id FROM canonical_entities WHERE entity_id=?", (entity_id,),
-    )
-    return str(dict(rows[0])["profile_id"]) if rows else None
+@contextmanager
+def lookup_session(db: DatabaseManager) -> Iterator[sqlite3.Connection | None]:
+    """One read-only snapshot for a run of lookups, or None to use ``db``.
+
+    A bridge walk makes up to ``MAX_ENTITY_LOOKUPS`` lookups, and each one
+    through ``db.execute`` opens a fresh connection with a cold page cache;
+    the facts of popular entities overlap heavily, so one connection reads
+    them once (measured 121 -> 49 ms per lookup on popular entities). The
+    read transaction also gives every lookup of the walk the same snapshot.
+    A store without a file behind it (a test double) gets None.
+    """
+    from superlocalmemory.storage.memory_write import memory_read
+    from superlocalmemory.storage.read_connection import ReadConnectionError
+
+    path = getattr(db, "db_path", None)
+    if not isinstance(path, (str, Path)) or not Path(path).is_file():
+        yield None
+        return
+    with ExitStack() as stack:
+        try:
+            conn = stack.enter_context(memory_read(path))
+            conn.execute("BEGIN")
+        except (OSError, sqlite3.Error, ReadConnectionError) as exc:
+            # A snapshot that cannot open costs speed, not answers.
+            logger.debug("entity lookups fall back to per-call reads: %s", exc)
+            conn = None
+        try:
+            yield conn
+        finally:
+            if conn is not None:
+                conn.rollback()
+
+
+def _rows(db: DatabaseManager, conn: sqlite3.Connection | None,
+          sql: str, args: tuple[Any, ...]) -> list[tuple[Any, ...]]:
+    if conn is not None:
+        return [tuple(r) for r in conn.execute(sql, args).fetchall()]
+    return [tuple(r) for r in db.execute(sql, args)]
+
+
+def _owner_profile(db: DatabaseManager, entity_id: str,
+                   conn: sqlite3.Connection | None) -> str | None:
+    rows = _rows(db, conn, "SELECT profile_id FROM canonical_entities "
+                           "WHERE entity_id=?", (entity_id,))
+    return str(rows[0][0]) if rows else None
 
 
 def facts_for_entity(
     db: DatabaseManager, entity_id: str, profile_id: str, *, limit: int,
     indexed: bool, include_global: bool = False, include_shared: bool = False,
+    conn: sqlite3.Connection | None = None,
 ) -> list[tuple[str, tuple[str, ...]]]:
     """The newest ``limit`` visible facts naming ``entity_id``, with their entities.
 
@@ -269,7 +328,7 @@ def facts_for_entity(
     needle = f'%"{entity_id}"%'
     use_index = (
         indexed and not include_global and not include_shared
-        and _owner_profile(db, entity_id) == profile_id
+        and _owner_profile(db, entity_id, conn) == profile_id
     )
     if use_index:
         sql = (
@@ -289,11 +348,8 @@ def facts_for_entity(
             "ORDER BY af.created_at DESC, af.fact_id LIMIT ?"
         )
         args = (*params, needle, int(limit))
-    return [
-        (str(dict(r)["fact_id"]), entity_ids(dict(r)["ents"]))
-        for r in db.execute(sql, args)
-    ]
+    return [(str(fid), entity_ids(ents)) for fid, ents in _rows(db, conn, sql, args)]
 
 
 __all__ = ["REPAIR_KEY", "backfill", "entity_ids", "facts_for_entity",
-           "is_complete", "record_fact_entities", "record_rewritten_fact", "status"]
+           "is_complete", "lookup_session", "record_fact_entities", "record_rewritten_fact", "status"]

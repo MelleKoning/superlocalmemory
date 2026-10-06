@@ -139,6 +139,30 @@ class BridgeDiscovery:
         # Read once per call: until the background backfill has indexed every
         # older fact, the full scan is the only complete answer.
         indexed = entity_index.is_complete(self._db)
+        with entity_index.lookup_session(self._db) as conn:
+            bridges = self._walk(
+                seed_ids, seed_facts, profile_id, max_bridges, budget,
+                indexed=indexed, conn=conn,
+                include_global=include_global, include_shared=include_shared,
+            )
+        bridges.sort(key=lambda x: (-x[1], x[0]))
+        return filter_authorized_results(
+            self._db,
+            bridges,
+            profile_id,
+            include_global=include_global,
+            include_shared=include_shared,
+        )[:max_bridges]
+
+    def _walk(
+        self, seed_ids: list[str], seed_facts: dict, profile_id: str,
+        max_bridges: int, budget: int, *, indexed: bool, conn,
+        include_global: bool, include_shared: bool,
+    ) -> list[tuple[str, float]]:
+        """Each neighbouring pair of seeds, each bridge entity in sorted order,
+        until ``budget`` lookups or ``max_bridges`` bridges."""
+        from superlocalmemory.storage import entity_index
+
         bridges: list[tuple[str, float]] = []
         seen = set(seed_ids)
         lookups = 0
@@ -169,7 +193,7 @@ class BridgeDiscovery:
                 lookups += 1
                 entity_facts = entity_index.facts_for_entity(
                     self._db, eid, profile_id, limit=_FACTS_PER_ENTITY,
-                    indexed=indexed,
+                    indexed=indexed, conn=conn,
                     include_global=include_global,
                     include_shared=include_shared,
                 )
@@ -183,14 +207,7 @@ class BridgeDiscovery:
             if len(bridges) >= max_bridges:
                 break
 
-        bridges.sort(key=lambda x: (-x[1], x[0]))
-        return filter_authorized_results(
-            self._db,
-            bridges,
-            profile_id,
-            include_global=include_global,
-            include_shared=include_shared,
-        )[:max_bridges]
+        return bridges
 
     def spreading_activation(
         self,
