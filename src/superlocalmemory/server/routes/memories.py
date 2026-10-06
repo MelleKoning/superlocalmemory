@@ -5,6 +5,7 @@
 Routes: /api/memories, /api/graph, /api/search, /api/clusters, /api/clusters/{id}
 Uses V3 MemoryEngine for store/recall. Falls back to direct DB for list/graph.
 """
+import asyncio
 import json
 import logging
 import re
@@ -100,11 +101,10 @@ def _canonical_mutation_error(exc: Exception, detail: str) -> HTTPException:
         return HTTPException(404, detail="Not found")
     if isinstance(exc, CanonicalMutationConflict):
         return HTTPException(409, detail=str(exc))
-    if isinstance(exc, CanonicalRememberUnavailable):
-        return HTTPException(
-            503,
-            detail="canonical mutation writer is temporarily unavailable",
-        )
+    if isinstance(exc, CanonicalRememberUnavailable):  # contention: nothing changed
+        return HTTPException(503, headers={"Retry-After": "3"}, detail=(
+            "the memory store is busy finishing other writes; nothing was changed. "
+            "Retry in a few seconds"))
     return _internal_error(detail)
 
 
@@ -1646,9 +1646,8 @@ async def edit_memory(request: Request, fact_id: str):
             profile=profile,
         )
         from superlocalmemory.core.mutations import update_fact_authorized
-
-        result = update_fact_authorized(
-            engine,
+        result = await asyncio.to_thread(  # it embeds and may wait for the writer
+            update_fact_authorized, engine,
             fact_id,
             new_content,
             trusted_actor_id=hook_context["agent_id"],

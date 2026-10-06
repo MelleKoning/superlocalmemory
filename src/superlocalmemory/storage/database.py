@@ -47,6 +47,7 @@ from superlocalmemory.storage.embedding_codec import (
     encode_float_vector,
 )
 from superlocalmemory.storage.write_lock import get_write_lock
+from superlocalmemory.storage.read_connection import read_only_snapshot
 from superlocalmemory.storage import projection_outbox
 from superlocalmemory.storage.memory_kinds import KIND_COLUMNS
 from superlocalmemory.storage.correction_cases import CALLER_REPLACEMENT_REASON
@@ -2843,12 +2844,10 @@ class DatabaseManager:
         """Return current-lifecycle exclusions with one bounded SQLite read.
 
         Recall needs both sides of reviewed correction truth: an expired
-        predecessor and a successor whose case is not applied.  The older
-        public helpers preserve their focused contracts, but invoking them
-        consecutively opened two SQLite connections on every candidate stage.
-        This read-model helper uses one connection and one UNION query while
-        retaining the same profile/scope and historical ``as_of`` semantics.
-        It is intentionally read-only and does not cache lifecycle state.
+        predecessor and a successor whose case is not applied. One read-only,
+        uncached connection and one UNION query keep the older helpers'
+        profile/scope and ``as_of`` semantics. It takes no write lock: through
+        ``raw_connection`` a recall waited 44 s here behind a long write.
         """
         if not fact_ids:
             return set()
@@ -2859,7 +2858,7 @@ class DatabaseManager:
             prefix="f",
         )
         inadmissible: set[str] = set()
-        with self.raw_connection() as conn:
+        with read_only_snapshot(self) as conn:
             correction_table = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='correction_cases'"
             ).fetchone()

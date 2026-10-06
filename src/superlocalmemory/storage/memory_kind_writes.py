@@ -330,33 +330,42 @@ def reconcile_confirmed(
     """
     if not db.has_memory_kind_columns():
         return 0
+    from superlocalmemory.storage.read_connection import read_only_snapshot
+
+    # The scan reads every row's tail (the kind columns sit after the vector),
+    # 22 s on a 2 GB store. It used to run inside BEGIN IMMEDIATE, holding the
+    # write lock that whole time on every start; it now takes none, and the
+    # time bound starts at the repair, so a long scan no longer stops it from
+    # repairing anything at all.
+    with read_only_snapshot(db) as snapshot:
+        rows = [_row_dict(r) for r in snapshot.execute(
+            "SELECT rowid, fact_id, memory_kind, memory_kind_source, "
+            "memory_kind_confidence, fact_type FROM atomic_facts "
+            "WHERE profile_id = ? AND memory_kind_source IN ('user', 'caller') "
+            "AND memory_kind IS NOT NULL LIMIT ?",
+            (profile_id, limit),
+        ).fetchall()]
+    todo = [(d, COARSE[kind]) for d in rows
+            if (kind := parse_kind(d["memory_kind"])) is not None
+            and d["fact_type"] != COARSE[kind]]
+    if not todo:
+        return 0
     now = _now_iso()
     fixed = 0
     started = time.perf_counter()
     with db.raw_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
-            rows = conn.execute(
-                "SELECT rowid, fact_id, memory_kind, memory_kind_source, "
-                "memory_kind_confidence, fact_type FROM atomic_facts "
-                "WHERE profile_id = ? AND memory_kind_source IN ('user', 'caller') "
-                "AND memory_kind IS NOT NULL LIMIT ?",
-                (profile_id, limit),
-            ).fetchall()
-            for row in rows:
+            for d, expected in todo:
                 if time.perf_counter() - started > max_seconds:
                     break
-                d = _row_dict(row)
-                parsed = parse_kind(d["memory_kind"])
-                if parsed is None:
-                    continue
-                expected = COARSE[parsed]
-                if d["fact_type"] == expected:
-                    continue
+                # Guarded on what was read: a row changed since is left alone.
                 cur = conn.execute(
                     "UPDATE atomic_facts SET fact_type = ? WHERE rowid = ? "
-                    "AND profile_id = ? AND memory_kind IS ? AND memory_kind_source IS ?",
-                    (expected, d["rowid"], profile_id, d["memory_kind"], d["memory_kind_source"]),
+                    "AND profile_id = ? AND memory_kind IS ? AND memory_kind_source IS ? "
+                    "AND fact_type IS ?",
+                    (expected, d["rowid"], profile_id, d["memory_kind"],
+                     d["memory_kind_source"], d["fact_type"]),
                 )
                 if cur.rowcount == 1:
                     fixed += 1

@@ -988,11 +988,11 @@ class CanonicalRememberRuntime:
             },
         )
         try:
-            return dict(self.coordinator.submit(command, timeout=2.0).receipt)
+            # 5 s, not 2: one background commit can stall ~3 s under disk load,
+            # and an edit now waits off the request loop (server/routes/memories).
+            return dict(self.coordinator.submit(command, timeout=5.0).receipt)
         except (CanonicalMutationConflict, MutationTargetMissing):
-            # A deterministic lifecycle conflict or a missing target is not a
-            # writer outage.  Let HTTP/CLI/MCP report the actionable result.
-            raise
+            raise  # deterministic, not an outage: HTTP/CLI/MCP report it as such
         except CommandConflictError as exc:
             raise CanonicalMutationConflict(
                 "idempotency key belongs to a different mutation request"
@@ -1360,6 +1360,8 @@ def _propose_correction_successor(
         raise ValueError("correction successor content cannot be empty")
     if successor_id == fact_id:
         raise ValueError("correction successor must differ from predecessor")
+    from superlocalmemory.core.open_correction import refuse_second_open_case
+    refuse_second_open_case(connection, profile_id, fact_id)  # a 409, never a false 503
 
     from superlocalmemory.storage.models import AtomicFact, FactType, MemoryLifecycle, SignalType
 
@@ -1409,12 +1411,10 @@ def _propose_correction_successor(
         emotional_arousal=float(source.get("emotional_arousal") or 0.0),
         signal_type=SignalType(str(source.get("signal_type") or "factual")),
         created_at=now,
-        # A corrected fact keeps its kind once the edit is applied - never
-        # before. The five kind columns are left untyped here (LLD I6): a
-        # proposal is a suggestion like any model's, not yet a person's
-        # confirmed say-so, and standing_rules/recall must not see it as one.
-        # ``_transition_correction`` copies the predecessor's *current* kind
-        # onto this successor the moment (and only when) the case is applied.
+        # A corrected fact keeps its kind once the edit is applied, never before:
+        # the kind columns stay untyped here (LLD I6), a proposal is no one's
+        # confirmed say-so, and ``_transition_correction`` copies the
+        # predecessor's current kind onto this successor only when applied.
     )
     persisted_id = db.insert_fact_immutable(successor)
     from superlocalmemory.storage.correction_cases import (

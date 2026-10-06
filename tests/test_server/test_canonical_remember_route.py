@@ -449,7 +449,7 @@ def test_authenticated_mcp_correction_lifecycle_uses_the_same_resident_daemon(
             },
         ).json()["fact_ids"][0]
 
-        def daemon_request(method: str, path: str, payload=None):
+        def daemon_request(method: str, path: str, payload=None, **_flags):
             response = client.request(method, path, json=payload)
             content_type = response.headers.get("content-type", "")
             return response.json() if content_type.startswith("application/json") else None

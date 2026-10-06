@@ -24,6 +24,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("superlocalmemory.events")
 
+#: Longest an event waits for the store before its stored copy is skipped.
+_PERSIST_LOCK_WAIT_S = 2.0
+
 # Default retention windows (hours)
 DEFAULT_HOT_HOURS = 48
 DEFAULT_WARM_HOURS = 14 * 24  # 14 days
@@ -343,9 +346,20 @@ class EventBus:
                 # memory.db writer even when no DatabaseManager was wired in
                 # (daemon/route/MCP callers construct via get_instance(path)).
                 # The write is a single tiny row — the lock is held for <1ms.
-                with get_write_lock(self.db_path):
+                # The WAIT is bounded: this runs on the daemon's request loop,
+                # and an unbounded wait behind a long write froze every
+                # request for 60 s (4.1.21). The event still reaches live
+                # listeners and the buffer; only its stored copy is skipped.
+                lock = get_write_lock(self.db_path)
+                if not lock.acquire(timeout=_PERSIST_LOCK_WAIT_S):
+                    logger.warning(
+                        "event %s not stored: the store was busy for %.0f s",
+                        event["event_type"], _PERSIST_LOCK_WAIT_S,
+                    )
+                    return None
+                try:
                     conn = sqlite3.connect(str(self.db_path))
-                    conn.execute("PRAGMA busy_timeout=10000")
+                    conn.execute("PRAGMA busy_timeout=2000")
                     try:
                         cur = conn.cursor()
                         cur.execute(sql, params)
@@ -353,6 +367,8 @@ class EventBus:
                         return cur.lastrowid
                     finally:
                         conn.close()
+                finally:
+                    lock.release()
         except Exception as exc:
             logger.error("Failed to persist event: %s", exc)
             return None
