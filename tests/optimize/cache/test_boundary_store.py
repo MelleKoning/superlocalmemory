@@ -206,12 +206,14 @@ def test_compute_tau_denom_near_zero():
     assert 0.0 <= tau <= 1.0
 
 
-def test_rng_function():
-    """_rng() returns a float in [0, 1)."""
-    from superlocalmemory.optimize.cache.boundary_store import _rng
-    for _ in range(20):
-        val = _rng()
-        assert 0.0 <= val < 1.0
+def test_explore_draw_is_in_unit_interval_and_repeatable():
+    """The explore draw is u in [0, 1), and the same record and query always
+    draw the same u."""
+    rec = PerItemBoundaryRecord(entry_id="e_draw", samples=[(0.9, 1), (0.8, 0)])
+    for q in (0.0, 0.5, 0.97, 1.0):
+        u = rec.explore_draw(q)
+        assert 0.0 <= u < 1.0
+        assert rec.explore_draw(q) == u
 
 
 def test_fit_logistic_bce_empty_samples():
@@ -348,21 +350,16 @@ def test_c03_cold_start_default_return_threshold_explores():
 
 def test_c03_should_explore_false_above_return_threshold():
     """C-03: should_explore returns False (exploit) during cold start when sim >= return_threshold."""
-    from superlocalmemory.optimize.cache import boundary_store as _bs
-    _bs._RNG.seed(0)  # deterministic — _RNG.random() will not be called when tau=0.0
     rec = PerItemBoundaryRecord(entry_id="e_c03d", samples=[])
-    # With tau=0.0, random() <= 0.0 is always False, so should_explore=False (exploit)
+    # With tau=0.0, u <= 0.0 is False for every draw but 0.0, so exploit
     result = rec.should_explore(query_sim=0.99, return_threshold=0.98)
     assert result is False, f"C-03: should_explore must return False (exploit) above threshold, got {result}"
 
 
-def test_compute_tau_seeded_rng():
-    """compute_tau determinism with seeded RNG."""
-    from superlocalmemory.optimize.cache import boundary_store as _bs
-    _bs._RNG.seed(42)
+def test_compute_tau_is_deterministic():
+    """compute_tau draws nothing: the same record gives the same tau."""
     samples = [(0.9, 1), (0.8, 1), (0.7, 1), (0.5, 0)]
     rec = PerItemBoundaryRecord(entry_id="e3", t_hat=0.80, gamma_hat=10.0, samples=samples)
     tau1 = rec.compute_tau(0.85)
-    _bs._RNG.seed(42)
     tau2 = rec.compute_tau(0.85)
     assert abs(tau1 - tau2) < 1e-9  # deterministic with same seed
