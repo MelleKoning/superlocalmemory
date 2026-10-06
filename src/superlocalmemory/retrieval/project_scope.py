@@ -42,6 +42,7 @@ order (ties keep the incoming order, which retrieval already breaks by id).
 from __future__ import annotations
 
 import logging
+import unicodedata
 from dataclasses import dataclass, replace
 from typing import Any, Iterable, Sequence
 
@@ -142,20 +143,28 @@ def _filter_note(raw: str, key: str | None, reason: str, strict: bool = False) -
 MATCH_RULE = "last folder name, ignoring case"
 
 
+def _as_path(value: str) -> str | None:
+    """A stored project value as a comparable full path, or None for a bare
+    name (a bare name cannot be told apart from any path that ends in it)."""
+    text = unicodedata.normalize("NFC", value.strip()).replace("\\", "/").rstrip("/")
+    return text.casefold() if "/" in text else None
+
+
 def _identity(raw: str, want: str | None, matched: list[str],
               stored: dict[str, str] | None) -> dict:
     """What the filter matched against, and whether one name stood for more
-    than one stored project ("/a/app" and "/b/app" are the same key)."""
+    than one saved folder ("/a/app" and "/b/app" have the same key). A bare
+    name next to a path is not ambiguous: it names whichever folder it is."""
     out: dict = {"name": project_name(raw), "rule": MATCH_RULE}
     if stored and matched:
-        variants = sorted({stored[f].strip() for f in matched if f in stored})
-        if len({v.rstrip("/\\").casefold() for v in variants}) > 1:
+        paths = sorted({p for p in (_as_path(stored[f]) for f in matched if f in stored)
+                        if p is not None})
+        if len(paths) > 1:
             out["ambiguous"] = True
-            out["stored_as"] = variants[:3]
-            out["stored_as_count"] = len(variants)
+            out["stored_as_count"] = len(paths)
             out["ambiguity_note"] = (
-                f"Memories saved as {len(variants)} different project values share the "
-                f"name '{want}'; they are treated as one project.")
+                f"Memories saved under {len(paths)} different folders share the name "
+                f"'{want}'; they are treated as one project.")
     return out
 
 
