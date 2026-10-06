@@ -127,10 +127,15 @@ def _ollama_available() -> bool:
 #: it is gone. The daemon's self-heal starts these downloads (up to 10 minutes)
 #: from a background thread; without this, stopping or killing the daemon left
 #: the download running on its own, and on Windows nothing else reaps it.
+#: Never a reason for the download itself to fail: if the watchdog cannot be
+#: imported, the download still runs.
 _EXIT_WITH_PARENT = (
-    "import sys; "
-    "from superlocalmemory.core.platform_utils import start_parent_watchdog; "
-    "start_parent_watchdog(); "
+    "import sys\n"
+    "try:\n"
+    "    from superlocalmemory.core.platform_utils import start_parent_watchdog\n"
+    "    start_parent_watchdog()\n"
+    "except Exception:\n"
+    "    pass\n"
 )
 
 
