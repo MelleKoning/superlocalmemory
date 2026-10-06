@@ -288,10 +288,7 @@
     // Update URL hash without triggering a scroll
     try { history.replaceState(null, '', '#' + paneId); } catch (e) {}
 
-    // Scroll both the window and the content area to top
-    window.scrollTo({ top: 0, behavior: 'instant' });
-    var contentEl = document.getElementById('main-content');
-    if (contentEl) contentEl.scrollTo({ top: 0, behavior: 'instant' });
+    resetPageScroll();
 
     // Deferred retry ONLY if the first render produced nothing (a pane that ran
     // before it was visible/sized). Re-running unconditionally used to wipe and
@@ -307,9 +304,29 @@
 
     // Scroll the active sidebar item into view (mobile)
     var activeLink = document.querySelector('.nav-link[data-tab="' + paneId + '"]');
-    if (activeLink) {
-      activeLink.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
+    if (activeLink) revealInSidebar(activeLink);
+  }
+
+  // The page scrolls on <body> (html and body both set overflow), so
+  // window.scrollTo alone leaves it where it was.
+  function resetPageScroll() {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    var contentEl = document.getElementById('main-content');
+    if (contentEl) contentEl.scrollTo({ top: 0, behavior: 'instant' });
+  }
+
+  // Moves only the sidebar's own list. scrollIntoView also scrolls every
+  // scrollable ancestor, the page included: it left the page 86 px down, with
+  // each pane's first line hidden under the sticky top bar.
+  function revealInSidebar(link) {
+    var list = link.closest('.nav');
+    if (!list) return;
+    var item = link.getBoundingClientRect();
+    var box = list.getBoundingClientRect();
+    if (item.top < box.top) list.scrollTop -= box.top - item.top;
+    else if (item.bottom > box.bottom) list.scrollTop += item.bottom - box.bottom;
   }
 
   /* ================================================================
@@ -830,6 +847,12 @@
     }
 
     window.slmShell({ active: active });
+
+    // The URL now names the pane, and on load the browser scrolls to that
+    // fragment: the pane's first line ended up under the sticky top bar.
+    window.addEventListener('load', function () {
+      (window.requestAnimationFrame || setTimeout)(resetPageScroll);
+    }, { once: true });
 
     // Wire subsequent hash changes (user-triggered navigation, not initial load)
     window.addEventListener('hashchange', handleHash);

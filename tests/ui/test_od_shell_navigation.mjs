@@ -183,4 +183,38 @@ describe('OD shell navigation lifecycle', function () {
     assert.equal(requests, 2);
     window.close();
   });
+
+  it('changing page never scrolls the page itself, only the sidebar list', async function () {
+    // scrollIntoView on the sidebar link also scrolled the page, hiding each
+    // pane's first line under the sticky top bar.
+    const window = harness();
+    const scrolled = [];
+    window.HTMLElement.prototype.scrollIntoView = function () { scrolled.push(this); };
+    window.slmShell({ active: 'dashboard-pane' });
+    const doc = window.document;
+    const link = doc.querySelector('[data-tab="memories-pane"]');
+    const list = link.closest('.nav');
+    assert.ok(list, 'the sidebar links sit in their own scrolling list');
+
+    link.getBoundingClientRect = () => ({ top: 900, bottom: 940 });
+    list.getBoundingClientRect = () => ({ top: 100, bottom: 800 });
+    link.click();
+
+    assert.deepEqual(scrolled, [], 'nothing asked the browser to scroll the page');
+    assert.equal(list.scrollTop, 140, 'the list moved just enough to show the link');
+    await new Promise((resolve) => setTimeout(resolve, 600));  // the shell's empty-pane retry
+    window.close();
+  });
+
+  it('changing page brings the page itself back to the top', async function () {
+    // The page scrolls on <body>, which window.scrollTo does not move.
+    const window = harness();
+    window.slmShell({ active: 'dashboard-pane' });
+    const doc = window.document;
+    doc.body.scrollTop = 86;
+    doc.querySelector('[data-tab="memories-pane"]').click();
+    assert.equal(doc.body.scrollTop, 0, 'the page starts at its first line');
+    await new Promise((resolve) => setTimeout(resolve, 600));  // the shell's empty-pane retry
+    window.close();
+  });
 });
