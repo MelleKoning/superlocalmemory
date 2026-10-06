@@ -28,6 +28,7 @@ import threading
 import time
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -268,6 +269,51 @@ def test_the_start_wait_budget_is_clamped(monkeypatch, raw, cap, expected):
 
     monkeypatch.setenv("SLM_DAEMON_START_WAIT_S", raw)
     assert start_wait_budget(cap) == expected
+
+
+class _RecordingDaemonModule:
+    """A duck-typed stand-in for the ``daemon`` module ``probe_health`` takes:
+    records the timeout it was actually asked to read with, instead of
+    depending on how fast any given OS refuses a connect to a closed port
+    (that varies by platform and is exactly what made the Windows bug
+    invisible on POSIX CI: the OS difference never showed up in a test that
+    only checks the final True/False answer)."""
+
+    def __init__(self, *, reachable: bool):
+        self.reachable = reachable
+        self.fetch_calls: list[float] = []
+
+    def _fetch_health(self, port, timeout=2.0):
+        self.fetch_calls.append(timeout)
+        return {"status": "ok"} if self.reachable else None
+
+
+@pytest.mark.parametrize("state", ["starting", "ready", "", None])
+def test_health_probe_timeout_is_short_on_every_path(state):
+    """The fix for the Windows fail-fast regression, pinned without a real
+    socket: the one-shot probe used whenever nothing proves a start is in
+    progress must ask for the same short read as the starting-daemon polling
+    loop already does -- not the old, much longer default that cost a
+    closed port the full read timeout on a platform slow to refuse it."""
+    from superlocalmemory.cli.daemon_startup import STARTING_PROBE_S, health_probe_timeout
+
+    descriptor = SimpleNamespace(state=state) if state is not None else object()
+    assert health_probe_timeout(descriptor) == STARTING_PROBE_S
+
+
+def test_probe_health_passes_the_given_timeout_straight_through():
+    from superlocalmemory.cli import daemon_startup
+
+    stub = _RecordingDaemonModule(reachable=True)
+    assert daemon_startup.probe_health(stub, port=1, remaining=2.0) == {"status": "ok"}
+    assert stub.fetch_calls == [2.0]
+
+
+def test_probe_health_returns_none_when_unreachable():
+    from superlocalmemory.cli import daemon_startup
+
+    stub = _RecordingDaemonModule(reachable=False)
+    assert daemon_startup.probe_health(stub, port=1, remaining=2.0) is None
 
 
 # ---------------------------------------------------------------------------

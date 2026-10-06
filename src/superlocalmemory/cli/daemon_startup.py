@@ -48,6 +48,16 @@ RETRY_HINT_S = 10
 _POLL_S = 0.25
 # A starting daemon binds its port before HTTP is up, so a 2 s health read
 # would just hang; while the descriptor says "starting" one probe is short.
+#
+# The same short bound also covers the one-shot probe when NOTHING shows a
+# start in progress (``health_probe_timeout``'s other branch, used by the
+# ordinary fail-fast path): POSIX refuses a loopback connect to a port
+# nobody ever bound almost instantly, but Windows does not -- CI measured
+# ~2 s for that refusal, which silently consumed the old 2 s health-read
+# timeout there and made "nothing is starting" exactly as slow as a start
+# actually in progress. A caller that specifically needs to tolerate a
+# daemon that IS listening but slow to answer (busy, not starting) has its
+# own opt-out already: ``daemon_request(..., verify_health=False)``.
 STARTING_PROBE_S = 0.5
 # Back-to-back retries inside one tool call (remember tries three times, 50-
 # 100 ms apart) must not each wait the full budget again: a wait that ran out
@@ -165,8 +175,8 @@ def probe_health(d: Any, port: int, remaining: float) -> dict | None:
     """One health probe that cannot outlive the wait's own deadline.
 
     A starting daemon reserves its port early, so a connect can succeed and
-    then hang until the 2 s read limit; capping by ``remaining`` keeps the
-    whole wait inside its budget.
+    then hang until the read limit; capping by ``remaining`` keeps the whole
+    wait inside its budget.
     """
     limit = max(0.05, min(2.0, remaining))
     try:
@@ -176,8 +186,19 @@ def probe_health(d: Any, port: int, remaining: float) -> dict | None:
 
 
 def health_probe_timeout(descriptor: Any) -> float:
-    """Health read limit for ``descriptor``: short while it is starting."""
-    return STARTING_PROBE_S if getattr(descriptor, "state", "") == "starting" else 2.0
+    """Health read limit for ``descriptor``.
+
+    Short (``STARTING_PROBE_S``) whenever there is no proof this daemon is
+    already answering HTTP: while it is starting (the polling loop needs
+    each attempt to stay quick) and equally when nothing suggests a start is
+    even in progress (the ordinary fail-fast path, where a bare "nobody is
+    listening" answer should cost the same small amount of patience on every
+    platform -- see ``STARTING_PROBE_S``'s comment). A caller that already
+    knows the daemon to be alive and merely wants to tolerate a slow-to-
+    answer, busy event loop uses ``verify_health=False`` instead of a longer
+    timeout here.
+    """
+    return STARTING_PROBE_S
 
 
 def wait_for_starting_daemon(
