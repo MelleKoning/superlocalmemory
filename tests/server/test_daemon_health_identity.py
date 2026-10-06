@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import signal
 from pathlib import Path
 from unittest.mock import patch
@@ -99,13 +100,37 @@ def test_stop_accepts_only_the_owned_process_instance(
     with (
         patch.object(unified_daemon._observe_buffer, "flush_sync"),
         patch("os.kill") as kill,
+        patch("signal.raise_signal") as raise_signal,
     ):
         payload = asyncio.run(route.endpoint(_request(
             capability="stop-capability", instance_id="stop-instance",
         )))
 
     assert payload == {"status": "stopping"}
-    kill.assert_called_once_with(unified_daemon.os.getpid(), signal.SIGTERM)
+    # In-process delivery, never os.kill(own pid): on Windows that is
+    # TerminateProcess, which skips the shutdown that removes daemon.json.
+    raise_signal.assert_called_once_with(signal.SIGTERM)
+    kill.assert_not_called()
+
+
+def test_a_shutdown_request_reaches_this_processs_handler_without_os_kill(
+    monkeypatch,
+) -> None:
+    """The server's SIGTERM handler runs (graceful shutdown); ``os.kill`` on
+    its own PID, a hard kill on Windows, is never used."""
+    from superlocalmemory.server import unified_daemon
+
+    hard_killed: list[tuple[int, int]] = []
+    monkeypatch.setattr(os, "kill", lambda pid, sig: hard_killed.append((pid, sig)))
+    handled: list[int] = []
+    previous = signal.signal(signal.SIGTERM, lambda sig, _frame: handled.append(sig))
+    try:
+        unified_daemon._request_graceful_shutdown()
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+    assert handled == [signal.SIGTERM]
+    assert hard_killed == []
 
 
 def test_legacy_redirect_targets_the_actual_runtime_port() -> None:
