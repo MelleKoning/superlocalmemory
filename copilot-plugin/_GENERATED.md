@@ -43,3 +43,4 @@ Regenerate: `npm run build:copilot-plugin` (or `node scripts/build-copilot-plugi
 - `scripts/slm-launch.bat`
 - `scripts/slm-resolve.sh`
 - `scripts/slm-run`
+- `scripts/torch-cpu-resolve.sh`

@@ -1,0 +1,13 @@
+# CPU-only torch pin for the Linux-no-GPU path (ensure-venv.sh, GB4).
+#
+# Installed from https://download.pytorch.org/whl/cpu, which publishes the
+# same public version with a `+cpu` local segment — PEP 440 ignores the local
+# segment when matching a bare `==X.Y.Z` specifier, so this satisfies the
+# `torch==X.Y.Z` requirement that requirements.txt pulls in transitively via
+# superlocalmemory, without ever contacting the CUDA-wheel-carrying default
+# index for it.
+#
+# Kept equal to pyproject.toml's `torch==` dependency by
+# tests/test_plugin_src/test_torch_cpu_pin_matches_pyproject.py — bump both
+# together, not just this file.
+torch==2.13.0

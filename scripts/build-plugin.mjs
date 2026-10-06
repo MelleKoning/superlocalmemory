@@ -449,7 +449,7 @@ export function buildPlan(root, manifest) {
   // ---------------------------------------------------------------------------
   // Root-level plugin-src files → plugin/ (.mcp.json, settings.json, requirements.txt)
   // ---------------------------------------------------------------------------
-  const rootFiles = ['.mcp.json', 'settings.json', 'requirements.txt'];
+  const rootFiles = ['.mcp.json', 'settings.json', 'requirements.txt', 'requirements-cpu-torch.txt'];
   for (const fname of rootFiles) {
     const srcFile = path.join(root, 'plugin-src', fname);
     if (fs.existsSync(srcFile)) {

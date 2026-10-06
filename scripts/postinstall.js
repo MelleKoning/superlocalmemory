@@ -21,6 +21,12 @@ const MIN_PYTHON = Object.freeze([3, 12]);
 const MAX_PYTHON_EXCLUSIVE = Object.freeze([3, 15]);
 const INSTALL_TIMEOUT_MS = 15 * 60 * 1000;
 
+// GB4: the official CPU-only wheel index (https://pytorch.org/get-started/locally/,
+// fetched 2026-10-06). PyPI's plain `torch` wheel is CPU-only on macOS/Windows but
+// a CUDA build on Linux (torch + triton + ~18 nvidia-* packages, ~2.6 GiB) even
+// with no GPU present to use it.
+const TORCH_CPU_INDEX_URL = 'https://download.pytorch.org/whl/cpu';
+
 function parsePythonVersion(output) {
   const match = String(output || '').match(/Python\s+(\d+)\.(\d+)(?:\.(\d+))?/i);
   if (!match) return null;
@@ -105,6 +111,72 @@ function findSupportedPython() {
     }
   }
   return null;
+}
+
+/**
+ * Is an NVIDIA GPU visible on this host? Linux-only signal: the three cheap,
+ * side-effect-free checks pip itself has no equivalent for. False on any
+ * error — a check that cannot tell is not evidence of a GPU.
+ * @param {string} platform
+ * @returns {boolean}
+ */
+function hasNvidiaGpu(platform = os.platform()) {
+  if (platform !== 'linux') return false;
+  if (fs.existsSync('/proc/driver/nvidia/version') || fs.existsSync('/dev/nvidia0')) {
+    return true;
+  }
+  try {
+    const probe = spawnSync('nvidia-smi', [], { stdio: 'ignore', timeout: 2000 });
+    return probe.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * GB4 — should this install pre-fetch the CPU-only torch wheel before the
+ * main package? Mirrors plugin-src/scripts/torch-cpu-resolve.sh's
+ * `torch_cpu_should_force` (same questions, same answers, separate runtime).
+ * False covers: not Linux, a GPU is visible, or the user already steered pip
+ * (their own index) or torch (SLM_TORCH_BACKEND set to anything but "cpu")
+ * themselves.
+ * @param {NodeJS.ProcessEnv} env
+ * @param {string} platform
+ * @param {(platform: string) => boolean} gpuCheck injected for testing
+ * @returns {boolean}
+ */
+function shouldForceCpuTorch(env = process.env, platform = os.platform(), gpuCheck = hasNvidiaGpu) {
+  if (platform !== 'linux') return false;
+
+  const backend = String(env.SLM_TORCH_BACKEND || '').trim();
+  if (backend === 'cpu') return true;
+  if (backend) return false; // cuda / cuXXX / auto / ... — the user already decided
+
+  if (env.PIP_INDEX_URL || env.PIP_EXTRA_INDEX_URL) return false;
+
+  return !gpuCheck(platform);
+}
+
+/**
+ * Read the `torch==X.Y.Z` pin shipped at plugin/requirements-cpu-torch.txt
+ * (kept equal to pyproject.toml's torch pin by
+ * tests/test_plugin_src/test_torch_cpu_pin_matches_pyproject.py). Returns
+ * null — fail-open — when the file is missing or has no such line, so a
+ * missing/stale pin file can never block an install that would otherwise
+ * succeed; it only means this optimization is skipped for this run.
+ * @param {string} packageRoot
+ * @returns {string | null}
+ */
+function cpuTorchPin(packageRoot) {
+  const pinFile = path.join(packageRoot, 'plugin', 'requirements-cpu-torch.txt');
+  let content;
+  try {
+    content = fs.readFileSync(pinFile, 'utf8');
+  } catch {
+    return null;
+  }
+  const match = content.match(/^torch==\S+/m);
+  return match ? match[0].trim() : null;
 }
 
 function runtimePythonPath(packageRoot, platform = os.platform()) {
@@ -244,6 +316,37 @@ function main(argv = process.argv.slice(2)) {
   }
 
   const runtimePython = runtimePythonPath(packageRoot);
+
+  // GB4: pre-install the pinned CPU-only torch wheel so the main install
+  // below finds it already satisfied and never resolves the CUDA build.
+  // Best-effort: a failure here just means this run keeps the default
+  // resolution (and therefore the CUDA wheels on Linux) — it must never be
+  // the reason the whole install fails.
+  if (shouldForceCpuTorch()) {
+    const torchPin = cpuTorchPin(packageRoot);
+    if (torchPin) {
+      console.log(`  Linux, no GPU detected — installing ${torchPin} from ${TORCH_CPU_INDEX_URL}`);
+      console.log('  (set SLM_TORCH_BACKEND=cuda to opt out).');
+      const installTorch = spawnSync(
+        runtimePython,
+        [
+          '-m', 'pip', 'install',
+          '--disable-pip-version-check',
+          '--no-input',
+          '--index-url', TORCH_CPU_INDEX_URL,
+          torchPin,
+        ],
+        { stdio: 'inherit', timeout: INSTALL_TIMEOUT_MS, env: process.env },
+      );
+      if (installTorch.status !== 0) {
+        console.error(
+          `SuperLocalMemory: CPU-only torch pre-install failed (${failureDetail(installTorch)}); `
+          + 'continuing with the default index.',
+        );
+      }
+    }
+  }
+
   const installPackage = spawnSync(
     runtimePython,
     [
@@ -322,7 +425,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  cpuTorchPin,
   findSupportedPython,
+  hasNvidiaGpu,
   isSupportedPython,
   main,
   parsePythonVersion,
@@ -330,5 +435,7 @@ module.exports = {
   pypiSpecifier,
   pythonCandidates,
   runtimePythonPath,
+  shouldForceCpuTorch,
+  TORCH_CPU_INDEX_URL,
   validateRuntimeLocation,
 };

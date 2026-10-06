@@ -295,6 +295,27 @@ describe('buildPlan', () => {
     assert.equal(banners.length, 1, 'exactly 1 _GENERATED.md banner in plugin root');
   });
 
+  test('GB4: requirements-cpu-torch.txt propagates into plugin/ when present in plugin-src/', async () => {
+    const { buildPlan } = await getModule();
+    const tmp = makeTmp();
+    const manifest = setupFixture(tmp);
+    writeFile(tmp, 'plugin-src/requirements-cpu-torch.txt', 'torch==2.13.0\n');
+    const plan = buildPlan(tmp, manifest);
+    const pinFiles = [...plan.keys()].filter((k) => k.endsWith('requirements-cpu-torch.txt'));
+    assert.equal(pinFiles.length, 1, 'expected exactly one requirements-cpu-torch.txt in the plan');
+    assert.ok(pinFiles[0].includes(`plugin${path.sep}requirements-cpu-torch.txt`));
+    assert.equal(plan.get(pinFiles[0]), 'torch==2.13.0\n');
+  });
+
+  test('GB4: build does not fail when requirements-cpu-torch.txt is absent (optional rootFile)', async () => {
+    const { buildPlan } = await getModule();
+    const tmp = makeTmp();
+    const manifest = setupFixture(tmp); // no requirements-cpu-torch.txt written
+    const plan = buildPlan(tmp, manifest);
+    const pinFiles = [...plan.keys()].filter((k) => k.endsWith('requirements-cpu-torch.txt'));
+    assert.equal(pinFiles.length, 0);
+  });
+
   test('manifest.targets.plugin validation: throws on missing plugin key', async () => {
     const { loadManifest } = await getModule();
     const tmp = makeTmp();
