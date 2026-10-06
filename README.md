@@ -9,14 +9,19 @@
 
 Claude Code, Codex, Cursor and other MCP clients forget what they learned when a session ends. SuperLocalMemory (SLM) gives them one long-term memory that lives on your machine: it learns from use, enforces who may read and erase what, coordinates many agents, and says "I don't have that" instead of guessing.
 
-In Mode A, core remember and recall make no model-provider call. Anything that sends data out is a choice you make, and the docs say exactly what goes. Four arXiv papers describe the design ([research](#research)).
+**Every recall is checked before your agent uses it.** A judge decides whether the memories found actually answer the question: **Laya** runs fully on your Mac, and **Jev** runs online on Windows, Linux and macOS. When they don't answer it, SLM says so instead of handing over a confident wrong answer: a hallucination guard for retrieval ([answer check](#answer-check-laya-and-jev)).
+
+In Mode A, core remember and recall make no model-provider call. Anything that sends data out is a choice you make, and the docs say exactly what goes.
 
 [![PyPI](https://img.shields.io/pypi/v/superlocalmemory)](https://pypi.org/project/superlocalmemory/)
 [![npm](https://img.shields.io/npm/v/superlocalmemory)](https://www.npmjs.com/package/superlocalmemory)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](pyproject.toml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+[![Answer check: Jev · Laya](https://img.shields.io/badge/answer_check-Jev_%C2%B7_Laya-f97316)](#answer-check-laya-and-jev)
 [![arXiv V4](https://img.shields.io/badge/arXiv-2608.08253-b31b1b)](https://arxiv.org/abs/2608.08253)
+[![arXiv V3.3](https://img.shields.io/badge/arXiv-2604.04514-b31b1b)](https://arxiv.org/abs/2604.04514)
 [![arXiv V3](https://img.shields.io/badge/arXiv-2603.14588-b31b1b)](https://arxiv.org/abs/2603.14588)
+[![arXiv V2](https://img.shields.io/badge/arXiv-2603.02240-b31b1b)](https://arxiv.org/abs/2603.02240)
 
 **[Install](https://www.superlocalmemory.com/install)** · **[Product walkthrough](https://www.superlocalmemory.com/demo)** · **[Demo video](https://www.youtube.com/watch?v=PMWW_ypsL60)** · **[CLI proof](docs/QUICK_PROOF.md)** · **[Release notes](CHANGELOG.md)**
 
@@ -28,7 +33,7 @@ slm connect cursor                # or claude-code, codex, windsurf, zed ... 12 
 
 npm installs SLM into a package-owned virtual environment. The other primary route is pip in a Python virtual environment you activate: `python3 -m venv .venv`, activate it, then `python -m pip install superlocalmemory`. Repository clone: `./scripts/install.sh install` (macOS, Linux) or `.\scripts\install.ps1 -Action Install` (Windows); see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Runs on Apple Silicon macOS, 64-bit Windows and 64-bit Linux; Intel Mac and 32-bit Windows are not supported (the pinned `cryptography` has no build for them). No Docker, no required graph database, no API key.
+Runs on Windows, Linux and macOS ([platforms](#platform-support)). No Docker, no required graph database, no API key.
 
 ## 30-second example
 
@@ -97,6 +102,18 @@ SLM is part of Qualixar's AI Reliability Engineering work: agent memory that is 
 
 Claude Code memory in two commands: `claude plugin marketplace add qualixar/superlocalmemory`, then `claude plugin install superlocalmemory@qualixar`.
 
+## What developers use it for
+
+- **Persistent memory for Claude Code, Codex and Cursor.** Decisions, conventions, fixes and project context carry across sessions and across tools; confirmed rules and decisions load at session start.
+- **An MCP memory server for any agent.** stdio or HTTP, with adapters for LangGraph, LangChain, LlamaIndex, CrewAI, AutoGen, Semantic Kernel, Microsoft Agent Framework, Google ADK and the OpenAI Agents SDK.
+- **Local-first RAG without a vector database service.** SQLite + sqlite-vec, hybrid search (BM25, embeddings, knowledge graph, temporal), reranking, no Docker and no cloud account.
+- **A hallucination guard for retrieval.** The answer check, Jev or Laya, abstains when the retrieved memories don't answer the question, so your agent doesn't build on a wrong one.
+- **Team and enterprise AI memory.** Roles, company mode with sign-in, scoped sharing, GDPR export and verified erasure, a hash-chained audit trail and an EU AI Act posture report.
+- **Multi-agent memory and coordination.** One store shared by many agents with per-agent attribution, SLM-Mesh messages, locks and shared state, and bounded loops that finish only when an independent gate passes.
+- **Lower token cost.** Exact caching and reversible compression of tool output and file reads keep long agent sessions inside the context window.
+- **Memory for local LLMs.** Mode B runs extraction on Ollama, llama.cpp, vLLM, LM Studio or any OpenAI-compatible server on your machine.
+- **A searchable work log.** Bi-temporal "what was true then" queries, daily, session and project summaries, and saved views, each answer pointing back to its memory ids.
+
 ## Architecture
 
 ![SuperLocalMemory 4.1.21 architecture: modes, eight-layer pipeline, governance, Scale Engine, SLM-Mesh, bounded loops](docs/assets/slm-4.1.21-architecture.svg)
@@ -121,12 +138,12 @@ Claude Code memory in two commands: `claude plugin marketplace add qualixar/supe
 | Code graph | Index a repo, then ask for blast radius, callers, review context and code search by meaning | [MCP tools](docs/mcp-tools.md) |
 | Modes and providers | A: no model calls. B: a model on this machine (Ollama by default, or another local OpenAI-compatible server). C: your own endpoint or a cloud provider. Multilingual embedders work | [Configuration](docs/configuration.md) |
 
-Recalled text is untrusted evidence: before it reaches a prompt, secrets are redacted, forged boundary markers neutralised and provenance attached.
+Recalled text is untrusted evidence: before it reaches a prompt, secrets are redacted, forged boundary markers neutralised and provenance attached, a defence against prompt injection through memory.
 
 ### Learning in memory
 
-- **Adaptive ranking.** A contextual Thompson-sampling bandit picks channel weights per query type; a LightGBM ranker trains on `report_outcome` and `report_feedback`. On an unchanged store, the same question gets the same ranking.
-- **Guarded promotion.** A candidate ranker runs in shadow and is promoted only on a measured win; a later NDCG@10 drop of 2% or more restores the previous model.
+- **Adaptive ranking.** A contextual Thompson-sampling bandit picks channel weights per query type; a LightGBM learning-to-rank model trains on `report_outcome` and `report_feedback`. The same question on an unchanged store gets the same ranking.
+- **Guarded promotion.** A candidate ranker runs in shadow and is promoted only on a measured win; a later NDCG@10 drop of 2% or more restores the previous model automatically.
 - **Soft prompts.** Consolidation mines behavioural patterns and turns stable ones into soft prompts for new sessions.
 - **Forgetting.** An Ebbinghaus retention cycle and a Langevin lifecycle move neglected memories toward archive and pull used ones back.
 - **Skill evolution (opt-in).** Measures agent skills, proposes revisions and keeps lineage, under a budget and blind verification. [Skill evolution](docs/skill-evolution.md)
@@ -159,8 +176,8 @@ Engineering controls that support a compliance program, not a certification.
 
 Answer check adds a second step after ranking; choose one in **Settings → Answer check**:
 
-- **On this Mac (Laya):** a small model, about 1.1 GB, on Apple Silicon. Nothing leaves the machine.
-- **Online with Jev:** TypeSafe or OpenRouter, with your own key and an explicit consent box. Sends the question and the top 3 memories.
+- **Laya, on this Mac:** a small on-device model (about 1.1 GB) for Apple Silicon Macs. Nothing leaves the machine.
+- **Jev, online, on any computer:** Windows, Linux or macOS, through TypeSafe or OpenRouter with your own key and an explicit consent box. Sends the question and the top 3 memories.
 - **Off.**
 
 Only one runs at a time and the online option never turns itself on. Results are never hidden: recall marks them `abstained` and your agent decides. A repeat question gets the same verdict. The **Answer Check** tab shows verdicts, timing against the 3-second recall ceiling and the "I don't have that" rate; it never stores questions or memory text. [Answer check](docs/answer-check.md)
@@ -179,18 +196,18 @@ All of it fails open. [Optimize](docs/optimize-overview.md), [Proxy setup](docs/
 
 ### Remote access and teams
 
-`slm remote` serves memory to other computers over TLS only. Each client gets one named key, bound to one profile, read-only or read-write; `slm remote keys revoke <name>` applies on the next request. Remote callers authenticate to read and never see this computer's paths or account. [Remote access](docs/distributed-deployment.md#remote-access-over-tls-4120), [Deployment tiers](docs/deployment-tiers.md)
+`slm remote` serves memory to other computers over TLS only. Each client gets a named key bound to one profile, read-only or read-write, revocable at once. Remote callers authenticate to read and never see this computer's paths or account. [Remote access](docs/distributed-deployment.md#remote-access-over-tls-4120), [Deployment tiers](docs/deployment-tiers.md)
 
 ### Scale and operations
 
 - **[Scale Engine](docs/scale-engine.md):** SQLite stays canonical. Optional CozoDB graph and LanceDB vector copies go through prepare, verify, promote and rollback, and serve recall only once they match SQLite.
 - **[Dashboard](docs/DASHBOARD-COVERAGE.md):** `slm dashboard`, 16 panes including Answer Check, Brain, Knowledge Graph, Governance, Optimize and Mesh Peers.
-- **Durable writes:** each save moves raw → queryable → enriching → complete with a receipt; a failed step keeps the raw evidence and retries.
+- **Durable writes:** each save moves raw → queryable → enriching → complete with a receipt; a failed step keeps the raw evidence and retries. Saves under heavy load are queued, never refused.
 - **[Operations](docs/troubleshooting.md):** `slm doctor`, `status`, `health`, `restart`, `ops`; stuck operations are listed and resolved.
 
 ## MCP memory server: tool profiles
 
-Pick how many tools your agent sees with `SLM_MCP_PROFILE`. Counts come from the server itself.
+Pick how many tools your agent sees with `SLM_MCP_PROFILE`.
 
 | Profile | Tools | For |
 |---|---:|---|
@@ -205,7 +222,7 @@ Pick how many tools your agent sees with `SLM_MCP_PROFILE`. Counts come from the
 { "mcpServers": { "superlocalmemory": { "type": "http", "url": "http://127.0.0.1:8765/mcp/" } } }
 ```
 
-For stdio clients use `{"command": "slm", "args": ["mcp"]}`. An unknown profile name stops startup and lists the valid ones.
+For stdio clients use `{"command": "slm", "args": ["mcp"]}`.
 
 ## Privacy and security
 
@@ -237,7 +254,7 @@ Method, category breakdown and ablations: [docs/benchmarks.md](docs/benchmarks.m
 
 Four arXiv preprints by Varun Pratap Bhardwaj describe SLM, newest first:
 
-1. **V4 (2026):** [SuperLocalMemory 4.0: The Governed Memory Operating System for AI Agents](https://arxiv.org/abs/2608.08253), with Garima Singh and Arun Pratap Bhardwaj. arXiv:2608.08253, DOI [10.5281/zenodo.21853302](https://doi.org/10.5281/zenodo.21853302). Multi-scope isolation, role-based access, verified erasure, hash-chained audit and bi-temporal recall, with their measured cost.
+1. **V4 (2026):** [SuperLocalMemory 4.0: The Governed Memory Operating System for AI Agents](https://arxiv.org/abs/2608.08253), with Garima Singh and Arun Pratap Bhardwaj. arXiv:2608.08253. Multi-scope isolation, role-based access, verified erasure, hash-chained audit and bi-temporal recall, with their measured cost.
 2. **V3.3 (2026):** [SuperLocalMemory V3.3: The Living Brain](https://arxiv.org/abs/2604.04514), arXiv:2604.04514. Biologically inspired forgetting, cognitive quantization, multi-channel retrieval without an LLM.
 3. **V3 (2026):** [SuperLocalMemory V3: Information-Geometric Foundations for Zero-LLM Enterprise Agent Memory](https://arxiv.org/abs/2603.14588), arXiv:2603.14588. Fisher-information retrieval, Langevin lifecycle, sheaf contradiction detection; the LoCoMo results above.
 4. **V2 (2026):** [SuperLocalMemory: Privacy-Preserving Multi-Agent Memory with Bayesian Trust Defense Against Memory Poisoning](https://arxiv.org/abs/2603.02240), arXiv:2603.02240.
@@ -249,8 +266,7 @@ Cite the V4 paper with [CITATION.cff](CITATION.cff) or GitHub's "Cite this repos
   title   = {SuperLocalMemory 4.0: The Governed Memory Operating System for AI Agents},
   author  = {Bhardwaj, Varun Pratap and Singh, Garima and Bhardwaj, Arun Pratap},
   journal = {arXiv preprint arXiv:2608.08253},
-  year    = {2026},
-  doi     = {10.5281/zenodo.21853302}
+  year    = {2026}
 }
 ```
 
@@ -258,7 +274,7 @@ Cite the V4 paper with [CITATION.cff](CITATION.cff) or GitHub's "Cite this repos
 
 **Start:** [Getting started](docs/getting-started.md) · [IDE setup](docs/ide-setup.md) · [Linux install](docs/install-linux.md) · [Quick proof](docs/QUICK_PROOF.md) · [Migrating from V2](docs/migration-from-v2.md)
 
-**Use:** [Recall](docs/recall.md) · [Memory kinds](docs/memory-kinds.md) · [Answer check](docs/answer-check.md) · [Auto-memory](docs/auto-memory.md) · [Shared memory](docs/shared-memory.md) · [Optimize](docs/optimize-overview.md) · [Per-agent optimize](docs/optimize-per-agent.md) · [pi.dev](docs/pi-dev-integration.md)
+**Use:** [Recall](docs/recall.md) · [Memory kinds](docs/memory-kinds.md) · [Answer check](docs/answer-check.md) · [Auto-memory](docs/auto-memory.md) · [Shared memory](docs/shared-memory.md) · [Optimize](docs/optimize-overview.md)
 
 **Reference:** [CLI](docs/cli-reference.md) · [MCP tools](docs/mcp-tools.md) · [Configuration](docs/configuration.md) · [Errors](docs/errors.md) · [Troubleshooting](docs/troubleshooting.md) · [Distributed deployment](docs/distributed-deployment.md) · [Privacy diagnostics](docs/privacy-diagnostics.md)
 
@@ -276,7 +292,14 @@ Upgrades never move or delete memory; an update that changes the store takes a r
 
 ## Platform support
 
-Python 3.12+, and Node 18+ for npm, on the systems listed under the install block. Laya needs Apple Silicon; elsewhere use Jev or leave the check off. The default embedding model (about 500 MB) downloads on first use or with `slm warmup`.
+| | SuperLocalMemory | Jev (online check) | Laya (on-device check) |
+|---|---|---|---|
+| Apple Silicon macOS | Yes | Yes | Yes |
+| 64-bit Windows | Yes | Yes | No (Laya uses Apple's MLX) |
+| 64-bit Linux (x86-64, ARM64) | Yes | Yes | No |
+| Intel Mac, 32-bit Windows | No prebuilt install | — | — |
+
+Python 3.12+, and Node 18+ for npm. Intel Mac and 32-bit Windows lack a build of the pinned security library (`cryptography` 50); older versions have high-severity advisories. The default embedding model (about 500 MB) downloads on first use or with `slm warmup`.
 
 ## Contributing and license
 

@@ -42,7 +42,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from superlocalmemory.core.session_identity import is_conversation  # noqa: E402
-from superlocalmemory.learning.bandit import ContextualBandit  # noqa: E402
+from superlocalmemory.learning.bandit import ContextualBandit, close_threadlocal_conn  # noqa: E402
 from superlocalmemory.learning.reward import EngagementRewardModel  # noqa: E402
 from superlocalmemory.learning.reward_proxy import settle_stale_plays  # noqa: E402
 from _harness import ExperimentResult  # noqa: E402
@@ -130,83 +130,89 @@ def run_arm(
 
     bandit = ContextualBandit(learn, profile_id=PROFILE)
     model = EngagementRewardModel(memory_db_path=str(mem))
-    t0 = datetime.now(timezone.utc) - timedelta(seconds=3600)
+    try:
+        t0 = datetime.now(timezone.utc) - timedelta(seconds=3600)
 
-    conn = sqlite3.connect(mem)
-    recorded = 0
-    for i in range(rounds):
-        played = t0 + timedelta(seconds=i)
-        query_id = str(uuid.uuid4())
-        # The ONLY difference between the two arms:
-        session_id = f"mcp:agent_{i % 3}" if arm == "defect" else str(uuid.uuid4())
+        conn = sqlite3.connect(mem)
+        recorded = 0
+        for i in range(rounds):
+            played = t0 + timedelta(seconds=i)
+            query_id = str(uuid.uuid4())
+            # The ONLY difference between the two arms:
+            session_id = f"mcp:agent_{i % 3}" if arm == "defect" else str(uuid.uuid4())
 
-        ctx = {"entity_count": (i % 5), "hour": (i % 24)}   # deterministic strata
-        choice = bandit.choose(ctx, query_id)
-        if choice.play_id is None:
-            continue
-        shown = [SEED_FACTS[i % len(SEED_FACTS)][0]]
-        bandit.record_shown(choice.play_id, shown)
-        # Real hot-path predicate decides whether an outcome ticket exists.
-        if is_conversation(session_id, PROFILE):
-            oid = model.record_recall(
-                profile_id=PROFILE, session_id=session_id,
-                recall_query_id=query_id, fact_ids=shown,
-                query_text=f"q{i}",
-            )
-            if not oid or oid == "disabled":
-                raise RuntimeError(f"record_recall failed at round {i}: {oid!r}")
+            ctx = {"entity_count": (i % 5), "hour": (i % 24)}   # deterministic strata
+            choice = bandit.choose(ctx, query_id)
+            if choice.play_id is None:
+                continue
+            shown = [SEED_FACTS[i % len(SEED_FACTS)][0]]
+            bandit.record_shown(choice.play_id, shown)
+            # Real hot-path predicate decides whether an outcome ticket exists.
+            if is_conversation(session_id, PROFILE):
+                oid = model.record_recall(
+                    profile_id=PROFILE, session_id=session_id,
+                    recall_query_id=query_id, fact_ids=shown,
+                    query_text=f"q{i}",
+                )
+                if not oid or oid == "disabled":
+                    raise RuntimeError(f"record_recall failed at round {i}: {oid!r}")
+                conn.execute(
+                    "UPDATE pending_outcomes SET created_at_ms = ? "
+                    "WHERE recall_query_id = ?",
+                    (int(played.timestamp() * 1000), query_id),
+                )
+                conn.commit()
+                recorded += 1
+            # The agent then acts on what it was shown. Identical in the first two
+            # arms; the negative control acts on something unrelated instead.
+            content = dict(SEED_FACTS)[shown[0]]
+            payload = ("unrelated build tooling upgrade for the frontend bundler"
+                       if arm == "no-engagement" else content)
             conn.execute(
-                "UPDATE pending_outcomes SET created_at_ms = ? "
-                "WHERE recall_query_id = ?",
-                (int(played.timestamp() * 1000), query_id),
+                "INSERT INTO tool_events (session_id, profile_id, tool_name, "
+                "input_summary, output_summary, created_at) VALUES (?,?,?,?,?,?)",
+                (session_id, PROFILE, "Write", payload,
+                 "wrote config", (played + timedelta(seconds=20)).isoformat()),
             )
             conn.commit()
-            recorded += 1
-        # The agent then acts on what it was shown. Identical in the first two
-        # arms; the negative control acts on something unrelated instead.
-        content = dict(SEED_FACTS)[shown[0]]
-        payload = ("unrelated build tooling upgrade for the frontend bundler"
-                   if arm == "no-engagement" else content)
-        conn.execute(
-            "INSERT INTO tool_events (session_id, profile_id, tool_name, "
-            "input_summary, output_summary, created_at) VALUES (?,?,?,?,?,?)",
-            (session_id, PROFILE, "Write", payload,
-             "wrote config", (played + timedelta(seconds=20)).isoformat()),
+
+            # Backdate the play so settlement sees a matured evidence window.
+            lc = sqlite3.connect(learn)
+            lc.execute("UPDATE bandit_plays SET played_at = ? WHERE play_id = ?",
+                       (played.isoformat(), choice.play_id))
+            lc.commit(); lc.close()
+        conn.close()
+
+        settled = settle_stale_plays(
+            PROFILE, learn, mem,
+            now=datetime.now(timezone.utc), bandit=bandit,
         )
-        conn.commit()
 
-        # Backdate the play so settlement sees a matured evidence window.
         lc = sqlite3.connect(learn)
-        lc.execute("UPDATE bandit_plays SET played_at = ? WHERE play_id = ?",
-                   (played.isoformat(), choice.play_id))
-        lc.commit(); lc.close()
-    conn.close()
-
-    settled = settle_stale_plays(
-        PROFILE, learn, mem,
-        now=datetime.now(timezone.utc), bandit=bandit,
-    )
-
-    lc = sqlite3.connect(learn)
-    arms_total = lc.execute("SELECT COUNT(*) FROM bandit_arms").fetchone()[0]
-    moved = lc.execute(
-        "SELECT COUNT(*) FROM bandit_arms WHERE ABS(alpha - beta) > 1e-9"
-    ).fetchone()[0]
-    spread = lc.execute(
-        "SELECT COALESCE(MAX(ABS(alpha/(alpha+beta) - 0.5)), 0.0) FROM bandit_arms"
-    ).fetchone()[0]
-    kinds = dict(lc.execute(
-        "SELECT COALESCE(NULLIF(settlement_type,''),'(open)'), COUNT(*) "
-        "FROM bandit_plays GROUP BY 1"
-    ).fetchall())
-    lc.close()
-    return {
-        "arm": arm, "rounds": rounds, "outcome_tickets_written": recorded,
-        "plays_settled": settled, "arms_total": arms_total,
-        "arms_moved_off_prior_mean": moved,
-        "max_abs_mean_shift": round(float(spread), 6),
-        "settlement_types": kinds,
-    }
+        arms_total = lc.execute("SELECT COUNT(*) FROM bandit_arms").fetchone()[0]
+        moved = lc.execute(
+            "SELECT COUNT(*) FROM bandit_arms WHERE ABS(alpha - beta) > 1e-9"
+        ).fetchone()[0]
+        spread = lc.execute(
+            "SELECT COALESCE(MAX(ABS(alpha/(alpha+beta) - 0.5)), 0.0) FROM bandit_arms"
+        ).fetchone()[0]
+        kinds = dict(lc.execute(
+            "SELECT COALESCE(NULLIF(settlement_type,''),'(open)'), COUNT(*) "
+            "FROM bandit_plays GROUP BY 1"
+        ).fetchall())
+        lc.close()
+        return {
+            "arm": arm, "rounds": rounds, "outcome_tickets_written": recorded,
+            "plays_settled": settled, "arms_total": arms_total,
+            "arms_moved_off_prior_mean": moved,
+            "max_abs_mean_shift": round(float(spread), 6),
+            "settlement_types": kinds,
+        }
+    finally:
+        # Both keep a database open; Windows cannot delete the work folder
+        # while they do.
+        model.close()
+        close_threadlocal_conn()
 
 
 def run(n_trials: int = ROUNDS, seed: int = SEED) -> ExperimentResult:

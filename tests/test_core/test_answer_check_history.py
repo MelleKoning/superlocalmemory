@@ -193,7 +193,7 @@ _IO_MODULES = {"sqlite3", "os", "io", "pathlib", "socket", "urllib", "http", "sh
 
 
 def test_hot_module_imports_no_io() -> None:
-    tree = ast.parse(_HOT.read_text())
+    tree = ast.parse(_HOT.read_text(encoding="utf-8"))
     imported = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

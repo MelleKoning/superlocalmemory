@@ -145,7 +145,7 @@ class TestConfigBackwardCompat:
     def test_old_config_loads_with_defaults(self, tmp_path):
         """A pre-3.4.3 config.json should load without error."""
         config_file = tmp_path / "config.json"
-        config_file.write_text(json.dumps({"mode": "a", "active_profile": "default"}))
+        config_file.write_text(json.dumps({"mode": "a", "active_profile": "default"}), encoding="utf-8")
 
         from superlocalmemory.core.config import SLMConfig
         config = SLMConfig.load(config_file)

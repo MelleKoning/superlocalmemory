@@ -140,8 +140,8 @@ class TestCompactDoesNotParseHistory:
 
         versions = tmp_path / "embeddings.lance" / "_versions"
         versions.mkdir(parents=True)
-        (versions / "1.manifest").write_text("x")
-        (versions / "2.manifest").write_text("x")
+        (versions / "1.manifest").write_text("x", encoding="utf-8")
+        (versions / "2.manifest").write_text("x", encoding="utf-8")
         backend = LanceDBVectorBackend.__new__(LanceDBVectorBackend)
         backend._table = _Table()
         backend._db_path = str(tmp_path)

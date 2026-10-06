@@ -49,7 +49,7 @@ def _load_api_key_hash(key_file: Optional[Path] = None) -> Optional[str]:
     if not path.exists():
         return None
     try:
-        key = path.read_text().strip()
+        key = path.read_text(encoding="utf-8").strip()
         if not key:
             return None
         return hashlib.sha256(key.encode()).hexdigest()

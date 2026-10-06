@@ -114,7 +114,7 @@ def test_new_python_passes_the_guard_when_the_venv_is_used(tmp_path):
     venv = _venv_dir(tmp_path)
     write_exe(venv / "bin" / "python3", "#!/bin/sh\nexit 0\n")
     digest = hashlib.sha256((PLUGIN_SRC / "requirements.txt").read_bytes()).hexdigest()
-    (tmp_path / "plugin-data" / ".venv-reqs.sha256").write_text(digest + "\n")
+    (tmp_path / "plugin-data" / ".venv-reqs.sha256").write_text(digest + "\n", encoding="utf-8")
 
     result = run(["bash", str(ENSURE)], _env(tmp_path, stubs))
 

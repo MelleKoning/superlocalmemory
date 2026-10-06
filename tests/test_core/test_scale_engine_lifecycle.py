@@ -65,10 +65,10 @@ class _Graph:
             "edges": edges,
             "fact_entity": fact_entity,
             "entity_ids": [r[0] for r in entity_rows],
-        }))
+        }), encoding="utf-8")
 
     def health_check(self):
-        counts = json.loads(self.counts_path.read_text())
+        counts = json.loads(self.counts_path.read_text(encoding="utf-8"))
         return {
             "status": "active",
             "entities": counts["entities"],
@@ -77,7 +77,7 @@ class _Graph:
         }
 
     def entity_ids(self, limit=1000):
-        counts = json.loads(self.counts_path.read_text())
+        counts = json.loads(self.counts_path.read_text(encoding="utf-8"))
         return list(counts.get("entity_ids", []))[:limit]
 
     def close(self):
@@ -99,10 +99,10 @@ class _Vectors:
             "WHERE af.profile_id = ? AND fe.profile_id = af.profile_id",
             (profile_id,),
         ).fetchone()[0]
-        self.count_path.write_text(str(count))
+        self.count_path.write_text(str(count), encoding="utf-8")
 
     def health_check(self):
-        return {"status": "active", "vectors": int(self.count_path.read_text())}
+        return {"status": "active", "vectors": int(self.count_path.read_text(encoding="utf-8"))}
 
     def close(self):
         pass
@@ -186,8 +186,8 @@ def test_prepare_verify_promote_preserves_rollback_copy(manager):
     old_cozo, old_lance = lifecycle.active_paths
     old_cozo.mkdir(parents=True)
     old_lance.mkdir(parents=True)
-    (old_cozo / "old").write_text("cozo")
-    (old_lance / "old").write_text("lance")
+    (old_cozo / "old").write_text("cozo", encoding="utf-8")
+    (old_lance / "old").write_text("lance", encoding="utf-8")
 
     prepared = lifecycle.prepare()
     assert prepared["state"] == "prepared"
@@ -199,7 +199,7 @@ def test_prepare_verify_promote_preserves_rollback_copy(manager):
     assert cfg.scale_engine_state == "promoted"
     assert (old_cozo / "counts.json").exists()
     assert (old_lance / "count.txt").exists()
-    assert (lifecycle.backup_root / promoted["backup_id"] / "cozo" / "old").read_text() == "cozo"
+    assert (lifecycle.backup_root / promoted["backup_id"] / "cozo" / "old").read_text(encoding="utf-8") == "cozo"
     assert cfg.saved == 3
 
 
@@ -230,9 +230,9 @@ def test_verify_detects_fact_entity_bridge_gap(manager):
     prepared = lifecycle.prepare()
     stage_dir, _m = lifecycle._load_stage(prepared["stage_id"])
     counts_file = stage_dir / "cozo" / "counts.json"
-    data = json.loads(counts_file.read_text())
+    data = json.loads(counts_file.read_text(encoding="utf-8"))
     data["fact_entity"] = 0
-    counts_file.write_text(json.dumps(data))
+    counts_file.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(ScaleEngineError, match="parity"):
         lifecycle.verify(prepared["stage_id"])
 
@@ -243,9 +243,9 @@ def test_verify_detects_entity_content_divergence(manager):
     prepared = lifecycle.prepare()
     stage_dir, _m = lifecycle._load_stage(prepared["stage_id"])
     counts_file = stage_dir / "cozo" / "counts.json"
-    data = json.loads(counts_file.read_text())
+    data = json.loads(counts_file.read_text(encoding="utf-8"))
     data["entity_ids"] = ["WRONG-1", "WRONG-2"]  # count still 2, identities wrong
-    counts_file.write_text(json.dumps(data))
+    counts_file.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(ScaleEngineError, match="content parity"):
         lifecycle.verify(prepared["stage_id"])
 
@@ -419,8 +419,8 @@ def test_adopt_legacy_rebuilds_verifies_and_promotes_current_projection(manager)
     """A legacy v3.5 projection is replaced only after fresh parity proof."""
     lifecycle, cfg = manager
     old_cozo, old_lance = _make_legacy_projection(lifecycle)
-    (old_cozo / "legacy-marker").write_text("cozo")
-    (old_lance / "legacy-marker").write_text("lance")
+    (old_cozo / "legacy-marker").write_text("cozo", encoding="utf-8")
+    (old_lance / "legacy-marker").write_text("lance", encoding="utf-8")
 
     result = lifecycle.adopt_legacy_projection()
 
@@ -430,8 +430,8 @@ def test_adopt_legacy_rebuilds_verifies_and_promotes_current_projection(manager)
     assert lifecycle.status()["retrieval_routing"] == "daemon_runtime_check_required"
     assert lifecycle.status()["active"] == {"cozo": False, "lance": False}
     backup = lifecycle.backup_root / result["backup_id"]
-    assert (backup / "cozo" / "legacy-marker").read_text() == "cozo"
-    assert (backup / "lance" / "legacy-marker").read_text() == "lance"
+    assert (backup / "cozo" / "legacy-marker").read_text(encoding="utf-8") == "cozo"
+    assert (backup / "lance" / "legacy-marker").read_text(encoding="utf-8") == "lance"
 
 
 def test_adoption_fsyncs_each_renamed_projection_directory(manager, monkeypatch):
@@ -465,8 +465,8 @@ def test_failed_legacy_adoption_preserves_paths_and_allows_corrected_retry(manag
     """A rejected stage stays inspectable without permanently blocking adoption."""
     lifecycle, cfg = manager
     old_cozo, old_lance = _make_legacy_projection(lifecycle)
-    (old_cozo / "legacy-marker").write_text("cozo")
-    (old_lance / "legacy-marker").write_text("lance")
+    (old_cozo / "legacy-marker").write_text("cozo", encoding="utf-8")
+    (old_lance / "legacy-marker").write_text("lance", encoding="utf-8")
     verify = lifecycle._verify
 
     def reject_parity(_: str):
@@ -478,8 +478,8 @@ def test_failed_legacy_adoption_preserves_paths_and_allows_corrected_retry(manag
         lifecycle.adopt_legacy_projection()
 
     assert cfg.scale_engine_state == "local_core"
-    assert (old_cozo / "legacy-marker").read_text() == "cozo"
-    assert (old_lance / "legacy-marker").read_text() == "lance"
+    assert (old_cozo / "legacy-marker").read_text(encoding="utf-8") == "cozo"
+    assert (old_lance / "legacy-marker").read_text(encoding="utf-8") == "lance"
     rejected = lifecycle.status()
     assert rejected["legacy_projection_candidate"] is True
     assert rejected["migration_repair_required"] is False
@@ -513,7 +513,7 @@ def test_successful_adoption_retires_a_prior_prepared_retry_payload(manager):
 
     assert promoted is not None
     assert promoted["retired_stages"] == [prior["stage_id"]]
-    prior_manifest = json.loads((prior_dir / lifecycle.MANIFEST_NAME).read_text())
+    prior_manifest = json.loads((prior_dir / lifecycle.MANIFEST_NAME).read_text(encoding="utf-8"))
     assert prior_manifest["state"] == "superseded"
     assert not (prior_dir / "cozo").exists()
     assert not (prior_dir / "lance").exists()
@@ -524,7 +524,7 @@ def test_legacy_adoption_refuses_a_second_writer(manager):
     lifecycle, cfg = manager
     old_cozo, old_lance = _make_legacy_projection(lifecycle)
     lock_path = lifecycle.lifecycle_lock_path
-    lock_path.write_text(json.dumps({"pid": os.getpid()}))
+    lock_path.write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
 
     with pytest.raises(ScaleEngineError, match="already in progress"):
         lifecycle.adopt_legacy_projection()
@@ -538,7 +538,7 @@ def test_legacy_adoption_recovers_a_lock_left_by_a_dead_process(manager):
     lifecycle, cfg = manager
     old_cozo, old_lance = _make_legacy_projection(lifecycle)
     lock_path = lifecycle.lifecycle_lock_path
-    lock_path.write_text(json.dumps({"pid": 999_999_999, "started_at": "2026-01-01T00:00:00Z"}))
+    lock_path.write_text(json.dumps({"pid": 999_999_999, "started_at": "2026-01-01T00:00:00Z"}), encoding="utf-8")
 
     result = lifecycle.adopt_legacy_projection()
 
@@ -550,8 +550,8 @@ def test_legacy_adoption_recovers_a_lock_left_by_a_dead_process(manager):
 def test_recovery_reverses_an_interrupted_half_promotion(manager):
     lifecycle, cfg = manager
     old_cozo, old_lance = _make_legacy_projection(lifecycle)
-    (old_cozo / "legacy-marker").write_text("cozo")
-    (old_lance / "legacy-marker").write_text("lance")
+    (old_cozo / "legacy-marker").write_text("cozo", encoding="utf-8")
+    (old_lance / "legacy-marker").write_text("lance", encoding="utf-8")
     prepared = lifecycle.prepare()
     lifecycle.verify(prepared["stage_id"])
     stage_dir = lifecycle.staging_root / prepared["stage_id"]
@@ -578,8 +578,8 @@ def test_recovery_reverses_an_interrupted_half_promotion(manager):
 
     assert result == "reversed_interrupted_promotion"
     assert cfg.scale_engine_state == "local_core"
-    assert (old_cozo / "legacy-marker").read_text() == "cozo"
-    assert (old_lance / "legacy-marker").read_text() == "lance"
+    assert (old_cozo / "legacy-marker").read_text(encoding="utf-8") == "cozo"
+    assert (old_lance / "legacy-marker").read_text(encoding="utf-8") == "lance"
     assert (stage_dir / "cozo").exists()
     assert not lifecycle.promotion_journal_path.exists()
 
@@ -588,8 +588,8 @@ def test_adoption_preserves_stage_when_promotion_recovery_is_unresolved(manager,
     """Never retire bytes that an unresolved promotion journal still needs."""
     lifecycle, cfg = manager
     old_cozo, old_lance = _make_legacy_projection(lifecycle)
-    (old_cozo / "legacy-marker").write_text("cozo")
-    (old_lance / "legacy-marker").write_text("lance")
+    (old_cozo / "legacy-marker").write_text("cozo", encoding="utf-8")
+    (old_lance / "legacy-marker").write_text("lance", encoding="utf-8")
     replace = ScaleEngineManager._replace_durable
     calls = 0
 
@@ -625,8 +625,8 @@ def test_adoption_preserves_stage_when_promotion_recovery_is_unresolved(manager,
         staticmethod(replace),
     )
     assert lifecycle.recover_interrupted_promotion() == "reversed_interrupted_promotion"
-    assert (old_cozo / "legacy-marker").read_text() == "cozo"
-    assert (old_lance / "legacy-marker").read_text() == "lance"
+    assert (old_cozo / "legacy-marker").read_text(encoding="utf-8") == "cozo"
+    assert (old_lance / "legacy-marker").read_text(encoding="utf-8") == "lance"
     assert not lifecycle.promotion_journal_path.exists()
 
 
@@ -634,8 +634,8 @@ def test_adoption_succeeds_when_committed_journal_cleanup_recovers(manager, monk
     """A transient committed-journal unlink failure is still a promotion."""
     lifecycle, cfg = manager
     old_cozo, old_lance = _make_legacy_projection(lifecycle)
-    (old_cozo / "legacy-marker").write_text("cozo")
-    (old_lance / "legacy-marker").write_text("lance")
+    (old_cozo / "legacy-marker").write_text("cozo", encoding="utf-8")
+    (old_lance / "legacy-marker").write_text("lance", encoding="utf-8")
     unlink = Path.unlink
     journal_unlinks = 0
 
@@ -658,8 +658,8 @@ def test_adoption_succeeds_when_committed_journal_cleanup_recovers(manager, monk
     assert not lifecycle.promotion_journal_path.exists()
     assert lifecycle.status()["migration_repair_required"] is False
     backup = lifecycle.backup_root / promoted["backup_id"]
-    assert (backup / "cozo" / "legacy-marker").read_text() == "cozo"
-    assert (backup / "lance" / "legacy-marker").read_text() == "lance"
+    assert (backup / "cozo" / "legacy-marker").read_text(encoding="utf-8") == "cozo"
+    assert (backup / "lance" / "legacy-marker").read_text(encoding="utf-8") == "lance"
 
 
 def test_recovery_reverses_an_interrupted_rollback(manager):

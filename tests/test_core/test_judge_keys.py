@@ -17,6 +17,8 @@ import stat
 
 import pytest
 
+from tests._portable import assert_owner_only
+
 from superlocalmemory.core.judge_keys import (
     PROVIDERS,
     JudgeKeyStore,
@@ -137,6 +139,7 @@ def test_clear_on_a_missing_key_does_not_raise(store):
 # filesystem permissions
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skipif(os.name == "nt", reason="folder mode bits do nothing on Windows")
 def test_secrets_dir_is_mode_0700(store, tmp_path):
     store.set_key("typesafe", VALID_KEY)
     mode = stat.S_IMODE((tmp_path / "secrets").stat().st_mode)
@@ -146,8 +149,7 @@ def test_secrets_dir_is_mode_0700(store, tmp_path):
 def test_key_file_is_mode_0600(store, tmp_path):
     store.set_key("typesafe", VALID_KEY)
     key_path = tmp_path / "secrets" / "jev-typesafe.key"
-    mode = stat.S_IMODE(key_path.stat().st_mode)
-    assert mode == 0o600
+    assert_owner_only(key_path)  # on Windows: the owner-only access list
 
 
 def test_set_key_is_atomic_no_tmp_files_left_behind(store, tmp_path):
@@ -167,7 +169,7 @@ def test_load_refuses_a_symlinked_key_file(store, tmp_path):
     secrets_dir.mkdir(parents=True)
     os.chmod(secrets_dir, 0o700)
     target = tmp_path / "elsewhere.txt"
-    target.write_text("not a key")
+    target.write_text("not a key", encoding="utf-8")
     (secrets_dir / "jev-typesafe.key").symlink_to(target)
 
     with pytest.raises(JudgeKeyStoreError):
@@ -183,13 +185,13 @@ def test_set_key_refuses_to_overwrite_a_symlink(store, tmp_path):
     secrets_dir.mkdir(parents=True)
     os.chmod(secrets_dir, 0o700)
     target = tmp_path / "elsewhere.txt"
-    target.write_text("not a key")
+    target.write_text("not a key", encoding="utf-8")
     (secrets_dir / "jev-typesafe.key").symlink_to(target)
 
     with pytest.raises(JudgeKeyStoreError):
         store.set_key("typesafe", VALID_KEY)
     # The symlink target must be untouched.
-    assert target.read_text() == "not a key"
+    assert target.read_text(encoding="utf-8") == "not a key"
 
 
 def test_clear_removes_a_symlink_without_following_it(store, tmp_path):
@@ -198,15 +200,16 @@ def test_clear_removes_a_symlink_without_following_it(store, tmp_path):
     secrets_dir.mkdir(parents=True)
     os.chmod(secrets_dir, 0o700)
     target = tmp_path / "elsewhere.txt"
-    target.write_text("must survive")
+    target.write_text("must survive", encoding="utf-8")
     (secrets_dir / "jev-typesafe.key").symlink_to(target)
 
     store.clear("typesafe")
 
     assert not (secrets_dir / "jev-typesafe.key").exists()
-    assert target.read_text() == "must survive"
+    assert target.read_text(encoding="utf-8") == "must survive"
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no named pipes in the file system on Windows")
 def test_load_refuses_a_non_regular_file(store, tmp_path):
     secrets_dir = tmp_path / "secrets"
     secrets_dir.mkdir(parents=True)
@@ -218,6 +221,8 @@ def test_load_refuses_a_non_regular_file(store, tmp_path):
         store.load("typesafe")
 
 
+@pytest.mark.skipif(not hasattr(os, "getuid"),
+                    reason="Windows has no POSIX file owner uid; the store skips this check there")
 def test_load_refuses_a_file_not_owned_by_current_user(store, tmp_path, monkeypatch):
     store.set_key("typesafe", VALID_KEY)
     # Simulate a different owner without needing root to chown for real.

@@ -170,7 +170,7 @@ def test_legacy_api_key_is_write_scope_and_policy_bound(app) -> None:
 
     from superlocalmemory.infra.auth_middleware import API_KEY_FILE
 
-    Path(API_KEY_FILE).write_text("legacy-secret-value\n")
+    Path(API_KEY_FILE).write_text("legacy-secret-value\n", encoding="utf-8")
     headers = {**_ACCEPT, "X-SLM-API-Key": "legacy-secret-value"}
     resp = _main(app).post("/mcp/hermes", json=_call("switch_profile", {"profile": "x"}),
                            headers=headers)

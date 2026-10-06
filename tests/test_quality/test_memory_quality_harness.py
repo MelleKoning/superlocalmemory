@@ -283,9 +283,9 @@ def test_q07_profile_scoped_correction_never_leaks_to_another_profile(
 def test_q08_native_host_assets_declare_distinct_identities_and_one_code_profile() -> None:
     """Codex and Claude use the same portable MCP contract with honest identity."""
     root = Path(__file__).resolve().parents[2]
-    codex = (root / "codex-plugin" / ".codex" / "config.toml").read_text()
-    codex_template = (root / "ide" / "configs" / "codex-mcp.toml").read_text()
-    claude = (root / "plugin" / ".mcp.json").read_text()
+    codex = (root / "codex-plugin" / ".codex" / "config.toml").read_text(encoding="utf-8")
+    codex_template = (root / "ide" / "configs" / "codex-mcp.toml").read_text(encoding="utf-8")
+    claude = (root / "plugin" / ".mcp.json").read_text(encoding="utf-8")
 
     assert 'SLM_AGENT_ID = "codex"' in codex
     # Checked on the env ASSIGNMENT, not the whole file: both configs now carry

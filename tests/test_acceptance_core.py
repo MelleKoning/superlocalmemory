@@ -43,7 +43,8 @@ class TestP2CodeGraphBuilds:
             "def foo():\n"
             "    return bar()\n\n\n"
             "def bar():\n"
-            "    return requests.get('https://example.invalid')\n"
+            "    return requests.get('https://example.invalid')\n",
+            encoding="utf-8",
         )
         return d
 

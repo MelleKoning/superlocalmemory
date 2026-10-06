@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -16,8 +17,11 @@ LEGACY_WORKFLOWS = (ROOT / ".github" / "workflows" / "npm-publish.yml",)
 
 
 def _npm_dry_run() -> dict:
+    # On Windows npm is npm.cmd, which CreateProcess does not find by the bare
+    # name "npm"; the resolved path runs everywhere.
+    npm = shutil.which("npm") or "npm"
     completed = subprocess.run(
-        ["npm", "pack", "--ignore-scripts", "--dry-run", "--json"],
+        [npm, "pack", "--ignore-scripts", "--dry-run", "--json"],
         cwd=ROOT,
         check=True,
         capture_output=True,

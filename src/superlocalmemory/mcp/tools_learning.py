@@ -10,6 +10,10 @@ Two-way learning tools:
   - reinforce_assertion: Explicitly reinforce a learned pattern
   - contradict_assertion: Mark a learned pattern as wrong
 
+Each takes an optional ``profile_id``: that profile is read or written for this
+one call (it must exist; the active profile is not moved). Empty = the active
+profile.
+
 Part of Qualixar | Author: Varun Pratap Bhardwaj
 """
 
@@ -24,11 +28,13 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
+from contextlib import closing
 
 from mcp.types import ToolAnnotations
 
 from superlocalmemory.core.admission import admits
 from superlocalmemory.core.operation_request import OperationKind
+from superlocalmemory.mcp.request_profile import tool_profile
 from superlocalmemory.mcp.shared import authorize_mcp_mutation
 
 logger = logging.getLogger(__name__)
@@ -57,7 +63,7 @@ def settle_pending_session_outcomes(
 
     path = Path(memory_db_path)
     try:
-        with sqlite3.connect(str(path), timeout=2.0) as conn:
+        with closing(sqlite3.connect(str(path), timeout=2.0)) as conn, conn:
             rows = conn.execute(
                 "SELECT outcome_id, signals_json FROM pending_outcomes "
                 "WHERE profile_id=? AND session_id=? AND status='pending'",
@@ -90,7 +96,7 @@ def settle_pending_session_outcomes(
     outcome_ids = [row[0] for row in rows]
     placeholders = ",".join("?" for _ in outcome_ids)
     try:
-        with sqlite3.connect(str(path), timeout=2.0) as conn:
+        with closing(sqlite3.connect(str(path), timeout=2.0)) as conn, conn:
             settled = conn.execute(
                 "SELECT COUNT(*) FROM pending_outcomes "
                 "WHERE profile_id=? AND session_id=? AND status='settled' "
@@ -117,6 +123,7 @@ def register_learning_tools(server, get_engine: Callable) -> None:
         session_id: str = "",
         agent_id: str = "",
         project_path: str = "",
+        profile_id: str = "",
     ) -> dict:
         """Log a tool usage event for behavioral learning.
 
@@ -133,6 +140,9 @@ def register_learning_tools(server, get_engine: Callable) -> None:
             metadata: JSON string with additional context
         """
         engine = get_engine()
+        pid, refused = tool_profile(engine, profile_id)
+        if refused:
+            return refused
         now = datetime.now(timezone.utc).isoformat()
         from superlocalmemory.mcp.session_binding import resolve_session_id
         effective_session_id = resolve_session_id(
@@ -153,7 +163,7 @@ def register_learning_tools(server, get_engine: Callable) -> None:
                 engine,
                 "update",
                 mutation_source="mcp-log-tool-event",
-                profile_id=engine.profile_id,
+                profile_id=pid,
                 content_preview=tool_name,
             )
             engine._db.execute(
@@ -161,7 +171,7 @@ def register_learning_tools(server, get_engine: Callable) -> None:
                 "(session_id, profile_id, project_path, tool_name, event_type, "
                 " input_summary, output_summary, duration_ms, metadata, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (effective_session_id, engine.profile_id, effective_project_path, tool_name,
+                (effective_session_id, pid, effective_project_path, tool_name,
                  event_type, input_clean, output_clean, duration_ms, metadata, now),
             )
             authorization.complete()
@@ -175,6 +185,7 @@ def register_learning_tools(server, get_engine: Callable) -> None:
     @admits(OperationKind.REMEMBER)
     async def settle_session_outcomes(
         session_id: str, agent_id: str = "", finalize: bool = False,
+        profile_id: str = "",
     ) -> dict:
         """Settle pending recall outcomes for one exact host session.
 
@@ -186,12 +197,15 @@ def register_learning_tools(server, get_engine: Callable) -> None:
         if not session_id or not session_id.strip():
             return {"success": False, "error": "session_id is required"}
         engine = get_engine()
+        pid, refused = tool_profile(engine, profile_id)
+        if refused:
+            return refused
         try:
             authorization = authorize_mcp_mutation(
                 engine,
                 "update",
                 mutation_source="mcp-settle-session-outcomes",
-                profile_id=engine.profile_id,
+                profile_id=pid,
                 content_preview=agent_id[:100],
             )
             from superlocalmemory.hooks._outcome_common import memory_db_path
@@ -199,7 +213,7 @@ def register_learning_tools(server, get_engine: Callable) -> None:
             result = await asyncio.to_thread(
                 settle_pending_session_outcomes,
                 memory_db_path(),
-                profile_id=engine.profile_id,
+                profile_id=pid,
                 session_id=session_id,
                 evidence_only=not finalize,
             )
@@ -220,6 +234,7 @@ def register_learning_tools(server, get_engine: Callable) -> None:
         category: str = "",
         project_path: str = "",
         limit: int = 50,
+        profile_id: str = "",
     ) -> dict:
         """Get learned behavioral assertions.
 
@@ -234,6 +249,9 @@ def register_learning_tools(server, get_engine: Callable) -> None:
             limit: Maximum results
         """
         engine = get_engine()
+        pid, refused = tool_profile(engine, profile_id)
+        if refused:
+            return {"assertions": [], "count": 0, **refused}
         try:
             query = (
                 "SELECT id, trigger_condition, action, category, confidence, "
@@ -242,7 +260,7 @@ def register_learning_tools(server, get_engine: Callable) -> None:
                 "FROM behavioral_assertions "
                 "WHERE profile_id = ? AND confidence >= ?"
             )
-            params: list = [engine.profile_id, min_confidence]
+            params: list = [pid, min_confidence]
 
             if category:
                 query += " AND category = ?"
@@ -267,7 +285,7 @@ def register_learning_tools(server, get_engine: Callable) -> None:
 
     @server.tool()
     @admits(OperationKind.CORRECT)
-    async def reinforce_assertion(assertion_id: str) -> dict:
+    async def reinforce_assertion(assertion_id: str, profile_id: str = "") -> dict:
         """Reinforce a behavioral assertion (increase confidence).
 
         Call this when an assertion's recommendation was helpful.
@@ -277,17 +295,20 @@ def register_learning_tools(server, get_engine: Callable) -> None:
             assertion_id: The assertion ID to reinforce
         """
         engine = get_engine()
+        pid, refused = tool_profile(engine, profile_id)
+        if refused:
+            return refused
         try:
             authorization = authorize_mcp_mutation(
                 engine,
                 "update",
                 mutation_source="mcp-reinforce-assertion",
-                profile_id=engine.profile_id,
+                profile_id=pid,
                 fact_id=assertion_id,
             )
             result = _update_assertion_confidence(
                 engine._db, assertion_id, reinforce=True,
-                profile_id=engine.profile_id,
+                profile_id=pid,
             )
             if result.get("success"):
                 authorization.complete()
@@ -297,7 +318,7 @@ def register_learning_tools(server, get_engine: Callable) -> None:
 
     @server.tool()
     @admits(OperationKind.FORGET)
-    async def contradict_assertion(assertion_id: str) -> dict:
+    async def contradict_assertion(assertion_id: str, profile_id: str = "") -> dict:
         """Contradict a behavioral assertion (decrease confidence).
 
         Call this when an assertion's recommendation was wrong.
@@ -307,17 +328,20 @@ def register_learning_tools(server, get_engine: Callable) -> None:
             assertion_id: The assertion ID to contradict
         """
         engine = get_engine()
+        pid, refused = tool_profile(engine, profile_id)
+        if refused:
+            return refused
         try:
             authorization = authorize_mcp_mutation(
                 engine,
                 "delete",
                 mutation_source="mcp-contradict-assertion",
-                profile_id=engine.profile_id,
+                profile_id=pid,
                 fact_id=assertion_id,
             )
             result = _update_assertion_confidence(
                 engine._db, assertion_id, reinforce=False,
-                profile_id=engine.profile_id,
+                profile_id=pid,
             )
             if result.get("success"):
                 authorization.complete()

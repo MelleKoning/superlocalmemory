@@ -58,7 +58,10 @@ const HASHED = ['od-brain.js', 'od-graph.js', 'fact-detail.js', 'od-memories.js'
                 'od-summaries.js', 'od-views.js',
                 // 4.1.21: the Ops Health table now explains an unconfirmed deletion;
                 // a stale copy would keep showing a bare "Exhausted" row.
-                'od-ops-health.js'];
+                'od-ops-health.js',
+                // 4.1.21: the live event stream subscribes to memory.captured;
+                // a stale copy would keep listening for an event nobody emits.
+                'events.js'];
 
 describe('cache-bust params match file content', function () {
   const html = readFileSync(join(UI, 'index.html'), 'utf8');

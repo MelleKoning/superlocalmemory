@@ -26,6 +26,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from contextlib import closing
 
 import numpy as np
 
@@ -93,7 +94,7 @@ def _activate_staged_vectors(
     from superlocalmemory.storage.write_lock import get_write_lock
 
     db_path = Path(db_path)
-    with get_write_lock(db_path), sqlite3.connect(stage_path) as stage:
+    with get_write_lock(db_path), closing(sqlite3.connect(stage_path)) as stage, stage:
         conn = sqlite3.connect(db_path)
         try:
             conn.execute("PRAGMA busy_timeout=10000")
@@ -261,7 +262,7 @@ def _read_stored_signature(config_dir: Path) -> str:
     if not config_path.exists():
         return _NO_MODEL
     try:
-        data = json.loads(config_path.read_text())
+        data = json.loads(config_path.read_text(encoding="utf-8"))
         return data.get("embedding_signature", _NO_MODEL)
     except (json.JSONDecodeError, OSError):
         return _NO_MODEL
@@ -273,12 +274,12 @@ def _write_stored_signature(config_dir: Path, signature: str) -> None:
     data: dict[str, Any] = {}
     if config_path.exists():
         try:
-            data = json.loads(config_path.read_text())
+            data = json.loads(config_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             pass
     data["embedding_signature"] = signature
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(data, indent=2))
+    config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def check_embedding_migration(config: SLMConfig) -> bool:
@@ -368,7 +369,7 @@ def run_embedding_migration(
             dir=config.base_dir,
         ) as stage_dir:
             stage_path = Path(stage_dir) / "shadow.sqlite3"
-            with sqlite3.connect(stage_path) as stage:
+            with closing(sqlite3.connect(stage_path)) as stage, stage:
                 stage.execute(
                     "CREATE TABLE staged_embeddings ("
                     "fact_id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, "

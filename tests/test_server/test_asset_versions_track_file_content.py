@@ -71,7 +71,7 @@ class TestTheVersionComesFromTheFile:
         assert on_disk.exists(), "fixture asset moved; pick another"
 
         before = _versions(render_index(ui / "index.html", ui))
-        on_disk.write_text(on_disk.read_text() + "\n/* an edit */\n")
+        on_disk.write_text(on_disk.read_text(encoding="utf-8") + "\n/* an edit */\n", encoding="utf-8")
         after = _versions(render_index(ui / "index.html", ui))
 
         assert target in before and target in after
@@ -89,7 +89,7 @@ class TestTheVersionComesFromTheFile:
         target = "static/css/design-system.css"
         before = _versions(render_index(ui / "index.html", ui))
         path = ui / target[len("static/"):]
-        path.write_text(path.read_text() + "\n/* an edit */\n")
+        path.write_text(path.read_text(encoding="utf-8") + "\n/* an edit */\n", encoding="utf-8")
         after = _versions(render_index(ui / "index.html", ui))
 
         moved = {k for k in before if before[k] != after.get(k)}
@@ -141,7 +141,7 @@ class TestTheVersionComesFromTheFile:
 class TestItCannotBreakThePage:
     def test_asset_paths_are_never_altered(self, ui: Path) -> None:
         """A rewriter that mangles a path takes the dashboard down."""
-        original = (ui / "index.html").read_text()
+        original = (ui / "index.html").read_text(encoding="utf-8")
         rendered = render_index(ui / "index.html", ui)
         assert set(_ANY_REF.findall(rendered)) == set(_ANY_REF.findall(original))
 
@@ -151,7 +151,7 @@ class TestItCannotBreakThePage:
         The literals stay in the HTML precisely so there is something to fall
         back to.
         """
-        html = (ui / "index.html").read_text().replace(
+        html = (ui / "index.html").read_text(encoding="utf-8").replace(
             '<script src="static/js/core.js"',
             '<script src="static/js/absent.js?v=deadbeef"',
             1,
@@ -182,7 +182,7 @@ class TestItCannotBreakThePage:
         asset_versions._CACHE.clear()
         bad = render_index(ui / "index.html", empty)
         # Unchanged from the source HTML: whatever literals it had, no more.
-        assert _versions(bad) == _versions((ui / "index.html").read_text())
+        assert _versions(bad) == _versions((ui / "index.html").read_text(encoding="utf-8"))
 
     def test_the_version_placeholder_is_still_substituted(self, ui: Path) -> None:
         """It was substituted by the daemon only, so the other two servers
@@ -248,7 +248,7 @@ class TestEveryServerUsesIt:
         # `index_path.read_text()` outright, which was wrong: reading the file
         # as written is precisely the right fallback, and forbidding it is what
         # left the route with nowhere to go when the import failed.
-        assert "return index_path.read_text().replace" in src, (
+        assert 'return index_path.read_text(encoding="utf-8").replace' in src, (
             f"server/{module}.py has no fallback, so a failure in asset "
             "versioning — a cosmetic feature — returns 500 for the whole page"
         )
@@ -286,7 +286,7 @@ class TestACosmeticFeatureCannotTakeThePageDown:
         import superlocalmemory
 
         ui = _pl.Path(superlocalmemory.__file__).parent / "ui"
-        html = (ui / "index.html").read_text().replace(
+        html = (ui / "index.html").read_text(encoding="utf-8").replace(
             "__SLM_VERSION__", superlocalmemory.__version__,
         )
         assert "<html" in html.lower()

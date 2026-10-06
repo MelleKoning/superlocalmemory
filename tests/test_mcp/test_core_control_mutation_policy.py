@@ -46,7 +46,7 @@ def test_core_pattern_correction_is_rejected_before_store_write() -> None:
         result = asyncio.run(tool("pattern-1", "prefer explicit errors"))
 
     assert result["success"] is False
-    store.return_value.record.assert_not_called()
+    store.return_value.record_pattern.assert_not_called()
 
 
 def test_core_profile_switch_is_rejected_before_global_state_change() -> None:

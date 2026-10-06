@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._portable import child_env_base
+
 WORKER = (Path(__file__).resolve().parents[2]
           / "src" / "superlocalmemory" / "core" / "laya_worker.py")
 
@@ -49,13 +51,13 @@ def load(model, **kwargs):
 
 def _spawn(tmp_path: Path, *, with_library: bool = True) -> subprocess.Popen:
     if with_library:
-        (tmp_path / "laya_mlx.py").write_text(_STUB)
+        (tmp_path / "laya_mlx.py").write_text(_STUB, encoding="utf-8")
     return subprocess.Popen(
         [sys.executable, str(WORKER)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, bufsize=1,
         env={"PYTHONPATH": str(tmp_path) if with_library else "",
-             "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+             "PATH": "/usr/bin:/bin", **child_env_base(tmp_path)},
     )
 
 

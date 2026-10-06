@@ -33,7 +33,7 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 # ---------------------------------------------------------------------------
 
 def test_hook_handlers_reads_port_file(home: Path) -> None:
-    (home / "daemon.port").write_text("8766")
+    (home / "daemon.port").write_text("8766", encoding="utf-8")
     assert hook_handlers._daemon_url() == "http://127.0.0.1:8766"
 
 
@@ -42,7 +42,7 @@ def test_hook_handlers_defaults_when_no_port_file(home: Path) -> None:
 
 
 def test_hook_handlers_defaults_on_garbage_port_file(home: Path) -> None:
-    (home / "daemon.port").write_text("not-a-number")
+    (home / "daemon.port").write_text("not-a-number", encoding="utf-8")
     assert hook_handlers._daemon_url() == "http://127.0.0.1:8765"
 
 
@@ -84,7 +84,7 @@ def test_hook_daemon_post_uses_owned_identity_client(
 # ---------------------------------------------------------------------------
 
 def test_async_hook_reads_port_file(home: Path) -> None:
-    (home / "daemon.port").write_text("8766")
+    (home / "daemon.port").write_text("8766", encoding="utf-8")
     assert post_tool_async_hook._port_file_url() == "http://127.0.0.1:8766"
 
 
@@ -96,7 +96,7 @@ def test_async_hook_env_unset_falls_back_to_port_file(
     home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("SLM_HOOK_DAEMON_URL", raising=False)
-    (home / "daemon.port").write_text("8766")
+    (home / "daemon.port").write_text("8766", encoding="utf-8")
     assert post_tool_async_hook._sanitised_daemon_url() == "http://127.0.0.1:8766"
 
 
@@ -106,7 +106,7 @@ def test_async_hook_non_loopback_env_falls_back_to_port_file(
     # S8-SEC-02: a hostile non-loopback URL must be refused — and the
     # fallback must still honour the per-user port, not hard-coded 8765.
     monkeypatch.setenv("SLM_HOOK_DAEMON_URL", "http://evil.example.com:9999")
-    (home / "daemon.port").write_text("8766")
+    (home / "daemon.port").write_text("8766", encoding="utf-8")
     assert post_tool_async_hook._sanitised_daemon_url() == "http://127.0.0.1:8766"
 
 

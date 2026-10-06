@@ -80,6 +80,10 @@ describe('od-graph draw-call integration — Deliverable C', function () {
         arc(x, y, r)   { calls.arc++; if (recording) recorded.push({ x, y, r }); },
         clearRect()    { calls.clearRect++; },
         fillText()     { calls.fillText++;  },
+        // od-graph.js's label-clipping (clipLabel) measures text before
+        // drawing it — a fixed per-character width is close enough for a
+        // stub that only needs to return *something* numeric.
+        measureText(s) { return { width: String(s || '').length * 6 }; },
         fill()         { calls.fill++;      },
         stroke()       { calls.stroke++;    },
         beginPath()    {},

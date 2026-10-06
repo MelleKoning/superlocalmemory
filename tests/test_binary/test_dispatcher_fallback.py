@@ -63,7 +63,7 @@ def _fake_python_env(tmp_path: Path) -> tuple[dict, Path]:
         fi
         echo "PYFALLBACK $*"
         exit 0
-    """))
+    """), encoding="utf-8")
     fake_py.chmod(fake_py.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP
                   | stat.S_IXOTH)
 
@@ -93,7 +93,8 @@ def test_dispatcher_falls_back_when_SLM_HOOK_BINARY_DISABLED_set(tmp_path):
     fake_bin.write_text(
         "#!/usr/bin/env bash\n"
         'echo BINARY_RAN\n'
-        'exit 0\n'
+        'exit 0\n',
+        encoding="utf-8",
     )
     fake_bin.chmod(fake_bin.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP
                    | stat.S_IXOTH)
@@ -111,7 +112,8 @@ def test_dispatcher_prefers_binary_when_present_and_enabled(tmp_path):
     fake_bin.write_text(
         "#!/usr/bin/env bash\n"
         'echo BINARY_RAN\n'
-        'exit 0\n'
+        'exit 0\n',
+        encoding="utf-8",
     )
     fake_bin.chmod(fake_bin.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP
                    | stat.S_IXOTH)
@@ -129,7 +131,8 @@ def test_dispatcher_does_not_run_binary_for_other_commands(tmp_path):
     """Only `hook user_prompt_submit` should hit the binary."""
     fake_bin = tmp_path / "slm-hook"
     fake_bin.write_text(
-        "#!/usr/bin/env bash\necho BINARY_RAN\nexit 0\n"
+        "#!/usr/bin/env bash\necho BINARY_RAN\nexit 0\n",
+        encoding="utf-8",
     )
     fake_bin.chmod(fake_bin.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP
                    | stat.S_IXOTH)
@@ -192,7 +195,7 @@ def test_postinstall_module_exports(tmp_path):
             process.exit(4);
         }}
         console.log('OK');
-    """))
+    """), encoding="utf-8")
     proc = subprocess.run(
         ["node", str(probe)],
         capture_output=True, text=True, timeout=15,
@@ -226,7 +229,7 @@ def test_postinstall_aborts_on_sha_mismatch(tmp_path):
             }}
             console.log('MISMATCH_OK');
         }})();
-    """))
+    """), encoding="utf-8")
     proc = subprocess.run(
         ["node", str(probe)],
         capture_output=True, text=True, timeout=15,

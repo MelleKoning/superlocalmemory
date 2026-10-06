@@ -76,37 +76,45 @@ class EraseOutcome:
 
 
 def reconcile_pending_erasures(engine: Any, *, limit: int = 20) -> int:
-    """Re-prove this profile's unfinished erasures. Returns how many closed."""
+    """Re-prove every profile's unfinished erasures. Returns how many closed.
+
+    Not only the active profile's: an erasure made in another profile (a
+    profile used earlier, or a remote key's own) must not wait until this
+    computer switches back to it. Each is proven inside its own profile.
+    """
     db = getattr(engine, "_db", None)
-    profile_id = getattr(engine, "_profile_id", None)
-    if db is None or not profile_id:
+    if db is None:
         return 0
     ledger = ObligationLedger()
     with db.raw_connection() as conn:
-        op_ids = ledger.unfinished_erase_operation_ids(
-            conn, profile_id=profile_id, limit=limit,
+        due = ledger.due_erasures_in_every_profile(
+            conn, limit=limit,
             backoff=(MAX_REPROOFS, RECHECK_BASE_S, RECHECK_CAP_S),
         )
     closed = 0
-    for operation_id in op_ids:
+    for operation_id, profile_id in due:
         try:
-            closed += int(reconcile_erase_operation(engine, operation_id).closed)
+            closed += int(reconcile_erase_operation(
+                engine, operation_id, profile_id=profile_id).closed)
         except Exception as exc:  # noqa: BLE001
             logger.warning("erase redrive failed for %s: %s", operation_id, exc)
     return closed
 
 
-def reconcile_erase_operation(engine: Any, operation_id: str) -> EraseOutcome:
+def reconcile_erase_operation(engine: Any, operation_id: str, *,
+                              profile_id: str | None = None) -> EraseOutcome:
     """Re-prove every unfinished erase obligation of one operation, now.
 
     Ignores the back-off: this is also what an explicit Reconcile runs.
+    ``profile_id`` is the profile the erasure belongs to (default: the active
+    one); only that profile's obligations and data are read or marked.
     """
     from superlocalmemory.core.transactions.concrete_owners import (
         build_erasure_service,
     )
 
     db = engine._db
-    profile_id = engine._profile_id
+    profile_id = profile_id or engine._profile_id
     ledger = ObligationLedger()
     with db.raw_connection() as conn:
         obligations = ledger.fetch(conn, operation_id)

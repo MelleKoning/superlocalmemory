@@ -13,6 +13,8 @@ from argparse import Namespace
 
 import pytest
 
+from tests._portable import child_env_base
+
 from superlocalmemory.cli import commands
 from superlocalmemory.storage import schema
 from superlocalmemory.storage.database import DatabaseManager
@@ -144,7 +146,7 @@ def test_list_help_matches_what_text_mode_shows(tmp_path) -> None:
     import subprocess
     import sys
 
-    env = dict(os.environ, HOME=str(tmp_path), SLM_DATA_DIR=str(tmp_path / "slm"))
+    env = dict(os.environ, SLM_DATA_DIR=str(tmp_path / "slm"), **child_env_base(tmp_path))
     out = subprocess.run(
         [sys.executable, "-m", "superlocalmemory.cli.main", "list", "--help"],
         capture_output=True, text=True, timeout=60, env=env,

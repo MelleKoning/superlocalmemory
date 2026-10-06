@@ -27,7 +27,7 @@ def test_valid_update_persists(tmp_path, monkeypatch):
     monkeypatch.setattr(evo_route, "MEMORY_DIR", tmp_path)
     res = _call(EvolutionConfigUpdate(enabled=True, mutation_model="haiku"))
     assert res["ok"] is True
-    saved = json.loads((tmp_path / "config.json").read_text())
+    saved = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
     assert saved["evolution"]["enabled"] is True
     assert saved["evolution"]["mutation_model"] == "haiku"
 
@@ -45,17 +45,17 @@ def test_auto_normalized_to_empty(tmp_path, monkeypatch):
     monkeypatch.setattr(evo_route, "MEMORY_DIR", tmp_path)
     res = _call(EvolutionConfigUpdate(verify_model="auto"))
     assert res["ok"] is True
-    saved = json.loads((tmp_path / "config.json").read_text())
+    saved = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
     assert saved["evolution"]["verify_model"] == ""
 
 
 def test_partial_update_preserves_other_keys(tmp_path, monkeypatch):
     monkeypatch.setattr(evo_route, "MEMORY_DIR", tmp_path)
     (tmp_path / "config.json").write_text(json.dumps(
-        {"mode": "b", "evolution": {"enabled": True, "backend": "ollama"}}))
+        {"mode": "b", "evolution": {"enabled": True, "backend": "ollama"}}), encoding="utf-8")
     res = _call(EvolutionConfigUpdate(mutation_model="sonnet"))
     assert res["ok"] is True
-    saved = json.loads((tmp_path / "config.json").read_text())
+    saved = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
     assert saved["mode"] == "b"                          # untouched
     assert saved["evolution"]["backend"] == "ollama"     # untouched
     assert saved["evolution"]["mutation_model"] == "sonnet"

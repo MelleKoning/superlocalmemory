@@ -40,7 +40,7 @@ def _make_loader(tmp_path: Path):
         cp = _config_path(tmp_path)
         if cp.exists():
             try:
-                data = json.loads(cp.read_text())
+                data = json.loads(cp.read_text(encoding="utf-8"))
                 return data.get("auto_invoke", {})
             except Exception:
                 pass
@@ -54,11 +54,11 @@ def _make_saver(tmp_path: Path):
         cfg: dict = {}
         if cp.exists():
             try:
-                cfg = json.loads(cp.read_text())
+                cfg = json.loads(cp.read_text(encoding="utf-8"))
             except Exception:
                 pass
         cfg["auto_invoke"] = auto_invoke_data
-        cp.write_text(json.dumps(cfg, indent=2))
+        cp.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     return _save
 
 

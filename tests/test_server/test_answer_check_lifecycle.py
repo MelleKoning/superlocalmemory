@@ -106,7 +106,7 @@ def _managed_install(tmp_path: Path) -> Path:
     model = run_dir / "hf-cache" / "model"
     model.mkdir(parents=True)
     (run_dir / ".slm-managed").write_text(json.dumps(
-        {"python": str(python), "model_path": str(model), "verified": True}))
+        {"python": str(python), "model_path": str(model), "verified": True}), encoding="utf-8")
     return run_dir
 
 
@@ -280,5 +280,5 @@ def test_auto_is_shown_as_what_it_does_and_is_not_a_choice(client, engine, tmp_p
     body = client.get("/api/v3/answer-check").json()
     assert body["mode"] == "auto" and body["active"] == "off"
     assert client.post("/api/v3/answer-check/mode", json={"mode": "auto"}).status_code == 422
-    doc = (Path(answer_check.__file__).resolve().parents[4] / "docs" / "answer-check.md").read_text()
+    doc = (Path(answer_check.__file__).resolve().parents[4] / "docs" / "answer-check.md").read_text(encoding="utf-8")
     assert "starting state" in doc and "never offered" in doc.lower()

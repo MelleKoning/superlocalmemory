@@ -31,7 +31,7 @@ OLD_DUMP = {
 
 def _old_config(tmp_path: Path) -> Path:
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({"mode": "a", "math": OLD_DUMP}))
+    path.write_text(json.dumps({"mode": "a", "math": OLD_DUMP}), encoding="utf-8")
     return path
 
 
@@ -54,7 +54,7 @@ def test_three_commands_one_notice(tmp_path, monkeypatch, caplog) -> None:
     # The behaviour the notice describes still holds on every load.
     assert all(c.math.sheaf_at_encoding is False for c in loaded)
     # And the user's file is not rewritten behind their back.
-    assert json.loads(path.read_text())["math"] == OLD_DUMP
+    assert json.loads(path.read_text(encoding="utf-8"))["math"] == OLD_DUMP
 
 
 def test_a_second_install_gets_its_own_notice(tmp_path, monkeypatch, caplog) -> None:

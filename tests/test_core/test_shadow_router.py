@@ -138,7 +138,7 @@ def test_shadow_router_route_query_uses_install_token(
         profile_id="p",
     )
     # Deterministic verification: manual hash matches implementation.
-    token_b = new_token_file.read_text().strip()
+    token_b = new_token_file.read_text(encoding="utf-8").strip()
     expected_h = hashlib.sha256(
         (token_b + "query-abc").encode("utf-8"),
     ).hexdigest()[:8]

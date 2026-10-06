@@ -268,8 +268,12 @@
         if (_st.rootId !== id || _st.requestSeq !== requestSeq) return;
         var el = document.getElementById(id + '-list');
         if (el) {
+          // --danger-text, not --danger: 4.3:1 on this plain page
+          // background, under WCAG AA (4.5:1). --danger-text already
+          // passes comfortably here too (5.75:1/6.57:1) — same token
+          // used for .badge.danger's self-tinted case elsewhere.
           el.innerHTML = '<div style="padding:24px;text-align:center;' +
-            'color:var(--danger);font-size:13px">Failed: ' + _esc(err.message) + '</div>';
+            'color:var(--danger-text);font-size:13px">Failed: ' + _esc(err.message) + '</div>';
         }
       });
   }

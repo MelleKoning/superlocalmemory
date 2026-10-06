@@ -151,7 +151,7 @@ def test_the_api_key_works_as_a_bearer_token_for_remote_mcp() -> None:
     from superlocalmemory.infra.auth_middleware import API_KEY_FILE
     from superlocalmemory.server.remote_access import authenticate_remote
 
-    Path(API_KEY_FILE).write_text(_KEY + "\n")
+    Path(API_KEY_FILE).write_text(_KEY + "\n", encoding="utf-8")
     principal = authenticate_remote({"authorization": f"Bearer {_KEY}"})
     assert principal is not None and principal.kind == "legacy-api-key"
     assert principal.scope == "write"

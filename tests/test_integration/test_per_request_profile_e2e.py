@@ -91,10 +91,12 @@ def _child_env(data_root: Path, port: int, home: Path, cache_root: Path) -> dict
     (offline so a cold cache can never trigger a network fetch). Proxy
     variables are stripped so loopback HTTP cannot be middle-boxed.
     """
+    from tests._portable import child_env_base
+
     env = {name: os.environ[name] for name in _PASSTHROUGH_VARS if name in os.environ}
+    env.update(child_env_base(home))  # HOME, plus what Windows cannot run without
     env.update(
         {
-            "HOME": str(home),
             "PYTHONPATH": str(SRC_ROOT),
             "SLM_DATA_DIR": str(data_root),
             "SLM_DAEMON_PORT": str(port),
@@ -168,11 +170,9 @@ def test_only_production_port_daemons_count_as_foreign() -> None:
 
 
 def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+    from superlocalmemory.core.platform_utils import is_pid_alive
+
+    return is_pid_alive(pid)  # not os.kill(pid, 0): that is Ctrl+C on Windows
 
 
 class _RpcClient:

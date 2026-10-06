@@ -60,7 +60,8 @@ def test_no_unrouted_atomic_facts_inserts() -> None:
 def test_guard_detects_a_synthetic_violation(tmp_path) -> None:
     # Prove the tripwire actually fires on an unrouted insert.
     (tmp_path / "rogue.py").write_text(
-        "db.execute('INSERT INTO atomic_facts (fact_id) VALUES (1)')\n"
+        "db.execute('INSERT INTO atomic_facts (fact_id) VALUES (1)')\n",
+        encoding="utf-8",
     )
     assert _offenders(tmp_path, frozenset()) == ["rogue.py"]
 
@@ -68,6 +69,7 @@ def test_guard_detects_a_synthetic_violation(tmp_path) -> None:
 def test_guard_ignores_fts_shadow_table(tmp_path) -> None:
     # The FTS5 shadow table must NOT be flagged (it is not a fact-row write).
     (tmp_path / "fts.py").write_text(
-        "c.execute('INSERT INTO atomic_facts_fts (rowid, content) VALUES (1, x)')\n"
+        "c.execute('INSERT INTO atomic_facts_fts (rowid, content) VALUES (1, x)')\n",
+        encoding="utf-8",
     )
     assert _offenders(tmp_path, frozenset()) == []

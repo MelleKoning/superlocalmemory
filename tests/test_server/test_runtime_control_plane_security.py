@@ -135,14 +135,15 @@ def test_evolution_reads_require_read(monkeypatch, tmp_path):
 def test_enable_preserves_selected_backend(monkeypatch, tmp_path):
     monkeypatch.setattr(evolution, "_require_manage", lambda request: None)
     (tmp_path / "config.json").write_text(
-        json.dumps({"evolution": {"enabled": False, "backend": "ollama"}})
+        json.dumps({"evolution": {"enabled": False, "backend": "ollama"}}),
+        encoding="utf-8",
     )
     client = _evolution_client(monkeypatch, tmp_path)
 
     response = client.post("/api/evolution/enable")
 
     assert response.status_code == 200
-    saved = json.loads((tmp_path / "config.json").read_text())
+    saved = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
     assert saved["evolution"] == {"enabled": True, "backend": "ollama"}
 
 

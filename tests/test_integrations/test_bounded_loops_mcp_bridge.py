@@ -87,14 +87,14 @@ def test_producer_identity_binds_the_console_launcher_to_its_package_source(
     venv = tmp_path / "venv"
     launcher = venv / "bin" / "bounded-loops-mcp"
     launcher.parent.mkdir(parents=True)
-    launcher.write_text(f"#!{venv / 'bin' / 'python'}\n")
-    (venv / "bin" / "python").write_text("#!/bin/sh\n")
+    launcher.write_text(f"#!{venv / 'bin' / 'python'}\n", encoding="utf-8")
+    (venv / "bin" / "python").write_text("#!/bin/sh\n", encoding="utf-8")
     source = venv / "lib" / "python3.13" / "site-packages" / "bounded_loops" / "mcp_server.py"
     source.parent.mkdir(parents=True)
-    source.write_text("def main(): return 0\n")
+    source.write_text("def main(): return 0\n", encoding="utf-8")
 
     original = _producer_identity(launcher)
-    source.write_text("def main(): return 1\n")
+    source.write_text("def main(): return 1\n", encoding="utf-8")
     changed = _producer_identity(launcher)
 
     assert original.startswith("sha256:")

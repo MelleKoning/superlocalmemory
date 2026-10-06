@@ -40,12 +40,12 @@ def _save(db, content, project=None, profile="default") -> str:
 
 
 def _five(db) -> list[str]:
-    values = ("acme-billing", "/Users/dev/work/acme-billing", "ACME-Billing",
-              "/Users/dev/work/acme-billing/", " acme-billing ")
+    values = ("acme-billing", "/Users/alice/work/acme-billing", "ACME-Billing",
+              "/Users/alice/work/acme-billing/", " acme-billing ")
     return [_save(db, f"Billing decision number {i}.", project=v) for i, v in enumerate(values)]
 
 
-@pytest.mark.parametrize("target", ["acme-billing", "/Users/dev/work/acme-billing",
+@pytest.mark.parametrize("target", ["acme-billing", "/Users/alice/work/acme-billing",
                                     "ACME-BILLING", "/somewhere/else/acme-billing/"])
 def test_summary_lists_memories_saved_under_the_project(db, target) -> None:
     ids = _five(db)
@@ -63,11 +63,11 @@ def test_summary_lists_memories_saved_under_the_project(db, target) -> None:
 def test_tool_events_match_by_name_too(db) -> None:
     db.execute(
         "INSERT INTO tool_events (session_id, profile_id, project_path, tool_name, event_type,"
-        " created_at) VALUES ('s1', 'default', '/Users/dev/work/acme-billing/', 'Bash', 'call',"
+        " created_at) VALUES ('s1', 'default', '/Users/alice/work/acme-billing/', 'Bash', 'call',"
         " '2026-10-04T10:00:00Z')")
     db.execute(
         "INSERT INTO tool_events (session_id, profile_id, project_path, tool_name, event_type,"
-        " created_at) VALUES ('s2', 'default', '/Users/dev/work/acme-billing-v2', 'Edit',"
+        " created_at) VALUES ('s2', 'default', '/Users/alice/work/acme-billing-v2', 'Edit',"
         " 'call', '2026-10-04T10:00:00Z')")
     result = generate_project_work_log(db.db_path, "acme-billing", "default")
     assert result.metadata["event_count"] == 1

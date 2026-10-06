@@ -27,7 +27,6 @@ message is withheld like any other host detail.
 
 from __future__ import annotations
 
-import getpass
 import json
 import os
 import re
@@ -84,7 +83,9 @@ def _host_strings() -> tuple[str, ...]:
     except Exception:  # noqa: BLE001
         pass
     try:
-        user = getpass.getuser()
+        from superlocalmemory.core.platform_utils import current_user_name
+
+        user = current_user_name()
         if len(user) >= 3:
             values.append(user)
     except Exception:  # noqa: BLE001

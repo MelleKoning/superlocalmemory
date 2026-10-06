@@ -137,7 +137,7 @@ def test_doctor_no_crash_when_metrics_empty_and_db_absent(tmp_path: Path):
     slm_dir = tmp_path / ".superlocalmemory"
     slm_dir.mkdir(parents=True, exist_ok=True)
     optimize_json = slm_dir / "optimize.json"
-    optimize_json.write_text(json.dumps({"enabled": True}))
+    optimize_json.write_text(json.dumps({"enabled": True}), encoding="utf-8")
 
     # ConfigStore resolves its path from the MODULE-LEVEL _DEFAULT_CONFIG_PATH
     # (bound at import via Path.home()). Patching Path.home alone does NOT

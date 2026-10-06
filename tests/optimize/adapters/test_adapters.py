@@ -75,7 +75,7 @@ def _enable_optimize_config(tmp_path: Path, *, proxy: bool = True, enabled: bool
     cfg_path.write_text(json.dumps({
         "enabled": enabled, "proxy_enabled": proxy,
         "cache_enabled": True, "compress_enabled": False,
-    }))
+    }), encoding="utf-8")
     store = ConfigStore(config_path=cfg_path, poll_interval=3600.0)
     _set_config_store(store)
     return store
@@ -267,7 +267,7 @@ def test_wrap_agent_settings_file(tmp_path: Path) -> None:
         rc = wrap_agent("claude-settings", [])
         assert rc == 0
         assert settings_path.exists()
-        data = json.loads(settings_path.read_text())
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
         assert data["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8765"
     finally:
         AGENT_REGISTRY["claude-settings"] = original
@@ -301,7 +301,7 @@ def test_wrap_agent_config_file_cline(tmp_path: Path) -> None:
     try:
         rc = wrap_agent("cline", [])
         assert rc == 0
-        data = json.loads(settings_path.read_text())
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
         assert data["cline.openAiApiBase"] == "http://127.0.0.1:8765/v1"
     finally:
         AGENT_REGISTRY["cline"] = original
@@ -312,7 +312,7 @@ def test_wrap_agent_config_file_existing_settings(tmp_path: Path) -> None:
     """Existing settings.json is preserved (only config_key is updated)."""
     _enable_optimize_config(tmp_path)
     settings_path = tmp_path / "settings.json"
-    settings_path.write_text(json.dumps({"editor.fontSize": 14, "cline.openAiApiBase": "old"}))
+    settings_path.write_text(json.dumps({"editor.fontSize": 14, "cline.openAiApiBase": "old"}), encoding="utf-8")
     spec = dict(AGENT_REGISTRY["cline"])
     spec["config_path"] = str(settings_path)
     original = AGENT_REGISTRY["cline"]
@@ -320,7 +320,7 @@ def test_wrap_agent_config_file_existing_settings(tmp_path: Path) -> None:
     try:
         rc = wrap_agent("cline", [])
         assert rc == 0
-        data = json.loads(settings_path.read_text())
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
         assert data["editor.fontSize"] == 14
         assert data["cline.openAiApiBase"] == "http://127.0.0.1:8765/v1"
     finally:
@@ -412,7 +412,7 @@ def test_wrap_agent_settings_file_corrupt_existing(tmp_path: Path) -> None:
     """Corrupt existing settings.json → treat as empty, still write."""
     _enable_optimize_config(tmp_path)
     settings_path = tmp_path / "settings.json"
-    settings_path.write_text("{not valid json")
+    settings_path.write_text("{not valid json", encoding="utf-8")
     spec = dict(AGENT_REGISTRY["claude-settings"])
     spec["settings_path"] = str(settings_path)
     original = AGENT_REGISTRY["claude-settings"]
@@ -420,7 +420,7 @@ def test_wrap_agent_settings_file_corrupt_existing(tmp_path: Path) -> None:
     try:
         rc = wrap_agent("claude-settings", [])
         assert rc == 0
-        data = json.loads(settings_path.read_text())
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
         assert data["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8765"
     finally:
         AGENT_REGISTRY["claude-settings"] = original
@@ -431,7 +431,7 @@ def test_atomic_write_text_chmod_failure(tmp_path: Path) -> None:
     """chmod failure on _atomic_write_text is silently swallowed."""
     p = tmp_path / "x.txt"
     _atomic_write_text(p, "hello")
-    assert p.read_text() == "hello"
+    assert p.read_text(encoding="utf-8") == "hello"
 
 
 def test_vscode_user_dir_returns_path() -> None:
@@ -467,7 +467,7 @@ def test_openai_async_cache_miss_then_hit(tmp_path: Path) -> None:
     import asyncio
 
     p = tmp_path / "oc.json"
-    p.write_text(json.dumps({"enabled": True, "cache_enabled": True}))
+    p.write_text(json.dumps({"enabled": True, "cache_enabled": True}), encoding="utf-8")
     from superlocalmemory.optimize.config.store import ConfigStore
 
     store = ConfigStore(config_path=p, poll_interval=3600.0)
@@ -505,7 +505,7 @@ def test_openai_async_cache_miss_then_hit(tmp_path: Path) -> None:
 def test_openai_legacy_functions_skips_cache(tmp_path: Path) -> None:
     """functions= (legacy param) must skip cache — covers line 62 in _should_cache."""
     p = tmp_path / "oc.json"
-    p.write_text(json.dumps({"enabled": True, "cache_enabled": True}))
+    p.write_text(json.dumps({"enabled": True, "cache_enabled": True}), encoding="utf-8")
     from superlocalmemory.optimize.config.store import ConfigStore
 
     store = ConfigStore(config_path=p, poll_interval=3600.0)
@@ -557,7 +557,7 @@ def test_anthropic_async_cache_miss_then_hit(tmp_path: Path) -> None:
     import asyncio
 
     p = tmp_path / "oc.json"
-    p.write_text(json.dumps({"enabled": True, "cache_enabled": True}))
+    p.write_text(json.dumps({"enabled": True, "cache_enabled": True}), encoding="utf-8")
     from superlocalmemory.optimize.config.store import ConfigStore
 
     store = ConfigStore(config_path=p, poll_interval=3600.0)
@@ -600,7 +600,7 @@ def test_anthropic_async_cache_miss_then_hit(tmp_path: Path) -> None:
 def test_anthropic_sync_cache_set_serialization_failure_does_not_raise(tmp_path: Path) -> None:
     """If json.dumps(response) raises, cache store failure must be swallowed."""
     p = tmp_path / "oc.json"
-    p.write_text(json.dumps({"enabled": True, "cache_enabled": True}))
+    p.write_text(json.dumps({"enabled": True, "cache_enabled": True}), encoding="utf-8")
     from superlocalmemory.optimize.config.store import ConfigStore
 
     store = ConfigStore(config_path=p, poll_interval=3600.0)

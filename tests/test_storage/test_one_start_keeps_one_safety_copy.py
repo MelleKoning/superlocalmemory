@@ -260,7 +260,7 @@ class TestWhenTheCopyMustNotBeReused:
         lease.write_text(json.dumps({
             "owner_id": "old-daemon", "pid": os.getppid(),
             "database": str(memory_db), "claimed_at_ms": 1,
-        }))
+        }), encoding="utf-8")
         _forget_migration(memory_db, "M004_cross_platform_sync_log")
         _forget_migration(memory_db, "M030_entity_explorer_indexes")
 
@@ -273,7 +273,7 @@ class TestWhenTheCopyMustNotBeReused:
 
         learning_db, memory_db, snapshots = store
         lease = memory_db.with_name(memory_db.name + ".writer.lock")
-        lease.write_text(json.dumps({"pid": 2 ** 22 + 12345, "claimed_at_ms": 1}))
+        lease.write_text(json.dumps({"pid": 2 ** 22 + 12345, "claimed_at_ms": 1}), encoding="utf-8")
         _forget_migration(memory_db, "M004_cross_platform_sync_log")
         _forget_migration(memory_db, "M030_entity_explorer_indexes")
 

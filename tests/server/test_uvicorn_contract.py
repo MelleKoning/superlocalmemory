@@ -31,7 +31,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def test_installed_uvicorn_is_the_pinned_and_tested_version() -> None:
-    pin = re.search(r'"uvicorn==([0-9.]+)"', (REPO / "pyproject.toml").read_text())
+    pin = re.search(r'"uvicorn==([0-9.]+)"', (REPO / "pyproject.toml").read_text(encoding="utf-8"))
     assert pin, "pyproject.toml must pin uvicorn exactly (remote access relies on internals)"
     assert uvicorn.__version__ == pin.group(1)
     assert remote_listener.uvicorn_problem() is None

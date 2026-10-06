@@ -37,7 +37,7 @@ def test_only_a_domain_separated_digest_is_stored(store) -> None:
     import hashlib
 
     _, secret = store.add("a", "read", profile="default")
-    raw = store.path.read_text()
+    raw = store.path.read_text(encoding="utf-8")
     assert secret not in raw
     assert hashlib.sha256(secret.encode()).hexdigest() not in raw
     assert remote_keys.digest_secret(secret) in raw
@@ -98,12 +98,12 @@ def test_wrong_owner_fails_closed(store, monkeypatch) -> None:
 
 def test_unknown_version_or_corrupt_store_fails_closed(store) -> None:
     _, secret = store.add("a", "write", profile="default")
-    data = json.loads(store.path.read_text())
+    data = json.loads(store.path.read_text(encoding="utf-8"))
     data["version"] = 99
-    store.path.write_text(json.dumps(data))
+    store.path.write_text(json.dumps(data), encoding="utf-8")
     os.chmod(store.path, 0o600)
     assert store.verify(secret) is None
-    store.path.write_text("{not json")
+    store.path.write_text("{not json", encoding="utf-8")
     assert store.verify(secret) is None
 
 
@@ -145,7 +145,7 @@ def _write_v1_store(store, secrets_by_name: dict[str, str], revoked: set[str] = 
              "digest": remote_keys.digest_secret(secret), "created_at": "2026-09-01T00:00:00+00:00",
              "revoked_at": "2026-09-02T00:00:00+00:00" if name in revoked else None}
             for i, (name, secret) in enumerate(secrets_by_name.items())]
-    store.path.write_text(json.dumps({"version": 1, "keys": keys}))
+    store.path.write_text(json.dumps({"version": 1, "keys": keys}), encoding="utf-8")
     os.chmod(store.path, 0o600)
 
 
@@ -169,7 +169,7 @@ def test_the_profile_is_stored_listed_and_returned_by_verify(store) -> None:
     assert store.verify(secret).profile == "clientx"
     assert record.public()["profile"] == "clientx"
     assert record.public()["profile_source"] == "chosen"
-    data = json.loads(store.path.read_text())
+    data = json.loads(store.path.read_text(encoding="utf-8"))
     assert data["version"] == 2 and data["keys"][0]["profile"] == "clientx"
 
 
@@ -189,7 +189,7 @@ def test_bind_unbound_binds_active_old_keys_once_and_says_how(store) -> None:
     assert key.profile == "work" and key.profile_source == "bound-on-upgrade"
     assert store.bind_unbound("other") == ()  # once only: a later switch changes nothing
     assert store.verify(old).profile == "work"
-    data = json.loads(store.path.read_text())
+    data = json.loads(store.path.read_text(encoding="utf-8"))
     assert data["version"] == 2
     revoked = next(k for k in data["keys"] if k["name"] == "gone")
     assert revoked["revoked_at"] is not None and revoked.get("profile") is None
@@ -208,9 +208,9 @@ def test_binding_never_revives_a_revoked_key(store) -> None:
 def test_a_tampered_binding_drops_the_key_rather_than_unbinding_it(store, profile,
                                                                   source) -> None:
     _, secret = store.add("a", "write", profile="work")
-    data = json.loads(store.path.read_text())
+    data = json.loads(store.path.read_text(encoding="utf-8"))
     data["keys"][0].update(profile=profile, profile_source=source)
-    store.path.write_text(json.dumps(data))
+    store.path.write_text(json.dumps(data), encoding="utf-8")
     os.chmod(store.path, 0o600)
     assert store.verify(secret) is None
 

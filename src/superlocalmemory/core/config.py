@@ -26,6 +26,21 @@ from superlocalmemory.storage.models import Mode
 logger = logging.getLogger(__name__)
 
 
+def _restrict_config_to_owner(path: Path) -> None:
+    """Make the (still empty) config file readable by its owner only.
+
+    config.json can hold API keys. POSIX: 0o600. Windows, where mode bits do
+    nothing: the owner-only access list. Best effort — failing to tighten it
+    must not stop settings from being saved — but never silent.
+    """
+    from superlocalmemory.infra.owner_only_acl import restrict_to_owner
+
+    try:
+        restrict_to_owner(path)
+    except OSError as exc:
+        logger.warning("could not make %s readable only by you: %s", path.name, exc)
+
+
 # ---------------------------------------------------------------------------
 # Canonical limits — single source of truth across all surfaces
 # ---------------------------------------------------------------------------
@@ -1351,7 +1366,7 @@ class SLMConfig:
             try:
                 import json as _json
                 _disk_mode = str(
-                    _json.loads(path.read_text()).get("mode", "")
+                    _json.loads(path.read_text(encoding="utf-8")).get("mode", "")
                 ).lower()
                 _active_mode = cls.read_current_mode(path.parent)
                 if _disk_mode and _active_mode and _disk_mode != _active_mode:
@@ -1370,7 +1385,7 @@ class SLMConfig:
 
         import json
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as exc:
             # An already-corrupt/truncated config.json must NOT brick every `slm`
             # call — degrade to the Mode-A default and warn rather than raise.
@@ -1701,7 +1716,7 @@ class SLMConfig:
         existing = {}
         if path.exists():
             try:
-                existing = json.loads(path.read_text())
+                existing = json.loads(path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 pass
 
@@ -1866,6 +1881,7 @@ class SLMConfig:
         )
         _tmp = Path(_tmp_name)
         try:
+            _restrict_config_to_owner(_tmp)
             with _os.fdopen(_fd, "w", encoding="utf-8") as _handle:
                 json.dump(data, _handle, indent=2)
                 _handle.write("\n")

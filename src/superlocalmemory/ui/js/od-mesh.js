@@ -189,7 +189,7 @@
             // Conversation log
             '<div class="ask-log" id="od-mesh-cv-log"' +
               ' style="flex:1;max-height:none;padding:16px;display:flex;flex-direction:column;gap:10px">' +
-              '<div style="text-align:center;color:var(--fg-3);font-size:13px;margin-top:30px">' +
+              '<div style="text-align:center;color:var(--fg-2);font-size:13px;margin-top:30px">' +
                 'Select a peer to start messaging' +
               '</div>' +
             '</div>' +

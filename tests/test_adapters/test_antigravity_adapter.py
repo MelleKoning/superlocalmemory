@@ -54,7 +54,7 @@ def test_skill_md_frontmatter_has_name_and_description(tmp_path, monkeypatch,
                                                        fake_recall):
     adapter = _make_adapter(tmp_path, recall=fake_recall, monkeypatch=monkeypatch)
     adapter.sync()
-    text = adapter.target_path.read_text()
+    text = adapter.target_path.read_text(encoding="utf-8")
     assert text.startswith("---\n")
     end = text.index("\n---\n", 4)
     block = text[4:end]
@@ -136,7 +136,7 @@ def test_code_never_contains_banned_plural_path():
     permitted because they document the rule — they never execute."""
     import ast
     from superlocalmemory.hooks import antigravity_adapter as mod
-    src = Path(mod.__file__).read_text()
+    src = Path(mod.__file__).read_text(encoding="utf-8")
     tree = ast.parse(src)
     # Drop the module docstring node if present.
     if (tree.body and isinstance(tree.body[0], ast.Expr)

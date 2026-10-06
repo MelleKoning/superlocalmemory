@@ -28,6 +28,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._portable import child_env_base
+
 REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "src"
 PRODUCTION_PORTS = {8765, 8767}
@@ -51,7 +53,8 @@ def _free_port() -> int:
 def _env(root: Path, port: int) -> dict:
     env = {k: os.environ[k] for k in ("PATH", "LANG", "LC_ALL", "TMPDIR") if k in os.environ}
     env.update({
-        "HOME": str(root / "home"), "PYTHONPATH": str(SRC), "SLM_DATA_DIR": str(root / "data"),
+        **child_env_base(root / "home"), "PYTHONPATH": str(SRC),
+        "SLM_DATA_DIR": str(root / "data"),
         "SLM_DAEMON_PORT": str(port), "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
         "HF_HOME": str(root / "cache" / "hf"), "XDG_CACHE_HOME": str(root / "cache"),
         "SENTENCE_TRANSFORMERS_HOME": str(root / "cache" / "st"), "CI": "1",
@@ -107,7 +110,7 @@ class Daemon:
             self.proc.wait(timeout=20)
 
     def log_tail(self) -> str:
-        return (self.root / "daemon.log").read_text(errors="replace")[-4000:]
+        return (self.root / "daemon.log").read_text(errors="replace", encoding="utf-8")[-4000:]
 
     def fact_count(self) -> int:
         import sqlite3
@@ -252,7 +255,7 @@ def test_hook_token_never_leaves_loopback(pair, monkeypatch) -> None:
     assert json.loads(out.stdout.strip()) == f"http://127.0.0.1:{pair['h'].port}"
     # (b) A loopback name pointed at S's remote listener: plain HTTP is refused by TLS,
     #     and over HTTPS the hook endpoint does not exist there.
-    token = (pair["h"].root / "data" / ".install_token").read_text().strip()
+    token = (pair["h"].root / "data" / ".install_token").read_text(encoding="utf-8").strip()
     request = urllib.request.Request(f"http://localhost:{pair['port']}/internal/prewarm",
                                      data=b"{}", method="POST",
                                      headers={"X-SLM-Hook-Token": token})

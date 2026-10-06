@@ -192,7 +192,7 @@ def test_copy_private_never_takes_the_source_mode(tmp_path, open_umask) -> None:
 
 
 def test_dashboard_learning_backup_is_owner_only() -> None:
-    text = (REPO / "src/superlocalmemory/server/routes/learning.py").read_text()
+    text = (REPO / "src/superlocalmemory/server/routes/learning.py").read_text(encoding="utf-8")
     body = text[text.index("def learning_backup"):text.index("def learning_backup") + 900]
     assert "copy_private(" in body and "copy2(" not in body
 
@@ -224,7 +224,7 @@ def test_restore_safety_folder_is_owner_only(tmp_path, open_umask) -> None:
 
 
 def test_the_daemon_runs_the_pass_before_migrations() -> None:
-    source = (REPO / "src/superlocalmemory/server/unified_daemon.py").read_text()
+    source = (REPO / "src/superlocalmemory/server/unified_daemon.py").read_text(encoding="utf-8")
     call = source.index("tighten_private_files(_private_root)")
     assert call < source.index("_result = apply_all(_learning_db, _memory_db)")
     assert source.index("perform_pending_restore(") < call

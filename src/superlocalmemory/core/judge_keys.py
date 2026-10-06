@@ -273,6 +273,15 @@ class JudgeKeyStore:
             dir=secrets_dir, prefix=f".jev-{provider}.", suffix=".tmp"
         )
         try:
+            # Windows ignores 0o600: give the empty file an owner-only access
+            # list before the key goes in. Refuses (raises) if it cannot.
+            from superlocalmemory.infra.owner_only_acl import restrict_to_owner
+
+            try:
+                restrict_to_owner(Path(tmp_name))
+            except BaseException:
+                os.close(fd)  # so the clean-up below can delete it on Windows
+                raise
             with os.fdopen(fd, "w", encoding="ascii") as handle:
                 handle.write(key)
                 handle.flush()

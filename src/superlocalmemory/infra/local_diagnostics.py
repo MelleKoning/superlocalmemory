@@ -248,7 +248,11 @@ class LocalDiagnostics:
                 mode="wb", dir=output.parent, prefix=f".{output.name}.", delete=False,
             ) as temporary:
                 temporary_name = temporary.name
-                os.chmod(temporary_name, 0o600)
+                # Owner-only on every platform (on Windows an access list,
+                # as mode bits do nothing there), before any data goes in.
+                from superlocalmemory.infra.owner_only_acl import restrict_to_owner
+
+                restrict_to_owner(Path(temporary_name))
                 temporary.write(data)
                 temporary.flush()
                 os.fsync(temporary.fileno())

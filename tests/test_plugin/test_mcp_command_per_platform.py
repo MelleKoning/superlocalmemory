@@ -71,6 +71,15 @@ def test_windows_runs_cmd_with_the_installed_slm(name, mcp_json, root) -> None:
 
 
 @pytest.mark.parametrize("name, mcp_json, root", ENTRIES, ids=IDS)
+def test_windows_finds_comspec_whatever_its_case(name, mcp_json, root) -> None:
+    """A copy of the Windows environment made by Python spells it ``COMSPEC``;
+    the host still finds it, as Windows names are case-insensitive."""
+    env = {"COMSPEC": WINDOWS_ENV["ComSpec"]}
+    argv = expanded_argv(mcp_json, root.as_posix(), env, case_insensitive=True)
+    assert argv[0] == WINDOWS_ENV["ComSpec"], (name, argv)
+
+
+@pytest.mark.parametrize("name, mcp_json, root", ENTRIES, ids=IDS)
 def test_the_entry_sets_only_the_agent_id(name, mcp_json, root) -> None:
     assert set(declared_server(mcp_json).get("env", {})) == {"SLM_AGENT_ID"}
 

@@ -41,14 +41,14 @@ def test_config_file_roundtrip():
         "mode": "a",
         "scope": {"default_scope": "shared", "recall_include_global": False,
                   "recall_include_shared": True},
-    }))
+    }), encoding="utf-8")
     c = SLMConfig.load(d / "config.json")
     assert c.scope.default_scope == "shared"
     assert c.scope.recall_include_global is False
     assert c.scope.recall_include_shared is True
 
     c.save(config_path=d / "out.json")
-    back = json.loads((d / "out.json").read_text())
+    back = json.loads((d / "out.json").read_text(encoding="utf-8"))
     assert back["scope"] == {
         "default_scope": "shared",
         "recall_include_global": False,
@@ -64,7 +64,7 @@ def test_invalid_scope_in_config_does_not_brick_load():
         "mode": "a",
         "scope": {"default_scope": "bogus"},
         "scope_weights": {"personal": -5.0},
-    }))
+    }), encoding="utf-8")
     c = SLMConfig.load(d / "config.json")  # must not raise
     assert c.scope.default_scope == "personal"
     assert c.scope.recall_include_global is False
@@ -72,7 +72,7 @@ def test_invalid_scope_in_config_does_not_brick_load():
 
 def test_absent_scope_section_uses_defaults():
     d = Path(tempfile.mkdtemp())
-    (d / "config.json").write_text(json.dumps({"mode": "a"}))
+    (d / "config.json").write_text(json.dumps({"mode": "a"}), encoding="utf-8")
     c = SLMConfig.load(d / "config.json")
     assert c.scope.default_scope == "personal"
     # No scope section → opt-in defaults (shared off), matching 3.6.14 isolation.

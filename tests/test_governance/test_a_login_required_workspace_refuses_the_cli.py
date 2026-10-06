@@ -49,7 +49,7 @@ def workspace(tmp_path, monkeypatch):
     rbac.set_require_login(True)
 
     # The command line writes into whichever workspace is active.
-    (tmp_path / "profiles.json").write_text(json.dumps({"active_profile": "team"}))
+    (tmp_path / "profiles.json").write_text(json.dumps({"active_profile": "team"}), encoding="utf-8")
 
     return {"rbac": rbac, "boss": boss, "watcher": watcher, "path": tmp_path}
 
@@ -191,7 +191,7 @@ def test_a_present_but_uninterpretable_config_does_not_grant_owner_access(
     answer, because on an enterprise store that hands out owner access.
     """
     monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path))
-    (tmp_path / "config.toml").write_text('[deployment]\nmode = "enterprise"\n')
+    (tmp_path / "config.toml").write_text('[deployment]\nmode = "enterprise"\n', encoding="utf-8")
 
     import superlocalmemory.core.config as config_module
     from superlocalmemory.core.admission import _resolve_deployment

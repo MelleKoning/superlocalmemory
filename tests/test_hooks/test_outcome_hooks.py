@@ -100,7 +100,7 @@ def install_token(slm_home: Path, monkeypatch) -> str:
     """Pin a deterministic install token for HMAC tests."""
     token_file = slm_home / ".install_token"
     token = "a" * 64
-    token_file.write_text(token)
+    token_file.write_text(token, encoding="utf-8")
     token_file.chmod(0o600)
     # Purge any cached token from earlier tests.
     import superlocalmemory.core.security_primitives as _sec
@@ -387,7 +387,7 @@ def test_user_prompt_rehash_writes_requery_on_dup_topic(
         "last_prompt_ts_ms": int(time.time() * 1000),
         "last_outcome_id": "oid-rehash-1",
     }
-    (ss_dir / "sess-R.json").write_text(json.dumps(state))
+    (ss_dir / "sess-R.json").write_text(json.dumps(state), encoding="utf-8")
 
     payload = {"session_id": "sess-R", "prompt": prompt}
     rc, out = _invoke_hook(h.main, payload, monkeypatch)
@@ -424,7 +424,7 @@ def test_user_prompt_rehash_ignores_stale_prior(
         "last_prompt_ts_ms": stale_ts,
         "last_outcome_id": "oid-stale",
     }
-    (ss_dir / "sess-S.json").write_text(json.dumps(state))
+    (ss_dir / "sess-S.json").write_text(json.dumps(state), encoding="utf-8")
 
     payload = {"session_id": "sess-S", "prompt": prompt}
     rc, out = _invoke_hook(h.main, payload, monkeypatch)
@@ -593,7 +593,7 @@ def test_hook_perf_log_shape(
 
     log = slm_home / "logs" / "hook-perf.log"
     assert log.exists(), "hook-perf.log not written"
-    line = log.read_text().strip().splitlines()[-1]
+    line = log.read_text(encoding="utf-8").strip().splitlines()[-1]
     obj = json.loads(line)
     for field in ("ts", "hook", "duration_ms", "outcome"):
         assert field in obj, f"missing {field!r} in perf log: {obj}"

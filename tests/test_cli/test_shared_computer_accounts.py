@@ -90,7 +90,7 @@ def _other_account_health(port: int, pid: int = 4242) -> dict:
     """What another account's daemon answers: its own owner and data folder."""
     return {
         "status": "ok", "service": DAEMON_SERVICE, "daemon_protocol": DAEMON_PROTOCOL,
-        "namespace_id": namespace_id_for("/Users/someone-else/.superlocalmemory"),
+        "namespace_id": namespace_id_for("/Users/user/.superlocalmemory"),
         "instance_id": "their-instance", "capability_fingerprint": "f" * 64,
         "owner_id": OTHER_OWNER, "pid": pid, "port": port, "state": "ready",
         "version": "4.1.21",
@@ -126,8 +126,8 @@ def test_a_stale_pid_file_naming_another_accounts_process_is_not_adopted(
 
     port, server = daemon
     pid = os.getpid()  # a live PID; the process below claims to be the other account's
-    (data_root / "daemon.pid").write_text(str(pid))
-    (data_root / "daemon.port").write_text(str(port))
+    (data_root / "daemon.pid").write_text(str(pid), encoding="utf-8")
+    (data_root / "daemon.port").write_text(str(port), encoding="utf-8")
     server.health = {"status": "ok", "pid": pid}  # a pre-identity daemon's health
 
     import psutil
@@ -141,6 +141,9 @@ def test_a_stale_pid_file_naming_another_accounts_process_is_not_adopted(
 
         def uids(self):
             return psutil._common.puids(4242424, 4242424, 4242424)
+
+        def username(self):  # what Windows, with no uid, compares
+            return "OTHER-PC\\someone-else"
 
     monkeypatch.setattr(psutil, "Process", _OtherAccountsDaemon)
     assert cli_daemon._verified_legacy_health() is None

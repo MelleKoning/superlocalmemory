@@ -1303,26 +1303,30 @@ class MemoryEngine:
                 speaker_a, speaker_b, self._profile_id,
             )
 
-    def close_session(self, session_id: str) -> int:
+    def close_session(self, session_id: str, profile_id: str | None = None) -> int:
         """Create session-level temporal summary and release its working set.
 
         The working set is what the session was recently looking at. It exists
         to connect one turn to the next, so it has no meaning once there are no
         more turns; holding it would let a later session that reuses this id
         inherit ranking bias from a conversation that already ended.
+
+        ``profile_id`` closes a session of that profile (per-request routing,
+        the active profile is not moved); ``None`` = the active profile.
         """
         self._ensure_init()
+        target = profile_id or self._profile_id
 
         try:
             from superlocalmemory.core.working_memory import discard
 
-            discard(self._profile_id, session_id)
+            discard(target, session_id)
         except Exception as exc:  # pragma: no cover — never block a close
             logger.debug("working-set discard skipped: %s", exc)
 
         from superlocalmemory.core.store_pipeline import run_close_session
         return run_close_session(
-            session_id, self._profile_id, db=self._db,
+            session_id, target, db=self._db,
         )
 
     # -- Lifecycle ----------------------------------------------------------

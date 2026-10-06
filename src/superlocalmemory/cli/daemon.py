@@ -70,11 +70,8 @@ def _is_pid_alive(pid: int) -> bool:
         import psutil
         return psutil.pid_exists(pid)
     except ImportError:
-        try:
-            os.kill(pid, 0)
-            return True
-        except (ProcessLookupError, PermissionError):
-            return False
+        from superlocalmemory.core.platform_utils import is_pid_alive
+        return is_pid_alive(pid)
 
 
 _CREATE_TIME_TOLERANCE_SECONDS = 1.0
@@ -303,14 +300,17 @@ def _process_is_this_account(process) -> bool:
     """The process runs as the account running this code.
 
     On a computer shared by several accounts, another account's daemon can
-    hold a PID a stale ``daemon.pid`` here still names. Windows has no uid;
-    its per-account isolation is the descriptor and the health identity.
+    hold a PID a stale ``daemon.pid`` here still names. Windows has no uid,
+    so there the account is the user name the process runs as. A process
+    whose account cannot be read is not counted as this account's.
     """
     getuid = getattr(os, "getuid", None)
-    if getuid is None:
-        return True
     try:
-        return int(process.uids().real) == int(getuid())
+        if getuid is not None:
+            return int(process.uids().real) == int(getuid())
+        from superlocalmemory.core.platform_utils import current_account
+
+        return str(process.username()).casefold() == current_account().casefold()
     except Exception:
         return False
 
@@ -336,8 +336,8 @@ def _verified_legacy_health() -> dict | None:
     pid_file = descriptor_path().with_name("daemon.pid")
     port_file = descriptor_path().with_name("daemon.port")
     try:
-        pid = int(pid_file.read_text().strip())
-        port = int(port_file.read_text().strip()) if port_file.exists() else _DEFAULT_PORT
+        pid = int(pid_file.read_text(encoding="utf-8").strip())
+        port = int(port_file.read_text(encoding="utf-8").strip()) if port_file.exists() else _DEFAULT_PORT
     except (OSError, ValueError):
         return None
     if not _is_verified_legacy_process(pid):
@@ -445,11 +445,43 @@ class DaemonNotFound(RuntimeError):
     ``unknown_profile`` indistinguishable from a dead daemon (#audit).
     """
 
-    def __init__(self, status: int, code: str, message: str, path: str = "") -> None:
+    def __init__(self, status: int, code: str, message: str, path: str = "", *,
+                 error_code: str = "", error_message: str = "") -> None:
         self.status = int(status)
         self.code = code or "not_found"
         self.message = message or "daemon returned 404"
+        # A per-request-routing route answers an unknown profile with
+        # ``{"error": {"code": "unknown_profile", ...}}`` rather than a
+        # ``detail``. Kept apart from ``code`` so no existing caller changes;
+        # a routed caller reads it (mcp/tools_core._routed_daemon_call).
+        self.error_code = error_code
+        self.error_message = error_message
         super().__init__(self.message + (f" for {path}" if path else ""))
+
+
+def not_found_from(payload: object, path: str = "") -> DaemonNotFound:
+    """The :class:`DaemonNotFound` for a 404 response body.
+
+    L3-11: every 404 in this codebase is a plain FastAPI
+    HTTPException(404, detail="...") -- {"detail": "..."} or {"detail": {...}}
+    -- so ``code`` and ``message`` come from ``detail``. The routed-profile
+    routes' ``{"error": {...}}`` body fills ``error_code``/``error_message``.
+    """
+    code, message = "not_found", "daemon returned 404"
+    error_code, error_message = "", ""
+    if isinstance(payload, dict):
+        detail = payload.get("detail")
+        if isinstance(detail, dict):
+            code = str(detail.get("code", code))
+            message = str(detail.get("message", message))
+        elif isinstance(detail, str) and detail:
+            message = detail
+        error = payload.get("error")
+        if isinstance(error, dict) and isinstance(error.get("code"), str):
+            error_code = error["code"]
+            error_message = str(error.get("message", ""))
+    return DaemonNotFound(404, code, message, path,
+                          error_code=error_code, error_message=error_message)
 
 
 class DaemonUnprocessable(RuntimeError):
@@ -603,23 +635,13 @@ def daemon_request(
                 pass
             raise DaemonConflict(detail) from exc
         if exc.code == 404 and preserve_not_found:
-            # L3-11: every 404 in this codebase is a plain FastAPI
-            # HTTPException(404, detail="...") -- {"detail": "..."}, never
-            # {"error": {...}}. Reading "error" here always found nothing, so
-            # the real reason (e.g. "Memory not found") was discarded in
-            # favour of the generic fallback below on every single 404.
-            code, message = "not_found", "daemon returned 404"
+            # The reason is read from the body (not_found_from): discarding
+            # it made "Memory not found" or "no such profile" look alike.
             try:
                 payload = json.loads(exc.read().decode())
-                detail = payload.get("detail") if isinstance(payload, dict) else None
-                if isinstance(detail, dict):
-                    code = str(detail.get("code", code))
-                    message = str(detail.get("message", message))
-                elif isinstance(detail, str) and detail:
-                    message = detail
             except Exception:
-                pass
-            raise DaemonNotFound(exc.code, code, message, path) from exc
+                payload = None
+            raise not_found_from(payload, path) from exc
         if exc.code == 422 and preserve_unprocessable:
             raise _unprocessable(exc) from exc
         return None
@@ -713,7 +735,7 @@ def _start_daemon_subprocess(*, port: int | None = None) -> bool:
     daemon_env["SLM_DAEMON_CAPABILITY"] = bootstrap_descriptor.capability
     kwargs["env"] = daemon_env
 
-    with open(log_file, "a") as lf:
+    with open(log_file, "a", encoding="utf-8") as lf:
         proc = subprocess.Popen(cmd, stdout=lf, stderr=lf, **kwargs)
 
     # Publish the exact child identity immediately so concurrent callers know
@@ -735,8 +757,8 @@ def _start_daemon_subprocess(*, port: int | None = None) -> bool:
         write_descriptor(child_descriptor)
 
     # One-release compatibility mirrors; never sufficient for ownership.
-    _pid_file_path().write_text(str(proc.pid))
-    _port_file_path().write_text(str(_target_port))
+    _pid_file_path().write_text(str(proc.pid), encoding="utf-8")
+    _port_file_path().write_text(str(_target_port), encoding="utf-8")
 
     return _wait_for_daemon(timeout=60)
 
@@ -776,7 +798,7 @@ def ensure_daemon(*, port: int | None = None) -> bool:
     try:
         lock_file = _lock_file_path()
         lock_file.parent.mkdir(parents=True, exist_ok=True)
-        lock_fd = open(lock_file, "w")
+        lock_fd = open(lock_file, "w", encoding="utf-8")
 
         # Cross-platform file locking
         if sys.platform == "win32":
@@ -833,7 +855,7 @@ def ensure_daemon(*, port: int | None = None) -> bool:
                 _stale_hint = ""
                 try:
                     _pid_text = (
-                        descriptor_path().with_name("daemon.pid").read_text().strip()
+                        descriptor_path().with_name("daemon.pid").read_text(encoding="utf-8").strip()
                     )
                     if _pid_text and str(occupant.get("pid")) == _pid_text:
                         _stale_hint = (

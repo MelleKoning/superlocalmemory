@@ -40,7 +40,7 @@ def test_refuses_the_owners_store_and_its_parents(tmp_path) -> None:
 
 def test_refuses_a_non_empty_folder(tmp_path) -> None:
     (tmp_path / "x").mkdir()
-    (tmp_path / "x" / "keep.txt").write_text("mine")
+    (tmp_path / "x" / "keep.txt").write_text("mine", encoding="utf-8")
     with pytest.raises(demo.DemoError) as err:
         demo.check_data_dir(str(tmp_path / "x"), [])
     assert err.value.code == 2

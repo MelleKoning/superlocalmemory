@@ -147,21 +147,21 @@ class TestStoredSignature:
 
     def test_write_preserves_other_keys(self, tmp_path):
         config_path = tmp_path / "config.json"
-        config_path.write_text(json.dumps({"mode": "a", "active_profile": "default"}))
+        config_path.write_text(json.dumps({"mode": "a", "active_profile": "default"}), encoding="utf-8")
         _write_stored_signature(tmp_path, "my::sig::768")
-        data = json.loads(config_path.read_text())
+        data = json.loads(config_path.read_text(encoding="utf-8"))
         assert data["mode"] == "a"
         assert data["active_profile"] == "default"
         assert data["embedding_signature"] == "my::sig::768"
 
     def test_corrupt_json_returns_no_model(self, tmp_path):
         config_path = tmp_path / "config.json"
-        config_path.write_text("{invalid json!!!")
+        config_path.write_text("{invalid json!!!", encoding="utf-8")
         assert _read_stored_signature(tmp_path) == _NO_MODEL
 
     def test_missing_key_returns_no_model(self, tmp_path):
         config_path = tmp_path / "config.json"
-        config_path.write_text(json.dumps({"mode": "a"}))
+        config_path.write_text(json.dumps({"mode": "a"}), encoding="utf-8")
         assert _read_stored_signature(tmp_path) == _NO_MODEL
 
     def test_creates_parent_dirs(self, tmp_path):
@@ -509,3 +509,29 @@ class TestModeConfigDefaults:
             embedding_provider="sentence-transformers",
         )
         assert cfg.embedding.provider == "sentence-transformers"
+
+
+def test_the_staging_database_is_closed_before_its_folder_is_removed(tmp_path, monkeypatch):
+    """On Windows an open file cannot be deleted, so the migration aborted
+    after activating the new vectors and never recorded the new signature."""
+    from superlocalmemory.storage import embedding_migrator, schema
+    from superlocalmemory.storage.database import DatabaseManager
+    from tests._portable import record_files_open_at_tempdir_cleanup
+
+    still_open = record_files_open_at_tempdir_cleanup(monkeypatch, embedding_migrator)
+    db = DatabaseManager(tmp_path / "memory.db")
+    db.initialize(schema)
+    db.execute("INSERT INTO memories (memory_id, profile_id, content, created_at, "
+               "metadata_json, scope) VALUES ('m1', 'default', 'witness', "
+               "'2026-01-01T00:00:00Z', '{}', 'personal')")
+    db.execute("INSERT INTO atomic_facts (fact_id, memory_id, profile_id, content, "
+               "lifecycle, created_at, scope) VALUES ('f1', 'm1', 'default', 'witness', "
+               "'active', '2026-01-01T00:00:00Z', 'personal')")
+    cfg = _make_config(tmp_path, model_name="new-model", dimension=2)
+    _write_stored_signature(tmp_path, "old-model::2")
+    embedder = MagicMock()
+    embedder.embed_batch.return_value = [[0.0, 1.0]]
+
+    assert run_embedding_migration(cfg, db, embedder) == 1
+    assert still_open == [], f"open when its folder was removed: {still_open}"
+    assert _read_stored_signature(tmp_path) == "new-model::2"

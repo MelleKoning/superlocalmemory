@@ -1,7 +1,9 @@
 """Portable Agent Experience receipt tools for the SLM Brain.
 
-Receipts are scoped to the MCP engine's active profile.  A host cannot write
-to another profile by supplying a different ``profile_id`` in its payload.
+Receipts are scoped to one profile: the MCP engine's active profile, or the
+tool's own ``profile_id`` argument when one is named (it must exist; the active
+profile is not moved). A host cannot write to another profile by supplying a
+different ``profile_id`` in its payload: the payload must name the same one.
 The receipts are evidence/observability records only: recall and ranking do
 not consume them synchronously, so an unavailable receipt store never slows
 or changes a memory answer.
@@ -43,11 +45,13 @@ from superlocalmemory.storage.external_evidence import (
 )
 
 
-def _store_for(engine: Any) -> AgentExperienceStore:
-    active_profile = engine.profile_id
+def _store_for(engine: Any, profile: str | None = None) -> AgentExperienceStore:
+    """The receipt store, admitting writes for ``profile`` only (default: the
+    engine's active profile)."""
+    target = profile or engine.profile_id
     return AgentExperienceStore(
         Path(state_path("learning.db")),
-        is_profile_active=lambda profile_id: profile_id == active_profile,
+        is_profile_active=lambda profile_id: profile_id == target,
     )
 
 
@@ -67,12 +71,12 @@ def _execution_store_for(engine: Any) -> ExecutionLearningStore:
     )
 
 
-def _brain_truth_for(engine: Any) -> dict[str, Any]:
+def _brain_truth_for(engine: Any, profile: str | None = None) -> dict[str, Any]:
     """Read the portable truth snapshot without opening an engine or a writer."""
     return BrainTruthService(
         memory_db_path=state_path("memory.db"),
         learning_db_path=state_path("learning.db"),
-    ).snapshot(engine.profile_id)
+    ).snapshot(profile or engine.profile_id)
 
 
 def _legacy_agent_experience(truth: dict[str, Any]) -> dict[str, Any]:
@@ -109,11 +113,31 @@ def _legacy_external_evidence(truth: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _require_active_profile(engine: Any, payload: dict[str, Any]) -> str | None:
+def _require_active_profile(engine: Any, payload: dict[str, Any],
+                            profile: str | None = None) -> str | None:
+    """The payload's profile must be the one this call is for: the named one,
+    else the active MCP profile."""
     supplied = payload.get("profile_id")
+    if profile is not None:
+        if supplied != profile:
+            return "profile_id in the payload must equal the profile this call is for"
+        return None
     if supplied != engine.profile_id:
         return "profile_id must equal the active MCP profile"
     return None
+
+
+def _call_profile(engine: Any, profile_id: str) -> tuple[str | None, dict[str, Any] | None]:
+    """``(profile, refusal)``; ``None`` = the engine's active profile."""
+    from superlocalmemory.mcp.request_profile import requested_profile, tool_profile
+
+    try:
+        if not requested_profile(profile_id):
+            return None, None
+    except ValueError as exc:
+        return None, {"success": False, "durable": False, "error": str(exc)}
+    named, refused = tool_profile(engine, profile_id)
+    return named, ({**refused, "durable": False} if refused else None)
 
 
 class _ExternalEvidenceWriteError(Exception):
@@ -146,17 +170,21 @@ def register_brain_tools(server: Any, get_engine: Callable[[], Any]) -> None:
     """
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
-    async def get_brain_evidence_status() -> dict[str, Any]:
+    async def get_brain_evidence_status(profile_id: str = "") -> dict[str, Any]:
         """Get profile-scoped, observation-only Living Brain evidence totals.
 
         ``brain_truth`` is the canonical v1 payload.  The legacy aliases are
         retained for one release so existing hosts can move independently.
+        ``profile_id`` reads another profile (empty = the active one).
         """
         engine = get_engine()
-        truth = _brain_truth_for(engine)
+        named, refused = _call_profile(engine, profile_id)
+        if refused:
+            return refused
+        truth = _brain_truth_for(engine, named)
         return {
             "success": True,
-            "profile_id": engine.profile_id,
+            "profile_id": named or engine.profile_id,
             "brain_truth": truth,
             "agent_experience": _legacy_agent_experience(truth),
             "external_evidence": truth["external_evidence"],
@@ -166,19 +194,24 @@ def register_brain_tools(server: Any, get_engine: Callable[[], Any]) -> None:
 
     @server.tool()
     @admits(OperationKind.REMEMBER)
-    async def record_agent_experience(payload: dict[str, Any]) -> dict[str, Any]:
+    async def record_agent_experience(payload: dict[str, Any],
+                                      profile_id: str = "") -> dict[str, Any]:
         """Record a contract-validated terminal experience receipt.
 
         Supply only evidence you can substantiate.  SLM records the declared
         verification authority and does not use this receipt to alter recall,
-        ranking, or model routing automatically.
+        ranking, or model routing automatically. ``profile_id`` records it for
+        another profile (empty = the active one); the payload must name it.
         """
         engine = get_engine()
-        error = _require_active_profile(engine, payload)
+        named, refused = _call_profile(engine, profile_id)
+        if refused:
+            return refused
+        error = _require_active_profile(engine, payload, named)
         if error:
             return {"success": False, "durable": False, "error": error}
         try:
-            created = _store_for(engine).record_experience(payload)
+            created = _store_for(engine, named).record_experience(payload)
         except (AgentExperienceConflictError, ProfileAdmissionError) as exc:
             return {"success": False, "durable": False, "error": str(exc)}
         except LearningWriteBusyError as exc:
@@ -189,14 +222,22 @@ def register_brain_tools(server: Any, get_engine: Callable[[], Any]) -> None:
 
     @server.tool()
     @admits(OperationKind.REMEMBER)
-    async def record_cognitive_turn(payload: dict[str, Any]) -> dict[str, Any]:
-        """Open one contract-validated cognitive-turn provenance receipt."""
+    async def record_cognitive_turn(payload: dict[str, Any],
+                                    profile_id: str = "") -> dict[str, Any]:
+        """Open one contract-validated cognitive-turn provenance receipt.
+
+        ``profile_id`` opens it for another profile (empty = the active one);
+        the payload must name it.
+        """
         engine = get_engine()
-        error = _require_active_profile(engine, payload)
+        named, refused = _call_profile(engine, profile_id)
+        if refused:
+            return refused
+        error = _require_active_profile(engine, payload, named)
         if error:
             return {"success": False, "durable": False, "error": error}
         try:
-            created = _store_for(engine).create_cognitive_turn(payload)
+            created = _store_for(engine, named).create_cognitive_turn(payload)
         except (
             AgentExperienceConflictError,
             CognitiveTurnTransitionError,
@@ -211,12 +252,19 @@ def register_brain_tools(server: Any, get_engine: Callable[[], Any]) -> None:
 
     @server.tool()
     @admits(OperationKind.REMEMBER)
-    async def finalize_cognitive_turn(receipt_id: str, outcome: dict[str, Any]) -> dict[str, Any]:
-        """Finalize an active-profile cognitive turn with outcome evidence."""
+    async def finalize_cognitive_turn(receipt_id: str, outcome: dict[str, Any],
+                                      profile_id: str = "") -> dict[str, Any]:
+        """Finalize an active-profile cognitive turn with outcome evidence.
+
+        ``profile_id`` finalizes a turn of another profile (empty = the active one).
+        """
         engine = get_engine()
+        named, refused = _call_profile(engine, profile_id)
+        if refused:
+            return refused
         try:
-            finalized = _store_for(engine).finalize_cognitive_turn(
-                engine.profile_id, receipt_id, outcome
+            finalized = _store_for(engine, named).finalize_cognitive_turn(
+                named or engine.profile_id, receipt_id, outcome
             )
         except (
             AgentExperienceConflictError,

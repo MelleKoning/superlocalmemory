@@ -246,7 +246,7 @@ def _take_slot():
         from superlocalmemory.infra.data_root import state_path
         path = state_path(".laya-judge.lock")
         path.parent.mkdir(parents=True, exist_ok=True)
-        handle = open(path, "a+")  # noqa: SIM115 — held open on purpose
+        handle = open(path, "a+", encoding="utf-8")  # noqa: SIM115 — held open on purpose
     except (ImportError, OSError, ValueError):
         return None
     try:

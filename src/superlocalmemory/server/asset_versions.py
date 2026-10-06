@@ -164,7 +164,7 @@ def render_index(
     Raises ``OSError`` if the index itself cannot be read; every caller already
     checks ``exists()`` and has its own fallback page.
     """
-    html = index_path.read_text()
+    html = index_path.read_text(encoding="utf-8")
     html = rewrite_asset_versions(html, ui_root or index_path.parent)
     for placeholder, value in (substitutions or {}).items():
         html = html.replace(placeholder, value)

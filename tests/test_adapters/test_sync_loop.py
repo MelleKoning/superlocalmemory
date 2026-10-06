@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import os
 import sqlite3
 from pathlib import Path
@@ -150,5 +151,8 @@ async def test_first_run_delay_honoured():
         [adapter], interval=0.01, first_run_delay=0.05, iterations=1,
     )
     elapsed = asyncio.get_event_loop().time() - start
-    assert elapsed >= 0.05
+    # asyncio runs a timer up to one clock tick early by design (its
+    # _clock_resolution); on Windows a monotonic tick is about 15.6 ms.
+    tick = time.get_clock_info("monotonic").resolution
+    assert elapsed >= 0.05 - tick
     assert adapter.calls == 1

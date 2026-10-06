@@ -256,7 +256,7 @@ def create_app() -> FastAPI:
                 "asset version rewrite unavailable, serving index.html as "
                 "written: %s: %s", type(exc).__name__, exc,
             )
-            return index_path.read_text().replace("__SLM_VERSION__", _v)
+            return index_path.read_text(encoding="utf-8").replace("__SLM_VERSION__", _v)
 
     @application.get("/favicon.ico", include_in_schema=False)
     async def favicon():

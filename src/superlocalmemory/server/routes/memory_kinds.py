@@ -8,9 +8,14 @@ The dashboard and ``slm kinds`` both use these routes, so every behaviour has
 one implementation. Who may do what (LLD §7.2):
 
 * READ   — status, settings, suggestions.
-* WRITE  — set or confirm a fact's kind, only on a fact the active profile
-  owns (``memories._authorize_memory_mutation``); the change goes through the
+* WRITE  — set or confirm a fact's kind, only on a fact the profile owns
+  (``memories._authorize_memory_mutation``); the change goes through the
   canonical mutation writer like every other memory edit.
+
+Status, suggestions and kind changes take an optional ``profile_id`` (query for
+reads, body for writes): that profile is served for this one request,
+authorized on THAT profile before its existence is revealed, and the active
+profile is not moved. Without it, the active profile.
 * MANAGE — start, pause, resume, cancel or undo a classification run, and
   change the settings. Also needs a credential the product issued, even from
   this machine: these decide whether memory text may be sent online.
@@ -49,6 +54,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/memory-kinds", tags=["memory-kinds"])
 
 _STATE_ATTR = "memory_kind_backfill"
+_MAX_PROFILE_CHARS = 200
 _REFUSAL_STATUS = {"needs_confirmation": 409, "schema_not_ready": 409, "disabled": 409,
                    "run_active": 409, "bad_state": 409, "not_found": 404,
                    "bad_request": 422, "not_ready": 503}
@@ -89,12 +95,14 @@ class ConfirmRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     items: list[ConfirmItem] = Field(..., min_length=1, max_length=200)
+    profile_id: str | None = Field(None, max_length=_MAX_PROFILE_CHARS)
 
 
 class KindEdit(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: str = Field(..., min_length=1, max_length=64)
+    profile_id: str | None = Field(None, max_length=_MAX_PROFILE_CHARS)
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +160,36 @@ def _read_gate(request: Request) -> None:
     from superlocalmemory.server.rbac_enforce import require_permission
 
     require_permission(request, Permission.READ)
+
+
+def _read_profile(request: Request, profile_id: str) -> str:
+    """The profile a read serves: the named one, else the active one.
+
+    A named profile is authorized (READ on it) before its existence is
+    revealed; an unknown one raises ``_UnknownRoutedProfile``.
+    """
+    from superlocalmemory.server.rbac_enforce import require_permission
+    from superlocalmemory.server.routed_profile import RoutedProfileError, routed_profile_id
+    from superlocalmemory.server.routes.memories import _UnknownRoutedProfile
+
+    try:
+        profile = routed_profile_id(profile_id)
+    except RoutedProfileError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+    if profile is None:
+        _read_gate(request)
+        return _profile()
+    require_permission(request, Permission.READ, profile=profile)
+    db = getattr(_engine(request), "_db", None)
+    if not db.execute("SELECT 1 AS one FROM profiles WHERE profile_id = ?", (profile,)):
+        raise _UnknownRoutedProfile(profile)
+    return profile
+
+
+def _unknown_profile(profile_id: str) -> JSONResponse:
+    from superlocalmemory.server.routes.memories import _unknown_profile_response
+
+    return _unknown_profile_response(profile_id)
 
 
 def _manage_gate(request: Request) -> str:
@@ -226,8 +264,12 @@ def _set_kinds(request: Request, profile_id: str, pairs: list[tuple[str, str]]) 
     return list(receipt.get("facts") or [])
 
 
-def _authorize(request: Request, fact_id: str) -> tuple[Any, str]:
-    """Authorize a kind change: WRITE on a fact the active profile owns.
+def _authorize(request: Request, fact_id: str,
+               profile: str | None = None) -> tuple[Any, str]:
+    """Authorize a kind change: WRITE on a fact the profile owns.
+
+    ``profile`` is a routed profile (None = the active one); an unknown one
+    raises ``memories._UnknownRoutedProfile`` after the permission check.
 
     Passes ``admission_kind=OperationKind.REMEMBER`` so the admission layer
     evaluates this as the WRITE-level operation the route is documented as
@@ -241,7 +283,8 @@ def _authorize(request: Request, fact_id: str) -> tuple[Any, str]:
     from superlocalmemory.server.routes.memories import _authorize_memory_mutation
 
     engine, profile_id, _context = _authorize_memory_mutation(
-        request, "update", fact_id, admission_kind=OperationKind.REMEMBER)
+        request, "update", fact_id, admission_kind=OperationKind.REMEMBER,
+        profile=profile)
     return engine, profile_id
 
 
@@ -251,10 +294,16 @@ def _authorize(request: Request, fact_id: str) -> tuple[Any, str]:
 
 
 @router.get("/status")
-def get_status(request: Request):
-    _read_gate(request)
+def get_status(request: Request,
+               profile_id: str = Query("", max_length=_MAX_PROFILE_CHARS)):
+    from superlocalmemory.server.routes.memories import _UnknownRoutedProfile
+
     try:
-        return _runner_for(request.app).status(_profile())
+        profile = _read_profile(request, profile_id)
+    except _UnknownRoutedProfile as exc:
+        return _unknown_profile(exc.profile_id)
+    try:
+        return _runner_for(request.app).status(profile)
     except Exception:  # noqa: BLE001
         return _internal_error()
 
@@ -319,8 +368,14 @@ def post_backfill_action(request: Request, run_id: str,
 @router.get("/suggestions")
 def get_suggestions(request: Request, kind: str | None = Query(None, max_length=64),
                     limit: int = Query(50, ge=1, le=100),
-                    offset: int = Query(0, ge=0, le=1_000_000)):
-    _read_gate(request)
+                    offset: int = Query(0, ge=0, le=1_000_000),
+                    profile_id: str = Query("", max_length=_MAX_PROFILE_CHARS)):
+    from superlocalmemory.server.routes.memories import _UnknownRoutedProfile
+
+    try:
+        profile = _read_profile(request, profile_id)
+    except _UnknownRoutedProfile as exc:
+        return _unknown_profile(exc.profile_id)
     parsed = parse_kind(kind) if kind else None
     if kind and parsed is None:
         raise invalid_kind_http(InvalidKind(kind))
@@ -329,7 +384,7 @@ def get_suggestions(request: Request, kind: str | None = Query(None, max_length=
         db = getattr(engine, "db", None) or getattr(engine, "_db", None)
         cfg = wiring.current_config(engine)
         items = MemoryKindStore(db).suggestions(
-            _profile(), kind=parsed, limit=limit, offset=offset,
+            profile, kind=parsed, limit=limit, offset=offset,
             display_min_confidence=cfg.display_min_confidence)
         return {"items": items}
     except HTTPException:
@@ -355,17 +410,25 @@ def _stored_suggestion(engine: Any, profile_id: str, fact_id: str) -> str | None
 def post_confirm(request: Request, body: ConfirmRequest):
     """Confirm (or set) the kind of 1-200 facts at once.
 
-    Permission: WRITE on the active profile, and the caller must own each
+    Permission: WRITE on the profile (``profile_id``, else the active one),
+    and the caller must own each
     fact (``_authorize`` -> ``_authorize_memory_mutation``, admitted as
     OperationKind.REMEMBER) — the same tier ``remember(kind=...)`` runs
     under, not the owner/admin-only CORRECT tier a content edit requires.
     """
+    from superlocalmemory.server.routed_profile import routed_profile_id
+    from superlocalmemory.server.routes.memories import _UnknownRoutedProfile
+
     results: list[dict[str, Any] | None] = [None] * len(body.items)
     pairs: list[tuple[str, str]] = []
     slots: list[int] = []
     profile_id = ""
+    routed = routed_profile_id(body.profile_id)
     for index, item in enumerate(body.items):
-        engine, profile_id = _authorize(request, item.fact_id)
+        try:
+            engine, profile_id = _authorize(request, item.fact_id, routed)
+        except _UnknownRoutedProfile as exc:
+            return _unknown_profile(exc.profile_id)
         if item.kind is not None:
             parsed = parse_kind(item.kind)
             value = parsed.value if parsed is not None else None
@@ -392,15 +455,23 @@ def post_confirm(request: Request, body: ConfirmRequest):
 def patch_fact_kind(request: Request, fact_id: str, body: KindEdit):
     """Set one fact's kind.
 
-    Permission: WRITE on the active profile, and the caller must own the
+    Permission: WRITE on the profile (``profile_id``, else the active one),
+    and the caller must own the
     fact (``_authorize`` -> ``_authorize_memory_mutation``, admitted as
     OperationKind.REMEMBER) — the same tier ``remember(kind=...)`` runs
     under, not the owner/admin-only CORRECT tier a content edit requires.
     """
+    from superlocalmemory.server.routed_profile import routed_profile_id
+    from superlocalmemory.server.routes.memories import _UnknownRoutedProfile
+
     parsed = parse_kind(body.kind)
     if parsed is None:
         raise invalid_kind_http(InvalidKind(body.kind))
-    _engine_obj, profile_id = _authorize(request, fact_id)
+    try:
+        _engine_obj, profile_id = _authorize(request, fact_id,
+                                             routed_profile_id(body.profile_id))
+    except _UnknownRoutedProfile as exc:
+        return _unknown_profile(exc.profile_id)
     applied = _set_kinds(request, profile_id, [(fact_id, parsed.value)])
     if not applied or not applied[0].get("ok"):
         raise HTTPException(404, detail="Memory not found")
