@@ -37,6 +37,13 @@ from typing import Any, Iterator
 
 DEFAULT_START_WAIT_S = 20.0
 MAX_START_WAIT_S = 45.0
+# `slm serve stop` waits out a cold start before giving up on a daemon that is
+# still "starting" (a small host's first model load can take about a
+# minute). Bounded and configurable (4.1.22 polish) so a daemon wedged
+# forever in "starting" cannot make the command hang indefinitely regardless
+# of host size.
+DEFAULT_STOP_WAIT_S = 90.0
+MAX_STOP_WAIT_S = 180.0
 RETRY_HINT_S = 10
 _POLL_S = 0.25
 # A starting daemon binds its port before HTTP is up, so a 2 s health read
@@ -67,6 +74,19 @@ def start_wait_budget(cap: float | None = None) -> float:
     if cap is not None:
         value = min(value, max(0.0, float(cap)))
     return value
+
+
+def stop_wait_budget() -> float:
+    """Seconds ``slm serve stop`` may wait for a starting daemon to finish
+    starting before giving up (never negative, never unbounded)."""
+    raw = os.environ.get("SLM_DAEMON_STOP_WAIT_S", "").strip()
+    try:
+        value = float(raw) if raw else DEFAULT_STOP_WAIT_S
+    except ValueError:
+        value = DEFAULT_STOP_WAIT_S
+    if value != value:  # NaN
+        value = DEFAULT_STOP_WAIT_S
+    return max(0.0, min(value, MAX_STOP_WAIT_S))
 
 
 @contextmanager

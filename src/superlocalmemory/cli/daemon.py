@@ -59,7 +59,6 @@ _DEFAULT_IDLE_TIMEOUT = 0  # v3.4.3: 24/7 default (was 1800)
 _PID_FILE = None  # test-only override; runtime resolution stays dynamic
 _PORT_FILE = None  # test-only override; runtime resolution stays dynamic
 _EXPECTED_DESCRIPTOR_UNSET = object()
-_STOP_START_WAIT_S = 90.0  # stop waits out a cold start (~60 s on small hosts)
 
 
 # ---------------------------------------------------------------------------
@@ -1087,7 +1086,10 @@ def stop_daemon() -> bool:
         if descriptor.state == "starting":
             # 4.1.22: a starting daemon cannot take /stop yet. Returning False
             # here printed "not running" and left it running; wait for it.
-            ready = _startup.wait_for_starting_daemon(seconds=_STOP_START_WAIT_S)
+            # Bounded (never a flat hang forever) and configurable via
+            # SLM_DAEMON_STOP_WAIT_S -- a daemon wedged permanently in
+            # "starting" must not make this command hang indefinitely.
+            ready = _startup.wait_for_starting_daemon(seconds=_startup.stop_wait_budget())
             descriptor = ready[0] if ready is not None else descriptor
         response = daemon_request(
             "POST",
