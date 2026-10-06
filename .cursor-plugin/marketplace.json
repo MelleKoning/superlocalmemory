@@ -1,0 +1,29 @@
+{
+  "metadata": {
+    "description": "SuperLocalMemory: local-first long-term memory for agents and bots."
+  },
+  "name": "qualixar",
+  "owner": {
+    "email": "varun.pratap.bhardwaj@gmail.com",
+    "name": "Qualixar"
+  },
+  "plugins": [
+    {
+      "category": "productivity",
+      "description": "Local-first long-term memory for your agents and bots: remember, recall and session context stored on your own computer, with reversible compression and a cache for large tool outputs.",
+      "homepage": "https://github.com/qualixar/superlocalmemory",
+      "keywords": [
+        "memory",
+        "long-term-memory",
+        "local-first",
+        "mcp",
+        "agents"
+      ],
+      "license": "AGPL-3.0-or-later",
+      "name": "superlocalmemory",
+      "repository": "https://github.com/qualixar/superlocalmemory",
+      "source": "./plugin",
+      "version": "4.1.21"
+    }
+  ]
+}

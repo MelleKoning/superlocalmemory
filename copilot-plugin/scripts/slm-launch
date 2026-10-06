@@ -25,17 +25,61 @@
 #                      plugin         — require the plugin's own venv
 #                      <path>         — an explicit slm binary (leading ~ expanded)
 #   SLM_DATA_DIR       SLM data dir (default: ~/.superlocalmemory)
-#   CLAUDE_PLUGIN_DATA where a plugin-owned venv lives, when there is one
+#   CLAUDE_PLUGIN_DATA where a plugin-owned venv lives (then CURSOR_PLUGIN_DATA,
+#                      PLUGIN_DATA, then ~/.local/share/superlocalmemory-plugin)
+#   SLM_LAUNCHER_BOOTSTRAP=1  build that venv here when nothing else can run
+#
+# HOSTS THAT DO NOT EXPAND THEIR VARIABLES
+#
+# Some hosts (Grok Bot's plugin computer) pass ${CLAUDE_PLUGIN_ROOT} and
+# ${CLAUDE_PLUGIN_DATA} through literally. So this script finds itself from
+# BASH_SOURCE, and treats any value still containing "${" as unset.
+#
+# Which slm runs, in order: SLM_LAUNCHER; an slm on PATH; the plugin venv, if
+# built; uvx, pinned to this plugin's release (CPU-only torch on Linux); and,
+# only with SLM_LAUNCHER_BOOTSTRAP=1, a plugin venv built on the spot.
+# The daemon is started first and `slm serve start` waits (up to 60 s) for its
+# /health, so the first remember after a cold start is not "daemon unavailable".
 #
 # Deliberately NOT set here: the MCP profile. Which tools a host exposes is the
 # user's decision, and a plugin that narrows it takes away tools they configured.
+
+# Where this script lives. Never from ${CLAUDE_PLUGIN_ROOT}: not every host sets it.
+_slm_self="${BASH_SOURCE[0]}"
+while [ -h "${_slm_self}" ]; do
+    _slm_link="$(readlink "${_slm_self}")"
+    case "${_slm_link}" in
+        /*) _slm_self="${_slm_link}" ;;
+        *)  _slm_self="$(dirname "${_slm_self}")/${_slm_link}" ;;
+    esac
+done
+_SLM_SCRIPTS="$(cd "$(dirname "${_slm_self}")" && pwd)"
+_SLM_PLUGIN_ROOT="$(dirname "${_SLM_SCRIPTS}")"
+
+# A value that is empty, or a placeholder the host never replaced, is not a value.
+_slm_usable() {
+    case "$1" in
+        ''|*'${'*) return 1 ;;
+    esac
+    return 0
+}
+[ -n "${HOME:-}" ] || { HOME="$(cd ~ 2>/dev/null && pwd)"; export HOME; }
+_slm_usable "${SLM_DATA_DIR:-}" || unset SLM_DATA_DIR
+_slm_usable "${SLM_LAUNCHER:-}" || unset SLM_LAUNCHER
+if ! _slm_usable "${CLAUDE_PLUGIN_DATA:-}"; then
+    unset CLAUDE_PLUGIN_DATA
+    for _slm_d in "${CURSOR_PLUGIN_DATA:-}" "${PLUGIN_DATA:-}" \
+                  "${XDG_DATA_HOME:-${HOME}/.local/share}/superlocalmemory-plugin"; do
+        if _slm_usable "${_slm_d}"; then CLAUDE_PLUGIN_DATA="${_slm_d}"; break; fi
+    done
+fi
 
 _SLM_DATA="${SLM_DATA_DIR:-$HOME/.superlocalmemory}"
 
 # Which slm to run is decided in ONE place, shared with the hooks and the venv
 # bootstrap, so the three can never disagree about which install is in play.
 # shellcheck source=slm-resolve.sh
-. "$(dirname "${BASH_SOURCE[0]}")/slm-resolve.sh"
+. "${_SLM_SCRIPTS}/slm-resolve.sh"
 _PLUGIN_BIN="$(slm_plugin_bin)"
 
 # Is a daemon already up for this data dir? If so we join it rather than boot a
@@ -46,10 +90,45 @@ if [ -f "${_SLM_DATA}/daemon.pid" ] \
     _daemon_running=1
 fi
 
-# Start a daemon with the chosen binary unless one is already serving.
+# Start a daemon with the chosen command unless one is already serving.
 _ensure_daemon() {
     [ "${_daemon_running}" -eq 1 ] && return 0
-    "$1" serve start >&2
+    "$@" serve start >&2
+}
+
+# The release this plugin tree ships (requirements.txt is stamped every release).
+_slm_pin() {
+    sed -n 's/^\(superlocalmemory==[0-9][0-9A-Za-z.+!-]*\)[[:space:]]*$/\1/p' \
+        "${_SLM_PLUGIN_ROOT}/requirements.txt" 2>/dev/null | head -n 1
+}
+
+# No installed slm and no plugin venv: run this release through uvx. Returns
+# only when it cannot (no uvx, or no pin); otherwise it becomes the server.
+_slm_run_uvx() {
+    local _pin
+    command -v uvx >/dev/null 2>&1 || return 1
+    _pin="$(_slm_pin)"
+    if [ -z "${_pin}" ]; then
+        echo "SLM plugin: not using uvx: no superlocalmemory pin in ${_SLM_PLUGIN_ROOT}/requirements.txt." >&2
+        return 1
+    fi
+    # PyPI's Linux torch is the CUDA build; macOS and Windows get CPU wheels anyway.
+    if [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
+        export UV_TORCH_BACKEND="${UV_TORCH_BACKEND:-cpu}"
+    fi
+    export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
+    echo "SLM plugin: no installed slm; running ${_pin} through uvx (downloaded once, then cached)." >&2
+    _ensure_daemon uvx --from "${_pin}" slm || \
+        echo "SLM plugin: daemon did not start; the MCP server will retry on first use." >&2
+    exec uvx --from "${_pin}" slm mcp
+}
+
+# Opt-in: build the plugin venv now, with the same bootstrap SessionStart runs.
+_slm_bootstrap() {
+    [ "${SLM_LAUNCHER_BOOTSTRAP:-0}" = "1" ] || return 1
+    CLAUDE_PLUGIN_ROOT="${_SLM_PLUGIN_ROOT}" CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}" \
+        bash "${_SLM_SCRIPTS}/ensure-venv.sh" >&2 || return 1
+    [ -x "${SLM_CHOICE_BIN}" ]
 }
 
 if ! slm_choose; then
@@ -88,12 +167,17 @@ case "${SLM_LAUNCHER:-auto}:${SLM_CHOICE}" in
         ;;
     auto:plugin)
         # No system install. Use the plugin's own venv, once SessionStart has
-        # built it. If it is not there either, say which two things were looked
-        # for, so the fix is obvious.
+        # built it. A host that runs no hooks never builds it: then uvx, then
+        # (opt-in) a venv built here. If none of that works, say what was
+        # looked for, so the fix is obvious.
         if [ "${SLM_CHOICE_READY}" -ne 1 ]; then
-            slm_not_found_message >&2
-            echo >&2
-            exit 1
+            _slm_run_uvx
+            if ! _slm_bootstrap; then
+                slm_not_found_message >&2
+                echo >&2
+                echo "  Or install uv (https://docs.astral.sh/uv/): the plugin then runs SuperLocalMemory through uvx." >&2
+                exit 1
+            fi
         fi
         if ! _ensure_daemon "${SLM_CHOICE_BIN}"; then
             echo "SLM plugin: unable to start the owned daemon; refusing a direct MCP writer." >&2

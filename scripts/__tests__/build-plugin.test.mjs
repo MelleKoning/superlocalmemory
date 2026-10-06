@@ -148,6 +148,7 @@ function setupFixture(tmp, overrides = {}) {
   writeFile(tmp, 'plugin-src/settings.json', '{"permissions":{"allow":[]}}\n');
   writeFile(tmp, 'plugin-src/requirements.txt', 'superlocalmemory>=3.6.14\n');
   writeFile(tmp, 'plugin-src/rules/CLAUDE.md.fragment', '<!-- SLM -->\n');
+  writeFile(tmp, 'assets/branding/slm-mark.svg', '<svg xmlns="http://www.w3.org/2000/svg"/>\n');
   return manifest;
 }
 
@@ -271,12 +272,15 @@ describe('buildPlan', () => {
     }
 
     // plugin/.claude-plugin/plugin.json
-    const pluginJsonFiles = [...plan.keys()].filter(k => k.endsWith('plugin.json'));
+    // (plus the Cursor-format pair: plugin/.cursor-plugin/plugin.json and the
+    // repo-root .cursor-plugin/marketplace.json — tested in build-cursor-plugin.test.mjs)
+    const isCursor = (k) => k.includes(`${path.sep}.cursor-plugin${path.sep}`);
+    const pluginJsonFiles = [...plan.keys()].filter(k => k.endsWith('plugin.json') && !isCursor(k));
     assert.equal(pluginJsonFiles.length, 1);
     assert.ok(pluginJsonFiles[0].includes(`plugin${path.sep}.claude-plugin`), 'plugin.json must be in plugin/.claude-plugin/');
 
     // marketplace.json at repo .claude-plugin/ (not plugin/)
-    const marketplaceFiles = [...plan.keys()].filter(k => k.endsWith('marketplace.json'));
+    const marketplaceFiles = [...plan.keys()].filter(k => k.endsWith('marketplace.json') && !isCursor(k));
     assert.equal(marketplaceFiles.length, 1);
     // must be in <root>/.claude-plugin/marketplace.json
     const mf = marketplaceFiles[0];
