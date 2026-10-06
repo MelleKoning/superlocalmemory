@@ -15,13 +15,28 @@ name, alias, or a spelling close enough to merge automatically, read-only.
 
 The candidates were already checked for visibility (a shared or global
 memory may belong to another profile), so matching does not re-filter by
-profile. ``saved_by``, ``about`` and ``kind`` are hard filters: only memories
-that match are kept, even if that leaves none, because the caller asked for
-exactly that. ``project`` filters too, but recall falls back to unfiltered
-results - and says so - when nothing it found was saved under the project
-(``retrieval.project_scope``). ``prefer_project`` never filters; it only ranks
-that project's memories higher. Reads only; ``matching_fact_ids`` never raises
-(a failure keeps nothing rather than everything).
+profile. ``saved_by``, ``about``, ``kind`` and ``tags`` are hard filters: only
+memories that match are kept, even if that leaves none, because the caller
+asked for exactly that. ``project`` filters too, but recall falls back to
+unfiltered results - and says so - when nothing it found was saved under the
+project (``retrieval.project_scope``). ``prefer_project`` never filters; it
+only ranks that project's memories higher. Reads only; ``matching_fact_ids``
+never raises (a failure keeps nothing rather than everything).
+
+``tags`` (4.1.22 G05): exact label matching, composed with every other facet
+as AND. A label's identity is ``core.tag_identity.tag_key`` - Unicode NFC,
+trimmed, internal whitespace collapsed, casefolded, punctuation kept - never
+a raw string compare, so "Token-Optimization" and "token-optimization " are
+the same tag. ``tags_match`` is ``"all"`` (every requested label must be on
+the memory - the default) or ``"any"`` (at least one). Stored tags are read
+from ``memories.metadata_json -> '$.tags'`` and parsed the same way
+regardless of whether that value is a comma-separated string, a string that
+is itself a JSON array, or (an MCP caller) a real list -
+``core.tag_identity.parse_tag_values`` is the one place that distinction is
+handled. Unlike ``kind``, no "richer report" lives in this module - the
+richer ``tag_scope`` note/reason the response shows is built once, in
+``retrieval.tag_scope``, from the same candidates this module already
+admitted.
 """
 
 from __future__ import annotations
@@ -51,6 +66,28 @@ def _clean_project(value: object) -> str | None:
     return _clean(value, MAX_PROJECT_CHARS)
 
 
+def _clean_tags(value: object) -> tuple[str, ...]:
+    """``value`` (a list, or a comma-separated string) to a de-duplicated
+    tuple of DISPLAY labels, in first-seen order, one per distinct
+    ``tag_key``. A label containing a comma needs the list form - a CSV
+    string cannot express it (``core.tag_identity.parse_tag_values``)."""
+    from superlocalmemory.core.tag_identity import parse_tag_values, tag_key
+
+    seen: dict[str, None] = {}
+    out: list[str] = []
+    for item in parse_tag_values(value):
+        key = tag_key(item)
+        if key is not None and key not in seen:
+            seen[key] = None
+            out.append(item)
+    return tuple(out)
+
+
+def _clean_tags_match(value: object) -> str:
+    text = str(value).strip().lower() if isinstance(value, str) and value.strip() else ""
+    return text if text in ("all", "any") else "all"
+
+
 @dataclass(frozen=True, slots=True)
 class Facets:
     project: str | None = None
@@ -63,18 +100,27 @@ class Facets:
     kind: str | None = None
     #: 4.1.21 (#150): rank this project's memories higher; never a filter.
     prefer_project: str | None = None
+    #: 4.1.22 (G05): exact DISPLAY labels asked for, de-duplicated by
+    #: ``core.tag_identity.tag_key`` — never the raw caller input verbatim.
+    #: Empty means no tag filter.
+    tags: tuple[str, ...] = ()
+    #: "all" (every requested label must be on the memory) or "any" (at
+    #: least one). Anything else given by a caller collapses to "all".
+    tags_match: str = "all"
 
     @classmethod
     def of(cls, project: object = None, agent: object = None, about: object = None,
-          kind: object = None, prefer_project: object = None) -> "Facets":
+          kind: object = None, prefer_project: object = None,
+          tags: object = None, tags_match: object = None) -> "Facets":
         return cls(_clean_project(project), _clean(agent), _clean(about), _clean(kind),
-                   _clean_project(prefer_project))
+                   _clean_project(prefer_project), _clean_tags(tags),
+                   _clean_tags_match(tags_match))
 
     @property
     def narrows(self) -> bool:
         """True when any facet filters (everything but ``prefer_project``)."""
         return not (self.project is None and self.agent is None and self.about is None
-                    and self.kind is None)
+                    and self.kind is None and not self.tags)
 
     @property
     def empty(self) -> bool:
@@ -84,7 +130,9 @@ class Facets:
     def as_dict(self) -> dict[str, str]:
         return {k: v for k, v in (("project", self.project), ("agent", self.agent),
                                   ("about", self.about), ("kind", self.kind),
-                                  ("prefer_project", self.prefer_project))
+                                  ("prefer_project", self.prefer_project),
+                                  ("tags", ",".join(self.tags) if self.tags else None),
+                                  ("tags_match", self.tags_match if self.tags else None))
                 if v is not None}
 
 
@@ -189,6 +237,40 @@ def _by_kind(db: Any, fact_ids: list[str], wanted: str, *,
     return keep
 
 
+def _by_tags(db: Any, fact_ids: list[str], wanted: tuple[str, ...], match: str) -> set[str]:
+    """``fact_ids`` whose parent memory's tags satisfy ``wanted``/``match``.
+
+    Reads each candidate's raw stored tag value once (chunked, like the
+    other metadata filters here) and parses it with
+    ``core.tag_identity.tag_keys`` — handling a CSV string, a JSON-array
+    string, or (already) a real list identically. A memory with no tags at
+    all never matches, whatever ``wanted`` is.
+    """
+    from superlocalmemory.core.tag_identity import tag_key, tag_keys
+
+    wanted_keys = frozenset(k for k in (tag_key(t) for t in wanted) if k is not None)
+    if not wanted_keys:
+        return set()
+    keep: set[str] = set()
+    for chunk in _chunks(fact_ids):
+        rows = db.execute(
+            "SELECT f.fact_id AS fact_id, "
+            "json_extract(m.metadata_json, '$.tags') AS tags "
+            "FROM atomic_facts f JOIN memories m ON m.memory_id = f.memory_id "
+            f"WHERE f.fact_id IN ({','.join('?' * len(chunk))})",
+            tuple(chunk),
+        )
+        for row in rows:
+            d = dict(row)
+            have = frozenset(tag_keys(d.get("tags")))
+            if not have:
+                continue
+            ok = bool(wanted_keys & have) if match == "any" else wanted_keys <= have
+            if ok:
+                keep.add(str(d["fact_id"]))
+    return keep
+
+
 def matching_fact_ids(db: Any, fact_ids: Iterable[str], profile_id: str,
                       facets: Facets, resolver: Any = None, *,
                       display_min_confidence: float = _DEFAULT_DISPLAY_MIN_CONFIDENCE,
@@ -226,6 +308,8 @@ def matching_fact_ids(db: Any, fact_ids: Iterable[str], profile_id: str,
             remaining = keep(_by_kind(
                 db, remaining, facets.kind,
                 display_min_confidence=display_min_confidence))
+        if facets.tags and remaining:
+            remaining = keep(_by_tags(db, remaining, facets.tags, facets.tags_match))
     except Exception as exc:  # noqa: BLE001 - a filter that cannot run keeps nothing
         logger.warning("Recall facet filter failed (%s); no results kept", type(exc).__name__)
         return set()

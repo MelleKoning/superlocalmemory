@@ -32,8 +32,9 @@ def db(tmp_path) -> DatabaseManager:
     return mgr
 
 
-def _save(db, content, *, project=None, agent=None, entities=()) -> str:
-    meta = {k: v for k, v in (("project", project), ("agent_id", agent)) if v is not None}
+def _save(db, content, *, project=None, agent=None, entities=(), tags=None) -> str:
+    meta = {k: v for k, v in (("project", project), ("agent_id", agent), ("tags", tags))
+           if v is not None}
     memory_id = db.store_memory(MemoryRecord(profile_id="default", content=content, metadata=meta))
     return db.store_fact(AtomicFact(profile_id="default", memory_id=memory_id, content=content,
                                     fact_type=FactType.SEMANTIC,
@@ -65,6 +66,92 @@ def test_no_facets_keeps_everything_and_blank_values_are_no_facet(db) -> None:
     ids = [_save(db, "x"), _save(db, "y", project="p")]
     assert matching_fact_ids(db, ids, "default", Facets.of()) == set(ids)
     assert Facets.of(project="  ", agent="", about=None).empty
+
+
+def test_tags_filter_matches_exact_label_csv_stored(db) -> None:
+    tagged = _save(db, "Ship with token optimization.", tags="token-optimization,v4.1.21")
+    other = _save(db, "Nothing tagged this way.", tags="unrelated")
+    none = _save(db, "No tags at all.")
+    keep = matching_fact_ids(
+        db, [tagged, other, none], "default", Facets.of(tags="token-optimization"))
+    assert keep == {tagged}
+
+
+def test_tags_filter_is_canonical_not_a_raw_compare(db) -> None:
+    tagged = _save(db, "x", tags="Token-Optimization")
+    keep = matching_fact_ids(db, [tagged], "default",
+                             Facets.of(tags=" token-optimization "))
+    assert keep == {tagged}
+
+
+def test_tags_filter_reads_a_json_array_string(db) -> None:
+    # Stored as a real list -> json.dumps makes metadata_json hold a JSON
+    # array; json_extract then hands that back as the string '["a", "b"]'.
+    tagged = _save(db, "x", tags=["token-optimization", "v4.1.21"])
+    keep = matching_fact_ids(db, [tagged], "default", Facets.of(tags="v4.1.21"))
+    assert keep == {tagged}
+
+
+def test_tags_filter_all_requires_every_label(db) -> None:
+    both = _save(db, "x", tags="a,b")
+    one = _save(db, "y", tags="a")
+    keep = matching_fact_ids(db, [both, one], "default",
+                             Facets.of(tags=["a", "b"], tags_match="all"))
+    assert keep == {both}
+
+
+def test_tags_filter_any_requires_one_label(db) -> None:
+    both = _save(db, "x", tags="a,b")
+    one = _save(db, "y", tags="a")
+    neither = _save(db, "z", tags="c")
+    keep = matching_fact_ids(db, [both, one, neither], "default",
+                             Facets.of(tags=["a", "b"], tags_match="any"))
+    assert keep == {both, one}
+
+
+def test_tags_filter_default_match_is_all(db) -> None:
+    assert Facets.of(tags=["a", "b"]).tags_match == "all"
+    assert Facets.of(tags=["a"], tags_match="bogus").tags_match == "all"
+    assert Facets.of(tags=["a"], tags_match="ANY").tags_match == "any"
+
+
+def test_tags_combine_with_project_as_and(db) -> None:
+    both = _save(db, "x", project="slm", tags="decision")
+    project_only = _save(db, "y", project="slm", tags="status")
+    tag_only = _save(db, "z", project="loops", tags="decision")
+    keep = matching_fact_ids(
+        db, [both, project_only, tag_only], "default",
+        Facets.of(project="slm", tags="decision"))
+    assert keep == {both}
+
+
+def test_a_comma_bearing_label_needs_the_list_form(db) -> None:
+    tagged = _save(db, "x", tags=["release, 4.1.22"])
+    # The CSV *string* form "release, 4.1.22" can only ever name two labels
+    # ("release" and "4.1.22") - it cannot ask for the one comma-bearing tag.
+    assert matching_fact_ids(db, [tagged], "default",
+                             Facets.of(tags="release, 4.1.22")) == set()
+    assert matching_fact_ids(db, [tagged], "default",
+                             Facets.of(tags=["release, 4.1.22"])) == {tagged}
+
+
+def test_tags_filter_duplicates_in_the_request_collapse(db) -> None:
+    tagged = _save(db, "x", tags="a")
+    facets = Facets.of(tags="a,A, a ")
+    assert facets.tags == ("a",)
+    assert matching_fact_ids(db, [tagged], "default", facets) == {tagged}
+
+
+def test_an_edited_tag_is_found_by_the_new_label_not_the_old(db) -> None:
+    memory_id = db.store_memory(MemoryRecord(
+        profile_id="default", content="x", metadata={"tags": "old-label"}))
+    fact_id = db.store_fact(AtomicFact(profile_id="default", memory_id=memory_id,
+                                      content="x", fact_type=FactType.SEMANTIC))
+    assert matching_fact_ids(db, [fact_id], "default", Facets.of(tags="old-label")) == {fact_id}
+    db.store_memory(MemoryRecord(profile_id="default", memory_id=memory_id, content="x",
+                                 metadata={"tags": "new-label"}))
+    assert matching_fact_ids(db, [fact_id], "default", Facets.of(tags="old-label")) == set()
+    assert matching_fact_ids(db, [fact_id], "default", Facets.of(tags="new-label")) == {fact_id}
 
 
 def test_list_facets_counts_memories_per_project_and_agent(db) -> None:
