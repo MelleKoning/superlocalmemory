@@ -30,6 +30,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from superlocalmemory.core.project_identity import project_key
+from superlocalmemory.storage.database import visible_fact_clause_for_connection
+
 from .helpers import dict_factory, get_active_profile, get_db_connection
 
 logger = logging.getLogger("superlocalmemory.routes.summaries")
@@ -159,12 +162,32 @@ async def get_summary_projects(request: Request):
 
     The dashboard is a browser tab with no working directory, so there is no
     "this project" from the server's point of view; a list of the projects seen
-    is the right control. Scope comes from ``tool_events.project_path`` — the
-    directory an agent was working in when it called SLM (see the note at the
-    top of summaries/project_work_log.py).
+    is the right control. Two sources are merged, by #150's project identity
+    rule (``core.project_identity.project_key`` — the last path component,
+    Unicode-normalised and case-folded):
 
-    ``tool_events`` is a bounded ring buffer, so this lists recently active
-    projects; ``truncated`` says so instead of implying the list is complete.
+    * ``tool_events.project_path`` — the directory an agent was working in
+      when it called SLM (see the note at the top of
+      summaries/project_work_log.py);
+    * projects saved on a VISIBLE memory (``remember(project=...)``) — the
+      same rows ``summaries/project_work_log.py``'s ``saved_rows`` query
+      already merges into a project work log. Before this, a memory saved
+      under a project that no hook-observed tool-event session ever touched
+      could be SUMMARISED (the work log found it by project name) but never
+      PICKED — this endpoint only read tool_events, so the project never
+      appeared in the dropdown, and the picker and the summary disagreed
+      about what a project is.
+
+    A project known under both a working-directory path and a saved project
+    name is listed once, under its tool-event path (the richer, most
+    identifying form); one known only from saved memories is listed under the
+    name it was saved with — either way, picking it sends a ``target`` that
+    ``generate_project_work_log`` resolves through the same ``project_key``
+    rule, so the summary it produces is never empty.
+
+    ``tool_events`` is a bounded ring buffer, so ``truncated`` describes only
+    that source; a project known solely from saved memories is never dropped
+    for ring-buffer reasons.
     """
     profile = get_active_profile()
     try:
@@ -185,21 +208,90 @@ async def get_summary_projects(request: Request):
             """,
             (profile,),
         )
-        rows = cursor.fetchall()
+        event_rows = cursor.fetchall()
         total = cursor.execute("SELECT COUNT(*) AS n FROM tool_events").fetchone()["n"]
+
+        # Withheld and archived rows are not memories a person may be shown —
+        # the identical predicate summaries/project_work_log.py applies to its
+        # own saved-project query, so a project the work log can summarise is
+        # never absent here.
+        visible = visible_fact_clause_for_connection(conn, "af")
+        cursor.execute(
+            f"""
+            SELECT json_extract(m.metadata_json, '$.project') AS project,
+                   COUNT(*) AS memories
+              FROM atomic_facts af
+              JOIN memories     m ON m.memory_id = af.memory_id
+             WHERE af.profile_id = ?
+               AND af.lifecycle != 'archived'
+               AND json_valid(m.metadata_json)
+               AND json_extract(m.metadata_json, '$.project') IS NOT NULL
+               AND json_extract(m.metadata_json, '$.project') != ''{visible}
+             GROUP BY project
+             ORDER BY memories DESC, project ASC
+             LIMIT 200
+            """,  # noqa: S608 - the clauses are built from constants only
+            (profile,),
+        )
+        saved_rows = cursor.fetchall()
     except Exception:
         raise _internal_error("Project list error")
 
-    projects = [
-        {"path": r["path"], "events": r["events"], "label": _project_label(r["path"])}
-        for r in rows
-    ]
+    projects = _merge_project_rows(event_rows, saved_rows)
     return {
         "projects": projects,
         "profile_id": profile,
         "truncated": total >= _TOOL_EVENT_RING_SIZE,
         "event_rows": total,
     }
+
+
+def _merge_project_rows(event_rows: list[dict], saved_rows: list[dict]) -> list[dict]:
+    """Combine tool-event projects and saved-memory projects into one list.
+
+    Deduplicated by ``project_key`` (#150's identity rule): a project seen as
+    a tool-event working directory and the same project named on a saved
+    memory are one entry, not two — picking either still produces a non-empty
+    summary, since ``generate_project_work_log`` resolves its target through
+    the same rule. Each source is summed within itself first (two raw project
+    strings — e.g. "acme-billing" and "ACME-Billing" — can share a key), and
+    the tool-event path wins as the displayed ``path`` when a project has one,
+    since it is the fuller, most identifying form.
+    """
+    event_by_key: dict[str, dict] = {}
+    for r in event_rows:
+        key = project_key(r["path"])
+        if key is None:
+            continue
+        cur = event_by_key.setdefault(key, {"path": r["path"], "events": 0, "_top": -1})
+        cur["events"] += r["events"]
+        if r["events"] > cur["_top"]:
+            cur["path"], cur["_top"] = r["path"], r["events"]
+
+    saved_by_key: dict[str, dict] = {}
+    for r in saved_rows:
+        key = project_key(r["project"])
+        if key is None:
+            continue
+        cur = saved_by_key.setdefault(key, {"path": r["project"], "memories": 0, "_top": -1})
+        cur["memories"] += r["memories"]
+        if r["memories"] > cur["_top"]:
+            cur["path"], cur["_top"] = r["project"], r["memories"]
+
+    merged: dict[str, dict] = {}
+    for key, ev in event_by_key.items():
+        merged[key] = {"path": ev["path"], "events": ev["events"]}
+    for key, sv in saved_by_key.items():
+        if key in merged:
+            continue  # already listed under its tool-event working directory
+        merged[key] = {"path": sv["path"], "events": sv["memories"]}
+
+    projects = [
+        {"path": v["path"], "events": v["events"], "label": _project_label(v["path"])}
+        for v in merged.values()
+    ]
+    projects.sort(key=lambda p: (-p["events"], p["path"]))
+    return projects[:50]
 
 
 @router.get("/api/summary/sessions")
