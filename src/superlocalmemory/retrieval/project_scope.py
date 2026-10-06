@@ -14,13 +14,20 @@ Two ways to say it, both opt-in per recall:
   make the cut (``boost_order``, inside retrieval) and on the final order
   (``prefer_in_final_order``, the last ranking step of recall, after learned
   ranking - which rewrites every score without knowing the project).
-* ``project`` - a filter. Only memories saved under that project are kept.
+* ``project`` - a filter. Only memories saved under that project are kept,
+  and recall also searches inside the project before results are fused
+  (``retrieval.project_search``), so a project memory crowded out by closer
+  matches elsewhere is still a candidate.
   When none of the memories found for the question were saved under it - a
   project with no tagged memories, a misspelt name - the filter is not applied,
   the unfiltered results are returned, and the response says so
   (``project_scope.filter.applied: false`` with a plain-English ``note``). A
   filter that silently returns nothing is indistinguishable from "this store
-  knows nothing", which is the wrong answer.
+  knows nothing", which is the wrong answer. ``project_strict`` (4.1.22) turns
+  the fall-back off: nothing is returned, and the response says why. For a
+  caller (an automation, a loop) that must never act on another project's
+  memories. A project label is never an access grant: profile and scope
+  admission, which ran before this, are the boundary.
 
 Both compare projects with ``core.project_identity.project_key`` and read the
 project each memory was saved with (``memories.metadata_json -> project``).
@@ -35,10 +42,11 @@ order (ties keep the incoming order, which retrieval already breaks by id).
 from __future__ import annotations
 
 import logging
+import unicodedata
 from dataclasses import dataclass, replace
 from typing import Any, Iterable, Sequence
 
-from superlocalmemory.core.project_identity import project_key
+from superlocalmemory.core.project_identity import project_key, project_name
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +121,15 @@ class Scoped:
     report: dict | None = None
 
 
-def _filter_note(raw: str, key: str | None, reason: str) -> str:
+def _filter_note(raw: str, key: str | None, reason: str, strict: bool = False) -> str:
+    if strict:
+        if reason == "not_a_project":
+            return f"'{raw}' does not name a project, so nothing is returned (strict)."
+        if reason == "unreadable":
+            return (f"The project saved with each memory could not be read, so nothing "
+                    f"is returned (strict project '{key}').")
+        return (f"Nothing saved under project '{key}' was found for this question, "
+                f"so nothing is returned (strict).")
     if reason == "not_a_project":
         return f"'{raw}' does not name a project, so these results are not narrowed."
     if reason == "unreadable":
@@ -123,7 +139,37 @@ def _filter_note(raw: str, key: str | None, reason: str) -> str:
             f"'{key}', so these results are not narrowed to it.")
 
 
-def _apply_filter(ids: list[str], raw: str, keys: dict[str, str] | None
+#: How two project values are judged the same (core.project_identity).
+MATCH_RULE = "last folder name, ignoring case"
+
+
+def _as_path(value: str) -> str | None:
+    """A stored project value as a comparable full path, or None for a bare
+    name (a bare name cannot be told apart from any path that ends in it)."""
+    text = unicodedata.normalize("NFC", value.strip()).replace("\\", "/").rstrip("/")
+    return text.casefold() if "/" in text else None
+
+
+def _identity(raw: str, want: str | None, matched: list[str],
+              stored: dict[str, str] | None) -> dict:
+    """What the filter matched against, and whether one name stood for more
+    than one saved folder ("/a/app" and "/b/app" have the same key). A bare
+    name next to a path is not ambiguous: it names whichever folder it is."""
+    out: dict = {"name": project_name(raw), "rule": MATCH_RULE}
+    if stored and matched:
+        paths = sorted({p for p in (_as_path(stored[f]) for f in matched if f in stored)
+                        if p is not None})
+        if len(paths) > 1:
+            out["ambiguous"] = True
+            out["stored_as_count"] = len(paths)
+            out["ambiguity_note"] = (
+                f"Memories saved under {len(paths)} different folders share the name "
+                f"'{want}'; they are treated as one project.")
+    return out
+
+
+def _apply_filter(ids: list[str], raw: str, keys: dict[str, str] | None,
+                  *, strict: bool = False, stored: dict[str, str] | None = None
                   ) -> tuple[list[str], dict]:
     want = project_key(raw)
     if want is None:
@@ -133,11 +179,13 @@ def _apply_filter(ids: list[str], raw: str, keys: dict[str, str] | None
     else:
         matched = [f for f in ids if keys.get(f) == want]
         reason = "" if matched else "no_match"
-    report = {"project": raw, "key": want, "applied": bool(matched),
-              "matched": len(matched), "note": ""}
+    report = {"project": raw, "key": want, "applied": bool(matched) or strict,
+              "strict": strict, "matched": len(matched), "note": "",
+              "identity": _identity(raw, want, matched, stored)}
     if not matched:
-        report = {**report, "reason": reason, "note": _filter_note(raw, want, reason)}
-        return ids, report
+        report = {**report, "reason": reason,
+                  "note": _filter_note(raw, want, reason, strict)}
+        return ([] if strict else ids), report
     return matched, report
 
 
@@ -169,18 +217,23 @@ def narrow(db: Any, fact_ids: Iterable[str], profile_id: str, facets: Any, *,
     wants_project = getattr(facets, "project", None) is not None
     wants_prefer = getattr(facets, "prefer_project", None) is not None
     keys: dict[str, str] | None = None
+    stored: dict[str, str] | None = None
     if (wants_project or wants_prefer) and ids:
         try:
-            keys = project_keys(db, ids)
+            stored = stored_projects(db, ids)
+            keys = {f: k for f, k in ((f, project_key(v)) for f, v in stored.items())
+                    if k is not None}
         except Exception as exc:  # noqa: BLE001 - reported, never silent
             logger.warning("Recall project lookup failed (%s)", type(exc).__name__)
-            keys = None
+            keys = stored = None
     elif wants_project or wants_prefer:
-        keys = {}
+        keys = stored = {}
     report: dict[str, dict] = {}
     if wants_project:
-        ids, report["filter"] = _apply_filter(ids, facets.project, keys)
-    rest = replace(facets, project=None, prefer_project=None)
+        ids, report["filter"] = _apply_filter(
+            ids, facets.project, keys,
+            strict=bool(getattr(facets, "project_strict", False)), stored=stored)
+    rest = replace(facets, project=None, prefer_project=None, project_strict=False)
     if rest.narrows and ids:
         kwargs = ({} if display_min_confidence is None
                   else {"display_min_confidence": display_min_confidence})
