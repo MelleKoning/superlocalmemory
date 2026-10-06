@@ -31,7 +31,7 @@ from superlocalmemory.core.config import (
     ChannelWeights,
     RetrievalConfig,
 )
-from superlocalmemory.retrieval import channel_status as chstat
+from superlocalmemory.retrieval import channel_status as chstat, kind_scope
 from superlocalmemory.retrieval.fusion import FusionResult, weighted_rrf
 from superlocalmemory.retrieval.rerank_pool import rerank_pool
 from superlocalmemory.retrieval.strategy import QueryStrategy, QueryStrategyClassifier
@@ -323,14 +323,10 @@ class RetrievalEngine:
         # Dynamic top-k for aggregation queries
         effective_limit = 100 if strat.query_type == "aggregation" else limit
 
-        # 3. Run channels. Both scope flags AND extra_disabled_channels travel as
-        # explicit call parameters so concurrent recalls with different flags
-        # cannot corrupt each other.  No lock needed — no shared mutable state.
-        # Owned by this call, so concurrent recalls cannot report each other's
-        # losses.  Non-empty means this answer is incomplete, not just slow.
+        # 3. Run channels; flags travel as parameters (no shared state). Owned by
+        # this call: non-empty means this answer is incomplete, not just slow.
         dropped_channels: set[str] = set()
-        # Where this recall's time went, so a slow answer names its stage
-        # (``RecallResponse.stage_ms``). Owned by this call, like the two above.
+        # Where this recall's time went (``RecallResponse.stage_ms``); per call.
         stage_ms: dict[str, float] = {}
         _t_channels = time.monotonic()
         ch_results = self._run_channels(
@@ -344,6 +340,10 @@ class RetrievalEngine:
             stage_ms=stage_ms,
         )
         stage_ms["channels"] = round((time.monotonic() - _t_channels) * 1000.0, 1)
+        if getattr(facets, "kind", None) and getattr(self, "_kind_membership", None):
+            ch_results = kind_scope.supplement(  # search inside the kind (kind_scope)
+                self, ch_results, query=query, query_embedding=self._embed_query(query)[0],
+                profile_id=profile_id, kind=facets.kind, stage_ms=stage_ms)
         _em("run_channels")
         # One request may need admission before fusion and again after optional
         # bridge/scene expansion.  Cache only the IDs checked during this one

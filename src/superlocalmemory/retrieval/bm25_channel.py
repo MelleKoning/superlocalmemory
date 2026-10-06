@@ -264,8 +264,13 @@ class BM25Channel:
         top_k: int = 30,
         include_global: bool | None = None,
         include_shared: bool | None = None,
+        extra_where: tuple[str, list] | None = None,
     ) -> list[tuple[str, float]]:
         """v3.5.0: SQLite FTS5 keyword search (C-level indexed, scales to millions).
+
+        ``extra_where``: an ``(" AND ...", params)`` clause on ``af`` that
+        narrows BOTH the content and the expansion query (kind-scoped recall,
+        retrieval/kind_scope). None: unchanged.
 
         Uses the ``atomic_facts_fts`` external-content FTS5 table (kept in sync
         by INSERT/DELETE/UPDATE triggers). Joins ``atomic_facts`` for profile
@@ -306,6 +311,9 @@ class BM25Channel:
         # than only at hydration so neither spends one of this channel's top_k
         # slots; the shared clause keeps the definition in one place.
         archive_clause = self._db.visible_fact_clause("af")
+        if extra_where is not None:
+            archive_clause += extra_where[0]
+            params = [*params, *extra_where[1]]
         sql = (
             "SELECT af.fact_id AS fact_id, bm25(atomic_facts_fts) AS rank, "
             "af.rowid AS fts_rowid, af.content AS content "

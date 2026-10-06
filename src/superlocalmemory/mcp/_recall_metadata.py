@@ -60,21 +60,42 @@ def forward_recall_metadata(raw: Any) -> dict[str, Any]:
             {key: raw.get(key, default) for key, default in defaults.items()}, raw)
     carried = getattr(raw, "metadata", None)
     if isinstance(carried, Mapping) and carried:
-        return {key: carried.get(key, default) for key, default in defaults.items()}
-    return {key: getattr(raw, key, default) for key, default in defaults.items()}
+        out = {key: carried.get(key, default) for key, default in defaults.items()}
+        out["answerability"], out["answerability_reason"] = _of_carried(carried, raw)
+        return out
+    from superlocalmemory.retrieval.answerability import of_response
+
+    out = {key: getattr(raw, key, default) for key, default in defaults.items()}
+    # A response object carries the check's status, not the derived word.
+    out["answerability"], out["answerability_reason"] = of_response(raw)
+    return out
+
+
+def _of_carried(carried: Mapping, raw: Any) -> tuple[str, str]:
+    from superlocalmemory.retrieval.answerability import of_envelope
+
+    results = getattr(raw, "results", None)
+    view = dict(carried)
+    if "result_count" not in view and results is not None:
+        view["result_count"] = len(results)
+    return of_envelope(view)
 
 
 def _derive_check_fields(out: dict[str, Any], raw: Mapping) -> dict[str, Any]:
     """An older daemon sends ``answer_check_status`` but not the 4.1.20 fields
     that explain it: derive them from the status it did send, so "judged" is
     never forwarded next to ``answer_check_ran: False``."""
-    if "answer_check_ran" in raw:
-        return out
-    from superlocalmemory.retrieval.answer_check_status import answer_check_note
+    from superlocalmemory.retrieval.answerability import of_envelope
 
-    status = out.get("answer_check_status")
-    out["answer_check_ran"] = status == "judged"
-    out["answer_check_note"] = answer_check_note(status, out.get("answer_check_reason", ""))
+    if "answer_check_ran" not in raw:
+        from superlocalmemory.retrieval.answer_check_status import answer_check_note
+
+        status = out.get("answer_check_status")
+        out["answer_check_ran"] = status == "judged"
+        out["answer_check_note"] = answer_check_note(status, out.get("answer_check_reason", ""))
+    # 4.1.22: an older daemon sends no answerability; derive it from what it
+    # did send, so an unchecked recall never reaches an agent as "supported".
+    out["answerability"], out["answerability_reason"] = of_envelope(raw)
     return out
 
 

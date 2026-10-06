@@ -203,5 +203,7 @@ def recall_keyword_fallback(
         "count": len(results),
         # Never judged, so never "confident" — the results are still shown.
         "no_confident_match": True,
+        "answerability": "unjudged",
+        "answerability_reason": "budget_exhausted" if results else "no_results",
         "retrieval_time_ms": 0,
     }
