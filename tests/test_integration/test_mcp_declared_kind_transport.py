@@ -420,12 +420,10 @@ def test_declared_kinds_survive_a_daemon_restart(lane):
             assert lane.kind_of(fid) == (kind, "caller"), (kind, fid)
 
 
-@pytest.mark.xfail(strict=False, raises=AssertionError, reason=(
-    "Known intermittent defect outside the transport: the kind filter is a hard "
-    "filter over the fused candidate pool (retrieval/project_scope.py), so once "
-    "enrichment has added near-identical facts a confirmed memory that misses the "
-    "pool is not returned at all, even for its exact words. Seen in 2 of 4 runs."))
 def test_kind_filtered_recall_still_finds_a_memory_after_the_restart(lane):
+    # Was intermittent (2 of 4 runs) while the kind filter only ran after
+    # fusion; kind-filtered recall now also searches inside the kind
+    # (retrieval/kind_scope; deterministic case: test_kind_recall_is_not_crowded_out).
     # Runs after the restart above (file order).
     out = lane.tool("recall", query=_content("decision"), kind="decision")
     # By now enrichment has split the memory into facts of its own, and recall

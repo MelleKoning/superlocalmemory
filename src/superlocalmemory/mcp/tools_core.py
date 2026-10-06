@@ -729,6 +729,8 @@ def register_core_tools(server, get_engine: Callable) -> None:
 
         ``profile_id`` reads another profile (empty = the active one); remote
         access sets it to the key's profile, whatever this computer is using.
+        A name that is not an existing profile is refused, never silently
+        treated as empty (4.1.22).
         """
         from superlocalmemory.core.kind_query import (
             InvalidKind,
@@ -744,7 +746,9 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     "error": str(exc)}
         try:
             engine = get_engine()
-            pid = await _runtime_profile(get_engine, (profile_id or "").strip())
+            pid, refused = await _call_profile(get_engine, profile_id)
+            if refused:
+                return refused
             # Read once: used for BOTH the --kind filter above and labelling
             # each item below, so a fact cannot pass the filter at one
             # threshold and be labelled (confirmed/suggested/legacy) at another.
@@ -788,6 +792,8 @@ def register_core_tools(server, get_engine: Callable) -> None:
 
         ``profile_id`` reads another profile (empty = the active one); remote
         access sets it to the key's profile, whatever this computer is using.
+        A name that is not an existing profile is refused, never silently
+        treated as empty (4.1.22).
         """
         try:
             engine = get_engine()
@@ -801,7 +807,9 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     ),
                     "results": [], "count": 0, "not_found": [],
                 }
-            pid = await _runtime_profile(get_engine, (profile_id or "").strip())
+            pid, refused = await _call_profile(get_engine, profile_id)
+            if refused:
+                return refused
             facts = engine._db.get_facts_by_ids(ids, pid)
             found = {f.fact_id for f in facts}
             # #150: the project each memory was saved under ("" when none).
@@ -855,6 +863,8 @@ def register_core_tools(server, get_engine: Callable) -> None:
 
         ``profile_id`` reads another profile (empty = the active one); remote
         access sets it to the key's profile, whatever this computer is using.
+        A name that is not an existing profile is refused, never silently
+        treated as empty (4.1.22).
         """
         from superlocalmemory.core.kind_query import (
             InvalidKind,
@@ -870,7 +880,9 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     "error": str(exc)}
         try:
             engine = get_engine()
-            pid = await _runtime_profile(get_engine, (profile_id or "").strip())
+            pid, refused = await _call_profile(get_engine, profile_id)
+            if refused:
+                return refused
             # v3.6.12 (search-2): push the limit into the query — was loading the
             # ENTIRE facts table (deserializing every 768-float embedding) just
             # to return the top N. get_all_facts preserves created_at DESC order.

@@ -313,6 +313,9 @@ def recall_response_metadata(response: Any) -> dict:
     _check_detail = getattr(response, "answer_check_detail", "") or ""
     if _check_detail not in ANSWER_CHECK_DETAILS:
         _check_detail = ""
+    from superlocalmemory.retrieval.answerability import of_response as _answerable
+
+    _answerability = _answerable(response)
     return {
         "score_contract_version": getattr(response, "score_contract_version", "2"),
         "calibration_status": getattr(response, "calibration_status", "uncalibrated"),
@@ -363,6 +366,10 @@ def recall_response_metadata(response: Any) -> dict:
         "answer_check_ran": _check_status == "judged",
         "answer_check_reason": _check_detail,
         "answer_check_note": answer_check_note(_check_status, _check_detail),
+        # 4.1.22: supported / unsupported / unjudged, and why (retrieval/
+        # answerability). ``abstained: false`` never means "checked"; this does.
+        "answerability": _answerability[0],
+        "answerability_reason": _answerability[1],
         # 4.1.21 (#150): what the recall's project did. ``filter.applied``
         # False means ``project`` matched nothing found for the question and
         # the results are NOT narrowed to it; ``note`` says so in words. None

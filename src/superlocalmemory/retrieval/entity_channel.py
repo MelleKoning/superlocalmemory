@@ -22,7 +22,7 @@ from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from superlocalmemory.retrieval import spreading
+from superlocalmemory.retrieval import adjacency_refresh as _refresh, spreading
 from superlocalmemory.retrieval.scope_policy import (
     authorized_fact_ids,
     filter_authorized_results,
@@ -305,12 +305,9 @@ class EntityGraphChannel:
         include_global: bool = False,
         include_shared: bool = False,
     ) -> None:
-        """Load graph adjacency into memory for fast spreading activation.
-
-        Loads ALL edges for a profile into a bidirectional dict. Cost: ~1s for
-        232K edges, ~18 MB RAM. The last ``SLM_ADJ_CACHE_PROFILES`` scopes
-        (default 3) stay warm in an LRU, so interleaved per-request profiles do
-        not rebuild the graph on every switch.
+        """Load graph adjacency into memory (all edges, bidirectional; an LRU of
+        ``SLM_ADJ_CACHE_PROFILES`` scopes). A copy that only lacks additions is
+        served while one rebuild runs beside recall (retrieval/adjacency_refresh).
         """
         # Check staleness: profile changed or new edges added since last load
         scope_key = (profile_id, bool(include_global), bool(include_shared))
@@ -330,25 +327,24 @@ class EntityGraphChannel:
         import time as _t_ec
 
         _now_ec = _t_ec.monotonic()
-        # memory-bounding-01: also reload if the cache is older than the TTL,
-        # even when the edge COUNT is unchanged. Edge weights/pruning can mutate
-        # the graph without changing the count (e.g. store_edge MAX-merge), and a
-        # count-stable window would otherwise serve a stale adjacency map.
-        # TTL=0 disables the time-based reload entirely (count-based correctness
-        # reload still applies); otherwise the slot is fresh within the TTL.
+        # memory-bounding-01: also reload past the TTL (weights can change with
+        # the count unchanged, e.g. MAX-merge); TTL=0 keeps count-based reload only.
         _ttl = _adj_ttl_seconds()
         slot = self._adj_slots.get(scope_key)
         if slot is not None:
             _fresh = _ttl <= 0.0 or ((_now_ec - slot.loaded_at) < _ttl)
-            if (
-                (slot.adj or slot.visible_fact_ids)
-                and slot.edge_count == current_count
-                and slot.fact_count == current_fact_count
-                and _fresh
-            ):
+            if ((slot.adj or slot.visible_fact_ids) and slot.edge_count == current_count
+                    and slot.fact_count == current_fact_count and _fresh):
                 self._adj_slots.move_to_end(scope_key)
                 self._restore_slot(scope_key, slot)
                 return
+            if (slot.adj or slot.visible_fact_ids) and _refresh.can_serve_stale(
+                    self, scope_key, slot) and _refresh.refresh_in_background(
+                    self, scope_key, current_count=current_count,
+                    current_fact_count=current_fact_count, now=_now_ec):
+                self._adj_slots.move_to_end(scope_key)
+                return self._restore_slot(scope_key, slot)
+        _seq = _refresh.log_head(self._db)
         slot = self._load_adjacency_from_db(
             profile_id,
             include_global=include_global,
@@ -360,6 +356,8 @@ class EntityGraphChannel:
         # Replacing an existing key keeps its old position, so the reload also
         # counts as a use for LRU ordering.
         self._adj_slots[scope_key] = slot
+        if _seq is not None:
+            _refresh.note_loaded(self, scope_key, _seq)
         self._adj_slots.move_to_end(scope_key)
         while len(self._adj_slots) > _adj_cache_profiles():
             self._adj_slots.popitem(last=False)

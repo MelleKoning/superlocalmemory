@@ -106,6 +106,73 @@ def test_the_opt_out_still_wins_on_the_default_root(clean_env, monkeypatch):
     assert not started and not listening
 
 
+async def _attempt_with_status(legacy_port: int, status: dict) -> bool:
+    """Same as :func:`_attempt` but also captures the status dict (4.1.22
+    polish: this is what /status reads to report the truth)."""
+    from superlocalmemory.server.legacy_port import maybe_start_legacy_redirect
+
+    task = maybe_start_legacy_redirect(_free_port(), legacy_port, status=status)
+    await asyncio.sleep(0.3)
+    if task is not None:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+    return task is not None
+
+
+def test_status_reports_bound_true_and_the_real_port_when_taken(clean_env):
+    status: dict = {}
+    port = _free_port()
+    started = asyncio.run(_attempt_with_status(port, status))
+    assert started
+    assert status == {"bound": True, "port": port, "reason": "default data root"}
+
+
+def test_status_reports_bound_false_for_a_second_data_root(clean_env, tmp_path, monkeypatch):
+    monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path / "second-root"))
+    status: dict = {}
+    port = _free_port()
+    started = asyncio.run(_attempt_with_status(port, status))
+    assert not started
+    assert status["bound"] is False
+    assert status["port"] is None
+    assert "not the default data root" in status["reason"]
+
+
+def test_status_reports_port_in_use_when_the_socket_is_already_held(clean_env):
+    """Entitled to take the port (default root), but another process already
+    holds the socket -- status must say so, not claim ``bound: True``."""
+    import socket as _socket
+
+    from superlocalmemory.server.legacy_port import maybe_start_legacy_redirect
+
+    port = _free_port()
+    holder = _socket.socket()
+    holder.bind(("127.0.0.1", port))
+    holder.listen(1)
+    try:
+        status: dict = {}
+
+        async def _run():
+            task = maybe_start_legacy_redirect(_free_port(), port, status=status)
+            await asyncio.sleep(0.3)
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+        asyncio.run(_run())
+        assert status["bound"] is False
+        assert status["port"] is None
+        assert "already in use" in status["reason"]
+    finally:
+        holder.close()
+
+
 def test_the_daemon_lifespan_uses_the_ownership_rule():
     """The lifespan must go through the rule, not start the redirect directly."""
     from superlocalmemory.server import unified_daemon

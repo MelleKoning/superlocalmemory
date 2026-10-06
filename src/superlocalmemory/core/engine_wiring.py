@@ -643,8 +643,9 @@ def init_retrieval(
     from superlocalmemory.retrieval.profile_channel import ProfileChannel
     from superlocalmemory.retrieval.bridge_discovery import BridgeDiscovery
 
-    # V3.3.19: TurboQuant 3-tier search (stateless, zero memory overhead)
-    qas = _init_quantization_aware_search(vector_store, db, config)
+    qas = _init_quantization_aware_search(vector_store, db, config)  # V3.3.19 TurboQuant
+    from superlocalmemory.retrieval import canonical_vector_index as cvi, kind_scope
+    vectors = cvi.candidate_vector_source(db, vector_store, config.embedding.dimension)
 
     channels: dict = {
         "semantic": SemanticChannel(
@@ -652,8 +653,7 @@ def init_retrieval(
             fisher_temperature=config.math.fisher_temperature,
             embedder=embedder,
             fisher_mode=config.math.fisher_mode,
-            vector_store=vector_store,
-            quantization_aware_search=qas,
+            vector_store=vectors, quantization_aware_search=qas,
         ),
         "bm25": BM25Channel(db),
         "entity_graph": EntityGraphChannel(db, entity_resolver),
@@ -661,12 +661,12 @@ def init_retrieval(
     }
 
     # Phase 3: Register SpreadingActivation as 5th channel
-    sa_channel = _init_spreading_activation(db, vector_store)
+    sa_channel = _init_spreading_activation(db, vectors)
     if sa_channel is not None:
         channels["spreading_activation"] = sa_channel
 
     # Phase G: Register Hopfield as 6th channel
-    hopfield_channel = _init_hopfield_channel(db, vector_store, config)
+    hopfield_channel = _init_hopfield_channel(db, vectors, config)
     if hopfield_channel is not None:
         channels["hopfield"] = hopfield_channel
 
@@ -692,11 +692,11 @@ def init_retrieval(
         display_min_confidence=config.memory_kinds.display_min_confidence,
     )
     judge_selection.register_engine(engine)  # so a switch reaches this engine too
+    kind_scope.attach(engine, db, vectors, config.embedding.dimension)  # kind recall
     # V3.3.13: Ensure reranker warmup is in progress.
     # The CrossEncoderReranker constructor starts background warmup, but
     # callers can also call warmup_sync() to block until ready.
     # Here we just log warmup status — benchmark scripts call warmup_sync() explicitly.
-    #
     # v3.4.42: Distinguish the legitimate "another process owns the
     # reranker worker" case (machine-wide singleton — usually the unified
     # daemon) from a real warmup failure. Before this fix, any CLI process

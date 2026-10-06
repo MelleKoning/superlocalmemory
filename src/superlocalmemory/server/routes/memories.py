@@ -1101,10 +1101,10 @@ async def search_memories(request: Request, body: SearchRequest):
             "query_type": "text_search", "retrieval_time_ms": 0,
             "retrieval_mode": "degraded_lexical", **abandoned_channel_metadata(),
             "score_contract_version": "2",
-            "calibration_status": "uncalibrated",
-            "calibration_id": None,
+            "calibration_status": "uncalibrated", "calibration_id": None,
             "answer_confidence": None,
-            "abstained": not bool(results),
+            "abstained": not bool(results), "answerability": "unjudged",  # never checked
+            "answerability_reason": "unavailable" if results else "no_results",
             "abstention_reason": None if results else "no_candidates",
             "no_confident_match": False,
         }

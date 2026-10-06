@@ -2297,11 +2297,25 @@ class SLMConfig:
 
         legacy = _base / "config.json"
         if not legacy.exists():
-            # No config at all — write defaults and current_mode
+            # No config at all — write defaults and current_mode.
+            #
+            # This is the path every fresh install (and every CI runner,
+            # which never has a prior config.json) takes on first boot.
+            # It used to default to Mode B — pointed at
+            # http://localhost:11434 for both the LLM and embeddings — with
+            # no reachability check (LLMBackbone.is_available() always
+            # returns True for the "ollama" provider; see llm/backbone.py).
+            # A machine with no local model silently got Mode B anyway,
+            # breaking Mode A's own promise ("no language model runs") and,
+            # on a machine where nothing answers at all on 11434, leaving
+            # enrichment unable to ever reach a terminal "complete" state.
+            # Every other zero-config default in this module (SLMConfig.
+            # default(), SLMConfig.load() with no file, the setup wizard's
+            # non-interactive path) is Mode A; this one now matches them.
             from superlocalmemory.storage.models import Mode as _M
-            _def = cls.for_mode(_M.B, base_dir=_base)
+            _def = cls.for_mode(_M.A, base_dir=_base)
             _def.save(legacy)
-            cls.write_current_mode("b", _base)
+            cls.write_current_mode("a", _base)
             for _m in (_M.A, _M.B, _M.C):
                 _mp = cls._mode_config_path(_base, _m)
                 if not _mp.exists():

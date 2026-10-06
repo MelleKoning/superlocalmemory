@@ -7,10 +7,17 @@
 Engine attaches a precomputed community summary when the top results cluster
 in one community (gated, fail-open, no per-query LLM). The serializer passes
 it through as `thematic_context`.
+
+Q9 (2026-10-06): a 3,816-member community made `member_fact_ids` 73% of a
+104KB session_init response — the full stored membership was echoed into
+every recall. `member_fact_ids` is now a bounded, query-relevant sample;
+`member_count` and `member_fact_ids_truncated` say the rest honestly instead
+of silently dropping it.
 """
 
 from __future__ import annotations
 
+import json
 import types
 from unittest.mock import MagicMock
 
@@ -52,7 +59,48 @@ class TestCommunityContext:
         assert ctx["community_id"] == 0
         assert ctx["summary"] == "Work at Accenture."
         assert ctx["matched_results"] == 2
-        assert ctx["member_fact_ids"] == ["f1", "f2", "f3"]  # drill-down handle
+        # Sample is bounded to the ids THIS query actually matched, not the
+        # whole stored membership — "f3" never appeared in the results.
+        assert ctx["member_fact_ids"] == ["f1", "f2"]
+        assert ctx["member_count"] == 3
+        assert ctx["member_fact_ids_truncated"] is True
+
+    def test_sample_bounded_on_a_large_community(self) -> None:
+        """Q9 regression: a 4,000-member community never floods the response.
+
+        Before the fix, `member_fact_ids` was `json.loads(fact_ids_json)` —
+        the entire stored membership. 15 of the top results fall in one
+        community of 4,000; the sample must cap at 10, never 15 or 4,000.
+        """
+        db = MagicMock()
+        big_members = [f"m{i}" for i in range(4000)]
+        db.execute.return_value = [
+            {"community_id": 0, "summary": "A very large community.",
+             "keywords": "big", "fact_ids_json": json.dumps(big_members),
+             "fact_count": 4000},
+        ]
+        eng = _engine(db)
+        results = [_result(f"m{i}") for i in range(15)]
+        ctx = eng._community_context(results, "default", top_k=20)
+        assert ctx is not None
+        assert len(ctx["member_fact_ids"]) == 10
+        assert ctx["member_count"] == 4000
+        assert ctx["member_fact_ids_truncated"] is True
+
+    def test_member_count_falls_back_to_a_reparse_without_fact_count(self) -> None:
+        """An older row with no `fact_count` column still reports a real count."""
+        db = MagicMock()
+        db.execute.return_value = [
+            {"community_id": 0, "summary": "Work at Accenture.",
+             "keywords": "accenture, varun", "fact_ids_json": '["f1", "f2", "f3"]',
+             "fact_count": 0},
+        ]
+        eng = _engine(db)
+        results = [_result("f1"), _result("f2")]
+        ctx = eng._community_context(results, "default")
+        assert ctx is not None
+        assert ctx["member_count"] == 3
+        assert ctx["member_fact_ids_truncated"] is True
 
     def test_none_below_threshold(self) -> None:
         db = MagicMock()
@@ -87,6 +135,44 @@ class TestCommunityContext:
         eng = _engine(db)
         assert eng._community_context([], "default") is None
         db.execute.assert_not_called()
+
+
+class TestBuildCommunityContextModuleDirect:
+    """Q9 (2026-10-06): the matching/sample logic lives in its own module
+    (``retrieval.community_context``) now, extracted out of engine.py so
+    that already-over-the-cap file does not grow. Covered above through
+    ``RetrievalEngine._community_context`` (the real caller); these confirm
+    the module also works correctly called directly, with no engine needed.
+    """
+
+    def test_direct_call_matches_the_engine_delegator(self) -> None:
+        from superlocalmemory.retrieval.community_context import (
+            MAX_MEMBER_SAMPLE,
+            build_community_context,
+        )
+
+        db = MagicMock()
+        db.execute.return_value = _summary_rows()
+        results = [_result("f1"), _result("f2"), _result("zz")]
+
+        direct = build_community_context(db, results, "default")
+        via_engine = _engine(db)._community_context(results, "default")
+
+        assert direct == via_engine
+        assert MAX_MEMBER_SAMPLE == 10
+
+    def test_direct_call_has_no_engine_config_gate(self) -> None:
+        """The module itself does not read ``enable_community_context`` —
+        gating on config is the engine wrapper's job, by design."""
+        from superlocalmemory.retrieval.community_context import (
+            build_community_context,
+        )
+
+        db = MagicMock()
+        db.execute.return_value = _summary_rows()
+        results = [_result("f1"), _result("f2"), _result("zz")]
+
+        assert build_community_context(db, results, "default") is not None
 
 
 class TestSerializerPassthrough:

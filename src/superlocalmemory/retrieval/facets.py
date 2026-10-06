@@ -205,20 +205,27 @@ def matching_fact_ids(db: Any, fact_ids: Iterable[str], profile_id: str,
     remaining = list(dict.fromkeys(str(f) for f in fact_ids))
     if not facets.narrows or not remaining:
         return set(remaining)
+
+    def keep(matched: set[str]) -> list[str]:
+        # Each filter is asked ONCE for the whole list. It used to sit inside
+        # the comprehension's condition, so it was re-run for every id: N
+        # queries over N rows per facet. Measured on a 21,739-fact store, one
+        # kind-filtered recall called the kind reader 380 times and decoded
+        # 170,000 kind rows -- 3 to 20 s of a recall spent on its filter.
+        return [f for f in remaining if f in matched]
+
     try:
         if facets.project is not None:
-            remaining = [f for f in remaining if f in _by_project(
-                db, remaining, facets.project)]
+            remaining = keep(_by_project(db, remaining, facets.project))
         if facets.agent is not None and remaining:
-            remaining = [f for f in remaining if f in _by_memory_metadata(
-                db, remaining, profile_id, "agent_id", facets.agent)]
+            remaining = keep(_by_memory_metadata(
+                db, remaining, profile_id, "agent_id", facets.agent))
         if facets.about is not None and remaining:
-            remaining = [f for f in remaining if f in _about(
-                db, remaining, profile_id, facets.about, resolver)]
+            remaining = keep(_about(db, remaining, profile_id, facets.about, resolver))
         if facets.kind is not None and remaining:
-            remaining = [f for f in remaining if f in _by_kind(
+            remaining = keep(_by_kind(
                 db, remaining, facets.kind,
-                display_min_confidence=display_min_confidence)]
+                display_min_confidence=display_min_confidence))
     except Exception as exc:  # noqa: BLE001 - a filter that cannot run keeps nothing
         logger.warning("Recall facet filter failed (%s); no results kept", type(exc).__name__)
         return set()

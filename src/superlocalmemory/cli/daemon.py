@@ -59,7 +59,6 @@ _DEFAULT_IDLE_TIMEOUT = 0  # v3.4.3: 24/7 default (was 1800)
 _PID_FILE = None  # test-only override; runtime resolution stays dynamic
 _PORT_FILE = None  # test-only override; runtime resolution stays dynamic
 _EXPECTED_DESCRIPTOR_UNSET = object()
-_STOP_START_WAIT_S = 90.0  # stop waits out a cold start (~60 s on small hosts)
 
 
 # ---------------------------------------------------------------------------
@@ -690,6 +689,55 @@ def _lock_file_path():
     return _LOCK_FILE or state_path("daemon.lock")
 
 
+def start_lock_is_held() -> bool:
+    """Is some OTHER process holding ``daemon.lock`` right now?
+
+    A non-mutating probe: tries the same non-blocking exclusive lock
+    ``ensure_daemon`` takes, and releases it at once if acquired. Used by
+    ``daemon_startup`` (4.1.22) to tell a cross-process start-in-progress
+    (the lock is held, but the other process has not written a descriptor
+    yet) apart from "nothing is starting" -- before this, that window had no
+    signal at all, so a caller fell into ``ensure_daemon``'s old flat 60 s
+    wait instead of the bounded start-wait budget, or a diagnosis call
+    reported "no daemon" while one was actually starting.
+    """
+    lock_file = _lock_file_path()
+    if not lock_file.exists():
+        return False
+    try:
+        lock_fd = open(lock_file, "w", encoding="utf-8")
+    except OSError:
+        return False
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            try:
+                msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+            except (IOError, OSError):
+                return True
+            try:
+                msvcrt.locking(lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
+            except (IOError, OSError):
+                pass
+            return False
+        else:
+            import fcntl
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (IOError, OSError):
+                return True
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except (IOError, OSError):
+                pass
+            return False
+    finally:
+        try:
+            lock_fd.close()
+        except Exception:
+            pass
+
+
 def _start_daemon_subprocess(*, port: int | None = None) -> bool:
     """Spawn the unified daemon subprocess and wait for readiness.
 
@@ -789,6 +837,21 @@ def _start_daemon_subprocess(*, port: int | None = None) -> bool:
     return _wait_for_daemon(timeout=60)
 
 
+def _wait_bounded_for_lock_holder() -> bool:
+    """Wait (bounded) for whoever holds ``daemon.lock`` to finish starting it.
+
+    4.1.22: the file-lock branch of ``ensure_daemon`` used to wait a flat
+    60 s here regardless of ``SLM_DAEMON_START_WAIT_S`` -- long enough to
+    outlive a host's own ~60 s tool-call timeout before this process ever
+    reported anything back. The holder has no descriptor to read yet in the
+    window right after it wins the lock, so ``wait_for_starting_daemon``
+    treats a currently-held lock as its own evidence of a start in progress
+    (see ``daemon.start_lock_is_held``).
+    """
+    _startup.wait_for_starting_daemon()
+    return is_daemon_running()
+
+
 def ensure_daemon(*, port: int | None = None) -> bool:
     """Start daemon if not running. Returns True if daemon is ready.
 
@@ -839,16 +902,19 @@ def ensure_daemon(*, port: int | None = None) -> bool:
             try:
                 msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
             except (IOError, OSError):
-                # Another process is starting the daemon — just wait for it
+                # Another process holds the start lock — wait the same
+                # bounded start budget a same-process contender gets (4.1.22;
+                # this used to be a flat 60 s wait that could outlive a
+                # host's own tool-call timeout).
                 lock_fd.close()
-                return _wait_for_daemon(timeout=60)
+                return _wait_bounded_for_lock_holder()
         else:
             import fcntl
             try:
                 fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except (IOError, OSError):
                 lock_fd.close()
-                return _wait_for_daemon(timeout=60)
+                return _wait_bounded_for_lock_holder()
         spawn_mark.__enter__()  # released in finally; see daemon_startup
         marked = True
 
@@ -1023,7 +1089,10 @@ def stop_daemon() -> bool:
         if descriptor.state == "starting":
             # 4.1.22: a starting daemon cannot take /stop yet. Returning False
             # here printed "not running" and left it running; wait for it.
-            ready = _startup.wait_for_starting_daemon(seconds=_STOP_START_WAIT_S)
+            # Bounded (never a flat hang forever) and configurable via
+            # SLM_DAEMON_STOP_WAIT_S -- a daemon wedged permanently in
+            # "starting" must not make this command hang indefinitely.
+            ready = _startup.wait_for_starting_daemon(seconds=_startup.stop_wait_budget())
             descriptor = ready[0] if ready is not None else descriptor
         response = daemon_request(
             "POST",

@@ -62,9 +62,9 @@ def _drain(judge: Any, memo: Any) -> None:
             if not memo.pending:
                 memo.worker = None
                 return
-            key, (query, documents, by) = memo.pending.popitem(last=False)
+            key, (query, documents, by, binding) = memo.pending.popitem(last=False)
         try:
-            _finish(judge, memo, key, query, documents, by)
+            _finish(judge, memo, key, query, documents, by, binding)
         except Exception as exc:  # noqa: BLE001 — best effort, never surfaces
             logger.debug("answer check finished later: failed (%s)", type(exc).__name__)
 
@@ -84,7 +84,7 @@ def _quiet(judge: Any, memo: Any, by: float) -> bool:
 
 
 def _finish(judge: Any, memo: Any, key: str, query: str,
-            documents: tuple[Any, ...], by: float) -> None:
+            documents: tuple[Any, ...], by: float, binding: Any = None) -> None:
     from superlocalmemory.core import answer_check_memo
     from superlocalmemory.retrieval.answer_check_status import STATUS_BUSY
 
@@ -108,11 +108,11 @@ def _finish(judge: Any, memo: Any, key: str, query: str,
                 _keep(memo, key, parts)
                 return
             parts[index] = verdict
-        if answer_check_memo.lookup(judge, query, documents) is not None:
+        if answer_check_memo.lookup(judge, query, documents, binding=binding) is not None:
             return  # a live recall judged this question meanwhile
     verdict = _combine(parts)
     if verdict is not None:
-        answer_check_memo.store(judge, query, documents, verdict)
+        answer_check_memo.store(judge, query, documents, verdict, binding=binding)
 
 
 def _single(outcome: Any) -> Any:

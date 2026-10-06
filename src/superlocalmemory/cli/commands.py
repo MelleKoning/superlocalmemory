@@ -750,13 +750,41 @@ def _cmd_wrap(args: Namespace) -> None:
 
 def cmd_serve(args: Namespace) -> None:
     """Start/stop the SLM daemon for instant CLI response."""
-    from superlocalmemory.cli.daemon import is_daemon_running, ensure_daemon, stop_daemon
+    from superlocalmemory.cli.daemon import (
+        is_daemon_running, ensure_daemon, stop_daemon,
+        read_descriptor, _descriptor_process_is_alive,
+    )
 
     action = getattr(args, 'action', 'start')
 
     if action == 'stop':
+        from superlocalmemory.cli.daemon_startup import stop_wait_budget
+
+        def _starting_and_alive(descriptor):
+            return (
+                descriptor is not None
+                and getattr(descriptor, "state", "") == "starting"
+                and _descriptor_process_is_alive(descriptor)
+            )
+
+        before = read_descriptor()
+        if _starting_and_alive(before):
+            # 4.1.22 polish: this used to wait silently -- say what for, and
+            # the wait is bounded (SLM_DAEMON_STOP_WAIT_S), never forever.
+            print(
+                f"Daemon (pid {before.pid}) is still starting; waiting up to "
+                f"{int(stop_wait_budget())}s for it to finish before stopping..."
+            )
         if stop_daemon():
             print("Daemon stopped.")
+        elif _starting_and_alive(read_descriptor()):
+            # Truthful, not "was not running": the process is alive and
+            # never left "starting" in time to take /stop.
+            print(
+                "Daemon is still starting and did not respond to stop in "
+                "time; it may still be running. Run `slm serve stop` again, "
+                "or `slm doctor`."
+            )
         else:
             print("Daemon was not running.")
         return
@@ -1893,9 +1921,8 @@ def _answer_check_line(result: dict) -> str:
     "uncalibrated"``) so plain-text output is byte-identical to before this
     existed — that is the overwhelming majority of installs today.
 
-    Results are never removed from the printed list; this is an additional
-    line, not a filter. Abstention is a signal for the reader, not a reason
-    to hide what was actually retrieved.
+    Results are never removed from the printed list; this is an extra line, not
+    a filter: abstention is a signal for the reader, never a reason to hide results.
     """
     if result.get("calibration_status", "uncalibrated") == "uncalibrated":
         return _not_checked_line(result)
@@ -1907,7 +1934,8 @@ def _answer_check_line(result: dict) -> str:
             f"(confidence {confidence:.2f}). Say you don't have it, or ask "
             "— don't present these as the answer."
         )
-    if not result.get("abstained", False):
+    from superlocalmemory.retrieval.answerability import is_supported as _checked
+    if not result.get("abstained", False) and _checked(result):  # a checked answer only
         return f"Answer check: likely answered (confidence {confidence:.2f})."
     return ""
 
@@ -3814,8 +3842,8 @@ def cmd_trace(args: Namespace) -> None:
                         "abstention_reason": result.get("abstention_reason"),
                         **{k: result[k] for k in (
                             "answer_check_status", "answer_check_ran",
-                            "answer_check_reason", "answer_check_note",
-                        ) if k in result},
+                            "answer_check_reason", "answer_check_note", "answerability",
+                            "answerability_reason") if k in result},
                     }, next_actions=[
                         {
                             "command": "slm recall '<query>' --json",
