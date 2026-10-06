@@ -50,9 +50,9 @@ logger = logging.getLogger(__name__)
 #: relevant one - at two thirds of the other's score it stays below it.
 #: Measured on the ranking fixture (tests/test_retrieval/
 #: test_project_scope_ranking.py): the on-topic project memories that
-#: cross-project trivia outranked sat at 0.87-0.98 of the trivia's ranking
-#: score, so 0.25 puts every one of them first; one on-topic memory at 0.65
-#: of the trivia stays below it, which is the bound doing its job. Half the
+#: other memories outranked sat at 0.84-0.98 of that memory's ranking
+#: score, so 0.25 puts every one of them first; one project memory at 0.77
+#: of a better match stays below it, which is the bound doing its job. Half the
 #: kind-aware ceiling (retrieval.kind_aware.MAX_BOOST). A constant, not a
 #: setting, so two installations rank the same question alike.
 BOOST = 0.25

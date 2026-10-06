@@ -155,17 +155,26 @@ def test_the_boost_moves_rank_only_never_the_reported_score(store) -> None:
             assert (r.score, r.relevance_score) == plain[r.fact.fact_id]
 
 
+#: The questions the bound is measured on. The last one holds the weakly
+#: relevant project memory: its webhooks memory sits at 0.77 of the untagged
+#: "Invoice is a word..." memory, under the 80% bound.
+_BOUND_QUERIES = ("what happens to an invoice", "how do invoices work",
+                  "invoice retries and numbering", "invoice faq and pricing docs")
+
+
 def test_the_boost_is_bounded(store) -> None:
     """A project memory at under 80% of a better match's score stays below it."""
-    query = "how do invoices work"
-    plain = {r.fact.content: r.ranking_score for r in _recall(store, query).results}
-    after = _contents(_recall(store, query, prefer_project=PROJECT_PATH))
-    weak = [c for c in _PROJECT if c in plain
-            and any(plain[c] < 0.8 * plain[t] for t in plain if not _is_project(t))]
-    assert weak, "fixture lost its weakly relevant project memory"
-    for c in weak:
-        stronger = [t for t in plain if not _is_project(t) and plain[c] < 0.8 * plain[t]]
-        assert all(after.index(t) < after.index(c) for t in stronger), (c, after)
+    weak_seen = []
+    for query in _BOUND_QUERIES:
+        plain = {r.fact.content: r.ranking_score for r in _recall(store, query).results}
+        after = _contents(_recall(store, query, prefer_project=PROJECT_PATH))
+        weak = [c for c in _PROJECT if c in plain
+                and any(plain[c] < 0.8 * plain[t] for t in plain if not _is_project(t))]
+        weak_seen.extend(weak)
+        for c in weak:
+            stronger = [t for t in plain if not _is_project(t) and plain[c] < 0.8 * plain[t]]
+            assert all(after.index(t) < after.index(c) for t in stronger), (query, c, after)
+    assert weak_seen, "fixture lost its weakly relevant project memory"
 
 
 def test_measured_ranking_before_and_after(store) -> None:
@@ -173,14 +182,21 @@ def test_measured_ranking_before_and_after(store) -> None:
     claim is checked: every project memory that trivia outranked by less than
     20% is lifted above it, and every one outranked by more stays below.
 
-    With the fixture's ids pinned the ratios are the same on every run:
-    0.87-0.98 lifted, 0.65 held. The bands are asserted rather
-    than the digits so a change elsewhere in ranking that keeps the bound
-    intact does not fail here.
+    With the fixture's ids pinned the ratios are the same on every run, and
+    the same with or without sqlite-vec: 0.84-0.98 lifted, 0.77 held. The
+    bands are asserted rather than the digits so a change elsewhere in
+    ranking that keeps the bound intact does not fail here.
+
+    The held case used to be a 0.65 on "how do invoices work" - a question
+    that shares no word with any memory. Spreading activation seeded its
+    walk with ten zero-similarity facts, and which ten was a tie-break the
+    vector index and its SQL fallback broke differently, so the case existed
+    only where sqlite-vec loaded (it does not on macOS's python.org build).
+    Zero-evidence seeds are no longer walked, and the held case now comes
+    from a question that really matches one memory better than another.
     """
     lifted_seen, held_seen = [], []
-    for query in ("what happens to an invoice", "how do invoices work",
-                  "invoice retries and numbering"):
+    for query in _BOUND_QUERIES:
         plain = _recall(store, query).results
         after = _contents(_recall(store, query, prefer_project=PROJECT_PATH))
         for i, r in enumerate(plain):
