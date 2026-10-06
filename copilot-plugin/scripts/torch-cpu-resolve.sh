@@ -11,7 +11,7 @@
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
 #
 # Sourced by ensure-venv.sh (never run directly). Pure decision logic — makes
-# no network call and runs no pip — so it is unit-testable without the 2 GiB
+# makes no HTTP request and runs no pip — so it is unit-testable without the 2 GiB
 # download it exists to avoid (tests/test_plugin_src/test_torch_cpu_resolve.sh).
 #
 # Environment (all optional):
