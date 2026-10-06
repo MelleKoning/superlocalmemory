@@ -276,7 +276,10 @@ class AdmissionJournal:
         if not isinstance(encrypted, bytes) or not encrypted:
             raise AdmissionPayloadError("configured command codec returned no ciphertext")
         command_json = json.dumps({"ciphertext_b64": base64.b64encode(encrypted).decode("ascii")})
-        request_hash = hashlib.sha256(plaintext).hexdigest()
+        # Bound to the stable caller, not to this daemon start's capability
+        # (storage/idempotency_identity.py): a retry after a restart is the
+        # same request; a different caller's is not.
+        request_hash = _request_hash(payload)
         now = _now_ms()
         journal_id = uuid.uuid4().hex
 
@@ -293,7 +296,9 @@ class AdmissionJournal:
             ).fetchone()
             if existing is not None:
                 entry = self._entry_from_row(existing)
-                if entry.request_hash != request_hash:
+                if entry.request_hash != request_hash and not self._stored_request_matches(
+                    existing["command_json"], request_hash,
+                ):
                     raise IdempotencyConflict(
                         "idempotency key belongs to a different immutable request"
                     )
@@ -346,10 +351,18 @@ class AdmissionJournal:
             ).fetchone()
         if row is None:
             raise KeyError(entry.journal_id)
+        request = RememberRequest.from_payload(self._decrypt_command(row["command_json"]))
+        _remaining_seconds(deadline)
+        return request
+
+    def _decrypt_command(self, command_json: Any) -> dict[str, Any]:
         try:
-            encoded = json.loads(str(row["command_json"]))["ciphertext_b64"]
+            encoded = json.loads(str(command_json))["ciphertext_b64"]
             plaintext = self._codec.decrypt(base64.b64decode(encoded, validate=True))
             payload = json.loads(plaintext.decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise TypeError("journal command is not an object")
+            return payload
         except (
             KeyError,
             TypeError,
@@ -362,9 +375,18 @@ class AdmissionJournal:
             raise AdmissionPayloadError(
                 "journal command cannot be decrypted by the configured policy"
             ) from exc
-        request = RememberRequest.from_payload(payload)
-        _remaining_seconds(deadline)
-        return request
+
+    def _stored_request_matches(self, command_json: Any, request_hash: str) -> bool:
+        """Whether a row journaled before 4.1.22 holds this same request.
+
+        Those rows hashed the per-start daemon actor, so their stored hash can
+        never equal the stable one. Their command is re-hashed the stable way;
+        a command that cannot be read back is never treated as a match.
+        """
+        try:
+            return _request_hash(self._decrypt_command(command_json)) == request_hash
+        except AdmissionPayloadError:
+            return False
 
     def mark_dispatched(
         self,
@@ -687,6 +709,13 @@ def _canonical_bytes(value: Mapping[str, Any]) -> bytes:
         )
     except (TypeError, ValueError) as exc:
         raise AdmissionPayloadError("remember command must be JSON serializable") from exc
+
+
+def _request_hash(payload: Mapping[str, Any]) -> str:
+    """The idempotency hash of one remember command, bound to its stable caller."""
+    from superlocalmemory.storage.idempotency_identity import stable_request_payload
+
+    return hashlib.sha256(_canonical_bytes(stable_request_payload(payload))).hexdigest()
 
 
 def _receipt_json(receipt: Mapping[str, Any]) -> str:

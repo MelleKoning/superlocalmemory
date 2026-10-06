@@ -101,7 +101,8 @@ def test_a_daemon_refusal_exits_2_with_its_message(capsys) -> None:
 def test_without_replaces_the_request_is_unchanged() -> None:
     request = _run(_args(None), _reply())
     assert "replaces" not in request.call_args.args[2]
-    assert "preserve_unprocessable" not in request.call_args.kwargs
+    # A 422 is always surfaced as a refusal (4.1.22), with or without replaces.
+    assert request.call_args.kwargs["preserve_unprocessable"] is True
 
 
 def test_the_flag_reaches_the_command() -> None:

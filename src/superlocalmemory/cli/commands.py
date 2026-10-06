@@ -1846,10 +1846,11 @@ def cmd_remember(args: Namespace) -> None:
             "shared_with": shared_with,
             "kind": kind,
         }
-        extra = {}
+        # A 422 is a refusal of this request, printed as such, not "daemon
+        # unavailable" (an idempotency conflict never heals by retrying).
+        extra = {"preserve_unprocessable": True}
         if replaces is not None:
             body["replaces"] = replaces
-            extra["preserve_unprocessable"] = True
         body["idempotency_key"] = _cli_remember_idempotency_key(body)
         try:
             result = daemon_request("POST", path, body, timeout_seconds=30, **extra)

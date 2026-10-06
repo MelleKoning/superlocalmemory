@@ -280,13 +280,12 @@ def register_core_tools(server, get_engine: Callable) -> None:
                         # 4.1.14 audit: stripped — whitespace-only is legacy,
                         # padded ids travel canonical.
                         body["profile_id"] = profile_id.strip()
-                    request_flags = {"preserve_not_found": True}
+                    # A 422 refuses THIS request (a reused key, a bad
+                    # ``replaces``): an answer, never an outage to retry.
+                    request_flags = {"preserve_not_found": True, "preserve_unprocessable": True}
                     if replaces_id is not None:
-                        # Sent only when set, so a plain call is unchanged. The
-                        # daemon refuses an id it cannot honour with a 422,
-                        # which must surface, not read as an outage.
+                        # Sent only when set, so a plain call is unchanged.
                         body["replaces"] = replaces_id
-                        request_flags["preserve_unprocessable"] = True
                     body, request_flags = rk.with_declared_kind(body, request_flags, declared_kind)
                     resp = None
                     try:

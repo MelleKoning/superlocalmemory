@@ -126,7 +126,8 @@ def test_mcp_remember_without_a_kind_sends_no_kind_field(monkeypatch) -> None:
     monkeypatch.setattr(daemon, "daemon_request", fake_request)
     asyncio.run(_mcp_remember()(CONTENT))
     assert "kind" not in sent["body"]
-    assert "preserve_unprocessable" not in sent["flags"]
+    # A 422 (e.g. a reused key) is surfaced with or without a kind (4.1.22).
+    assert sent["flags"].get("preserve_unprocessable") is True
 
 
 def test_mcp_remember_fallback_passes_the_kind_to_the_proxy(monkeypatch) -> None:
@@ -184,7 +185,7 @@ def test_proxy_store_sends_a_declared_kind_and_never_promotes_metadata(monkeypat
     proxy.store(CONTENT, {"idempotency_key": "k2", METADATA_KEY: "rule"})
     (declared, declared_flags), (forged, forged_flags) = sent
     assert declared["kind"] == "rule" and declared_flags.get("preserve_unprocessable") is True
-    assert "kind" not in forged and "preserve_unprocessable" not in forged_flags
+    assert "kind" not in forged and forged_flags.get("preserve_unprocessable") is True
 
 
 def test_cli_remember_refuses_an_unknown_kind_before_contacting_slm(monkeypatch, capsys) -> None:

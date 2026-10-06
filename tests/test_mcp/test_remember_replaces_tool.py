@@ -106,7 +106,8 @@ def test_without_replaces_the_daemon_request_is_unchanged(monkeypatch) -> None:
     calls = _daemon(monkeypatch, reply={"ok": True, "fact_ids": ["f"], "count": 1})
     out = asyncio.run(_tools()["remember"](CONTENT))
     [(_path, body, kwargs)] = calls
-    assert "replaces" not in body and "preserve_unprocessable" not in kwargs
+    # The body is unchanged; a 422 is always surfaced as a refusal (4.1.22).
+    assert "replaces" not in body and kwargs.get("preserve_unprocessable") is True
     assert "replaced" not in out
 
 
@@ -214,4 +215,4 @@ def test_the_pool_proxy_without_replaces_is_unchanged(monkeypatch) -> None:
     calls = _daemon(monkeypatch, reply={"ok": True, "fact_ids": ["f"]})
     DaemonPoolProxy(port=1).store(CONTENT, {"tags": "a"})
     [(_path, body, kwargs)] = calls
-    assert "replaces" not in body and "preserve_unprocessable" not in kwargs
+    assert "replaces" not in body and kwargs.get("preserve_unprocessable") is True

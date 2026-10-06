@@ -139,7 +139,8 @@ class TestDaemonPoolProxy:
         assert captured == {
             "method": "POST",
             "path": "/remember",
-            "kwargs": {"preserve_conflict": True, "preserve_not_found": True},
+            "kwargs": {"preserve_conflict": True, "preserve_not_found": True,
+                       "preserve_unprocessable": True},
             "body": {
                 "content": "identity-bound content",
                 "tags": "audit",

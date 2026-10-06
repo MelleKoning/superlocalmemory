@@ -24,6 +24,7 @@ from typing import Any, Callable
 
 from superlocalmemory.core.materialization_control import MaterializationDeferred
 from superlocalmemory.storage.database import DatabaseManager
+from superlocalmemory.storage.idempotency_identity import same_principal
 
 logger = logging.getLogger("superlocalmemory.ingestion_command")
 
@@ -216,7 +217,7 @@ class IngestionOperationRepository:
             existing.metadata == request.metadata,
             existing.scope == request.scope,
             existing.shared_with == request.shared_with,
-            existing.trusted_actor_id == request.trusted_actor_id,
+            same_principal(existing.trusted_actor_id, request.trusted_actor_id),
             existing.session_id == request.session_id,
             existing.session_date == request.session_date,
             existing.speaker == request.speaker,

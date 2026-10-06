@@ -228,10 +228,12 @@ class DaemonPoolProxy:
             "idempotency_key": meta.get("idempotency_key") or None,
             "profile_id": meta.get("profile_id", ""),
         }
-        flags = {"preserve_conflict": True, "preserve_not_found": True}
+        # A 422 (e.g. an idempotency key already used for another request)
+        # is a refusal of this request: surfaced, never read as an outage.
+        flags = {"preserve_conflict": True, "preserve_not_found": True,
+                 "preserve_unprocessable": True}
         if replaces is not None:
             body["replaces"] = replaces
-            flags["preserve_unprocessable"] = True
         from superlocalmemory.mcp._remember_kind import with_declared_kind
 
         body, flags = with_declared_kind(body, flags, (kind or "").strip())

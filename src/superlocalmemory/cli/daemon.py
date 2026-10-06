@@ -519,7 +519,10 @@ def _unprocessable(exc) -> DaemonUnprocessable:
             if isinstance(item, dict) and item.get("msg")
         ]
         return DaemonUnprocessable("", "; ".join(messages) or "the request was invalid")
-    return DaemonUnprocessable("", detail if isinstance(detail, str) else "")
+    message = detail if isinstance(detail, str) else ""
+    # The daemon's own wording for a key reused for another request.
+    code = "IDEMPOTENCY_CONFLICT" if message.startswith("idempotency key ") else ""
+    return DaemonUnprocessable(code, message)
 
 
 def daemon_request(

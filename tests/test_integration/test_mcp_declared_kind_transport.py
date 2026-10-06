@@ -439,12 +439,6 @@ def test_kind_filtered_recall_still_finds_a_memory_after_the_restart(lane):
     assert memory_of(lane.saved["decision"]["fact_ids"][0]) in found, out
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "Known defect outside the transport, for every save with or without a kind: "
-    "the daemon's write identity is its capability fingerprint "
-    "(server/write_identity.py), which changes on every restart, and it is part "
-    "of the idempotency request hash (storage/admission_journal.py), so a retry "
-    "with the same key after a restart is refused as a different request."))
 def test_a_retry_with_the_same_key_after_a_restart_returns_the_same_memory(lane):
     # Runs after the restart above (file order).
     again = lane.tool("remember", content=_content("decision"), kind="decision",
