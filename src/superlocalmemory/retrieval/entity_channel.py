@@ -299,6 +299,31 @@ class EntityGraphChannel:
         self._graph_metrics: dict[str, dict] = graph_metrics or {}
         self._graph_metrics_profile: str = ""
 
+    def _store_counts(self, scope_key: tuple, *, include_global: bool,
+                      include_shared: bool) -> tuple[int, int]:
+        """The scope's edge and fact counts, which decide whether the cached
+        graph is current. Counting 481k edges took 44 ms of every recall; while
+        nothing has been committed since (storage/store_signature) the last
+        counts are still exact and are reused."""
+        from superlocalmemory.storage import store_signature
+
+        sig = store_signature.of_db(self._db)
+        memo = self.__dict__.setdefault("_count_memo", {})
+        hit = memo.get(scope_key)
+        if sig is not None and hit is not None and hit[0] == sig:
+            return hit[1], hit[2]
+        profile_id = scope_key[0]
+        edges = self._get_edge_count(profile_id, include_global=include_global,
+                                     include_shared=include_shared)
+        try:
+            facts = self._db.get_fact_count(profile_id, include_global=include_global,
+                                            include_shared=include_shared)
+        except Exception:
+            facts = -1
+        if sig is not None:
+            memo[scope_key] = (sig, edges, facts)
+        return edges, facts
+
     def _ensure_adjacency(
         self,
         profile_id: str,
@@ -313,19 +338,8 @@ class EntityGraphChannel:
         """
         # Check staleness: profile changed or new edges added since last load
         scope_key = (profile_id, bool(include_global), bool(include_shared))
-        current_count = self._get_edge_count(
-            profile_id,
-            include_global=include_global,
-            include_shared=include_shared,
-        )
-        try:
-            current_fact_count = self._db.get_fact_count(
-                profile_id,
-                include_global=include_global,
-                include_shared=include_shared,
-            )
-        except Exception:
-            current_fact_count = -1
+        current_count, current_fact_count = self._store_counts(
+            scope_key, include_global=include_global, include_shared=include_shared)
         import time as _t_ec
 
         _now_ec = _t_ec.monotonic()
@@ -974,14 +988,13 @@ class EntityGraphChannel:
             # seed community is not damped -- see apply_community_bias.
             penalise_outsiders=False,
         )
-        activation = {
-            fid: float(activation_result.scores[idx])
-            for fid, idx in snapshot.node_index.items()
-        }
-
-        # Extract scores ONLY for the candidate set, normalize to [0, 1]
+        # Scores ONLY for the candidate set (<= 100), normalized to [0, 1]: a
+        # dict over every node of the graph was built here and then read for
+        # those few ids.
+        scores, node_index = activation_result.scores, snapshot.node_index
         candidate_set = allowed_candidates
-        scored = {fid: activation.get(fid, 0.0) for fid in candidate_set}
+        scored = {fid: (float(scores[node_index[fid]]) if fid in node_index else 0.0)
+                  for fid in candidate_set}
 
         max_score = max(scored.values()) if scored else 0
         if max_score > 0:
