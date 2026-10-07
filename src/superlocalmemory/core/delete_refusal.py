@@ -158,6 +158,72 @@ def restore(engine: Any, snap: SearchSnapshot, operation_id: str) -> bool:
         return False
 
 
+def _drop_stale_erasure(db: Any, profile_id: str, fact_id: str) -> bool:
+    """Remove the fact's tombstone and its erasure's open obligations, in one
+    transaction, if the fact is still stored. False when it is gone."""
+    with db.transaction():
+        if not db.execute("SELECT 1 FROM atomic_facts WHERE fact_id = ? AND profile_id = ? "
+                          "LIMIT 1", (fact_id, profile_id)):
+            return False
+        rows = db.execute("SELECT erasure_id FROM projection_tombstones WHERE profile_id = ? "
+                          "AND fact_id = ?", (profile_id, fact_id))
+        if not rows:
+            return False
+        db.execute("DELETE FROM projection_tombstones WHERE profile_id = ? AND fact_id = ?",
+                   (profile_id, fact_id))
+        for row in rows:  # an erasure of several facts keeps its obligations open
+            erasure_id = dict(row)["erasure_id"]
+            if not db.execute("SELECT 1 FROM projection_tombstones WHERE erasure_id = ? LIMIT 1",
+                              (erasure_id,)):
+                db.execute("DELETE FROM projection_obligations WHERE operation_id = ? "
+                           "AND kind = 'erase'", (erasure_id,))
+    return True
+
+
+def heal_stale(engine: Any, profile_id: str, fact_id: str) -> bool:
+    """Make a stored fact findable again when it carries a tombstone that no
+    delete is completing (a writer that timed out, a crash): every delete of it
+    is now refused, so nothing will ever finish that erasure. Its search entries
+    are rebuilt from the stored fact by the projection owners. Never raises."""
+    from superlocalmemory.storage.erasure_fence import is_erasing
+
+    if is_erasing(profile_id, fact_id):
+        return False  # a delete in this process is inside its window right now
+    try:
+        if not _drop_stale_erasure(engine._db, profile_id, fact_id):
+            return False
+        import uuid
+
+        from superlocalmemory.core.transactions import OperationContext
+        from superlocalmemory.core.transactions.concrete_owners import _admission_owners
+
+        ctx = OperationContext(operation_id=uuid.uuid4().hex, profile_id=profile_id,
+                               subject_id=fact_id, fact_ids=(fact_id,))
+        results = [owner.apply(ctx) for owner in _admission_owners(engine).values()]
+        if not all(r.ok for r in results):
+            logger.error("Stale erasure of %s: search entries not all rebuilt: %s",
+                         fact_id[:16], [r.owner for r in results if not r.ok])
+            return False
+        logger.warning("Stale erasure of a kept memory %s undone: findable again", fact_id[:16])
+        return True
+    except Exception as exc:
+        logger.error("Stale erasure of %s not undone: %s", fact_id[:16], exc)
+        return False
+
+
+def refuse_early(engine: Any, profile_id: str, fact_id: str) -> None:
+    """The delete's first protection check. A protected fact can never be
+    deleted, so a tombstone it carries is stale: heal it, then refuse."""
+    from superlocalmemory.core.mutations import _refuse_if_correction_protected
+    from superlocalmemory.core.remember_runtime import CanonicalMutationConflict
+
+    try:
+        _refuse_if_correction_protected(engine._db, profile_id, fact_id)
+    except CanonicalMutationConflict:
+        heal_stale(engine, profile_id, fact_id)
+        raise
+
+
 def unrestored_message(refusal: str) -> str:
     """The refusal, without claiming nothing changed when the restore failed."""
     kept = ("The memory was kept, but some of its search entries could not be put "
@@ -166,4 +232,5 @@ def unrestored_message(refusal: str) -> str:
         else f"{refusal} {kept}"
 
 
-__all__ = ["SearchSnapshot", "restore", "snapshot", "unrestored_message"]
+__all__ = ["SearchSnapshot", "heal_stale", "refuse_early", "restore", "snapshot",
+           "unrestored_message"]

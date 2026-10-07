@@ -529,11 +529,11 @@ def delete_fact_authorized(
     exists = bool(rows)
     content_preview = dict(rows[0]).get("content", "")[:80] if exists else ""
     memory_id = dict(rows[0]).get("memory_id") if exists else None
-    from superlocalmemory.core import erasure_scrub
+    from superlocalmemory.core import delete_refusal, erasure_scrub
 
     entity_ids: list[str] = []
-    if exists:
-        _refuse_if_correction_protected(engine._db, profile_id, fact_id)
+    if exists:  # a refused delete also heals a stale tombstone (delete_refusal)
+        delete_refusal.refuse_early(engine, profile_id, fact_id)
         entity_ids = erasure_scrub.entities_of(engine._db, profile_id, fact_id)
         erasure_scrub.prepare(engine._db)
 
@@ -559,8 +559,6 @@ def delete_fact_authorized(
 
     remove_result = None
     if exists:
-        from superlocalmemory.core import delete_refusal
-
         before_removal = delete_refusal.snapshot(engine, profile_id, fact_id)
         try:
             remove_result = service.remove(engine._db, op_ctx, memory_id=memory_id)
