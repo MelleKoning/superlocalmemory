@@ -49,10 +49,15 @@ class ReadConnectionFactory:
 
         uri = f"{self._memory_db.as_uri()}?mode=ro"
         try:
+            # Closable from any thread: a legacy caller that skips its close
+            # leaves the connection to garbage collection, which may run on
+            # another thread, where a same-thread connection refuses to close
+            # and is never closed. One caller still uses it at a time.
             conn = sqlite3.connect(
                 uri,
                 uri=True,
                 timeout=self._timeout_ms / 1000.0,
+                check_same_thread=False,
             )
         except sqlite3.Error as exc:
             raise ReadConnectionError(

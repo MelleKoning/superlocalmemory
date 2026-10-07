@@ -558,6 +558,7 @@ def get_memories(
       with ``lifecycle='cold'`` AND no positive reward in 60 days.
       Makes "memory decay" tangible to the operator.
     """
+    conn = None
     try:
         conn = get_db_connection()
         conn.row_factory = dict_factory
@@ -788,8 +789,6 @@ def get_memories(
                 for row in memories:
                     row.update(kind_fields(row, display_min_confidence=threshold))
 
-        conn.close()
-
         response = {
             "memories": memories, "total": total,
             "limit": limit, "offset": offset,
@@ -808,6 +807,9 @@ def get_memories(
         raise
     except Exception:
         raise _internal_error("Database error")
+    finally:
+        if conn is not None:  # also on the 400 and 500 paths
+            conn.close()
 
 
 @router.get("/api/memories/kind-counts")
