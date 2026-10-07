@@ -204,7 +204,7 @@ def test_a_port_reserved_before_http_is_up_cannot_stretch_the_wait(
            "probe here (health_probe_timeout), not this 2 s one",
 )
 def test_a_slow_but_alive_health_reply_is_not_reported_unavailable_on_posix(
-    stubs, no_spawn,
+    stubs, no_spawn, monkeypatch,
 ):
     """4.1.22 correction (CRIT #1): shortening the Windows fail-fast probe
     must not narrow POSIX's own patience for a real, busy-but-alive daemon.
@@ -214,14 +214,27 @@ def test_a_slow_but_alive_health_reply_is_not_reported_unavailable_on_posix(
     would wrongly read DAEMON_UNAVAILABLE if the short probe ever leaked
     onto POSIX."""
     from superlocalmemory.cli import daemon
+    from superlocalmemory.cli.daemon_startup import STARTING_PROBE_S
 
-    _proc, _descriptor = stubs(delay=1.2, mode="slow", state="ready")
-    time.sleep(0.5)  # let the stub bind before the probe (it sleeps on ACCEPT, not before)
-    began = time.monotonic()
-    health = daemon.daemon_request("GET", "/health")
-    took = time.monotonic() - began
+    # Checked on the read limit the real call path hands the health fetch, not
+    # on a stopwatch: a 1.2 s stub reply against the 2 s limit failed on a
+    # loaded machine, where the stub itself was late.
+    _proc, _descriptor = stubs(delay=0, mode="slow", state="ready")
+    real_fetch, limits = daemon._fetch_health, []
+
+    def spy(port, timeout=2.0):
+        limits.append(timeout)
+        return real_fetch(port, timeout=timeout)
+
+    monkeypatch.setattr(daemon, "_fetch_health", spy)
+    health = None
+    for _ in range(100):  # the stub binds asynchronously; liveness only
+        health = daemon.daemon_request("GET", "/health")
+        if health is not None:
+            break
+        time.sleep(0.1)
     assert health is not None and health.get("status") == "ok", health
-    assert 1.1 <= took < 2.0, took
+    assert limits and limits[0] == 2.0 > STARTING_PROBE_S, limits
 
 
 def test_nothing_starting_keeps_the_old_fail_fast_behaviour(stubs, no_spawn):
