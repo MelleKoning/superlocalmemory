@@ -102,9 +102,16 @@ def start_for_daemon(app_state: Any, config: Any) -> er.ReindexRunner | None:
     try:
         runner = er.ReindexRunner(db_path=config.db_path, data_root=config.base_dir,
                                   app_state=app_state)
+        engine_config = getattr(getattr(app_state, "engine", None), "_config", None)
+        conn = sp.connect(config.db_path)
+        try:  # a fresh store only exists once the engine has created it
+            sp.ensure_control_tables(conn)
+            if sp.read_space(conn) is None:
+                _record_first_start(conn, engine_config or config)
+        finally:
+            conn.close()
         er._RUNNER = runner
         app_state.embedding_reindex = runner
-        engine_config = getattr(getattr(app_state, "engine", None), "_config", None)
         for candidate in (engine_config, config):
             if candidate is not None and getattr(candidate, PENDING_ATTR, None) is not None:
                 runner.adopt_pending(candidate)
