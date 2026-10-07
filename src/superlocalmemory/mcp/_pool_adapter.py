@@ -120,6 +120,16 @@ def pool_recall(query: str, limit: int = 10, **kwargs: Any) -> PoolRecallRespons
     for _name in ("project", "prefer_project", "profile_id"):
         if (kwargs.get(_name) or "").strip():
             _recall_kwargs[_name] = kwargs[_name].strip()
+    # 4.1.22 (G05): forwarded only when set, same as the other facets. A
+    # string or a list are both accepted here and downstream (the daemon
+    # proxy / HTTP route parse either the same way).
+    _tags = kwargs.get("tags")
+    if isinstance(_tags, str) and _tags.strip():
+        _recall_kwargs["tags"] = _tags.strip()
+    elif isinstance(_tags, (list, tuple)) and _tags:
+        _recall_kwargs["tags"] = list(_tags)
+    if "tags" in _recall_kwargs and (kwargs.get("tags_match") or "").strip():
+        _recall_kwargs["tags_match"] = kwargs["tags_match"].strip()
     if kwargs.get("project_strict") and "project" in _recall_kwargs:
         _recall_kwargs["project_strict"] = True
     # S-M2: a context load (session start, auto-injection) is not a question.

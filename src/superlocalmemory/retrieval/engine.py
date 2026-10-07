@@ -348,6 +348,12 @@ class RetrievalEngine:
             ch_results = project_search.supplement(  # search inside the project
                 self, ch_results, query=query, query_embedding=self._embed_query(query)[0],
                 profile_id=profile_id, project=facets.project, stage_ms=stage_ms)
+        if getattr(facets, "tags", None):
+            from superlocalmemory.retrieval import tag_search
+            ch_results = tag_search.supplement(  # search inside the tag set
+                self, ch_results, query=query, query_embedding=self._embed_query(query)[0],
+                profile_id=profile_id, tags=facets.tags,
+                match=getattr(facets, "tags_match", "all"), stage_ms=stage_ms)
         _em("run_channels")
         # One request may need admission before fusion and again after optional
         # bridge/scene expansion.  Cache only the IDs checked during this one
@@ -567,6 +573,7 @@ class RetrievalEngine:
         # memories for the bounded boost below (retrieval/project_scope.py).
         preferred: frozenset[str] = frozenset()
         project_scope = None
+        tag_scope = None
         if facets is not None and not getattr(facets, "empty", True):
             from superlocalmemory.retrieval.project_scope import narrow
 
@@ -581,6 +588,12 @@ class RetrievalEngine:
             keep = set(scoped.kept)
             fused = [fr for fr in fused if fr.fact_id in keep]
             preferred, project_scope = scoped.preferred, scoped.report
+            if getattr(facets, "tags", None):
+                # ``scoped.kept`` already has every facet (incl. tags) ANDed
+                # in (retrieval.facets.matching_fact_ids), so its count IS
+                # the tag-filtered match count — nothing to recompute here.
+                from superlocalmemory.retrieval.tag_scope import build_report
+                tag_scope = build_report(self._db, profile_id, facets, len(scoped.kept))
             _em("facets")
 
         # 4. Load facts for rerank pool
@@ -713,6 +726,7 @@ class RetrievalEngine:
             channel_status=dict(channel_status),
             stage_ms=dict(stage_ms),
             project_scope=project_scope,
+            tag_scope=tag_scope,
         )
 
     # -- Community context (Wave Q2b) --------------------------------------

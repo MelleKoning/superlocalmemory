@@ -375,4 +375,9 @@ def recall_response_metadata(response: Any) -> dict:
         # the results are NOT narrowed to it; ``note`` says so in words. None
         # when the recall named no project.
         "project_scope": getattr(response, "project_scope", None),
+        # 4.1.22 (G05): what the recall's ``tags`` filter did. ``applied`` is
+        # always True for tags (a hard filter that never falls back);
+        # ``reason``/``note`` are only present when ``matched`` is 0. None
+        # when the recall named no tags.
+        "tag_scope": getattr(response, "tag_scope", None),
     }

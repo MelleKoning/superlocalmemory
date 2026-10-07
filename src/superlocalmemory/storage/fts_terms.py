@@ -67,4 +67,17 @@ def version_match_phrases(text: str) -> tuple[str, ...]:
     return tuple(phrases)
 
 
-__all__ = ["version_match_phrases", "version_terms"]
+def search_match_expression(query: str) -> str:
+    """The FTS5 MATCH expression the full-text ``search`` paths use.
+
+    v3.6.12 (search-1): the raw query was passed straight into MATCH, so any
+    '?', '-', quote, or trailing AND/OR/NOT raised an FTS5 syntax error.
+    Word tokens are lower-cased, each quoted, and OR-joined, mirroring the
+    recall BM25 channel; dotted versions are added whole. Empty when the
+    query holds no word at all (the caller then has nothing to search for).
+    """
+    tokens = [t for t in re.findall(r"\w+", (query or "").lower()) if t]
+    return " OR ".join([*(f'"{t}"' for t in tokens), *version_match_phrases(query or "")])
+
+
+__all__ = ["search_match_expression", "version_match_phrases", "version_terms"]

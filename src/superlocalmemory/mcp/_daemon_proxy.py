@@ -94,6 +94,8 @@ class DaemonPoolProxy:
         about: str = "",
         kind: str = "",
         prefer_project: str = "",
+        tags: "str | list[str] | None" = None,
+        tags_match: str = "all",
         project_strict: bool = False,
     ) -> dict[str, Any]:
         if self._unavailable:
@@ -138,6 +140,16 @@ class DaemonPoolProxy:
         # string byte-identical to before this filter existed.
         if (kind or "").strip():
             _params["kind"] = kind.strip()
+        # 4.1.22 (G05): sent only when set. A string is sent as-is (the
+        # daemon splits a single ``?tags=a,b`` on the comma); a real list is
+        # sent as a REPEATED param (``doseq=True`` below) so a label
+        # containing a comma survives the round trip untouched.
+        if isinstance(tags, str) and tags.strip():
+            _params["tags"] = tags.strip()
+        elif isinstance(tags, (list, tuple)) and tags:
+            _params["tags"] = [str(t) for t in tags if str(t).strip()]
+        if _params.get("tags") and (tags_match or "").strip().lower() == "any":
+            _params["tags_match"] = "any"
         if as_of:
             _params["as_of"] = as_of
         if known_as_of:
@@ -165,7 +177,10 @@ class DaemonPoolProxy:
             _params[ANSWER_CHECK_PARAM] = ANSWER_CHECK_SKIP
         elif answer_check == REQUEST_NO_REORDER:
             _params[ANSWER_CHECK_PARAM] = REQUEST_NO_REORDER
-        params = urllib.parse.urlencode(_params)
+        # doseq=True: safe for every existing plain-string param (urlencode
+        # special-cases str/bytes even with doseq on — only a genuine list
+        # value, like `tags` above, expands to repeated `key=value` pairs).
+        params = urllib.parse.urlencode(_params, doseq=True)
         try:
             from superlocalmemory.cli.daemon import daemon_request
 

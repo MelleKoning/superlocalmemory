@@ -49,7 +49,7 @@ from typing import Any, Optional
 # Must be set BEFORE any import of superlocalmemory.mcp.server.
 os.environ.setdefault("SLM_MCP_EMBEDDED", "1")
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, field_validator
@@ -1059,8 +1059,26 @@ from superlocalmemory.server.recall_core import (  # noqa: E402
 )
 
 
+def _recall_tags_param(tags: list[str] | None) -> str | list[str] | None:
+    """``?tags=`` as FastAPI hands it back, resolved to what ``Facets.of``
+    expects to parse.
+
+    A single ``?tags=a,b`` arrives as a ONE-element list (``["a,b"]``) —
+    indistinguishable, in HTTP, from a caller who meant exactly one label
+    that happens to contain a comma via the repeated-param form. The common
+    case wins: one element is treated as the comma-separated STRING form (so
+    it splits into two labels), and two-or-more elements are treated as the
+    real LIST form (so a repeated ``?tags=a,b&tags=c`` keeps "a,b" as one
+    label — the documented way to carry a comma-bearing label over HTTP).
+    """
+    if not tags:
+        return None
+    return tags[0] if len(tags) == 1 else list(tags)
+
+
 def _facet_kwargs(project: str, saved_by: str, about: str, kind: str | None = None,
-                  prefer_project: str = "", project_strict: bool = False) -> dict:
+                  prefer_project: str = "", tags: object = None,
+                  tags_match: str = "all", project_strict: bool = False) -> dict:
     """{"facets": ...} when any recall facet was given, else {} (stand-ins
     of the engine need not know about facets).
 
@@ -1071,11 +1089,15 @@ def _facet_kwargs(project: str, saved_by: str, about: str, kind: str | None = No
     caller was shown. As a facet it is matched inside retrieval, after
     fusion, before the answer check — exactly where project/saved_by/about
     already run — so the judge and the caller always see the same memories.
+
+    ``tags`` (4.1.22 G05): a list (repeated ``?tags=``) or a single
+    comma-separated string; ``Facets.of`` parses either the same way.
     """
     from superlocalmemory.retrieval.facets import Facets
 
     facets = Facets.of(project=project, agent=saved_by, about=about, kind=kind,
-                       prefer_project=prefer_project, project_strict=project_strict)
+                       prefer_project=prefer_project, tags=tags, tags_match=tags_match,
+                       project_strict=project_strict)
     return {} if facets.empty else {"facets": facets}
 
 
@@ -4760,6 +4782,15 @@ def _register_daemon_routes(application: FastAPI) -> None:
         # before any retrieval when it does not parse (never silently
         # ignored). See core.kind_query / retrieval.kind_filter.
         kind: str = "",
+        # 4.1.22 (G05): only memories saved with these exact tags (canonical
+        # identity - case/whitespace/punctuation handled by
+        # core.tag_identity). Repeat ``?tags=`` for a list (a label
+        # containing a comma needs this form); a single ``?tags=a,b`` is the
+        # comma-separated form. Hard filter, composes with every other facet
+        # as AND; never falls back the way ``project`` does - an unmatched
+        # tag filter says why in ``tag_scope``.
+        tags: list[str] | None = Query(default=None),
+        tags_match: str = "all",
     ):
         _update_activity()
         search_query = q or query  # Accept both ?q= and ?query= for compatibility
@@ -4896,8 +4927,10 @@ def _register_daemon_routes(application: FastAPI) -> None:
             include_global=include_global, include_shared=include_shared,
             window=window, as_of=as_of, known_as_of=known_as_of, valid_at=valid_at,
             include_unknown=include_unknown,
-            facets=_facet_kwargs(project, saved_by, about, _kind, prefer_project,
-                                 project_strict).get("facets"),
+            facets=_facet_kwargs(
+                project, saved_by, about, _kind, prefer_project,
+                _recall_tags_param(tags), tags_match, project_strict=project_strict,
+            ).get("facets"),
             skip_answer_check=_skip_check, no_reorder=_check_request == "no_reorder",
             full=full, include_source=include_source,
             include_marker=bool(session_id),
@@ -5816,8 +5849,14 @@ def _register_daemon_routes(application: FastAPI) -> None:
         return result
 
     @application.get("/list")
-    async def list_facts(request: Request, limit: int = 50, kind: str = ""):
+    async def list_facts(request: Request, limit: int = 50, kind: str = "",
+                         tags: list[str] | None = Query(default=None),
+                         tags_match: str = "all"):
         """Most recent memories, newest first.
+
+        ``tags`` / ``tags_match`` (4.1.22): only memories carrying the tags, as
+        GET /recall takes them; ``tag_scope`` says what was found. The fetch
+        runs off the event loop, so a cold tag scan never stalls /health.
 
         ``kind`` (L3-20) narrows to one of the nine memory kinds, the same
         filter ``list_recent`` (MCP) and ``slm list`` (CLI) already take —
@@ -5841,7 +5880,12 @@ def _register_daemon_routes(application: FastAPI) -> None:
         from superlocalmemory.server.rbac_enforce import require_permission
         require_permission(request, Permission.READ, profile=profile_id)
         try:
-            facts = list_recent_facts(engine._db, profile_id, limit, parsed_kind)
+            from superlocalmemory.core import tag_query
+
+            _tags = tag_query.TagFilter.of(_recall_tags_param(tags), tags_match)
+            facts = await asyncio.to_thread(
+                list_recent_facts, engine._db, profile_id, limit, parsed_kind,
+                tag_filter=_tags)
             items = [
                 {
                     "content": f.content[:100],
@@ -5852,7 +5896,9 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 }
                 for f in facts
             ]
-            return {"results": items, "count": len(items)}
+            return await asyncio.to_thread(
+                tag_query.with_report, {"results": items, "count": len(items)},
+                engine._db, profile_id, _tags)
         except HTTPException:
             raise
         except Exception:
