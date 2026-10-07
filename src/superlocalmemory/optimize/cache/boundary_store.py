@@ -20,9 +20,11 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import math
+import secrets
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -34,6 +36,33 @@ if TYPE_CHECKING:
     from superlocalmemory.optimize.storage.db import CacheDB
 
 logger = logging.getLogger(__name__)
+
+#: W3 (4.1.22): the explore draw is keyed by this install's secret, the same way
+#: learning/bandit_draw.py keys its draw, so which queries get re-asked is not
+#: predictable to anyone who can see or guess a record's state but lacks the key.
+_EXPLORE_KEY_LABEL = b"slm:vcache-explore:v1"
+_PROCESS_FALLBACK_KEY = secrets.token_bytes(32)
+_explore_keys: dict[str, bytes] = {}
+
+
+def _explore_key() -> bytes:
+    """The install-derived key for the explore draw, cached per token file."""
+    try:
+        from superlocalmemory.core.security_primitives import (
+            _install_token_path,
+            ensure_install_token,
+        )
+
+        path = str(_install_token_path())
+        key = _explore_keys.get(path)
+        if key is None:
+            token = ensure_install_token()
+            key = hmac.new(token.encode("utf-8"), _EXPLORE_KEY_LABEL, hashlib.sha256).digest()
+            _explore_keys[path] = key
+        return key
+    except Exception as exc:  # noqa: BLE001 — token I/O failure; still a secret draw
+        logger.debug("vcache explore: install key unavailable (%s)", type(exc).__name__)
+        return _PROCESS_FALLBACK_KEY
 
 # Optional scipy MLE (N-D L-BFGS-B). Fall back to gradient descent if absent.
 try:
@@ -189,7 +218,8 @@ class PerItemBoundaryRecord:
         return u <= tau
 
     def explore_draw(self, query_sim: float) -> float:
-        """u in [0, 1), keyed on this record's state and the query similarity.
+        """u in [0, 1), keyed on this record's state and the query similarity,
+        under this install's secret (W3): repeatable here, unpredictable elsewhere.
 
         The similarity is rounded to 6 places, so float noise from different
         platforms' arithmetic does not turn one query into two draws.
@@ -200,7 +230,7 @@ class PerItemBoundaryRecord:
              f"{float(query_sim):.6f}"],
             ensure_ascii=True,
         )
-        digest = hashlib.sha256(b"slm:vcache-explore:v1|" + material.encode("utf-8")).digest()
+        digest = hmac.new(_explore_key(), material.encode("utf-8"), hashlib.sha256).digest()
         return int.from_bytes(digest[:8], "big") / 2.0**64
 
     def add_sample(

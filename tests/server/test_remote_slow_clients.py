@@ -223,3 +223,59 @@ def test_requests_on_the_listener_are_seen_as_https(limits) -> None:
         _close(writer)
 
     _run(scenario)
+
+
+def test_pipelined_requests_are_answered_and_the_counts_come_back(limits, monkeypatch) -> None:
+    """Muse 4.1.21 M2: requests sent together right after the handshake are all
+    answered, and under the lowest limits a closed connection frees its place
+    (handshaking -> open -> gone is counted once each way)."""
+    monkeypatch.setattr(remote_conn_guard, "MAX_WAITING_CONNECTIONS", 1)
+    monkeypatch.setattr(remote_conn_guard, "MAX_OPEN_CONNECTIONS", 1)
+
+    async def ask_twice(connect) -> None:
+        reader, writer = await connect()
+        writer.write(b"GET /mcp/a HTTP/1.1\r\nHost: localhost\r\n\r\n"
+                     b"GET /mcp/b HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        await writer.drain()
+        for _ in range(2):
+            head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
+            assert head.startswith(b"HTTP/1.1 200"), head
+            assert await asyncio.wait_for(reader.readexactly(2), 2) == b"ok"
+        return reader, writer
+
+    async def scenario(connect):
+        _reader, writer = await ask_twice(connect)
+        assert await _refused(connect), "a second connection fit under a cap of one"
+        _close(writer)
+        await asyncio.sleep(0.2)  # let the listener see the close
+        for _ in range(2):  # the place is free again, and stays countable
+            _r, w = await ask_twice(connect)
+            _close(w)
+            await asyncio.sleep(0.2)
+
+    _run(scenario)
+
+
+def test_a_flood_before_the_hand_over_closes_the_connection(monkeypatch) -> None:
+    """Bytes buffered between the handshake and the HTTP hand-over are capped."""
+    monkeypatch.setattr(remote_conn_guard, "MAX_PENDING_BYTES", 1000, raising=False)
+
+    class _Transport:
+        aborted = False
+
+        def is_closing(self):
+            return self.aborted
+
+        def abort(self):
+            self.aborted = True
+
+    async def scenario():
+        gate_cls = remote_conn_guard.tls_gate_protocol_class(ssl.create_default_context())
+        gate = gate_cls(_loop=asyncio.get_running_loop())
+        gate._transport = _Transport()
+        gate.data_received(b"x" * 600)
+        assert not gate._transport.aborted
+        gate.data_received(b"x" * 600)
+        assert gate._transport.aborted and gate._pending == []
+
+    asyncio.run(scenario())
