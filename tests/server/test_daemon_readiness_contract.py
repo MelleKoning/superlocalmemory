@@ -51,7 +51,10 @@ def test_health_ready_requires_engine_migrations_writer_and_retrieval(
     tmp_path,
     monkeypatch,
 ) -> None:
-    from superlocalmemory.server import unified_daemon
+    from superlocalmemory.server import recall_warmup, unified_daemon
+
+    # Process-wide warm-up state: another test in this worker may have run it.
+    monkeypatch.setattr(recall_warmup, "_state", {"phase": "pending"})
 
     monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(unified_daemon, "_embedding_warm", True)
@@ -76,6 +79,10 @@ def test_health_ready_requires_engine_migrations_writer_and_retrieval(
         # 4.1.22: the reason the last warmup attempt failed, when it did.
         # None once the embedding model is warm, as it is here.
         "embedding_warmup_error": None,
+        # 4.1.22: what the recall warm-up is still building. ``ready`` does not
+        # wait for it; this says it. Never started in this direct call.
+        "recall_warmup": {"phase": "pending", "warm": False,
+                          "warming": ["indexes", "entity_graph", "recalls"]},
         "recall_health": True,
         "retrieval": True,
         "migration_failures": [],

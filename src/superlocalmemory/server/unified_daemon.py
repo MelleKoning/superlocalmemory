@@ -2593,8 +2593,8 @@ async def lifespan(application: FastAPI):
             it reads graph_edges from disk. After this warmup completes, all
             subsequent queries hit the warm page cache at <2s.
 
-            Runs after embedding warm (embed first so recall can use it).
-            Named 'recall-warmup' so it appears clearly in thread dumps.
+            Runs after embedding warm (embed first so recall can use it); the
+            entity graph starts at once (recall_warmup.begin). Thread 'recall-warmup'.
 
             v3.x: each warmup query holds its own operation_nowait() lease
             (previously one lease across both queries held for up to 20s,
@@ -2602,6 +2602,8 @@ async def lifespan(application: FastAPI):
             transition preempts remaining queries; they complete on next boot.
             """
             import time as _t
+            from superlocalmemory.server.recall_warmup import begin, run_warmup_recalls
+            begin(engine)
             for _ in range(60):
                 if _embedding_warm:
                     break
@@ -2611,8 +2613,6 @@ async def lifespan(application: FastAPI):
                 # 4.1.18: the system's own recalls — never asked of the answer
                 # check, so a daemon start sends and bills nothing. See
                 # server/recall_warmup.py for what each recall warms.
-                from superlocalmemory.server.recall_warmup import run_warmup_recalls
-
                 run_warmup_recalls(
                     engine, profile_runtime,
                     warm_spreading_activation=_warm_spreading_activation,
@@ -4623,6 +4623,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
             "canonical_remember_runtime",
             None,
         )
+        from superlocalmemory.server.recall_warmup import warmup_status as _recall_warmup_status
         readiness = {
             "engine": engine is not None,
             "migrations": migrations_ready,
@@ -4631,11 +4632,10 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 and getattr(writer_runtime, "ready", False)
             ),
             "embedding": embedding_ready,
-            # 4.1.22: why the embedding model is not warm, when the last
-            # warmup attempt actually failed (e.g. a first run offline with
-            # no cached model) rather than merely still being in progress.
-            # None while warming normally, or once warm.
+            # 4.1.22: why the embedding model is not warm when its warmup failed (None
+            # while warming or warm); what the recall warm-up is still building.
             "embedding_warmup_error": _embedding_warmup_error,
+            "recall_warmup": _recall_warmup_status(),
             "recall_health": recall_health.get("recall_healthy") is True,
             "migration_failures": migration_failures,
             # Which of those are the reason this daemon will not serve, as

@@ -31,7 +31,8 @@ from superlocalmemory.core.config import (
     ChannelWeights,
     RetrievalConfig,
 )
-from superlocalmemory.retrieval import channel_status as chstat, kind_scope, project_search
+from superlocalmemory.retrieval import (channel_status as chstat, entity_graph_warmup,
+                                      kind_scope, project_search)
 from superlocalmemory.retrieval.fusion import FusionResult, weighted_rrf
 from superlocalmemory.retrieval.rerank_pool import rerank_pool
 from superlocalmemory.retrieval.strategy import QueryStrategy, QueryStrategyClassifier
@@ -498,16 +499,14 @@ class RetrievalEngine:
             # the code no longer makes.
             try:
                 candidate_ids = [fr.fact_id for fr in fused[:100]]
-                eg_scores = self._entity.score_candidates(
-                    query,
-                    candidate_ids,
-                    profile_id,
-                    include_global=include_global,
-                    include_shared=include_shared,
-                )
-                channel_status["entity_graph"] = (
-                    chstat.OK if eg_scores else chstat.EMPTY
-                )
+                # None: another thread builds this scope's graph, none usable cached.
+                eg_scores = entity_graph_warmup.score_candidates_unless_warming(
+                    self._entity, query, candidate_ids, profile_id,
+                    include_global=include_global, include_shared=include_shared)
+                if eg_scores is None:  # incomplete, never "found nothing"
+                    dropped_channels.add("entity_graph")
+                channel_status["entity_graph"] = (chstat.WARMING if eg_scores is None
+                                                  else chstat.OK if eg_scores else chstat.EMPTY)
                 if eg_scores:
                     boosted = []
                     for fr in fused:

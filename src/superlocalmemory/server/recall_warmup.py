@@ -21,12 +21,61 @@ on-device check's model is warmed separately — locally, without a recall.
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
 from typing import Any
 
 from superlocalmemory.core.answer_check_scope import skip_answer_check
 
 logger = logging.getLogger(__name__)
+
+#: 4.1.22: what the warm-up is doing, for /health. ``ready`` only says the
+#: daemon can serve; until this reads ``warm`` a recall may still find a cache
+#: being built (and say so: an incomplete channel reports ``warming``).
+#: pending -> indexes -> entity_graph -> recalls -> warm | failed
+_state_lock = threading.Lock()
+_state = {"phase": "pending"}
+_WARMING_PHASES = ("pending", "indexes", "entity_graph", "recalls")
+
+
+def _set_phase(phase: str) -> None:
+    with _state_lock:
+        _state["phase"] = phase
+
+
+def begin(engine: Any) -> threading.Thread | None:
+    """Daemon start, before the embedding model is loaded: build the graph now.
+
+    The entity graph needs no model, so it starts at once instead of after the
+    model load, and from here on a graph build never runs on a recall's clock
+    (``adjacency_rcu.prefer_background_builds``): a recall that arrives first
+    reports the channel ``warming`` instead of building it itself.
+    """
+    from superlocalmemory.retrieval import adjacency_rcu, entity_graph_warmup
+
+    try:
+        adjacency_rcu.prefer_background_builds(entity_graph_warmup.channel_of(engine))
+        profile_id = str(getattr(engine, "profile_id", "") or "default")
+        thread = threading.Thread(target=entity_graph_warmup.warm, args=(engine, profile_id),
+                                  name="slm-graph-warmup", daemon=True)
+        thread.start()
+    except Exception as exc:  # noqa: BLE001 -- the warm-up builds it later instead
+        logger.warning("early entity graph build not started (%s)", type(exc).__name__)
+        return None
+    with _state_lock:
+        _state["graph_thread"] = thread
+    return thread
+
+
+def warmup_status() -> dict[str, Any]:
+    """``{"phase": ..., "warm": bool, "warming": [what is still being built]}``."""
+    with _state_lock:
+        phase = _state["phase"]
+    if phase in _WARMING_PHASES:
+        still = list(_WARMING_PHASES[max(1, _WARMING_PHASES.index(phase)):])
+    else:
+        still = []
+    return {"phase": phase, "warm": phase == "warm", "warming": still}
 
 #: One to load the graph page cache, one to warm the reranker and producers.
 WARMUP_QUERIES = ("memory recall performance", "context injection retrieval")
@@ -36,8 +85,13 @@ FULL_PATH_QUERY = "memory recall performance"
 def run_warmup_recalls(engine: Any, profile_runtime: Any, *,
                        warm_spreading_activation: Callable[[Any, Any], Any]) -> None:
     """Fire the start-up recalls, then warm the on-device check's model."""
-    with skip_answer_check():
-        _recalls(engine, profile_runtime, warm_spreading_activation)
+    try:
+        with skip_answer_check():
+            _recalls(engine, profile_runtime, warm_spreading_activation)
+    except BaseException:
+        _set_phase("failed")
+        raise
+    _set_phase("warm")
     warm_answer_check(engine)
 
 
@@ -46,9 +100,22 @@ def _recalls(engine: Any, profile_runtime: Any,
     # The in-memory vector and kind indexes first (retrieval/kind_scope): built
     # here, the warm-up recalls below and the first real one find them ready
     # instead of waiting behind the build past the channel guard.
-    from superlocalmemory.retrieval import kind_scope
+    from superlocalmemory.retrieval import entity_graph_warmup, kind_scope
 
-    kind_scope.warm(engine, str(getattr(engine, "profile_id", "") or "default"))
+    profile_id = str(getattr(engine, "profile_id", "") or "default")
+    _set_phase("indexes")
+    kind_scope.warm(engine, profile_id)
+    # The entity graph next, directly: built inside the first recall it cost
+    # that recall ~6 s. It builds off the cache lock; a recall meanwhile reports
+    # entity_graph ``warming`` instead of waiting (retrieval/adjacency_rcu).
+    _set_phase("entity_graph")
+    with _state_lock:
+        early = _state.get("graph_thread")
+    if early is not None:
+        early.join()  # started by ``begin``; bounded by the build itself
+    else:
+        entity_graph_warmup.warm(engine, profile_id)
+    _set_phase("recalls")
     for query in WARMUP_QUERIES:
         with profile_runtime.operation_nowait() as snapshot:
             if snapshot is None:
@@ -90,4 +157,5 @@ def warm_answer_check(engine: Any) -> bool:
     return True
 
 
-__all__ = ["FULL_PATH_QUERY", "WARMUP_QUERIES", "run_warmup_recalls", "warm_answer_check"]
+__all__ = ["FULL_PATH_QUERY", "WARMUP_QUERIES", "run_warmup_recalls", "warm_answer_check",
+           "begin", "warmup_status"]
