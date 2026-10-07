@@ -51,6 +51,7 @@ from superlocalmemory.storage.read_connection import read_only_snapshot
 from superlocalmemory.storage import projection_outbox
 from superlocalmemory.storage.memory_kinds import KIND_COLUMNS
 from superlocalmemory.storage.correction_cases import CALLER_REPLACEMENT_REASON
+from superlocalmemory.storage import store_signature
 
 logger = logging.getLogger(__name__)
 
@@ -1712,6 +1713,16 @@ class DatabaseManager:
         warm = None if include_global or include_shared else getattr(self, "visible_count", None)
         if warm is not None and (n := warm(profile_id)) is not None:
             return n
+        # Outside a transaction, a count taken since the last commit is still
+        # exact (storage/store_signature): recall asked this 2-3 times a call.
+        txn = getattr(self, "_txn_state", None)
+        in_txn = txn is None or getattr(txn, "conn", None) is not None  # unknown: count
+        key = (profile_id, bool(include_global), bool(include_shared))
+        sig = None if in_txn else store_signature.of(getattr(self, "db_path", None))
+        memo = self.__dict__.setdefault("_fact_count_memo", {})
+        hit = memo.get(key)
+        if sig is not None and hit is not None and hit[0] == sig:
+            return hit[1]
         where, params = _scope_where(
             profile_id,
             include_global=include_global,
@@ -1721,7 +1732,10 @@ class DatabaseManager:
             f"SELECT COUNT(*) AS c FROM atomic_facts WHERE {where}"
             f"{self.visible_fact_clause()}", (*params,),
         )
-        return int(rows[0]["c"]) if rows else 0
+        count = int(rows[0]["c"]) if rows else 0
+        if sig is not None:
+            memo[key] = (sig, count)
+        return count
 
     def store_entity(self, entity: CanonicalEntity) -> str:
         """Persist a canonical entity. Returns entity_id."""

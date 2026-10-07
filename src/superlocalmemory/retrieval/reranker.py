@@ -78,6 +78,11 @@ _WORKER_RECYCLE_AFTER = 500  # Recycle after N requests
 # long instead of falling back to unranked order. The swap is a pointer
 # exchange plus a PID-file write and an idle-timer reset: milliseconds.
 _SWAP_WAIT_SECONDS = 1.0
+#: How long a recall waits for the reranker while another recall is using it.
+#: It used to skip reranking at once and return fusion order, so two recalls at
+#: the same moment could rank the same question differently. One rerank takes
+#: ~0.2 s: this lets about five queued recalls through inside the 3 s budget.
+_RERANK_QUEUE_WAIT_SECONDS = 1.0
 
 # One-time model load is far heavier than a live rerank request: the child
 # process imports torch / sentence-transformers and runs a warmup inference,
@@ -413,7 +418,7 @@ class CrossEncoderReranker:
         )
 
     def _send_request(self, req: dict, timeout: float | None = None,
-                      block: bool = True) -> dict | None:
+                      block: bool = True, wait: float = 0.0) -> dict | None:
         """Send JSON request to worker, get response. Thread-safe.
 
         Uses a short timeout (10s) for rerank requests since the model
@@ -431,6 +436,8 @@ class CrossEncoderReranker:
         effective_timeout = timeout or _SUBPROCESS_RESPONSE_TIMEOUT
 
         acquired = self._lock.acquire(blocking=block)
+        if not acquired and wait > 0:
+            acquired = self._lock.acquire(timeout=wait)  # queue behind another recall
         if not acquired and self._swap_in_progress():
             # Not another recall's inference but a recycle swapping workers:
             # bounded wait, so the swap never leaves a recall unranked.
@@ -693,7 +700,7 @@ class CrossEncoderReranker:
             "cmd": "rerank",
             "query": query,
             "documents": documents,
-        }, timeout=15.0, block=False)
+        }, timeout=15.0, block=False, wait=_RERANK_QUEUE_WAIT_SECONDS)
 
         if resp is None or not resp.get("ok"):
             # Fallback: return by existing score

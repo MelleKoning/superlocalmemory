@@ -379,22 +379,52 @@ class EntityResolver:
         A name that is unknown, or only uncertainly close, is left out.
         """
         found: dict[str, str] = {}
+        index = self._lookup_rows(profile_id)
         for raw in raw_entities or ():
             name = _usable_mention(raw)
             if name is None:
                 continue
-            entity = self._db.get_entity_by_name(name, profile_id)
-            if entity is not None:
-                found[raw] = entity.entity_id
-                continue
-            entity_id = self._alias_lookup(name, profile_id)
+            entity_id = self._lookup_one(name, profile_id, index)
             if entity_id is not None:
                 found[raw] = entity_id
-                continue
-            match_id, score = self._fuzzy_match(name, profile_id)
-            if match_id is not None and score >= JARO_WINKLER_AUTO_MERGE:
-                found[raw] = match_id
         return found
+
+    def _lookup_rows(self, profile_id: str):
+        """The kept name rows (encoding/entity_lookup_index), or None."""
+        from superlocalmemory.encoding import entity_lookup_index as eli
+
+        holder = self.__dict__.get("_lookup_index")
+        if holder is None:
+            holder = self.__dict__.setdefault("_lookup_index", eli.EntityLookupIndex(self._db))
+        try:
+            return holder.get(profile_id)
+        except Exception as exc:  # noqa: BLE001 -- the original queries still answer
+            logger.debug("entity lookup index unavailable: %s", exc)
+            return None
+
+    def _lookup_one(self, name: str, profile_id: str, index) -> str | None:
+        """Exact name, then alias, then a close enough spelling: as before."""
+        from superlocalmemory.encoding import entity_lookup_index as eli
+
+        key = eli.sql_lower(name)
+        hit = index.by_name.get(key) if index is not None else eli.AMBIGUOUS
+        if hit is eli.AMBIGUOUS:
+            entity = self._db.get_entity_by_name(name, profile_id)
+            hit = entity.entity_id if entity is not None else None
+        if hit is not None:
+            return str(hit)
+        hit = index.by_alias.get(key) if index is not None else eli.AMBIGUOUS
+        if hit is eli.AMBIGUOUS:
+            hit = self._alias_lookup(name, profile_id)
+        if hit is not None:
+            return str(hit)
+        if index is not None:
+            match_id, score = eli.fuzzy_best(index, name, jaro_winkler)
+        else:
+            match_id, score = self._fuzzy_match(name, profile_id)
+        if match_id is not None and score >= JARO_WINKLER_AUTO_MERGE:
+            return match_id
+        return None
 
     def create_speaker_entities(
         self,

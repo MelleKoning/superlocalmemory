@@ -498,3 +498,51 @@ class TestWorkerRecycle:
             reranker._send_request({"cmd": "ping"})
         assert reranker._worker_proc is old
         assert reranker._model_loaded is True
+
+
+class TestConcurrentRecallsAreBothReranked:
+    """A recall that finds the reranker busy waits its turn (bounded) instead of
+    returning unranked fusion order: two recalls at the same moment used to
+    rank the same question differently."""
+
+    def _ready(self):
+        reranker = _make_reranker(model_name="fake-model")
+        proc = MagicMock()
+        proc.poll.return_value = None
+        reranker._worker_proc = proc
+        reranker._model_loaded = True
+        return reranker
+
+    def test_a_busy_reranker_is_waited_for_not_skipped(self) -> None:
+        reranker = self._ready()
+        held, release = threading.Event(), threading.Event()
+
+        def other_recall() -> None:
+            with reranker._lock:
+                held.set()
+                release.wait(5)
+
+        t = threading.Thread(target=other_recall)
+        t.start()
+        assert held.wait(5)
+        threading.Timer(0.2, release.set).start()
+        with patch.object(reranker, "_readline_with_timeout",
+                          return_value='{"ok": true, "scores": [0.1, 0.9, 0.5]}\n'):
+            ranked, applied, status = reranker.rerank_with_status(
+                "q", _make_candidates(3), top_k=3)
+        t.join(5)
+        assert applied is True and status == "applied", status
+
+    def test_a_reranker_busy_past_the_wait_falls_back_and_says_so(self, monkeypatch) -> None:
+        from superlocalmemory.retrieval import reranker as mod
+
+        monkeypatch.setattr(mod, "_RERANK_QUEUE_WAIT_SECONDS", 0.05, raising=False)
+        reranker = self._ready()
+        with reranker._lock:  # held for the whole call
+            got = []
+            t = threading.Thread(target=lambda: got.append(
+                reranker.rerank_with_status("q", _make_candidates(2), top_k=2)))
+            t.start()
+            t.join(5)
+        _ranked, applied, status = got[0]
+        assert applied is False and status == "fallback_busy_or_unavailable"
