@@ -140,3 +140,33 @@ class TestItRunsOnWindows:
                             raising=False)
         monkeypatch.setenv("USERPROFILE", str(tmp_path / "elsewhere"))
         assert tool._account_home() == Path(profile)
+
+
+class TestMeasuresOnlyACompleteSearch:
+    """A gate run measured the first questions while the embedding model was
+    still warming: the same question ranked 7 three times, then dropped out
+    once meaning-based search came online. The tool now waits for a complete
+    search and counts any incomplete recall in its report."""
+
+    class _Engine:
+        def __init__(self, warming_for: int) -> None:
+            self.calls = 0
+            self.warming_for = warming_for
+
+        def recall(self, *_a, **_k):
+            from types import SimpleNamespace
+
+            self.calls += 1
+            missing = ("semantic",) if self.calls <= self.warming_for else ()
+            return SimpleNamespace(incomplete_channels=missing)
+
+    def test_it_waits_until_no_channel_is_warming(self, tool, monkeypatch) -> None:
+        monkeypatch.setattr(tool.time, "sleep", lambda _s: None)
+        engine = self._Engine(warming_for=3)
+        tool._wait_until_complete(engine, fast=None, timeout_s=30)
+        assert engine.calls == 4
+
+    def test_a_search_that_never_completes_is_refused(self, tool, monkeypatch) -> None:
+        monkeypatch.setattr(tool.time, "sleep", lambda _s: None)
+        with pytest.raises(tool.EvalError, match="semantic"):
+            tool._wait_until_complete(self._Engine(warming_for=10**9), fast=None, timeout_s=0.05)

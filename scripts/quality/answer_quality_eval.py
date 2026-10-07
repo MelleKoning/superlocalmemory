@@ -149,6 +149,24 @@ def _build_engine(warm_timeout_s: float, require_reranker: bool):
     return engine
 
 
+def _wait_until_complete(engine, fast, timeout_s: float) -> None:
+    """Measure only a complete search. Every channel that is still warming
+    (the embedding model, Hopfield, spreading activation) makes a recall
+    incomplete, and the product says so; measuring then compares a partial
+    search. Probe until one recall comes back complete."""
+    deadline = time.monotonic() + timeout_s
+    missing: tuple = ()
+    while time.monotonic() < deadline:
+        missing = tuple(getattr(engine.recall("warm up", limit=1, fast=fast),
+                                "incomplete_channels", ()) or ())
+        if not missing:
+            return
+        time.sleep(0.5)
+    raise EvalError(3, "these channels were still warming after "
+                       f"{timeout_s:.0f} s: {', '.join(missing)}; a measurement now "
+                       "would not describe complete recall")
+
+
 def _ranked(response) -> list[RankedResult]:
     return [RankedResult(memory_id=r.fact.memory_id or "", fact_id=r.fact.fact_id or "")
             for r in response.results]
@@ -161,6 +179,8 @@ def run_retrieval(args: argparse.Namespace) -> dict:
     from superlocalmemory.core.recall_pipeline import resolve_hot_path_fast
 
     fast = resolve_hot_path_fast(None, engine._config)
+    _wait_until_complete(engine, fast, args.warm_timeout)
+    incomplete_recalls = 0
     ranks: dict[str, int | None] = {}
     latencies: list[float] = []
     unstable: list[str] = []
@@ -173,6 +193,8 @@ def run_retrieval(args: argparse.Namespace) -> dict:
                 t0 = time.monotonic()
                 response = engine.recall(q.question, limit=args.limit, fast=fast)
                 latencies.append((time.monotonic() - t0) * 1000.0)
+                if getattr(response, "incomplete_channels", ()):
+                    incomplete_recalls += 1
                 status = getattr(response, "reranker_status", "") or "unknown"
                 rerank_status[status] = rerank_status.get(status, 0) + 1
                 results = _ranked(response)
@@ -195,6 +217,7 @@ def run_retrieval(args: argparse.Namespace) -> dict:
     report = retrieval_report(ranks, questions, latencies)
     report["repeats"] = args.repeats
     report["rank_changed_between_repeats"] = unstable
+    report["incomplete_recalls"] = incomplete_recalls
     report["reranker_status"] = rerank_status
     unanswerable = [r for r in rows if not r["answerable"]]
     report["unanswerable"] = {
