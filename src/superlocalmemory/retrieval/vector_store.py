@@ -506,19 +506,26 @@ class VectorStore:
                     if self._has_quarantine_column() else ""
                 )
                 if profile_id is not None:
+                    # The profile is BOUND on the metadata side, not joined to
+                    # fe.profile_id: reading the vec0 partition column runs a
+                    # nested statement per candidate row, and its allocations
+                    # take a process-wide SQLite lock that every other read in
+                    # the daemon then waits on. fe.profile_id = ? already holds,
+                    # so the rows are identical
+                    # (tests/test_retrieval/test_vector_search_binds_the_profile.py).
                     sql = (
                         "SELECT fe.rowid, fe.distance, em.fact_id "
                         "FROM fact_embeddings AS fe "
                         "JOIN embedding_metadata AS em "
                         "ON em.vec_rowid = fe.rowid "
-                        "AND em.profile_id = fe.profile_id "
+                        "AND em.profile_id = ? "
                         + quarantine_join +
                         "WHERE fe.embedding MATCH ? "
                         "AND fe.profile_id = ? "
                         + quarantine_filter +
                         "AND fe.k = ?"
                     )
-                    base_params: tuple[object, ...] = (vec_bytes, profile_id)
+                    base_params: tuple[object, ...] = (profile_id, vec_bytes, profile_id)
                     count_sql = "SELECT COUNT(*) AS c FROM fact_embeddings WHERE profile_id = ?"
                     count_params: tuple[object, ...] = (profile_id,)
                 else:

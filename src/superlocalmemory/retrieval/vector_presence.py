@@ -102,12 +102,12 @@ def is_searchable_by_meaning(
                     "SELECT 1 FROM fact_embeddings AS fe "
                     "JOIN embedding_metadata AS em "
                     "ON em.vec_rowid = fe.rowid "
-                    "AND em.profile_id = fe.profile_id "
+                    "AND em.profile_id = ? "  # bound, not joined (vector_store.search)
                     "WHERE em.fact_id = ? "
                     "AND fe.profile_id = ? "
                     "LIMIT 1"
                 )
-                row = conn.execute(sql, (fact_id, profile_id)).fetchone()
+                row = conn.execute(sql, (profile_id, fact_id, profile_id)).fetchone()
             else:
                 sql = (
                     "SELECT 1 FROM fact_embeddings AS fe "
@@ -139,9 +139,9 @@ def count(store: VectorStore, profile_id: str | None = None) -> int:
                     "FROM embedding_metadata em "
                     "JOIN fact_embeddings fe "
                     "ON fe.rowid = em.vec_rowid "
-                    "AND fe.profile_id = em.profile_id "
+                    "AND fe.profile_id = ? "  # bound, not joined (vector_store.search)
                     "WHERE em.profile_id = ?",
-                    (profile_id,),
+                    (profile_id, profile_id),
                 ).fetchone()
             else:
                 row = conn.execute(
@@ -168,9 +168,9 @@ def indexed_fact_ids(store: VectorStore, profile_id: str) -> set[str]:
                 "FROM embedding_metadata em "
                 "JOIN fact_embeddings fe "
                 "ON fe.rowid = em.vec_rowid "
-                "AND fe.profile_id = em.profile_id "
+                "AND fe.profile_id = ? "  # bound, not joined (vector_store.search)
                 "WHERE em.profile_id = ?",
-                (profile_id,),
+                (profile_id, profile_id),
             ).fetchall()
         return {str(row["fact_id"]) for row in rows}
     except Exception as exc:
