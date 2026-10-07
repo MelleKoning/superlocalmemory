@@ -684,29 +684,28 @@ class GDPRCompliance:
         # them still exist to be joined against.
         self._erase_fact_keyed_tables(profile_id, counts)
 
-        # Pass 2 — full-tenant wipe with FK enforcement OFF so table order is
-        # irrelevant (every profile row in every table goes). FTS shadow rows
-        # are still removed by the base-table delete triggers.
-        try:
-            self._db.execute("PRAGMA foreign_keys=OFF")
-        except Exception:
-            pass
+        # Correction history does not block erasure (compliance/erased_cases.py):
+        # the ledger refers to facts ON DELETE RESTRICT, which no table order
+        # and no deferred check can get past, so its cases go first.
+        from superlocalmemory.compliance.erased_cases import erase_profile_cases
+
+        counts["correction_cases_erased"] = erase_profile_cases(
+            self._db, profile_id, erasure_id=_uuid.uuid4().hex)
+
+        # Pass 2 — full-tenant wipe (every profile row in every table goes).
+        # Each statement runs on its own connection with foreign keys ON (a
+        # PRAGMA here would only reach a throwaway connection), so cascades
+        # apply. FTS shadow rows are removed by the base-table delete triggers.
         table_delete_failures: list[str] = []
-        try:
-            for table in tables:
-                try:
-                    self._db.execute(f"DELETE FROM {table} WHERE profile_id = ?", (profile_id,))
-                except Exception as exc:  # pragma: no cover — defensive per-table
-                    logger.warning("GDPR erase: delete %s failed: %s", table, exc)
-                    table_delete_failures.append(table)
-            # Delete the profile record itself.
-            self._db.execute("DELETE FROM profiles WHERE profile_id = ?", (profile_id,))
-            counts["profiles"] = 1
-        finally:
+        for table in tables:
             try:
-                self._db.execute("PRAGMA foreign_keys=ON")
-            except Exception:
-                pass
+                self._db.execute(f"DELETE FROM {table} WHERE profile_id = ?", (profile_id,))
+            except Exception as exc:  # pragma: no cover — defensive per-table
+                logger.warning("GDPR erase: delete %s failed: %s", table, exc)
+                table_delete_failures.append(table)
+        # Delete the profile record itself.
+        self._db.execute("DELETE FROM profiles WHERE profile_id = ?", (profile_id,))
+        counts["profiles"] = 1
         if table_delete_failures:
             counts["table_delete_failures"] = len(table_delete_failures)
 
@@ -957,16 +956,10 @@ class GDPRCompliance:
             [fid for fid, _mid in targets], counts,
         )
 
-        for fid, mid in targets:
-            self._db.delete_fact(fid)
-            if mid and not self._memory_has_siblings(mid, profile_id):
-                try:
-                    self._db.execute(
-                        "DELETE FROM memories WHERE memory_id = ? AND profile_id = ?",
-                        (mid, profile_id),
-                    )
-                except Exception:
-                    pass
+        if targets:  # correction history does not block erasure (compliance/erased_cases.py)
+            from superlocalmemory.compliance.erased_cases import delete_erased_facts
+            delete_erased_facts(self._db, targets, profile_id, erasure_id=op_id,
+                                has_siblings=self._memory_has_siblings, counts=counts)
 
         try:
             for fid in target_fact_ids:
@@ -1013,7 +1006,7 @@ class GDPRCompliance:
                 counts.get(marker)
                 for marker in (
                     "vector_store_failures",
-                    "audit_request_failed", "text_scrub_failed",
+                    "audit_request_failed", "text_scrub_failed", "projection_failed",
                     *(f"{table}_failed" for table, _ in self._FACT_KEYED_TABLES),
                 )
             )

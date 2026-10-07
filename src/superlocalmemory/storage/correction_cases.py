@@ -40,6 +40,10 @@ class CorrectionCompareAndSetError(CorrectionCaseError):
     """The caller attempted a state transition against a stale case version."""
 
 
+class CorrectionFactErasingError(CorrectionCompareAndSetError):
+    """A fact the case names is being deleted (its erasure tombstone exists)."""
+
+
 class CorrectionIdempotencyError(CorrectionCaseError):
     """A replay key names a different correction proposal."""
 
@@ -291,6 +295,7 @@ def propose_on_connection(
             raise CorrectionIdempotencyError("proposal replay key names different data")
         return case
 
+    refuse_if_being_deleted(conn, (predecessor_fact_id, successor_fact_id), "proposed")
     now = _now()
     conn.execute(
         "INSERT INTO correction_cases (case_id, profile_id, scope, predecessor_fact_id, "
@@ -348,6 +353,8 @@ def transition_on_connection(
         raise CorrectionAuthorizationError("profile is inactive or closing")
     if case.status != from_status or case.version != expected_version:
         raise CorrectionCompareAndSetError("case state changed; reload before review action")
+    refuse_if_being_deleted(conn, (case.predecessor_fact_id, case.successor_fact_id),
+                            to_status.replace("_", " "))
     if to_status == "rolled_back":
         dependent = conn.execute(
             "SELECT 1 FROM correction_cases WHERE profile_id=? "
@@ -414,6 +421,29 @@ def transition_on_connection(
             is_profile_active=is_profile_active, is_actor_trusted=is_actor_trusted,
         )
     return _get_case(conn, case_id)
+
+
+def refuse_if_being_deleted(conn: sqlite3.Connection, fact_ids: tuple[str, ...],
+                            action: str) -> None:
+    """Refuse while a delete of either fact is in progress (4.1.22).
+
+    A delete writes the fact's erasure tombstone and removes its search entries
+    before its last protection check; a case proposed or reviewed in that window
+    would turn the delete into a late refusal. Asked inside the case's own write
+    transaction, so it cannot interleave with the tombstone write.
+    """
+    ph = ",".join("?" * len(fact_ids))
+    try:
+        row = conn.execute(f"SELECT fact_id FROM projection_tombstones "  # noqa: S608
+                           f"WHERE fact_id IN ({ph}) LIMIT 1", fact_ids).fetchone()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return  # an older store without erasure tombstones
+        raise
+    if row is not None:
+        raise CorrectionFactErasingError(
+            f"memory {row[0]} is being deleted, so this correction cannot be {action}; "
+            "nothing was changed")
 
 
 def _append_event(

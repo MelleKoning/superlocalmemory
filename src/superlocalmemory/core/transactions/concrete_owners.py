@@ -561,7 +561,9 @@ def build_erasure_service_for_db(db: Any, engine: Any = None) -> ErasureService:
     """
     audit_logger = _audit_chain_logger()
     owners: dict[str, Any] = {
-        "bm25": Bm25Owner(db),
+        # The live keyword index too: without it an erased person's words
+        # stayed searchable in the running daemon until its next restart.
+        "bm25": Bm25Owner(db, retrieval=getattr(engine, "_retrieval_engine", None)),
         "temporal": TemporalOwner(db),
         "vector": VectorOwner(
             db,
