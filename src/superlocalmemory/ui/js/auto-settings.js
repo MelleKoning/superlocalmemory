@@ -81,7 +81,9 @@ function saveAutoCaptureConfig() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-    }).catch(function(e) { console.log('Save auto-capture error:', e); });
+    }).then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); })
+      // A refused save must not leave the switch showing a value the daemon never took.
+      .catch(function(e) { console.warn('auto-capture not saved:', e.message); loadAutoSettings(); });
 }
 
 function saveAutoRecallConfig() {
@@ -93,7 +95,9 @@ function saveAutoRecallConfig() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-    }).catch(function(e) { console.log('Save auto-recall error:', e); });
+    }).then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); })
+      // A refused save must not leave the switch showing a value the daemon never took.
+      .catch(function(e) { console.warn('auto-recall not saved:', e.message); loadAutoSettings(); });
 }
 
 // Use delegation so listeners work even when the settings pane is injected lazily.

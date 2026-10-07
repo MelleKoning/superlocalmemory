@@ -1375,7 +1375,6 @@
     saveAllBtn.addEventListener('click', function () {
       ['mode-save','emb-save','stor-save','forg-save','trust-save','rl-save','evo-save','bk-save','dmn-save']
         .forEach(function (i) { var b = q(i); if (b) b.click(); });
-      saveBackupConfig();
       syncBadge.className = 'badge';
       syncBadge.innerHTML = '<span class="dot"></span> Check each section';
     });
