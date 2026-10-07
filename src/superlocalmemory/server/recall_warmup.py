@@ -54,7 +54,7 @@ def begin(engine: Any) -> threading.Thread | None:
     from superlocalmemory.retrieval import adjacency_rcu, entity_graph_warmup
 
     try:
-        adjacency_rcu.prefer_background_builds(True)
+        adjacency_rcu.prefer_background_builds(entity_graph_warmup.channel_of(engine))
         profile_id = str(getattr(engine, "profile_id", "") or "default")
         thread = threading.Thread(target=entity_graph_warmup.warm, args=(engine, profile_id),
                                   name="slm-graph-warmup", daemon=True)

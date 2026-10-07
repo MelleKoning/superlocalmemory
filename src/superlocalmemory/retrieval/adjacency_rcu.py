@@ -52,14 +52,17 @@ class GraphWarming(RuntimeError):
 
 _inflight: set[tuple[int, tuple]] = set()
 _inflight_lock = threading.Lock()
-_background = False
 _local = threading.local()
 
 
-def prefer_background_builds(on: bool = True) -> None:
-    """Daemon policy: build beside recall, never on its clock."""
-    global _background
-    _background = bool(on)
+def prefer_background_builds(channel: Any, on: bool = True) -> None:
+    """Daemon policy for this channel: build beside recall, never on its clock.
+
+    Set per channel, not per process, so a test or tool that starts a daemon
+    in-process does not change how every other engine in it builds its graph.
+    """
+    if channel is not None:
+        channel._rcu_background = bool(on)
 
 
 class building_here:
@@ -114,7 +117,7 @@ def build_slot(channel: Any, scope_key: tuple, *, current_count: int,
     Returns with the lock held again and the slot installed. Raises
     ``GraphWarming`` when another thread is already building this scope.
     """
-    if _background and not getattr(_local, "builder", False):
+    if getattr(channel, "_rcu_background", False) and not getattr(_local, "builder", False):
         _start_background(channel, scope_key)
         raise GraphWarming(f"entity graph for {scope_key[0]!r} is being built")
     key = (id(channel), scope_key)

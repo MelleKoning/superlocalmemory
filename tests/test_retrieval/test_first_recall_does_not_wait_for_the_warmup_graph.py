@@ -205,7 +205,7 @@ def _wait_until(predicate, seconds: float = 10.0) -> bool:
 def test_in_the_daemon_a_cold_graph_is_built_beside_the_recall(tmp_path, monkeypatch):
     """The daemon's policy: no graph build ever runs on a recall's clock."""
     channel = _channel(tmp_path)
-    monkeypatch.setattr(adjacency_rcu, "_background", True)
+    adjacency_rcu.prefer_background_builds(channel)
     assert egw.score_candidates_unless_warming(channel, QUERY, ["f_a"], "a") is None
     assert _wait_until(lambda: ("a", False, False) in channel._adj_slots
                        and not adjacency_rcu.build_in_flight(channel, ("a", False, False)))
@@ -215,7 +215,6 @@ def test_in_the_daemon_a_cold_graph_is_built_beside_the_recall(tmp_path, monkeyp
 def test_begin_starts_the_graph_before_the_model_and_the_warmup_waits_for_it(
         tmp_path, monkeypatch):
     channel = _channel(tmp_path)
-    monkeypatch.setattr(adjacency_rcu, "_background", False)
     monkeypatch.setattr(recall_warmup, "_state", {"phase": "pending"})
     seen: list[bool] = []
     engine = SimpleNamespace(
@@ -223,7 +222,7 @@ def test_begin_starts_the_graph_before_the_model_and_the_warmup_waits_for_it(
         recall=lambda q, limit=5, fast=True: seen.append(("a", False, False)
                                                           in channel._adj_slots))
     thread = recall_warmup.begin(engine)
-    assert thread is not None and adjacency_rcu._background is True
+    assert thread is not None and channel._rcu_background is True
     recall_warmup.run_warmup_recalls(engine, _Runtime(),
                                      warm_spreading_activation=lambda e, r: None)
     assert seen and all(seen)
