@@ -82,19 +82,33 @@ def _get_ram_gb() -> float:
     return total_ram_gb()
 
 
+def _ollama_installed_models() -> list[str] | None:
+    """Names of the Ollama models actually installed on this machine.
+
+    One bounded GET (``/api/tags``), 1.5s timeout — same call ``_ollama_available``
+    used to make on its own. Returns ``None`` when Ollama is unreachable or the
+    response cannot be parsed, so callers can fall back to the catalogue default
+    instead of crashing the wizard.
+    """
+    try:
+        import httpx
+
+        resp = httpx.get("http://localhost:11434/api/tags", timeout=1.5)
+        if resp.status_code != 200:
+            return None
+        return [m["name"] for m in resp.json().get("models", [])]
+    except Exception:
+        return None
+
+
 def _ollama_available() -> bool:
     """True if a local Ollama server is reachable (or its binary is installed).
 
     v3.8.2: used to RECOMMEND Mode B at setup with a single keypress. Bounded
     and fail-safe — a slow/absent Ollama never blocks or slows the wizard.
     """
-    try:
-        import httpx
-
-        if httpx.get("http://localhost:11434/api/tags", timeout=1.5).status_code == 200:
-            return True
-    except Exception:
-        pass
+    if _ollama_installed_models() is not None:
+        return True
     try:
         return shutil.which("ollama") is not None
     except Exception:
@@ -321,6 +335,18 @@ def _run_mode_b_server_step(config: Any, *, interactive: bool) -> None:
     else:
         print("  ⚠ Ollama not found. Install: https://ollama.ai")
         print("    After installing: ollama pull llama3.2")
+
+    # #4.1.22: offer the models actually installed, best first, instead of
+    # always wiring the catalogue default — logic lives in cli.model_choice
+    # (setup_wizard.py is already past the 800-line guideline; see
+    # .backup/4.1.22/LANE-RULES.md). ``_prompt`` is passed through BY NAME so
+    # a test that monkeypatches ``sw._prompt`` is still honoured here.
+    from superlocalmemory.cli.model_choice import pick_mode_b_model
+
+    pick_mode_b_model(
+        config, interactive=interactive, prompt=_prompt,
+        installed=_ollama_installed_models(), ram_gb=_get_ram_gb(),
+    )
     config.save(mode_change=True)
 
 
@@ -1331,6 +1357,20 @@ def configure_provider(
                 f"  Enter your {provider_name.capitalize()} API key: ",
             )
 
+    # Offer the model instead of silently taking the preset's (#4.1.22):
+    # OpenRouter users see SLM's hosted catalogue so a cheaper or stronger
+    # tier doesn't require already knowing its id; direct presets show the
+    # preset model as the default. Non-interactive runs (``slm provider set``,
+    # CI) keep the preset model — unchanged zero-prompt behavior. Logic lives
+    # in cli.model_choice (this file is already past the 800-line guideline).
+    chosen_model = preset["model"]
+    if interactive_selection and is_interactive():
+        from superlocalmemory.cli.model_choice import pick_mode_c_model
+
+        chosen_model = pick_mode_c_model(
+            provider_name=provider_name, default_model=chosen_model, prompt=_prompt,
+        )
+
     # Provider selection is an additive configuration operation.  Rebuilding
     # via ``for_mode`` used to reset retrieval, scale-engine, evolution, and
     # user-tuned embedding settings — surprising and unsafe after a user had
@@ -1342,11 +1382,11 @@ def configure_provider(
     updated.mode = Mode.C
     updated.llm = LLMConfig(
         provider=provider_name,
-        model=preset["model"],
+        model=chosen_model,
         api_key=api_key,
         api_base=preset["base_url"],
     )
     updated.save(mode_change=True)
     SLMConfig.write_current_mode(Mode.C, updated.base_dir)
     print(f"  Provider: {provider_name}")
-    print(f"  Model: {preset['model']}")
+    print(f"  Model: {chosen_model}")

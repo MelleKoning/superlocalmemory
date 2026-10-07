@@ -57,7 +57,7 @@ REVIEWED: dict[tuple[str, str, str], tuple[int, str]] = {
     # no entry: since 4.1.21 their loopback probes go through
     # cli.daemon.owned_daemon_answers (the _fetch_health probe above), so a port
     # answered by another account's SuperLocalMemory is not taken for this one.
-    (_S + "cli/setup_wizard.py", "_ollama_available", "httpx.get"):
+    (_S + "cli/setup_wizard.py", "_ollama_installed_models", "httpx.get"):
         (1, "PROBE: is a local Ollama running (GET /api/tags)"),
     (_S + "core/component_registry.py", "probe_ollama", "httpx.get"):
         (1, "PROBE: Ollama model list for the component panel"),
