@@ -110,6 +110,7 @@ class MemoryConsolidator:
 
     def _similar(
         self, new_fact: AtomicFact, profile_id: str, k: int, exclude: set[str],
+        pending: tuple[str, ...] = (),
     ) -> list[tuple[AtomicFact, float]]:
         """The ``k`` most similar visible facts with cosine > 0.5, best first.
 
@@ -117,6 +118,12 @@ class MemoryConsolidator:
         the profile's visibility rules (``get_facts_by_ids``), so a withheld or
         deleted fact is never a candidate. The same set the full scan returns
         whenever that scan saw every fact (stores under its 50,000 cap).
+
+        ``pending`` are the facts this save already stored. Their vectors are
+        indexed only once the save commits, so the vector source cannot return
+        them yet; they are scored here directly, as the full scan did. Without
+        them a memory's facts were never linked to, or de-duplicated against,
+        each other.
         """
         skip = set(exclude) | {new_fact.fact_id}
         vectors = self._vectors
@@ -128,7 +135,9 @@ class MemoryConsolidator:
                 logger.debug("consolidation neighbour search fell back (%s)",
                              type(exc).__name__)
             else:
-                ids = [fid for fid, _ in hits if fid not in skip]
+                ids = list(dict.fromkeys(
+                    fid for fid in (*(fid for fid, _ in hits), *pending)
+                    if fid not in skip))
                 facts = {f.fact_id: f for f in self._db.get_facts_by_ids(ids, profile_id)}
                 out = []
                 for fid in ids:
@@ -158,6 +167,7 @@ class MemoryConsolidator:
         profile_id: str,
         *,
         exclude_fact_ids: set[str] | frozenset[str] | None = None,
+        pending_fact_ids: tuple[str, ...] | list[str] = (),
     ) -> ConsolidationAction:
         """Consolidate *new_fact* against existing knowledge.
 
@@ -167,15 +177,21 @@ class MemoryConsolidator:
         queryable projection.  That projection is evidence being promoted,
         not pre-existing knowledge, and must not suppress its derived facts as
         near-duplicates.
+
+        ``pending_fact_ids`` are the facts the same save stored before this
+        one (not yet in the vector index); see ``_similar``.
         """
+        pending = tuple(pending_fact_ids or ())
         candidates = self._find_candidates(
             new_fact,
             profile_id,
             exclude_fact_ids=exclude_fact_ids,
+            pending=pending,
         )
 
         if not candidates:
-            return self._execute_add(new_fact, profile_id, reason="no matching facts")
+            return self._execute_add(new_fact, profile_id, reason="no matching facts",
+                                     pending=pending)
 
         best_fact, best_score = candidates[0]
 
@@ -186,6 +202,7 @@ class MemoryConsolidator:
                 return self._execute_supersede(
                     new_fact, best_fact, profile_id,
                     reason=f"contradiction detected (score={best_score:.3f})",
+                    pending=pending,
                 )
             return self._execute_noop(
                 new_fact, best_fact, profile_id,
@@ -197,16 +214,19 @@ class MemoryConsolidator:
                 return self._execute_supersede(
                     new_fact, best_fact, profile_id,
                     reason=f"contradiction detected (score={best_score:.3f})",
+                    pending=pending,
                 )
             if new_fact.fact_type == best_fact.fact_type:
                 return self._execute_update(
                     new_fact, best_fact, profile_id,
                     reason=f"refines existing (score={best_score:.3f})",
+                    pending=pending,
                 )
 
         return self._execute_add(
             new_fact, profile_id,
             reason=f"new information (best_score={best_score:.3f})",
+            pending=pending,
         )
 
     def get_consolidation_history(
@@ -239,6 +259,7 @@ class MemoryConsolidator:
         profile_id: str,
         *,
         exclude_fact_ids: set[str] | frozenset[str] | None = None,
+        pending: tuple[str, ...] = (),
     ) -> list[tuple[AtomicFact, float]]:
         """Find and score candidate matches from existing facts.
 
@@ -261,7 +282,8 @@ class MemoryConsolidator:
         # --- semantic candidates (top-K by embedding) ---
         if new_fact.embedding is not None and self._embedder is not None:
             semantic_scored = self._similar(new_fact, profile_id,
-                                            self._cfg.max_consolidation_candidates, seen_ids)
+                                            self._cfg.max_consolidation_candidates, seen_ids,
+                                            pending)
             for fact, _ in semantic_scored:
                 if fact.fact_id not in seen_ids:
                     seen_ids.add(fact.fact_id)
@@ -338,10 +360,11 @@ class MemoryConsolidator:
 
     def _execute_add(
         self, new_fact: AtomicFact, profile_id: str, *, reason: str,
+        pending: tuple[str, ...] = (),
     ) -> ConsolidationAction:
         """Store the new fact and link to related facts via semantic edges."""
         self._db.store_fact(new_fact)
-        self._create_semantic_edges(new_fact, profile_id)
+        self._create_semantic_edges(new_fact, profile_id, pending)
         action = self._log_action(
             ConsolidationActionType.ADD, new_fact.fact_id, "", profile_id, reason,
         )
@@ -355,10 +378,11 @@ class MemoryConsolidator:
         profile_id: str,
         *,
         reason: str,
+        pending: tuple[str, ...] = (),
     ) -> ConsolidationAction:
         """Persist a proposed refinement without rewriting the predecessor."""
         self._db.store_fact(new_fact)
-        self._create_semantic_edges(new_fact, profile_id)
+        self._create_semantic_edges(new_fact, profile_id, pending)
         action = self._log_action(
             ConsolidationActionType.UPDATE,
             new_fact.fact_id, existing.fact_id,
@@ -377,10 +401,11 @@ class MemoryConsolidator:
         profile_id: str,
         *,
         reason: str,
+        pending: tuple[str, ...] = (),
     ) -> ConsolidationAction:
         """Persist a proposed successor without changing the predecessor."""
         self._db.store_fact(new_fact)
-        self._create_semantic_edges(new_fact, profile_id)
+        self._create_semantic_edges(new_fact, profile_id, pending)
         action = self._log_action(
             ConsolidationActionType.SUPERSEDE,
             new_fact.fact_id, existing.fact_id,
@@ -416,13 +441,14 @@ class MemoryConsolidator:
     # -- Helpers ------------------------------------------------------------
 
     def _create_semantic_edges(
-        self, new_fact: AtomicFact, profile_id: str,
+        self, new_fact: AtomicFact, profile_id: str, pending: tuple[str, ...] = (),
     ) -> None:
         """Link new fact to top-K most similar existing facts."""
         if new_fact.embedding is None:
             return
         scored = [(f.fact_id, sim) for f, sim in
-                  self._similar(new_fact, profile_id, self._cfg.semantic_edge_top_k, set())]
+                  self._similar(new_fact, profile_id, self._cfg.semantic_edge_top_k, set(),
+                                pending)]
         for target_id, weight in scored:
             self._db.store_edge(GraphEdge(
                 profile_id=profile_id,

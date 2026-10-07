@@ -883,6 +883,8 @@ def run_store(
                     fact,
                     profile_id,
                     exclude_fact_ids=queryable_ids,
+                    # Stored by this save, not yet in the vector index.
+                    pending_fact_ids=tuple(stored_ids),
                 )
             except Exception as _consolidate_exc:
                 # P0-1 (remember-write-03): a consolidate failure (e.g. LLM

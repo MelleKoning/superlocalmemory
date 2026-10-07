@@ -98,3 +98,72 @@ def test_recall_and_consolidation_share_one_index(store) -> None:
     a = candidate_vector_source(db, None, DIM)
     b = candidate_vector_source(db, None, DIM)
     assert a is b is shared_index(db, DIM)
+
+
+class _NotYetIndexed:
+    """A vector source that has not indexed some facts yet, as during a save:
+    the facts a save stores get their vectors only once it commits."""
+
+    def __init__(self, inner, hidden: set[str]) -> None:
+        self._inner, self._hidden = inner, hidden
+
+    def search(self, embedding, top_k: int, profile_id: str):
+        return [h for h in self._inner.search(embedding, top_k=top_k, profile_id=profile_id)
+                if h[0] not in self._hidden]
+
+
+def test_facts_stored_by_the_same_save_are_still_neighbours(store) -> None:
+    db, _ids, probe = store
+    old = [f.fact_id for f, _ in _consolidator(db)._similar(probe, "default", 5, set())]
+    hidden = set(old[:2])
+    source = _NotYetIndexed(CanonicalVectorIndex(db, DIM), hidden)
+    new = _consolidator(db, source)._similar(probe, "default", 5, set(), tuple(hidden))
+    assert [f.fact_id for f, _ in new] == old
+
+
+def test_a_memorys_own_facts_are_linked_when_it_is_saved(tmp_path) -> None:
+    """Through a real save: the prefixed fact and the copy without its
+    "[name] " prefix are one memory's facts and must be linked, as the full
+    scan linked them (4.1.22: they were not, which moved recall ranking)."""
+    import hashlib
+    import re
+    from unittest.mock import MagicMock, patch
+
+    from superlocalmemory.core.config import SLMConfig
+    from superlocalmemory.core.engine import MemoryEngine
+    from superlocalmemory.core.engine_ingestion import canonical_store, local_trusted_actor_id
+    from superlocalmemory.storage.models import Mode
+
+    def embed(text: str) -> list[float]:
+        vec = np.zeros(768, dtype=np.float32)
+        for token in re.findall(r"[a-z0-9]+", text.lower()):
+            vec[int(hashlib.sha256(token.encode()).hexdigest(), 16) % 768] += 1.0
+        return (vec / float(np.linalg.norm(vec))).tolist()
+
+    embedder = MagicMock()
+    embedder.embed.side_effect = embed
+    embedder.embed_batch.side_effect = lambda texts: [embed(t) for t in texts]
+    embedder.is_available = True
+    embedder.compute_fisher_params.return_value = ([0.0] * 768, [1.0] * 768)
+    config = SLMConfig.for_mode(Mode.A, base_dir=tmp_path)
+    config.retrieval.use_cross_encoder = False
+    engine = MemoryEngine(config)
+    with patch("superlocalmemory.core.engine_wiring.init_embedder", return_value=embedder):
+        engine.initialize()
+        engine._embedder = embedder
+    try:
+        canonical_store(engine, "[newsletter] session ended 2026-10-04 17:02 | recent: fix typo "
+                        "in invoice email footer", source_type="python-api",
+                        trusted_actor_id=local_trusted_actor_id("python-api"),
+                        metadata={"project": "newsletter"}, require_complete=True)
+        facts = {r[0]: r[1] for r in engine._db.execute(
+            "SELECT fact_id, content FROM atomic_facts")}
+        assert len(facts) >= 2, facts
+        linked = {frozenset((r[0], r[1])) for r in engine._db.execute(
+            "SELECT source_id, target_id FROM graph_edges WHERE edge_type = 'semantic'")}
+        prefixed = [f for f, c in facts.items() if c.startswith("[newsletter]")]
+        stripped = [f for f, c in facts.items() if c.startswith("session ended")]
+        assert prefixed and stripped
+        assert frozenset((prefixed[0], stripped[0])) in linked
+    finally:
+        engine.close()
