@@ -2663,20 +2663,10 @@ async def lifespan(application: FastAPI):
                     profiles = list(db.list_profiles()) or ["default"]
                 except Exception:
                     profiles = ["default"]
+                from superlocalmemory.server.vector_backfill import missing_vectors
                 for pid in profiles:
-                    facts = db.get_all_facts(pid)
-                    with_emb = [
-                        (f.fact_id, getattr(f, "profile_id", pid) or pid, f.embedding)
-                        for f in facts
-                        if getattr(f, "embedding", None) and len(f.embedding) == dim
-                    ]
-                    if not with_emb:
-                        continue
-                    indexed_ids = vs.indexed_fact_ids(pid)
-                    missing = [
-                        item for item in with_emb
-                        if item[0] not in indexed_ids
-                    ]
+                    # Ids first, embeddings only for the gap (server/vector_backfill).
+                    missing = missing_vectors(db, vs, pid, dim)
                     if not missing:
                         continue  # every metadata pointer has a vec0 payload
                     # Fix: route each upsert through db._lock with cooperative
