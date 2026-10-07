@@ -158,8 +158,10 @@ def test_restore_and_listing_stay_inside_the_profile(three):
         "already restored")
 
 
-def test_a_deleted_workspace_takes_its_overtaken_cases_with_it(tmp_path, monkeypatch):
-    """A workspace made later under the same name must not list them."""
+def test_a_deleted_workspace_s_overtaken_cases_move_with_its_memories(tmp_path, monkeypatch):
+    """A workspace made later under the same name must not list them; since
+    4.1.22 they move to 'default' with the memories they close (still
+    restorable there) instead of being dropped."""
     from superlocalmemory.core import overtaken_cases as ot
     from superlocalmemory.server.routes import helpers
     from superlocalmemory.storage import schema as real_schema
@@ -179,5 +181,6 @@ def test_a_deleted_workspace_takes_its_overtaken_cases_with_it(tmp_path, monkeyp
 
     helpers.delete_profile_from_db("alice")
 
-    assert [r["case_id"] for r in db.execute(
-        "SELECT case_id FROM correction_cases_overtaken")] == ["case-bob"]
+    assert sorted((r["case_id"], r["profile_id"]) for r in db.execute(
+        "SELECT case_id, profile_id FROM correction_cases_overtaken")) == [
+        ("case-alice", "default"), ("case-bob", "bob")]
