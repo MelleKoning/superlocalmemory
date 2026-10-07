@@ -100,11 +100,11 @@ def register_v3_tools(server, get_engine: Callable) -> None:
             old_config = SLMConfig.load()
             config = SLMConfig.switch_mode(mode_lower)
 
-            # V3.3: Check if embedding model changed — flag for re-indexing
-            needs_reindex = (
-                old_config.embedding.provider != config.embedding.provider
-                or old_config.embedding.model_name != config.embedding.model_name
-            )
+            # A mode file naming another model: every engine stays on the live one
+            # and the daemon re-indexes in the background (core/embedding_live.py).
+            from superlocalmemory.core.embedding_reindex import (
+                pending_switch_message, space_changed)
+            needs_reindex = space_changed(old_config.embedding, config.embedding)
 
             reset_engine()
             authorization.complete()
@@ -115,7 +115,8 @@ def register_v3_tools(server, get_engine: Callable) -> None:
                 "description": _mode_description(mode_lower, config.retrieval),
                 "online_answer_check": online_check_on(config.retrieval),
                 "needs_reindex": needs_reindex,
-                "message": "Embedding re-indexing will run on next recall." if needs_reindex else "",
+                "message": (pending_switch_message(old_config.embedding, config.embedding)
+                            if needs_reindex else ""),
             }
         except Exception as exc:
             logger.exception("set_mode failed")

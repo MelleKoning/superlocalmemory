@@ -116,6 +116,22 @@ def queue_if_new_space(request: Request, live: Any, target: Any, *,
         return JSONResponse({"error": "reindex_refused", "detail": str(exc)}, status_code=409)
 
 
+def saved_switch_note(request: Request, live: Any, target: Any) -> dict:
+    """``needs_reindex`` + ``message`` for a save answered 200, not 202.
+
+    With the daemon's runner a real change of space answers 202 (see
+    :func:`queue_if_new_space`), so a 200 there re-indexes nothing: the same
+    space, an alias, a declared-equivalent ``force``, or no change. Without
+    the runner the save is persisted, every engine stays on the live model,
+    and the daemon queues the job when it loads the configuration.
+    """
+    from superlocalmemory.core.embedding_reindex import pending_switch_message, space_changed
+
+    if _runner(request) is not None or not space_changed(live, target):
+        return {"needs_reindex": False, "message": ""}
+    return {"needs_reindex": True, "message": pending_switch_message(live, target)}
+
+
 def _declare_equivalent(runner: Any, target: Any) -> None:
     from superlocalmemory.core.embedding_reindex_steps import write_txn
     from superlocalmemory.storage import embedding_spaces as sp
@@ -207,4 +223,4 @@ async def forget_previous(request: Request):
     return await _call(request, "forget_previous", accepted=False)
 
 
-__all__ = ["queue_if_new_space", "router", "target_config"]
+__all__ = ["queue_if_new_space", "router", "saved_switch_note", "target_config"]

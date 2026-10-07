@@ -448,21 +448,26 @@ async function saveAllSettings() {
             body: JSON.stringify(payload)
         });
 
+        var modeData = await modeResp.json().catch(function() { return {}; });
         if (modeResp.ok) {
-            var modeData = await modeResp.json();
             var msg = 'Configuration saved! Mode: ' + mode.toUpperCase() +
                 (provider !== 'none' ? ' | Provider: ' + provider : '');
-            if (modeData.needs_reindex) {
-                msg += ' | Embeddings will be re-indexed on next use (may take several minutes).';
-            }
+            // 202: the model change is a background re-index in the daemon; recall keeps
+            // the old model until it completes. The server's sentence says so exactly.
+            var reindexNote = modeResp.status === 202 ? modeData.detail
+                : (modeData.needs_reindex ? modeData.message : '');
+            if (reindexNote) msg += ' | ' + reindexNote;
             if (statusEl) {
                 statusEl.textContent = msg;
-                statusEl.className = modeData.needs_reindex ? 'ms-2 text-warning fw-bold' : 'ms-2 text-success fw-bold';
+                statusEl.className = reindexNote ? 'ms-2 text-warning fw-bold' : 'ms-2 text-success fw-bold';
             }
             loadModeSettings();
             loadEmbeddingSettings();
         } else {
-            if (statusEl) { statusEl.textContent = 'Save failed'; statusEl.className = 'ms-2 text-danger'; }
+            var detail = typeof modeData.detail === 'string' ? modeData.detail
+                : (modeData.detail && modeData.detail.message);
+            var reason = detail || modeData.error || modeData.message || 'no reason given';
+            if (statusEl) { statusEl.textContent = 'Save failed (' + modeResp.status + '): ' + reason; statusEl.className = 'ms-2 text-danger'; }
         }
     } catch (e) {
         if (statusEl) { statusEl.textContent = 'Error: ' + e.message; statusEl.className = 'ms-2 text-danger'; }
