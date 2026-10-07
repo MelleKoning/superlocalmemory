@@ -7,6 +7,7 @@
 Listens on 127.0.0.1:0 (OS-assigned port). Handles:
 - POST /v1/chat/completions  — OpenAI-compatible
 - POST /api/chat             — Ollama native
+- GET  /api/tags             — Ollama's own reachability probe (model list)
 
 Records all received requests. Thread-safe. Torn down via finalizer.
 """
@@ -78,6 +79,19 @@ class StubLLMServer:
         class _Handler(BaseHTTPRequestHandler):
             def log_message(self, *_a) -> None:
                 pass  # suppress request logging during tests
+
+            def do_GET(self) -> None:
+                # Ollama's own reachability probe: LLMBackbone.is_available()
+                # (and OllamaEmbedder's) ask this before trusting the host.
+                if not self.path.rstrip("/").endswith("/api/tags"):
+                    self.send_error(404)
+                    return
+                body_bytes = json.dumps({"models": []}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body_bytes)))
+                self.end_headers()
+                self.wfile.write(body_bytes)
 
             def do_POST(self) -> None:
                 length = int(self.headers.get("Content-Length", "0"))

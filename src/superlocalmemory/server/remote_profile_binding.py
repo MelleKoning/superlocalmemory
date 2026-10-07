@@ -125,6 +125,7 @@ NEUTRAL_ARGUMENTS: frozenset[str] = frozenset({
     "max_results", "memory_ids", "metadata", "min_confidence", "mode", "name", "new_name",
     "offset", "outcome",
     "output_summary", "pattern_id", "pattern_type", "payload", "prefer_project", "project",
+    "project_strict",
     "project_path", "query", "recall_query_id", "receipt_id", "replaces", "reversible", "run_id",
     "saved_by", "session_date", "session_id", "skill_name", "tags", "target", "tool_name",
     "ttl_seconds", "valid_at", "value", "window",

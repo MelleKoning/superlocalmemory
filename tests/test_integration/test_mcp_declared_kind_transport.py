@@ -24,12 +24,16 @@ and through the proxy.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -59,7 +63,78 @@ def _content(kind: str) -> str:
             f"C54{KINDS.index(kind)} for synthetic-kestrel.")
 
 
-def _start_daemon(data_root: Path, port: int, root: Path) -> RealDaemon:
+def _vector(text: str, dim: int = 768) -> list[float]:
+    """Deterministic unit vector per text (a stand-in embedding model).
+
+    Mirrors ``test_source_fidelity_e2e.py``'s stub: a hash, not a real model,
+    so enrichment has something to embed on any machine, offline.
+    """
+    raw = [b for i in range(0, dim, 32)
+           for b in hashlib.sha256(f"{i}:{text}".encode()).digest()][:dim]
+    values = [(b - 127.5) / 127.5 for b in raw]
+    norm = math.sqrt(sum(v * v for v in values)) or 1.0
+    return [v / norm for v in values]
+
+
+class _StubEmbeddings(BaseHTTPRequestHandler):
+    """A local OpenAI-compatible embedding endpoint: the one thing this file's
+    daemon needs from a model. 4.1.22 made a fresh install default to the
+    zero-setup mode (Mode A) instead of assuming a local Ollama; in that mode
+    the real embedder is a sentence-transformers model that has to download
+    on first use, which a HOME with no HF cache and no network can never do,
+    so enrichment stayed "queryable" forever. Pointing the embedding config at
+    this stub keeps the test hermetic (no network, no Ollama) while still
+    running the real daemon's enrichment path end to end.
+    """
+
+    def log_message(self, *_args) -> None:  # keep test output clean
+        return
+
+    def do_POST(self) -> None:  # noqa: N802 - http.server API
+        length = int(self.headers.get("Content-Length") or 0)
+        request = json.loads(self.rfile.read(length) or b"{}")
+        texts = request.get("input") or []
+        texts = [texts] if isinstance(texts, str) else texts
+        body = json.dumps({"data": [{"index": i, "embedding": _vector(str(t))}
+                                    for i, t in enumerate(texts)]}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+@pytest.fixture(scope="module")
+def stub_embedder():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _StubEmbeddings)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _start_daemon(
+    data_root: Path, port: int, root: Path, models_url: str | None = None,
+) -> RealDaemon:
+    # Pinned to Mode A (the now-default fresh-install mode) so this never
+    # depends on, or reaches, a real local Ollama -- only the embedding
+    # model is swapped for the hermetic stub; the rules-based extraction
+    # backend Mode A uses needs no LLM at all. ``models_url`` is optional:
+    # a caller that only needs the daemon itself (not hermetic enrichment)
+    # gets the previous, config-free default untouched -- this file's own
+    # callers (below) always pass it.
+    if models_url is not None:
+        config = {
+            "mode": "a", "active_profile": "default", "daemon_port": port,
+            "daemon_enable_legacy_port": False, "mesh_enabled": False,
+            "scale_auto_promote_enabled": False,
+            "embedding": {"provider": "openai", "api_endpoint": f"{models_url}/v1",
+                          "model_name": "stub-embed", "dimension": 768, "api_key": ""},
+        }
+        (data_root / "config.json").write_text(json.dumps(config), encoding="utf-8")
     env = _child_env(data_root, port, root / "home", root / "cache")
     log = root / f"daemon-{time.monotonic_ns()}.log"
     with log.open("wb") as handle:
@@ -77,14 +152,15 @@ def _start_daemon(data_root: Path, port: int, root: Path) -> RealDaemon:
 class _Lane:
     """One daemon plus one MCP stdio child, restartable on the same store."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, models_url: str) -> None:
         self.root = root
+        self.models_url = models_url
         self.data_root = root / "data"
         self.data_root.mkdir()
         self.port = _reserve_private_port()
         assert self.port not in PRODUCTION_PORTS
         self.foreign = _foreign_daemon_pids()
-        self.daemon = _start_daemon(self.data_root, self.port, root)
+        self.daemon = _start_daemon(self.data_root, self.port, root, models_url)
         self.daemon.precreate_profiles((PROFILE,))
         self.mcp = None
         self.saved: dict[str, dict] = {}
@@ -123,7 +199,7 @@ class _Lane:
     def restart(self) -> None:
         self.close_mcp()
         self.daemon.stop(self.foreign)
-        self.daemon = _start_daemon(self.data_root, self.port, self.root)
+        self.daemon = _start_daemon(self.data_root, self.port, self.root, self.models_url)
         self.open_mcp()
 
     def rows(self, sql: str, args: tuple = ()) -> list[tuple]:
@@ -151,8 +227,8 @@ class _Lane:
 
 
 @pytest.fixture(scope="module")
-def lane(tmp_path_factory):
-    lane = _Lane(tmp_path_factory.mktemp("kind-transport"))
+def lane(tmp_path_factory, stub_embedder):
+    lane = _Lane(tmp_path_factory.mktemp("kind-transport"), stub_embedder)
     try:
         lane.open_mcp()
         for kind in KINDS:

@@ -73,6 +73,9 @@ def test_health_ready_requires_engine_migrations_writer_and_retrieval(
         "migrations": True,
         "writer": True,
         "embedding": True,
+        # 4.1.22: the reason the last warmup attempt failed, when it did.
+        # None once the embedding model is warm, as it is here.
+        "embedding_warmup_error": None,
         "recall_health": True,
         "retrieval": True,
         "migration_failures": [],
@@ -117,6 +120,36 @@ def test_health_is_live_but_warming_until_embedding_is_usable(
     assert payload["state"] == "ready"
     assert payload["runtime_state"] == "warming"
     assert payload["readiness"]["retrieval"] is False
+
+
+def test_health_reports_why_the_embedding_model_never_warmed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """4.1.22: a first run offline with no cached embedding model exhausts
+    its warmup retries and never becomes warm on its own -- /health must
+    say why, not just that it is (still, implicitly: temporarily) warming."""
+    from superlocalmemory.server import unified_daemon
+
+    monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(unified_daemon, "_embedding_warm", False)
+    monkeypatch.setattr(
+        unified_daemon, "_embedding_warmup_error",
+        "LocalEntryNotFoundError: outgoing traffic has been disabled",
+    )
+    app = unified_daemon.create_app()
+    app.state.engine = object()
+    app.state.canonical_remember_runtime = _ready_writer()
+    app.state.migration_result = {
+        "applied": ["M018"], "skipped": [], "failed": [], "details": {},
+    }
+
+    payload = asyncio.run(_health_route(app).endpoint())
+
+    assert payload["runtime_state"] == "warming"
+    assert payload["readiness"]["embedding_warmup_error"] == (
+        "LocalEntryNotFoundError: outgoing traffic has been disabled"
+    )
 
 
 def test_health_does_not_report_stale_warm_flag_after_worker_exit(

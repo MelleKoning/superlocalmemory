@@ -18,8 +18,10 @@ the pipeline gave it.
    It can never jump a clearly better result. A confirmed kind counts fully, a
    suggested one by half: a model's suggestion is a weaker signal than the kind
    its author declared.
-2. When the question asks for a current state or a decision, a newer memory is
-   placed above an older one only when BOTH carry that kind CONFIRMED (by a
+2. When the question asks for a current state, a decision, a rule, or a value
+   as it stands now ("what is the X", "which X do we use", "how many X"), a
+   newer memory is placed above an older one only when BOTH carry that kind
+   CONFIRMED (by a
    user or a caller - LLD I6, Varun's V2) and both mention an entity the
    QUESTION names. The older one then says which memory is newer. A suggested
    kind never drives this, and neither does an entity the question does not
@@ -73,7 +75,17 @@ _CUES: tuple[tuple[MemoryKind, re.Pattern[str]], ...] = (
     (MemoryKind.CORRECTION, re.compile(
         r"\b(correct(ion|ed)|was wrong|mistaken?|erratum)\b", _I)),
 )
-_LATEST_KINDS = frozenset({MemoryKind.STATUS, MemoryKind.DECISION})
+_LATEST_KINDS = frozenset({MemoryKind.STATUS, MemoryKind.DECISION, MemoryKind.RULE})
+
+#: A question about a value as it stands now ("what is the recall ceiling",
+#: "which editor do we use", "how many workers"). It asks for the newest of
+#: two confirmed decisions, rules or statuses about what it names, but carries
+#: no kind of its own, so it never triggers the kind boost. "What was ..."
+#: asks about the past and is not one.
+_CURRENT_VALUE = re.compile(
+    r"\b(what|which)(\s+is|\s+are|'s|'re)\s+(the|our|my|your)\b"
+    r"|\bwhich\s+\w+(\s+\w+)?\s+(do|does|should)\s+(we|i|you)\s+use\b"
+    r"|\bhow\s+(many|much|long|often)\b", _I)
 
 #: The entities a question names: given, or read on demand (and only if needed).
 Subject = Union[Iterable[str], Callable[[], Iterable[str]], None]
@@ -82,6 +94,8 @@ Subject = Union[Iterable[str], Callable[[], Iterable[str]], None]
 @dataclass(frozen=True, slots=True)
 class Intent:
     kinds: frozenset[MemoryKind]
+    #: The question asks for a value as it stands now (see _CURRENT_VALUE).
+    current_value: bool = False
 
     @property
     def wants_latest(self) -> bool:
@@ -96,7 +110,8 @@ def query_intent(query: str) -> Intent:
     """The memory kinds a question asks for (possibly none)."""
     if not isinstance(query, str) or not query.strip():
         return Intent(frozenset())
-    return Intent(frozenset(kind for kind, cue in _CUES if cue.search(query)))
+    return Intent(frozenset(kind for kind, cue in _CUES if cue.search(query)),
+                  current_value=bool(_CURRENT_VALUE.search(query)))
 
 
 def clamp_boost(value: object) -> float:
@@ -242,14 +257,15 @@ def apply_kind_awareness(results: list, query: str, *, enabled: bool = True,
     if not enabled or not results:
         return results
     intent = query_intent(query)
-    if not intent.kinds:
+    if not intent.kinds and not intent.current_value:
         return results
     head = list(results[:WINDOW])
     floor = 1 if is_exact_lexical_hit(head[0], normalize_query(query)) else 0
     order, moved = _boosted_order(head, intent, clamp_boost(boost), floor)
     notes: dict[int, list[str]] = {
         i: [f"kind_intent({head[i].fact.memory_kind})"] for i in moved}
-    wanted = frozenset(k.value for k in intent.kinds & _LATEST_KINDS)
+    wanted = frozenset(k.value for k in (
+        (intent.kinds & _LATEST_KINDS) | (_LATEST_KINDS if intent.current_value else frozenset())))
     if wanted and sum(_confirmed_latest(r.fact, wanted) for r in head[floor:]) >= 2:
         order = _latest_first(head, order, wanted, _subject_ids(subject), floor, notes)
     if order == list(range(len(head))):

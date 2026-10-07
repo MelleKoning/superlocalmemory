@@ -31,7 +31,7 @@ from superlocalmemory.core.config import (
     ChannelWeights,
     RetrievalConfig,
 )
-from superlocalmemory.retrieval import channel_status as chstat, kind_scope
+from superlocalmemory.retrieval import channel_status as chstat, kind_scope, project_search
 from superlocalmemory.retrieval.fusion import FusionResult, weighted_rrf
 from superlocalmemory.retrieval.rerank_pool import rerank_pool
 from superlocalmemory.retrieval.strategy import QueryStrategy, QueryStrategyClassifier
@@ -344,6 +344,10 @@ class RetrievalEngine:
             ch_results = kind_scope.supplement(  # search inside the kind (kind_scope)
                 self, ch_results, query=query, query_embedding=self._embed_query(query)[0],
                 profile_id=profile_id, kind=facets.kind, stage_ms=stage_ms)
+        if getattr(facets, "project", None):
+            ch_results = project_search.supplement(  # search inside the project
+                self, ch_results, query=query, query_embedding=self._embed_query(query)[0],
+                profile_id=profile_id, project=facets.project, stage_ms=stage_ms)
         _em("run_channels")
         # One request may need admission before fusion and again after optional
         # bridge/scene expansion.  Cache only the IDs checked during this one

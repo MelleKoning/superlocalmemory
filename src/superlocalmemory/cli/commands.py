@@ -2098,6 +2098,8 @@ def cmd_recall(args: Namespace) -> None:
                                     ("prefer_project", getattr(args, "prefer_project", "")))
                 if (value or "").strip()
             )
+            if getattr(args, "project_strict", False) and (getattr(args, "project", "") or "").strip():
+                facet_qs += "&project_strict=true"
             kind_qs = f"&kind={quote(_kind)}" if _kind else ""
             result = daemon_request(
                 "GET",

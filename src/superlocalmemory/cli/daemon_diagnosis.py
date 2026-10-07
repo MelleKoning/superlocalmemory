@@ -108,9 +108,8 @@ def describe(d) -> dict[str, str]:
         }
 
     starting = getattr(descriptor, "state", "") == "starting"
-    health = daemon_startup.probe_health(
-        d, descriptor.port, daemon_startup.health_probe_timeout(descriptor),
-    )
+    probe_timeout = daemon_startup.health_probe_timeout(descriptor)
+    health = daemon_startup.probe_health(d, descriptor.port, probe_timeout)
     if health is None:
         if starting:
             return daemon_startup.starting_diagnosis(descriptor)
@@ -119,7 +118,7 @@ def describe(d) -> dict[str, str]:
             "message": (
                 f"the owned daemon (pid {descriptor.pid}) is running but did "
                 f"not answer http://127.0.0.1:{descriptor.port}/health within "
-                f"2s."
+                f"{probe_timeout:g}s."
             ),
             "hint": (
                 f"Check {d.state_path('logs', 'daemon.log')} for a stalled "

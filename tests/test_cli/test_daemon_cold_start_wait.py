@@ -28,6 +28,7 @@ import threading
 import time
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -42,7 +43,8 @@ _STUB = r"""
 import json, pathlib, socket, sys, time
 port, delay, mode = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3]
 health_path = pathlib.Path(sys.argv[4])
-time.sleep(delay)
+if mode != "slow":
+    time.sleep(delay)
 if mode == "exit":
     sys.exit(0)
 srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -51,6 +53,8 @@ while True:
     conn, _ = srv.accept()
     if mode == "silent":
         continue  # accept, never answer: a port reserved before HTTP is up
+    if mode == "slow":
+        time.sleep(delay)  # alive and listening already; slow to answer
     data = conn.recv(65536).decode("latin-1")
     health = health_path.read_text()
     stopping = data.startswith("POST /stop")
@@ -194,6 +198,32 @@ def test_a_port_reserved_before_http_is_up_cannot_stretch_the_wait(
     assert time.monotonic() - began < 2.5  # 0.5 s first probe + 1 s budget + slack
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX-only guarantee: Windows deliberately uses the short "
+           "probe here (health_probe_timeout), not this 2 s one",
+)
+def test_a_slow_but_alive_health_reply_is_not_reported_unavailable_on_posix(
+    stubs, no_spawn,
+):
+    """4.1.22 correction (CRIT #1): shortening the Windows fail-fast probe
+    must not narrow POSIX's own patience for a real, busy-but-alive daemon.
+    A real stub process binds and accepts the connection immediately (it is
+    not "starting"), then takes 1.2 s to answer /health -- well under the
+    2 s POSIX budget and well over the 0.5 s Windows-only one, so this
+    would wrongly read DAEMON_UNAVAILABLE if the short probe ever leaked
+    onto POSIX."""
+    from superlocalmemory.cli import daemon
+
+    _proc, _descriptor = stubs(delay=1.2, mode="slow", state="ready")
+    time.sleep(0.5)  # let the stub bind before the probe (it sleeps on ACCEPT, not before)
+    began = time.monotonic()
+    health = daemon.daemon_request("GET", "/health")
+    took = time.monotonic() - began
+    assert health is not None and health.get("status") == "ok", health
+    assert 1.1 <= took < 2.0, took
+
+
 def test_nothing_starting_keeps_the_old_fail_fast_behaviour(stubs, no_spawn):
     from superlocalmemory.cli import daemon
 
@@ -268,6 +298,71 @@ def test_the_start_wait_budget_is_clamped(monkeypatch, raw, cap, expected):
 
     monkeypatch.setenv("SLM_DAEMON_START_WAIT_S", raw)
     assert start_wait_budget(cap) == expected
+
+
+class _RecordingDaemonModule:
+    """A duck-typed stand-in for the ``daemon`` module ``probe_health`` takes:
+    records the timeout it was actually asked to read with, instead of
+    depending on how fast any given OS refuses a connect to a closed port
+    (that varies by platform and is exactly what made the Windows bug
+    invisible on POSIX CI: the OS difference never showed up in a test that
+    only checks the final True/False answer)."""
+
+    def __init__(self, *, reachable: bool):
+        self.reachable = reachable
+        self.fetch_calls: list[float] = []
+
+    def _fetch_health(self, port, timeout=2.0):
+        self.fetch_calls.append(timeout)
+        return {"status": "ok"} if self.reachable else None
+
+
+@pytest.mark.parametrize("state", ["starting", "ready", "", None])
+def test_health_probe_timeout_is_short_on_every_path(state, monkeypatch):
+    """The fix for the Windows fail-fast regression, pinned without a real
+    socket: the one-shot probe used whenever nothing proves a start is in
+    progress must ask for the same short read as the starting-daemon polling
+    loop already does on Windows -- not the old, much longer default that
+    cost a closed port the full read timeout on a platform slow to refuse
+    it. Forced to win32 regardless of where this test actually runs: the
+    short bound is Windows-specific (see test_non_starting_probe_stays_2s_
+    on_posix below), not a universal one."""
+    from superlocalmemory.cli import daemon_startup
+    from superlocalmemory.cli.daemon_startup import STARTING_PROBE_S, health_probe_timeout
+
+    monkeypatch.setattr(daemon_startup.sys, "platform", "win32")
+    descriptor = SimpleNamespace(state=state) if state is not None else object()
+    assert health_probe_timeout(descriptor) == STARTING_PROBE_S
+
+
+@pytest.mark.parametrize("state", ["ready", "", None])
+def test_non_starting_probe_stays_2s_on_posix(state, monkeypatch):
+    """4.1.22 correction: the Windows fail-fast fix must not narrow POSIX's
+    patience for a real, busy-but-alive daemon. A refused connect on POSIX
+    is fast regardless of the timeout value, so there is nothing to gain
+    there from shortening it, and something to lose (see the module test
+    below with a real slow-but-alive stub)."""
+    from superlocalmemory.cli import daemon_startup
+    from superlocalmemory.cli.daemon_startup import health_probe_timeout
+
+    monkeypatch.setattr(daemon_startup.sys, "platform", "darwin")
+    descriptor = SimpleNamespace(state=state) if state is not None else object()
+    assert health_probe_timeout(descriptor) == 2.0
+
+
+def test_probe_health_passes_the_given_timeout_straight_through():
+    from superlocalmemory.cli import daemon_startup
+
+    stub = _RecordingDaemonModule(reachable=True)
+    assert daemon_startup.probe_health(stub, port=1, remaining=2.0) == {"status": "ok"}
+    assert stub.fetch_calls == [2.0]
+
+
+def test_probe_health_returns_none_when_unreachable():
+    from superlocalmemory.cli import daemon_startup
+
+    stub = _RecordingDaemonModule(reachable=False)
+    assert daemon_startup.probe_health(stub, port=1, remaining=2.0) is None
 
 
 # ---------------------------------------------------------------------------
