@@ -20,6 +20,7 @@ from pathlib import Path
 from superlocalmemory.core import answer_check_state as _answer_check_state
 from superlocalmemory.core import config_upgrades as _config_upgrades
 from superlocalmemory.core import memory_kind_config as _memory_kind_config
+from superlocalmemory.core import model_catalog as _catalog
 from superlocalmemory.core.memory_kind_config import MemoryKindConfig
 from superlocalmemory.infra.data_root import DynamicStatePath, canonical_data_root
 from superlocalmemory.storage.models import Mode
@@ -1926,25 +1927,25 @@ class SLMConfig:
         return {
             "openai": {
                 "base_url": "https://api.openai.com/v1",
-                "model": "gpt-4.1-mini",
-                "embedding_model": "text-embedding-3-large",
+                "model": _catalog.OPENAI_LLM,
+                "embedding_model": _catalog.OPENAI_EMBEDDING,
                 "env_key": "OPENAI_API_KEY",
             },
             "anthropic": {
                 "base_url": "https://api.anthropic.com",
-                "model": "claude-sonnet-4-6",
+                "model": _catalog.ANTHROPIC_LLM,
                 "embedding_model": "",
                 "env_key": "ANTHROPIC_API_KEY",
             },
             "ollama": {
                 "base_url": "http://localhost:11434",
-                "model": "llama3.2",
+                "model": _catalog.DEFAULT_LOCAL_LLM,
                 "embedding_model": "nomic-embed-text",
                 "env_key": "",
             },
             "openrouter": {
                 "base_url": "https://openrouter.ai/api/v1",
-                "model": "openai/gpt-4.1-mini",
+                "model": _catalog.DEFAULT_HOSTED_LLM,
                 "embedding_model": "",
                 "env_key": "OPENROUTER_API_KEY",
             },
@@ -2084,7 +2085,7 @@ class SLMConfig:
                 embedding=_b_emb,
                 llm=LLMConfig(
                     provider=llm_provider or "ollama",
-                    model=llm_model or "llama3.2",
+                    model=llm_model or _catalog.DEFAULT_LOCAL_LLM,
                     api_base=llm_api_base or "http://localhost:11434",
                     api_key=llm_api_key or "",
                 ),
@@ -2098,21 +2099,21 @@ class SLMConfig:
         # Mode C — FULL POWER, UNRESTRICTED
         # Don't carry over local-only providers (ollama) to cloud mode
         c_provider = llm_provider if llm_provider not in ("ollama", "") else "openrouter"
-        c_model = llm_model if llm_provider not in ("ollama", "") else "anthropic/claude-sonnet-4"
+        c_model = llm_model if llm_provider not in ("ollama", "") else _catalog.DEFAULT_HOSTED_LLM
         # V3.4.24: If user chose "openai" provider, honour it in Mode C too.
         _c_emb_provider = embedding_provider or ""
         if _c_emb_provider == "openai" and embedding_endpoint:
             _c_emb = EmbeddingConfig(
-                model_name=embedding_model_name or "text-embedding-3-large",
-                dimension=embedding_dimension or 3072,
+                model_name=embedding_model_name or _catalog.OPENAI_EMBEDDING,
+                dimension=embedding_dimension or _catalog.OPENAI_EMBEDDING_DIMENSION,
                 provider="openai",
                 api_endpoint=embedding_endpoint,
                 api_key=embedding_key,
             )
         elif embedding_endpoint:
             _c_emb = EmbeddingConfig(
-                model_name=embedding_model_name or "text-embedding-3-large",
-                dimension=embedding_dimension or 3072,
+                model_name=embedding_model_name or _catalog.OPENAI_EMBEDDING,
+                dimension=embedding_dimension or _catalog.OPENAI_EMBEDDING_DIMENSION,
                 provider=_c_emb_provider,
                 api_endpoint=embedding_endpoint,
                 api_key=embedding_key,
@@ -2295,7 +2296,7 @@ class SLMConfig:
                     new_config,
                     llm=LLMConfig(
                         provider="ollama",
-                        model="llama3.2",
+                        model=_catalog.DEFAULT_LOCAL_LLM,
                         api_base="http://localhost:11434",
                     ),
                 )
@@ -2304,7 +2305,7 @@ class SLMConfig:
                     new_config,
                     llm=LLMConfig(
                         provider="openrouter",
-                        model="anthropic/claude-sonnet-4",
+                        model=_catalog.DEFAULT_HOSTED_LLM,
                     ),
                 )
 
