@@ -1146,6 +1146,8 @@ def main() -> None:
     from superlocalmemory.cli.view_cmd import register_view_parser
 
     register_view_parser(sub)
+    from superlocalmemory.cli.embedder_cmd import register_embedder_parser
+    register_embedder_parser(sub)
 
     from superlocalmemory.cli.backup_cmd import add_backup_parser
     add_backup_parser(sub)

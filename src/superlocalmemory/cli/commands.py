@@ -329,12 +329,12 @@ def _cmd_db_reembed(args: Namespace) -> None:
                 error={
                     "code": "NOT_IMPLEMENTED",
                     "message": "Only --missing-only is supported. "
-                    "For full re-embed use 'slm db migrate'.",
+                    "To re-embed with another model use 'slm embedder switch MODEL'.",
                 },
             )
         else:
             print("Only --missing-only mode is supported. "
-                  "For full re-embed use 'slm db migrate'.")
+                  "To re-embed with another model use 'slm embedder switch MODEL'.")
         sys.exit(2)
 
     try:
@@ -668,6 +668,7 @@ def dispatch(args: Namespace) -> None:
         "summary": _cmd_summary_dispatch,
         "kinds": _cmd_kinds_dispatch,
         "view": _cmd_view_dispatch,
+        "embedder": lambda a: __import__("superlocalmemory.cli.embedder_cmd", fromlist=["x"]).cmd_embedder(a),
     }
     handler = handlers.get(args.command)
     if handler:
@@ -2663,6 +2664,7 @@ def cmd_status(args: Namespace) -> None:
         print(f"  DB size: {size_mb} MB")
     if daemon_status:
         print(_admission_status_text(daemon_status), end="")
+        print(__import__("superlocalmemory.cli.embedder_cmd", fromlist=["x"]).status_line(), end="")
 
     # S9-UX-07 / S9-UX-13: --verbose surfaces the disabled marker,
     # last-version marker, and daemon port so users who are debugging
@@ -2894,6 +2896,7 @@ _COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("summary", "Readable summaries: session, day, or project"),
         ("view", "Saved views: named recall queries you can re-run"),
         ("kinds", "Memory kinds: status, settings, classify (undoable)"),
+        ("embedder", "Switch the embedding model in the background"),
     ]),
     ("Privacy & compliance", [
         # gdpr shipped in 4.0.6 but was never listed here, so `slm help` did not

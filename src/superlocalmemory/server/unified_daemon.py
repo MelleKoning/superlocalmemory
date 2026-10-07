@@ -2282,7 +2282,8 @@ async def lifespan(application: FastAPI):
         deployment = load_deployment_config()
         _apply_deployment_runtime(config, deployment)
         application.state.deployment = deployment
-        engine = MemoryEngine(config)
+        from superlocalmemory.core import embedding_reindex_daemon as _reindex
+        engine = MemoryEngine(_reindex.prepare_daemon_config(config))
         engine.initialize()
 
         # Load the embedding model now, off the request path, the way the
@@ -2385,6 +2386,7 @@ async def lifespan(application: FastAPI):
             )
         )
         logger.info("Unified daemon: MemoryEngine initialized (mode=%s)", config.mode.value)
+        _reindex.start_for_daemon(application.state, config)  # resumes a model switch
 
         # v3.5.0: Backend Orchestrator — CozoDB (graph) + LanceDB (vector) backends.
         # Initialise AFTER engine so the retrieval channels exist to receive backends.
@@ -4393,6 +4395,8 @@ def _register_dashboard_routes(application: FastAPI) -> None:
     application.include_router(summaries_router)
     from superlocalmemory.server.routes.views import router as views_router
     application.include_router(views_router)
+    from superlocalmemory.server.routes.embedding_reindex import router as _reindex_router
+    application.include_router(_reindex_router)
     from superlocalmemory.server.routes.upgrade_restore import register as register_upgrade
     register_upgrade(application)
 
@@ -4665,7 +4669,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
         lifecycle_state = "ready" if base_ready else "starting"
         identity = getattr(application.state, "daemon_descriptor", None)
         from superlocalmemory.server.profile_runtime import get_profile_runtime
-
+        from superlocalmemory.core.embedding_reindex_daemon import health_payload as _reindex_health
         profile_snapshot = get_profile_runtime(application.state).snapshot
         # H-05 (3.7.9): operational metadata (pid, daemon identity including
         # capability_fingerprint/instance_id, active profile, readiness detail)
@@ -4728,6 +4732,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
             # from the record, and the only symptom is answers that are subtly
             # worse. A depth that does not fall is the thing to alert on.
             "projection": _projection_health(),
+            "embedding_reindex": _reindex_health(application.state),
         }
 
     @application.get("/recall")

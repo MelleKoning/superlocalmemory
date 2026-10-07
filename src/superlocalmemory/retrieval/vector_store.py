@@ -601,6 +601,10 @@ class VectorStore:
             with self._lock:  # INNER: VectorStore per-instance state
                 try:
                     with self._managed_connection() as conn:
+                        # A model switch's staged and previous copies go with it.
+                        from superlocalmemory.storage.embedding_spaces import purge_fact
+                        purge_fact(conn, fact_id)
+                        conn.commit()
                         row = conn.execute(
                             "SELECT vec_rowid, profile_id "
                             "FROM embedding_metadata "

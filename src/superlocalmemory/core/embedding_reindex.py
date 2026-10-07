@@ -1,0 +1,405 @@
+# Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar
+# Licensed under AGPL-3.0-or-later - see LICENSE file
+# Part of SuperLocalMemory V3 | https://qualixar.com | https://varunpratap.com
+
+"""Guarded background re-embed: switch the embedding model without stopping.
+
+One daemon thread runs at most one job. While it runs, recall and remember use
+the OLD model and the OLD vectors untouched; the job embeds every memory into a
+staging space of the NEW dimension in short batches, catches up with memories
+written or edited meanwhile, and then swaps the spaces in one transaction while
+the daemon holds requests for that moment only (core/embedding_reindex_activate).
+The previous space is kept until the next switch, so ``rollback`` can return to
+it; ``forget-previous`` frees it. A daemon restart resumes the job at its
+cursor; a failure at any step leaves the old space live.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+from superlocalmemory.core import embedding_reindex_secrets as secrets
+from superlocalmemory.core import embedding_reindex_steps as steps
+from superlocalmemory.storage import embedding_spaces as sp
+from superlocalmemory.storage.embedding_reindex_jobs import (
+    JobConflict,
+    active_job,
+    create_job,
+    get_job,
+    latest_job,
+    public_view,
+    update_job,
+)
+from superlocalmemory.storage.embedding_space_swap import count_facts, drop_gone, facts_after, staged_diff
+
+logger = logging.getLogger(__name__)
+
+_RUNNER: "ReindexRunner | None" = None
+_IDLE_POLL_S = 2.0
+_PURGE_EVERY_S = 30.0
+_CATCH_UP_ROUNDS = 50
+
+
+class NoChange(ValueError):
+    """The requested model is the one the store already holds."""
+
+
+class Refused(RuntimeError):
+    """A request that cannot be honoured; the message says why, in plain words."""
+
+
+def get_runner() -> "ReindexRunner | None":
+    return _RUNNER
+
+
+def notify_pending(config: Any) -> None:
+    """An engine was built on the live space while config named another model."""
+    runner = _RUNNER
+    if runner is not None and Path(runner.db_path) == Path(config.db_path):
+        runner.adopt_pending(config)
+
+
+class ReindexRunner:
+    def __init__(self, *, db_path: Any, data_root: Any, app_state: Any = None) -> None:
+        self.db_path = Path(db_path)
+        self.data_root = Path(data_root)
+        self.app_state = app_state
+        self._wake = threading.Event()
+        self._stop = threading.Event()
+        self._cancel = threading.Event()
+        self._api_lock = threading.Lock()
+        self._prebuilt: dict[int, Any] = {}
+        self._thread: threading.Thread | None = None
+        self._last_purge = 0.0
+
+    # -- lifecycle ----------------------------------------------------------
+
+    def start(self) -> "ReindexRunner":
+        self._thread = threading.Thread(target=self._loop, name="slm-embedding-reindex",
+                                        daemon=True)
+        self._thread.start()
+        return self
+
+    def stop(self, timeout: float = 5.0) -> None:
+        self._stop.set()
+        self._wake.set()
+        if self._thread is not None:
+            self._thread.join(timeout)
+
+    def wake(self) -> None:
+        self._wake.set()
+
+    def _conn(self) -> Any:
+        return sp.connect(self.db_path)
+
+    # -- requests (HTTP routes and CLI land here) ---------------------------
+
+    def _live(self, conn: Any) -> tuple[str, dict]:
+        row = sp.read_space(conn)
+        if row is None:
+            raise Refused("the embedding space of this store is not recorded yet; "
+                          "restart SLM once and try again")
+        return str(row["live_signature"]), json.loads(row["live_config"])
+
+    def request_switch(self, target: Any, *, kind: str = "switch") -> dict:
+        target_sig = sp.signature_of(target)
+        with self._api_lock:
+            conn = self._conn()
+            try:
+                live_sig, live_cfg = self._live(conn)
+                if sp.same_space(live_sig, target_sig):
+                    raise NoChange(f"{target.model_name} is already the embedding model")
+                with steps.write_txn(conn, self.db_path):
+                    job = create_job(conn, kind=kind, from_sig=live_sig, to_sig=target_sig,
+                                     from_cfg=live_cfg, to_cfg=sp.public_config(target),
+                                     total=count_facts(conn))
+            finally:
+                conn.close()
+        if kind == "switch":  # a rollback's key already sits under PREVIOUS
+            secrets.put(self.data_root, secrets.TARGET, target.api_key)
+        self._cancel.clear()
+        self.wake()
+        logger.info("embedding re-index job %s queued: %s -> %s", job["job_id"],
+                    live_sig, target_sig)
+        return public_view(job)
+
+    def request_rollback(self) -> dict:
+        conn = self._conn()
+        try:
+            row = sp.read_space(conn)
+            if active_job(conn) is not None:
+                raise JobConflict(active_job(conn))
+            if row is None or not row.get("prev_signature"):
+                raise Refused("there is no previous embedding model to go back to")
+            prev = sp.config_from_public(row["prev_config"],
+                                         secrets.get(self.data_root, secrets.PREVIOUS))
+        finally:
+            conn.close()
+        embedder = steps.build_embedder(prev)
+        try:
+            if embedder is None:
+                raise steps.StepFailed("it could not be started")
+            steps.probe(embedder, prev.dimension)
+        except steps.StepFailed as exc:
+            if embedder is not None:
+                steps.close_embedder(embedder)
+            raise Refused(f"the previous model {prev.model_name} is not available ({exc}); "
+                          "make it available again, then retry the rollback") from exc
+        view = self.request_switch(prev, kind="rollback")
+        self._prebuilt[view["job_id"]] = embedder
+        return view
+
+    def cancel(self) -> dict:
+        conn = self._conn()
+        try:
+            job = active_job(conn)
+            if job is None:
+                raise Refused("no re-index is running")
+            if job["state"] == "queued":
+                with steps.write_txn(conn, self.db_path):
+                    update_job(conn, job["job_id"], state="cancelled", finished_at=time.time(),
+                               error="cancelled before it started")
+                return public_view(get_job(conn, job["job_id"]))
+        finally:
+            conn.close()
+        self._cancel.set()
+        self.wake()
+        return public_view(job)
+
+    def forget_previous(self) -> dict:
+        with self._api_lock:
+            conn = self._conn()
+            try:
+                job = active_job(conn)
+                if job is not None and job["kind"] == "rollback":
+                    raise JobConflict(job)
+                row = sp.read_space(conn)
+                had = sp.has_previous(conn) or bool(row and row.get("prev_signature"))
+                if not had:
+                    raise Refused("there is no previous embedding space to free")
+                with steps.write_txn(conn, self.db_path):
+                    freed = int(conn.execute(f"SELECT COUNT(*) FROM {sp.PREV_MAP}").fetchone()[0]) \
+                        if sp.table_exists(conn, sp.PREV_MAP) else 0
+                    sp.drop_previous(conn)
+                    if row is not None:
+                        sp.write_space(conn, row["live_signature"], json.loads(row["live_config"]))
+            finally:
+                conn.close()
+        secrets.drop(self.data_root, secrets.PREVIOUS)
+        return {"freed_vectors": freed, "previous": None}
+
+    def status(self) -> dict:
+        conn = self._conn()
+        try:
+            job = active_job(conn) or latest_job(conn)
+            row = sp.read_space(conn)
+            previous = row.get("prev_signature") if row else None
+            return {"job": public_view(job), "live": row["live_signature"] if row else None,
+                    "previous": previous if previous and sp.has_previous(conn) else previous,
+                    "previous_vectors_kept": sp.has_previous(conn)}
+        finally:
+            conn.close()
+
+    # -- adopting a model named outside the job API -------------------------
+
+    def adopt_pending(self, config: Any) -> dict | None:
+        from superlocalmemory.core.embedding_live import PENDING_ATTR
+
+        target = getattr(config, PENDING_ATTR, None)
+        if target is None:
+            return None
+        try:
+            delattr(config, PENDING_ATTR)
+        except AttributeError:
+            pass
+        try:
+            return self.request_switch(target)
+        except NoChange:
+            return None
+        except JobConflict as exc:
+            logger.warning("embedding model %s was named while %s; it was not queued",
+                           target.model_name, exc)
+        except Exception as exc:
+            logger.error("could not queue a re-index to %s: %s", target.model_name, exc)
+        return None
+
+    # -- the thread ---------------------------------------------------------
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                conn = self._conn()
+                try:
+                    job = active_job(conn)
+                    if job is None and time.monotonic() - self._last_purge > _PURGE_EVERY_S:
+                        self._last_purge = time.monotonic()
+                        if sp.table_exists(conn, sp.PURGE):
+                            with steps.write_txn(conn, self.db_path):
+                                sp.purge_pending(conn)
+                finally:
+                    conn.close()
+                if job is not None:
+                    self._run(job)
+                    continue
+            except Exception as exc:  # the thread must outlive any one bad pass
+                logger.error("embedding re-index runner pass failed: %s", exc)
+            self._wake.wait(_IDLE_POLL_S)
+            self._wake.clear()
+
+    def _key_for(self, job: dict) -> str:
+        role = secrets.TARGET if job["kind"] == "switch" else secrets.PREVIOUS
+        return secrets.get(self.data_root, role)
+
+    def _fail(self, job: dict, message: str, state: str = "failed") -> None:
+        conn = self._conn()
+        try:
+            with steps.write_txn(conn, self.db_path):
+                sp.drop_staging(conn)
+                update_job(conn, job["job_id"], state=state, error=message,
+                           finished_at=time.time())
+        finally:
+            conn.close()
+        if job["kind"] == "switch":
+            secrets.drop(self.data_root, secrets.TARGET)
+        logger.error("embedding re-index job %s %s: %s; the previous embedding space "
+                     "stays active", job["job_id"], state, message)
+
+    def _run(self, job: dict) -> None:
+        from superlocalmemory.core.embedding_reindex_activate import ActivationFailed, activate_job
+
+        target = sp.config_from_public(job["to_config"], self._key_for(job))
+        embedder = self._prebuilt.pop(job["job_id"], None)
+        handed_over = False
+        try:
+            if embedder is None:
+                embedder = steps.build_embedder(target)
+            if embedder is None:
+                raise steps.StepFailed(f"the model {target.model_name} could not be started")
+            job = self._prepare(job, embedder, target.dimension)
+            if job["state"] == "running":
+                job = self._bulk(job, embedder, target.dimension)
+            for _attempt in range(20):
+                if job["state"] == "catching_up":
+                    job = self._catch_up(job, embedder, target.dimension)
+                if job["state"] != "ready":
+                    break
+                job = activate_job(self, job, embedder, target)
+                handed_over = job["state"] == "activated"
+            if job["state"] in sp.ACTIVE_STATES and not self._stop.is_set():
+                time.sleep(2.0)  # e.g. requests did not drain: try again next pass
+        except _Cancelled:
+            self._fail(job, "cancelled", state="cancelled")
+        except (steps.StepFailed, ActivationFailed) as exc:
+            if not isinstance(exc, ActivationFailed):
+                self._fail(job, str(exc))
+        except Exception as exc:
+            logger.exception("embedding re-index job %s stopped", job["job_id"])
+            if self._stop.is_set():
+                return  # shutting down: the job resumes on the next start
+            self._fail(job, f"unexpected error: {exc}")
+        finally:
+            if embedder is not None and not handed_over:
+                steps.close_embedder(embedder)
+
+    def _check(self) -> None:
+        if self._cancel.is_set():
+            self._cancel.clear()
+            raise _Cancelled()
+        if self._stop.is_set():
+            raise RuntimeError("daemon stopping")
+
+    def _prepare(self, job: dict, embedder: Any, dimension: int) -> dict:
+        conn = self._conn()
+        try:
+            if job["state"] == "queued":
+                steps.probe(embedder, dimension)
+                with steps.write_txn(conn, self.db_path):
+                    sp.drop_staging(conn)
+                    sp.ensure_side_tables(conn)
+                    sp.create_vec(conn, sp.NEXT_VEC, dimension)
+                    update_job(conn, job["job_id"], state="running", started_at=time.time(),
+                               total=count_facts(conn), cursor=0, done=0, next_rowid=0,
+                               attempts=int(job.get("attempts") or 0) + 1)
+            elif not sp.table_exists(conn, sp.NEXT_VEC):
+                with steps.write_txn(conn, self.db_path):  # staging lost: start over
+                    sp.ensure_side_tables(conn)
+                    sp.create_vec(conn, sp.NEXT_VEC, dimension)
+                    conn.execute(f"DELETE FROM {sp.NEXT_MAP}")
+                    update_job(conn, job["job_id"], state="running", cursor=0, done=0)
+            else:
+                with steps.write_txn(conn, self.db_path):
+                    update_job(conn, job["job_id"], started_at=time.time(),
+                               attempts=int(job.get("attempts") or 0) + 1)
+            return get_job(conn, job["job_id"])
+        finally:
+            conn.close()
+
+    def _stats(self, job: dict) -> steps.LockStats:
+        return steps.LockStats(json.loads(job["stats"]) if job.get("stats") else None)
+
+    def _save_stats(self, conn: Any, job: dict, stats: steps.LockStats, **extra: Any) -> None:
+        current = json.loads(job["stats"]) if job.get("stats") else {}
+        current.update(stats.summary())
+        current.update(extra)
+        with steps.write_txn(conn, self.db_path):
+            update_job(conn, job["job_id"], stats=json.dumps(current))
+
+    def _bulk(self, job: dict, embedder: Any, dimension: int) -> dict:
+        conn = self._conn()
+        stats = self._stats(job)
+        rollback = job["kind"] == "rollback"
+        try:
+            cursor = int(job["cursor"])
+            while True:
+                self._check()
+                facts = facts_after(conn, cursor, steps.BATCH)
+                if not facts:
+                    break
+                steps.stage(conn, self.db_path, job, embedder, facts, dimension,
+                            rollback=rollback, stats=stats, cursor=facts[-1][0],
+                            catching_up=False)
+                cursor = facts[-1][0]
+                if len(stats.samples) % 20 == 0:
+                    self._save_stats(conn, get_job(conn, job["job_id"]), stats)
+            with steps.write_txn(conn, self.db_path):
+                update_job(conn, job["job_id"], state="catching_up")
+            self._save_stats(conn, get_job(conn, job["job_id"]), stats)
+            return get_job(conn, job["job_id"])
+        finally:
+            conn.close()
+
+    def _catch_up(self, job: dict, embedder: Any, dimension: int) -> dict:
+        conn = self._conn()
+        stats = self._stats(job)
+        try:
+            for _round in range(_CATCH_UP_ROUNDS):
+                self._check()
+                need, gone = staged_diff(conn)
+                if gone:
+                    with steps.write_txn(conn, self.db_path, stats):
+                        drop_gone(conn, gone)
+                if not need:
+                    break
+                for start in range(0, len(need), steps.BATCH):
+                    self._check()
+                    steps.stage(conn, self.db_path, job, embedder, need[start:start + steps.BATCH],
+                                dimension, rollback=job["kind"] == "rollback", stats=stats,
+                                cursor=None, catching_up=True)
+            with steps.write_txn(conn, self.db_path):
+                update_job(conn, job["job_id"], state="ready")
+            self._save_stats(conn, get_job(conn, job["job_id"]), stats)
+            return get_job(conn, job["job_id"])
+        finally:
+            conn.close()
+
+
+class _Cancelled(Exception):
+    pass
+
+
+__all__ = ["NoChange", "Refused", "ReindexRunner", "get_runner", "notify_pending"]

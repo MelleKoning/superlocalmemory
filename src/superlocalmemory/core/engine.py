@@ -368,12 +368,12 @@ class MemoryEngine:
             _init_auto_invoker, _init_consolidation,
         )
 
-        self._embedder = init_embedder(self._config)
-
-        # Rebuild the complete vector projection before VectorStore opens it.
-        # This preserves the previous vec0 table until the shadow activation
-        # succeeds, including across embedding-dimension changes.
-        self._check_embedding_migration()
+        # Built on the space the store holds, never on a model config.json merely
+        # names: a different model is re-indexed in the background by the daemon
+        # (core/embedding_live.py, core/embedding_reindex.py), not here.
+        from superlocalmemory.core.embedding_live import bind_live_space, take_preset_embedder
+        bind_live_space(self._config, self._db)
+        self._embedder = take_preset_embedder(self._config) or init_embedder(self._config)
 
         if self._caps.llm_fact_extraction:
             self._llm = LLMBackbone(self._config.llm)
@@ -1480,24 +1480,6 @@ class MemoryEngine:
         return self._db.get_fact_count(self._profile_id)
 
     # -- Internal -----------------------------------------------------------
-
-    def _check_embedding_migration(self) -> None:
-        """Detect embedding model change and re-index if needed."""
-        try:
-            from superlocalmemory.storage.embedding_migrator import (
-                check_embedding_migration,
-                run_embedding_migration,
-            )
-            if check_embedding_migration(self._config):
-                count = run_embedding_migration(
-                    self._config, self._db, self._embedder,
-                )
-                if count > 0:
-                    logger.info(
-                        "Embedding migration: %d facts re-embedded", count,
-                    )
-        except Exception as exc:
-            logger.warning("Embedding migration check failed: %s", exc)
 
     def _ensure_init(self) -> None:
         if not self._initialized:
