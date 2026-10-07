@@ -23,6 +23,7 @@ cannot be put back: both its facts are gone.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable
@@ -126,8 +127,11 @@ def erase_profile_cases(db: Any, profile_id: str, *, erasure_id: str) -> int:
     every fact and memory the profile's corrections named, and the erasure
     stopped partway with a foreign-key error.
     """
+    # A custom DB wrapper may offer only ``execute``: the same statements, in
+    # the same order, then run one by one (GDPRCompliance accepts such wrappers).
+    begin = getattr(db, "transaction", None) or contextlib.nullcontext
     try:
-        with db.transaction():
+        with begin():
             fact_ids = [str(dict(r)["fact_id"]) for r in db.execute(
                 "SELECT fact_id FROM atomic_facts WHERE profile_id = ?", (profile_id,))]
             closed = close_for_erasure(db, fact_ids, erasure_id=erasure_id, actor_id="gdpr")
