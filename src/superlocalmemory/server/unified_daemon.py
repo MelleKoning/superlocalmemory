@@ -254,6 +254,8 @@ _FACT_ENTITY_REPAIR_MAX_RETRY_SECONDS = 30.0
 # second gets what the first left rather than a fresh grant.
 _REMEMBER_TOTAL_CEILING_SECONDS = 1.5
 _REMEMBER_ENRICHMENT_WAIT_SECONDS = 1.2
+#: Executor hand-off around the inline enrichment wait; inside the ceiling.
+_ENRICHMENT_HANDOFF_GRACE_SECONDS = 0.25
 # How long a remember waits for the canonical commit before answering
 # "accepted" instead: inside the 1.5 s ceiling with room for the response.
 # Past the old single 2.0 s deadline the answer was a 503 for a memory the
@@ -4968,6 +4970,9 @@ def _register_daemon_routes(application: FastAPI) -> None:
         enrichment on this path. The daemon materializer owns all model, graph,
         vector, and post-hook work after this response.
         """
+        # The 1.5 s ceiling counts from here, not from the durable write
+        # (tests/test_server/test_remember_ceiling_counts_from_the_request.py).
+        _request_started = time.monotonic()
         trusted_actor_id = _require_write_actor(request)
         _update_activity()
         engine = _get_engine_or_503()
@@ -5278,12 +5283,14 @@ def _register_daemon_routes(application: FastAPI) -> None:
             # states. A caller that asked to wait may exceed the shared ceiling,
             # because that is what asking to wait means; nobody else may.
             _elapsed = time.monotonic() - _store_started
-            _remaining = _REMEMBER_TOTAL_CEILING_SECONDS - _elapsed
+            _remaining = _REMEMBER_TOTAL_CEILING_SECONDS - (time.monotonic() - _request_started)
             if wait:
                 enrich_budget = _REMEMBER_ENRICHMENT_WAIT_SECONDS
             else:
+                # The hand-off grace below is part of the ceiling, not on top of it.
                 enrich_budget = min(
-                    1.0, _REMEMBER_ENRICHMENT_WAIT_SECONDS, max(0.0, _remaining),
+                    1.0, _REMEMBER_ENRICHMENT_WAIT_SECONDS,
+                    max(0.0, _remaining - _ENRICHMENT_HANDOFF_GRACE_SECONDS),
                 )
             if enrich_budget <= 0.0:
                 logger.warning(
@@ -5298,8 +5305,9 @@ def _register_daemon_routes(application: FastAPI) -> None:
             # writing to the database after this response has been sent — so the
             # write is simply reported as findable by wording and the background
             # pass picks it up, which is the intended degradation.
-            _permit = _enrichment_semaphore.acquire(blocking=False)
-            if not _permit:
+            # No time left inside the ceiling: no inline wait at all.
+            _permit = enrich_budget > 0.0 and _enrichment_semaphore.acquire(blocking=False)
+            if not _permit and enrich_budget > 0.0:
                 logger.warning(
                     "inline enrichment at capacity for %d fact(s) — deferred to "
                     "the background pass", len(fact_ids),
@@ -5322,7 +5330,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
                     _enrichment_semaphore.release()
                     raise
                 enriched = await asyncio.wait_for(
-                    _pending, timeout=enrich_budget + 0.25,
+                    _pending, timeout=enrich_budget + _ENRICHMENT_HANDOFF_GRACE_SECONDS,
                 )
             except _EnrichmentAtCapacity:
                 pass
