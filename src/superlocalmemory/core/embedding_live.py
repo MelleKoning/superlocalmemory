@@ -112,6 +112,15 @@ def live_signature(config: Any, db: Any) -> tuple[str | None, dict | None]:
 
 def bind_live_space(config: Any, db: Any) -> None:
     """Point ``config.embedding`` at the live space before any embedder is built."""
+    try:
+        _bind_live_space(config, db)
+    finally:  # the stored vectors' width, for the decoder's truncated-write check
+        from superlocalmemory.storage.embedding_codec import set_expected_dimension
+
+        set_expected_dimension(config.embedding.dimension)
+
+
+def _bind_live_space(config: Any, db: Any) -> None:
     from superlocalmemory.storage.embedding_migrator import _write_stored_signature
     from superlocalmemory.storage.embedding_spaces import (
         config_from_public,
