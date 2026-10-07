@@ -211,42 +211,81 @@ def _extract_interval(text: str, ref_date: str | None = None) -> tuple[str | Non
     return _try_parse_date(start_raw, ref_date), _try_parse_date(end_raw, ref_date)
 
 
+#: Q4 (2026-10-06): common English words that are capitalized only because
+#: they open a sentence (an imperative verb, an adverb, a determiner,
+#: filler), never because they name something. Checked against every word of
+#: a matched capitalized run, not only its first word -- see
+#: ``_extract_entities`` for why that distinction matters.
+_ENTITY_STOPWORDS = frozenset({
+    "the", "this", "that", "these", "those", "what", "when", "where",
+    "which", "how", "who", "why", "also", "then", "just", "very",
+    "really", "actually", "maybe", "well", "still", "even",
+    "she", "he", "they", "them", "her", "him", "his", "its",
+    "but", "and", "not", "yes", "yeah", "sure", "okay", "ok",
+    "here", "there", "now", "today", "some", "all", "any",
+    "been", "being", "have", "has", "had", "was", "were",
+    "for", "with", "from", "about", "into", "over",
+    # Sentence starters and conversational words
+    "wow", "did", "so", "gonna", "got", "by", "thanks", "thank",
+    "hey", "hi", "hello", "bye", "good", "great", "nice", "cool",
+    "right", "like", "know", "think", "feel", "want", "need",
+    "make", "take", "give", "tell", "said", "told", "get",
+    "let", "can", "will", "would", "could", "should", "might",
+    "much", "many", "more", "most", "lot", "way", "thing",
+    "something", "anything", "everything", "nothing", "someone",
+    "it", "my", "your", "our", "their", "me", "you", "we", "us",
+    "do", "does", "if", "or", "no", "to", "at", "on", "in",
+    "up", "out", "off", "too", "go", "come", "see", "look",
+    "say", "ask", "try", "keep", "put", "run", "set", "move",
+    "call", "end", "start", "find", "show", "hear", "play",
+    "work", "read", "talk", "turn", "help", "miss", "hope",
+    "love", "hate", "wish", "seem", "mean", "mind", "care",
+    # Q4: sentence-initial imperative verbs and adverbs reproduced live
+    # ("Use the Kestrel checkpoint", "Every Harbor needs...", "Deploy The
+    # Kestrel immediately") -- none of these name anything.
+    "use", "deploy", "every", "never", "quickly", "please", "always",
+    "consider", "check", "install", "restart", "enable", "ignore",
+    "verify", "finally", "basically", "specifically", "clearly",
+    "obviously", "immediately", "apply", "avoid", "update", "upgrade",
+    "note", "remember", "ensure", "skip",
+    # Q4: weekday names are temporal markers (already surfaced separately
+    # by date extraction), never entity names on their own.
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+    "sunday",
+})
+
+
 def _extract_entities(text: str) -> list[str]:
     """Extract candidate entity names from text using regex heuristics."""
     entities: set[str] = set()
 
-    # Capitalized word sequences (proper nouns)
+    # Capitalized word sequences (proper nouns). A capitalized run can start
+    # with, end with, or contain a word that is capitalized only because it
+    # opens a sentence (an imperative verb, an adverb, a determiner) rather
+    # than because it names something. Checking only the run's FIRST word
+    # handled neither direction well: a stopword there dropped the ENTIRE
+    # run, losing a real entity glued to it ("The Kestrel checkpoint was
+    # recalled..." -> nothing, losing "Kestrel" -- a recall bug), while a
+    # stopword anywhere else in the run was never checked at all ("Deploy
+    # The Kestrel immediately" -> the whole phrase kept as one junk entity --
+    # a precision bug). Trimming stopword words out of the run, wherever
+    # they occur, and keeping the remaining contiguous span(s) fixes both at
+    # once: "The Kestrel" -> "Kestrel"; "Deploy The Kestrel" -> "Kestrel";
+    # "Every Harbor" -> "Harbor"; a lone "Use" or "Never" -> nothing.
     for match in _ENTITY_RE.finditer(text):
         candidate = (match.group(1) or match.group(2) or "").strip()
-        # Filter common English words that start sentences
-        # Check first word of multi-word candidates against stop list
-        _first_word = candidate.split()[0].lower() if candidate else ""
-        if _first_word not in {
-            "the", "this", "that", "these", "those", "what", "when", "where",
-            "which", "how", "who", "why", "also", "then", "just", "very",
-            "really", "actually", "maybe", "well", "still", "even",
-            "she", "he", "they", "them", "her", "him", "his", "its",
-            "but", "and", "not", "yes", "yeah", "sure", "okay", "ok",
-            "here", "there", "now", "today", "some", "all", "any",
-            "been", "being", "have", "has", "had", "was", "were",
-            "for", "with", "from", "about", "into", "over",
-            # Sentence starters and conversational words
-            "wow", "did", "so", "gonna", "got", "by", "thanks", "thank",
-            "hey", "hi", "hello", "bye", "good", "great", "nice", "cool",
-            "right", "like", "know", "think", "feel", "want", "need",
-            "make", "take", "give", "tell", "said", "told", "get",
-            "let", "can", "will", "would", "could", "should", "might",
-            "much", "many", "more", "most", "lot", "way", "thing",
-            "something", "anything", "everything", "nothing", "someone",
-            "it", "my", "your", "our", "their", "me", "you", "we", "us",
-            "do", "does", "if", "or", "no", "to", "at", "on", "in",
-            "up", "out", "off", "too", "go", "come", "see", "look",
-            "say", "ask", "try", "keep", "put", "run", "set", "move",
-            "call", "end", "start", "find", "show", "hear", "play",
-            "work", "read", "talk", "turn", "help", "miss", "hope",
-            "love", "hate", "wish", "seem", "mean", "mind", "care",
-        }:
-            entities.add(candidate)
+        if not candidate:
+            continue
+        run: list[str] = []
+        for word in candidate.split():
+            if word.lower() in _ENTITY_STOPWORDS:
+                if run:
+                    entities.add(" ".join(run))
+                    run = []
+                continue
+            run.append(word)
+        if run:
+            entities.add(" ".join(run))
 
     # Quoted strings
     for match in _QUOTED_RE.finditer(text):

@@ -101,9 +101,14 @@ function renderChangedThisWeek(data, container) {
         card.className = 'border rounded p-2 mb-1';
         card.style.fontSize = '0.78rem';
 
+        // Q5 (2026-10-06): show the memory kind (the same label the
+        // Memories table and recall use), not the raw legacy fact_type.
+        // memory_kind_label is absent only on a legacy pre-4.1.19 store
+        // that has no kind columns at all, in which case the server never
+        // sends it and this falls back to the old fact_type display.
         var badge = document.createElement('span');
         badge.className = 'badge bg-info me-1';
-        badge.textContent = item.fact_type || 'fact';
+        badge.textContent = item.memory_kind_label || item.fact_type || 'fact';
         card.appendChild(badge);
 
         var content = document.createElement('span');

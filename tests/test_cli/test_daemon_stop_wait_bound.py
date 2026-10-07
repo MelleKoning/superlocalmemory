@@ -106,6 +106,26 @@ class TestCmdServeStopMessaging:
         out = capsys.readouterr().out
         assert "Daemon was not running." in out
 
+    def test_reports_the_truth_when_a_ready_daemon_fails_to_stop(self, capsys):
+        """Q10 (2026-10-06): a 'ready' (not "starting") daemon whose /stop
+        request itself fails -- e.g. it was rejected by the loopback write
+        rate limiter right after a write burst, or any other dropped round
+        trip -- must not be reported as "was not running." The process is
+        proven alive both before and after the failed stop attempt."""
+        from superlocalmemory.cli import commands
+
+        ready = self._descriptor(state="ready")
+        args = SimpleNamespace(action="stop")
+        with patch("superlocalmemory.cli.daemon.read_descriptor", return_value=ready), \
+             patch("superlocalmemory.cli.daemon._descriptor_process_is_alive", return_value=True), \
+             patch("superlocalmemory.cli.daemon.stop_daemon", return_value=False), \
+             patch("superlocalmemory.cli.daemon.owned_daemon_process_alive", return_value=True):
+            commands.cmd_serve(args)
+
+        out = capsys.readouterr().out
+        assert "was not running" not in out.lower()
+        assert "may have been dropped" in out.lower()
+
     def test_ready_daemon_stops_without_the_starting_message(self, capsys):
         from superlocalmemory.cli import commands
 
