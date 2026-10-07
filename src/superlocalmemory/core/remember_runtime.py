@@ -998,9 +998,8 @@ class CanonicalRememberRuntime:
                 "idempotency key belongs to a different mutation request"
             ) from exc
         except (OwnershipRequiredError, WriteCoordinatorError) as exc:
-            raise CanonicalRememberUnavailable(
-                "canonical mutation is temporarily unavailable"
-            ) from exc
+            from superlocalmemory.core.writer_refusals import refusal_or_outage
+            raise refusal_or_outage(exc) from exc  # a ledger refusal is a 409, not a 503
 
     def _profile_exists_locked(self, profile_id: str) -> bool:
         """Whether ``profile_id`` still names a live profile row.
