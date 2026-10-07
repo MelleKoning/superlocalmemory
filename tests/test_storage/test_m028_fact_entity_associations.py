@@ -243,3 +243,32 @@ def test_post_readiness_scheduler_retries_transient_sqlite_failure(
     assert status["state"] == "complete"
     assert status["last_error"] == ""
     assert migration.get_repair_status(db_path)["state"] == "complete"
+
+
+def test_the_repair_task_finishes_while_the_gap_sweep_keeps_running(tmp_path: Path) -> None:
+    """Q7's never-ending gap sweep is its own task: the repair task callers
+    await still completes, and shutdown cancels both."""
+    from superlocalmemory.server.unified_daemon import (
+        _cancel_fact_entity_association_repair,
+        _schedule_fact_entity_association_repair,
+    )
+
+    db_path = tmp_path / "memory.db"
+    conn = sqlite3.connect(db_path)
+    _base_tables(conn)
+    migration.apply(conn)
+    conn.close()
+    application = SimpleNamespace(state=SimpleNamespace())
+
+    async def run() -> None:
+        task = _schedule_fact_entity_association_repair(
+            application, db_path, batch_size=1, tick_seconds=0,
+        )
+        await asyncio.wait_for(task, 30)
+        sweep = application.state.entity_index_gap_sweep_task
+        await asyncio.sleep(0.05)
+        assert not sweep.done(), "the gap sweep should outlive the repair task"
+        await asyncio.wait_for(_cancel_fact_entity_association_repair(application), 10)
+        assert sweep.cancelled() or sweep.done()
+
+    asyncio.run(run())

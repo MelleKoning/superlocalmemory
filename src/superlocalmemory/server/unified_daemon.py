@@ -1600,16 +1600,21 @@ async def _fact_entity_association_repair_loop(
             batch_size=batch_size, tick_seconds=tick_seconds,
         )
         # Q7: the one-time backfill above only ever covers facts up to the
-        # rowid snapshot it took when it first ran. This runs for the rest
-        # of the process's life, in bounded batches, so a fact written by a
-        # path that bypasses the real-time indexing hook (an older version
+        # rowid snapshot it took when it first ran. The gap sweep runs for the
+        # rest of the process's life, in bounded batches, so a fact written by
+        # a path that bypasses the real-time indexing hook (an older version
         # reached by a downgrade, a restore, a direct import) is found and
-        # repaired whenever it was introduced, not only if it existed at
-        # this one startup.
-        await run_entity_index_gap_sweep(
-            application, memory_db_path,
-            batch_size=batch_size, tick_seconds=tick_seconds,
+        # repaired whenever it was introduced. It is its OWN task: this repair
+        # task still finishes, as its callers and the shutdown path expect.
+        sweep = asyncio.create_task(
+            run_entity_index_gap_sweep(
+                application, memory_db_path,
+                batch_size=batch_size, tick_seconds=tick_seconds,
+            ),
+            name="entity-index-gap-sweep",
         )
+        sweep.add_done_callback(_log_gap_sweep_end)
+        application.state.entity_index_gap_sweep_task = sweep
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -1622,18 +1627,24 @@ async def _fact_entity_association_repair_loop(
         }
 
 
+def _log_gap_sweep_end(task: asyncio.Task) -> None:
+    if not task.cancelled() and task.exception() is not None:
+        logger.warning("Entity index gap sweep stopped: %r", task.exception())
+
+
 async def _cancel_fact_entity_association_repair(application) -> None:
-    task = getattr(
-        application.state, "fact_entity_association_repair_task", None,
-    )
-    if task is None:
-        return
-    if not task.done():
-        task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+    for name in ("fact_entity_association_repair_task", "entity_index_gap_sweep_task"):
+        task = getattr(application.state, name, None)
+        if task is None:
+            continue
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001 — already logged by its done-callback
+            pass
 
 
 def _schedule_source_quality_repair(
