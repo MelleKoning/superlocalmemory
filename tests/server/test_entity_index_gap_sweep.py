@@ -76,7 +76,10 @@ class TestGapSweepEndToEnd:
             )
             try:
                 for _ in range(500):
-                    if _has_pair(store, "gap-fact", "E00"):
+                    # covered AND reported: the status is published after the
+                    # write, so waiting only for the pair races the report.
+                    if (_has_pair(store, "gap-fact", "E00")
+                            and getattr(app.state, "entity_index_gap_status", None)):
                         return
                     await asyncio.sleep(0.01)
             finally:

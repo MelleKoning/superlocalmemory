@@ -221,83 +221,114 @@ def _ensure_gap_state(conn: sqlite3.Connection) -> None:
     )
 
 
-def _gap_sweep_batch(conn: sqlite3.Connection, batch_size: int,
-                     max_pairs: int) -> dict[str, Any]:
-    """One bounded step of the never-ending coverage sweep (Q7).
+#: The sweep's insert also requires the fact to still exist: detection runs on a
+#: read-only snapshot, so a fact deleted before the write must be skipped, not
+#: break the transaction on its foreign key.
+_INSERT_PAIR_IF_FACT = (
+    "INSERT OR IGNORE INTO fact_entity_associations "
+    "(profile_id,fact_id,entity_id,first_operation_id,count_applied) "
+    "SELECT ?,?,?,'gap-sweep',0 FROM canonical_entities "
+    "WHERE profile_id=? AND entity_id=? "
+    "AND EXISTS (SELECT 1 FROM atomic_facts WHERE fact_id=?)"
+)
 
-    Re-applies the same idempotent insert ``record_fact_entities`` would
-    have made, for a bounded window of facts in rowid order. A fact already
-    fully indexed costs one cheap ``INSERT OR IGNORE`` no-op per entity; a
-    fact missing some or all of its pairs (written by a path that bypassed
-    the real-time hook) gets them filled -- no separate "detect a gap"
-    query is needed, because attempting the fill IS the detection. At the
-    end of a lap the target is re-derived to the current ``MAX(rowid)`` and
-    the cursor wraps back to the start, so the sweep never permanently
-    stops the way the one-time ``REPAIR_KEY`` backfill does.
-    """
-    _ensure_gap_state(conn)
-    cursor, target = conn.execute(
-        "SELECT last_fact_rowid,target_fact_rowid "
-        "FROM fact_entity_association_repair_state WHERE repair_key=?",
-        (GAP_REPAIR_KEY,),
-    ).fetchone()
-    rows = conn.execute(
-        "SELECT rowid,fact_id,profile_id,canonical_entities_json "
-        "FROM atomic_facts WHERE rowid>? ORDER BY rowid LIMIT ?",
-        (int(cursor), batch_size),
-    ).fetchall()
-    if not rows:
-        new_target = int(conn.execute(
-            "SELECT COALESCE(MAX(rowid), 0) FROM atomic_facts",
-        ).fetchone()[0])
-        conn.execute(
-            "UPDATE fact_entity_association_repair_state SET "
-            "last_fact_rowid=0,target_fact_rowid=?,state='complete',"
-            "last_error='',updated_at=? WHERE repair_key=?",
-            (new_target, _now(), GAP_REPAIR_KEY),
-        )
-        return {"scanned": 0, "inserted": 0, "lap_complete": True}
-    inserted = pairs = done = 0
-    for rowid, fact_id, profile_id, raw in rows:
+
+def _gap_missing(conn: sqlite3.Connection, rows: list, max_pairs: int):
+    """Read-only: of ``rows``, how many fit the pair budget, and which of
+    their (profile, fact, entity) pairs are missing from the index."""
+    wanted: list[tuple[str, str, str]] = []
+    pairs = done = 0
+    for _rowid, fact_id, profile_id, raw in rows:
         entities = entity_ids(raw)
         if done and pairs + len(entities) > max_pairs:
-            break  # the rest is the next batch's; one fact always fits
-        inserted += _insert_pairs(conn.execute, fact_id, profile_id,
-                                  entities, "gap-sweep")
+            break  # the rest is the next window's; one fact always fits
+        wanted.extend((profile_id, fact_id, e) for e in entities)
         pairs += len(entities)
         done += 1
-    conn.execute(
-        "UPDATE fact_entity_association_repair_state SET state='running',"
-        "last_fact_rowid=?,scanned=scanned+?,inserted=inserted+?,"
-        "last_error='',updated_at=? WHERE repair_key=?",
-        (int(rows[done - 1][0]), done, inserted, _now(), GAP_REPAIR_KEY),
-    )
-    return {"scanned": done, "inserted": inserted, "lap_complete": False}
+    have: set[tuple[str, str]] = set()
+    known: set[tuple[str, str]] = set()
+    facts = sorted({f for _p, f, _e in wanted})
+    ents = sorted({e for _p, _f, e in wanted})
+    for i in range(0, len(facts), 500):
+        chunk = facts[i:i + 500]
+        have.update(conn.execute(
+            "SELECT fact_id,entity_id FROM fact_entity_associations WHERE fact_id IN "
+            f"({','.join('?' * len(chunk))})", chunk).fetchall())
+    for i in range(0, len(ents), 500):
+        chunk = ents[i:i + 500]
+        known.update(conn.execute(
+            "SELECT profile_id,entity_id FROM canonical_entities WHERE entity_id IN "
+            f"({','.join('?' * len(chunk))})", chunk).fetchall())
+    missing = [(p, f, e) for p, f, e in wanted if (f, e) not in have and (p, e) in known]
+    return done, missing
 
 
 def repair_coverage_gap(db_path: Path, *, batch_size: int = 250,
                         max_batches: int = 1) -> dict[str, Any]:
-    """Run up to ``max_batches`` short gap-sweep batches. Safe to repeat.
+    """Run up to ``max_batches`` gap-sweep windows. Safe to repeat.
 
-    Unlike ``backfill``, this never reaches a terminal "nothing more to do
-    ever" state: it is meant to be called repeatedly (by the daemon, in the
-    background, indefinitely) so a coverage gap introduced at any time --
-    not only the one that existed the first time this ran -- is eventually
-    found and repaired.
+    Detection is read-only: the windows are scanned on a read-only
+    connection, so a fully indexed store (the normal case) never holds the
+    write lock to find nothing. The call then takes the write lock ONCE, for
+    the missing pairs (usually none) and the durable cursor, so progress
+    survives a restart exactly as before.
     """
     from superlocalmemory.storage.memory_write import memory_write
 
     if batch_size < 1 or max_batches < 1:
         raise ValueError("batch_size and max_batches must be positive")
     totals: dict[str, Any] = {"scanned": 0, "inserted": 0, "laps_completed": 0}
-    for _ in range(max_batches):
-        with memory_write(Path(db_path)) as conn:
-            conn.execute("PRAGMA foreign_keys=ON")
-            result = _gap_sweep_batch(conn, batch_size, MAX_PAIRS_PER_BATCH)
-        totals["scanned"] += result["scanned"]
-        totals["inserted"] += result["inserted"]
-        if result["lap_complete"]:
-            totals["laps_completed"] += 1
+    ro = sqlite3.connect(f"file:{Path(db_path)}?mode=ro", uri=True, timeout=10.0)
+    try:
+        state = ro.execute(
+            "SELECT last_fact_rowid FROM fact_entity_association_repair_state "
+            "WHERE repair_key=?", (GAP_REPAIR_KEY,)).fetchone()
+        cursor = int(state[0]) if state else 0
+        missing: list[tuple[str, str, str]] = []
+        lap_end = False
+        for _ in range(max_batches):
+            rows = ro.execute(
+                "SELECT rowid,fact_id,profile_id,canonical_entities_json "
+                "FROM atomic_facts WHERE rowid>? ORDER BY rowid LIMIT ?",
+                (cursor, batch_size)).fetchall()
+            if not rows:
+                lap_end = True
+                break
+            done, gap = _gap_missing(ro, rows, MAX_PAIRS_PER_BATCH)
+            missing.extend(gap)
+            cursor = int(rows[done - 1][0])
+            totals["scanned"] += done
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc):
+            raise
+        cursor, missing, lap_end = 0, [], False  # migrations not applied yet
+    finally:
+        ro.close()
+    with memory_write(Path(db_path)) as conn:
+        conn.execute("PRAGMA foreign_keys=ON")
+        _ensure_gap_state(conn)
+        inserted = 0
+        for profile_id, fact_id, entity_id in missing:
+            inserted += max(0, conn.execute(
+                _INSERT_PAIR_IF_FACT,
+                (profile_id, fact_id, entity_id, profile_id, entity_id, fact_id),
+            ).rowcount or 0)
+        totals["inserted"] = inserted
+        if lap_end:
+            new_target = int(conn.execute(
+                "SELECT COALESCE(MAX(rowid), 0) FROM atomic_facts").fetchone()[0])
+            conn.execute(
+                "UPDATE fact_entity_association_repair_state SET last_fact_rowid=0,"
+                "target_fact_rowid=?,state='complete',scanned=scanned+?,"
+                "inserted=inserted+?,last_error='',updated_at=? WHERE repair_key=?",
+                (new_target, totals["scanned"], inserted, _now(), GAP_REPAIR_KEY))
+            totals["laps_completed"] = 1
+        else:
+            conn.execute(
+                "UPDATE fact_entity_association_repair_state SET state='running',"
+                "last_fact_rowid=?,scanned=scanned+?,inserted=inserted+?,"
+                "last_error='',updated_at=? WHERE repair_key=?",
+                (cursor, totals["scanned"], inserted, _now(), GAP_REPAIR_KEY))
     return totals
 
 

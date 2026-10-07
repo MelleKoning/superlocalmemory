@@ -47,6 +47,8 @@ MAX_TICK_SECONDS = 0.25
 #: continuous full-table background scan forever. Finding and fixing even
 #: one fact resets the backoff to the normal tick pace immediately, so an
 #: actual gap is still chased quickly.
+#: Gap-sweep windows read per write-lock acquisition (detection is read-only).
+_GAP_WINDOWS_PER_CALL = 10
 _GAP_IDLE_BACKOFF_FLOOR_SECONDS = 1.0
 _GAP_IDLE_BACKOFF_CEILING_SECONDS = 3600.0
 
@@ -125,7 +127,8 @@ async def run_entity_index_gap_sweep(
         try:
             result = await asyncio.to_thread(
                 entity_index.repair_coverage_gap, Path(memory_db_path),
-                batch_size=batch_size, max_batches=1,
+                # Detection is read-only; each call takes the write lock once.
+                batch_size=batch_size, max_batches=_GAP_WINDOWS_PER_CALL,
             )
             gap_status = await asyncio.to_thread(
                 entity_index.gap_sweep_status, Path(memory_db_path),

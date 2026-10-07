@@ -216,3 +216,39 @@ class TestDowngradeGapReproduced:
         result = entity_index.repair_coverage_gap(db_path, batch_size=10, max_batches=3)
         assert result["inserted"] == 0
         assert _pairs(db_path) == {("fact-x", "juniper")}
+
+
+class TestDetectionNeverHoldsTheWriteLock:
+    """A fully indexed store (the normal case) must not make saves wait: the
+    sweep used to take the process write lock for every 250-fact window even
+    when it found nothing (MM3 lane: saves stalled behind it on a 22k store)."""
+
+    def test_one_write_per_call_however_many_windows_are_read(self, tmp_path, monkeypatch) -> None:
+        db_path = _store(tmp_path)
+        _add_entity(db_path, "e1")
+        for i in range(40):
+            _add_fact(db_path, f"f{i}", ["e1"])
+        entity_index.repair_coverage_gap(db_path, batch_size=5, max_batches=20)  # fill once
+        from superlocalmemory.storage import memory_write as mw
+
+        entered = []
+        real = mw.memory_write
+
+        def counting(path):
+            entered.append(path)
+            return real(path)
+
+        monkeypatch.setattr(mw, "memory_write", counting)
+        result = entity_index.repair_coverage_gap(db_path, batch_size=5, max_batches=6)
+        assert result["scanned"] == 30 and result["inserted"] == 0
+        assert len(entered) == 1
+
+    def test_a_fact_deleted_after_detection_is_skipped_not_fatal(self, tmp_path, monkeypatch) -> None:
+        db_path = _store(tmp_path)
+        _add_entity(db_path, "e1")
+        _add_fact(db_path, "f-kept", ["e1"])
+        monkeypatch.setattr(entity_index, "_gap_missing", lambda conn, rows, mp: (
+            len(rows), [("default", "f-gone", "e1"), ("default", "f-kept", "e1")]))
+        result = entity_index.repair_coverage_gap(db_path, batch_size=10, max_batches=1)
+        assert result["inserted"] == 1
+        assert ("f-kept", "e1") in _pairs(db_path)
