@@ -121,10 +121,11 @@ def _cmd_db_dispatch(args: Namespace) -> None:
         if rc:
             sys.exit(rc)
         return
-    if sub in ("restore-points", "restore", "prepare-downgrade", "fidelity"):
-        from superlocalmemory.cli import fidelity_cmd, upgrade_cmd
+    if sub in ("restore-points", "restore", "prepare-downgrade", "fidelity", "integrity", "repair"):
+        from superlocalmemory.cli import fidelity_cmd, integrity_cmd, upgrade_cmd
         handler = {"restore-points": upgrade_cmd.cmd_db_restore_points,
                    "restore": upgrade_cmd.cmd_db_restore, "fidelity": fidelity_cmd.cmd_db_fidelity,
+                   "integrity": integrity_cmd.cmd_db_integrity, "repair": integrity_cmd.cmd_db_repair,
                    "prepare-downgrade": upgrade_cmd.cmd_db_prepare_downgrade}[sub]
         rc = handler(args)
         if rc:
@@ -135,7 +136,8 @@ def _cmd_db_dispatch(args: Namespace) -> None:
         "| slm db scale <action> "
         "| slm db regraph [--check] [--profile NAME] "
         "| slm db reembed [--missing-only] [--all-profiles] [--limit N] "
-        "| slm db compact [--offline] | slm db fidelity [--withhold|--release ID]"
+        "| slm db compact [--offline] | slm db fidelity [--withhold|--release ID] "
+        "| slm db integrity | slm db repair [--apply|--undo ID] --root PATH"
     )
     sys.exit(2)
 
@@ -525,6 +527,12 @@ def _cmd_kinds_dispatch(args: Namespace) -> None:
     cmd_kinds(args)
 
 
+def _cmd_corrections_dispatch(args: Namespace) -> None:
+    """4.1.22: corrections a user action overtook (cli/corrections_cmd.py)."""
+    from superlocalmemory.cli.corrections_cmd import run
+    run(args)
+
+
 def _cmd_view_dispatch(args: Namespace) -> None:
     """4.1.21: saved views through the daemon (cli/view_cmd.py)."""
     from superlocalmemory.cli.view_cmd import cmd_view
@@ -668,6 +676,7 @@ def dispatch(args: Namespace) -> None:
         "summary": _cmd_summary_dispatch,
         "kinds": _cmd_kinds_dispatch,
         "view": _cmd_view_dispatch,
+        "corrections": _cmd_corrections_dispatch,
     }
     handler = handlers.get(args.command)
     if handler:
@@ -2341,11 +2350,13 @@ def cmd_delete(args: Namespace) -> None:
     import urllib.parse
 
     from superlocalmemory.cli.daemon import (
+        DaemonConflict,
         DaemonNotFound,
         daemon_request,
         ensure_daemon,
         is_daemon_running,
     )
+    from superlocalmemory.cli.mutation_conflict import exit_conflict
 
     use_json = getattr(args, 'json', False)
     fact_id = args.fact_id.strip()
@@ -2388,9 +2399,12 @@ def cmd_delete(args: Namespace) -> None:
                 return
 
         try:
-            result = daemon_request("DELETE", path, preserve_not_found=True)
+            result = daemon_request("DELETE", path, preserve_not_found=True,
+                                    preserve_conflict=True)
         except DaemonNotFound:
             _memory_not_found("delete", fact_id, use_json)
+        except DaemonConflict as exc:
+            exit_conflict("delete", exc.detail, use_json)
         if not isinstance(result, dict) or not result.get("success"):
             _daemon_unavailable("delete", use_json)
         if use_json:
@@ -2420,6 +2434,7 @@ def cmd_update(args: Namespace) -> None:
     import urllib.parse
 
     from superlocalmemory.cli.daemon import (
+        DaemonConflict,
         DaemonNotFound,
         daemon_request,
         ensure_daemon,
@@ -2442,9 +2457,13 @@ def cmd_update(args: Namespace) -> None:
         path = "/api/memories/" + urllib.parse.quote(fact_id, safe="")
         try:
             body = {"content": new_content}
-            result = daemon_request("PATCH", path, body, preserve_not_found=True)
+            result = daemon_request("PATCH", path, body, preserve_not_found=True,
+                                    preserve_conflict=True)
         except DaemonNotFound:
             _memory_not_found("update", fact_id, use_json)
+        except DaemonConflict as exc:
+            from superlocalmemory.cli.mutation_conflict import exit_conflict
+            exit_conflict("update", exc.detail, use_json)
         if not isinstance(result, dict) or not result.get("success"):
             _daemon_unavailable("update", use_json)
         if use_json:

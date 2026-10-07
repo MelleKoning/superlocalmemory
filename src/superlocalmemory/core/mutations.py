@@ -445,6 +445,19 @@ def _finalize_erasure(
         }
 
 
+def _refuse_if_correction_protected(db: Any, profile_id: str, fact_id: str) -> None:
+    """Refuse before the erasure removes a single projection (see module doc)."""
+    from superlocalmemory.core.correction_protection import (
+        blocking_cases,
+        protection_message,
+    )
+    from superlocalmemory.core.remember_runtime import CanonicalMutationConflict
+
+    cases = blocking_cases(db, profile_id, fact_id)
+    if cases:
+        raise CanonicalMutationConflict(protection_message(cases))
+
+
 def delete_fact_authorized(
     engine: Any,
     fact_id: str,
@@ -489,6 +502,13 @@ def delete_fact_authorized(
     exists = bool(rows)
     content_preview = dict(rows[0]).get("content", "")[:80] if exists else ""
     memory_id = dict(rows[0]).get("memory_id") if exists else None
+    from superlocalmemory.core import erasure_scrub
+
+    entity_ids: list[str] = []
+    if exists:
+        _refuse_if_correction_protected(engine._db, profile_id, fact_id)
+        entity_ids = erasure_scrub.entities_of(engine._db, profile_id, fact_id)
+        erasure_scrub.prepare(engine._db)
 
     erasure_id = uuid.uuid4().hex
     requested_at = _time.time()
@@ -553,11 +573,24 @@ def delete_fact_authorized(
                 if not content_preview:
                     content_preview = str(result.get("content_preview", ""))
             else:
-                engine._db.delete_fact(fact_id, profile_id=profile_id)
+                from superlocalmemory.core.overtaken_cases import cases_naming, overtake
+
+                with engine._db.transaction():  # the delete and the cases it closes: one txn
+                    _refuse_if_correction_protected(engine._db, profile_id, fact_id)
+                    overtake(engine._db, cases_naming(engine._db, [fact_id]),
+                             user_action="delete", actor_id=trusted_actor_id,
+                             operation_id=f"delete:{fact_id}")
+                    engine._db.delete_fact(fact_id, profile_id=profile_id)
 
         # Purge projections for a fresh delete and re-run (idempotently) for a
         # resumed cleanup so an orphaned source memory is reclaimed on retry.
         _purge_delete_projections(engine, fact_id, profile_id, memory_id=memory_id)
+        try:  # the erased words outside the projections (core/erasure_scrub.py)
+            erasure_scrub.scrub(engine._db, profile_id, fact_id, entity_ids)
+        except Exception as exc:
+            logger.error("Erasure scrub failed for %s: %s", fact_id[:16], exc)
+            return {"ok": False, "retryable": True, "deleted": fact_id,
+                    "error": "erasure incomplete: derived copies remain"}
 
         if exists:
             tombstoned = bool(remove_result and remove_result.tombstoned)
@@ -571,9 +604,10 @@ def delete_fact_authorized(
         )
 
         engine._hooks.run_post("delete", context)
+        # Never the erased words themselves: a log line outlives the erasure.
         logger.info(
-            "DELETE fact_id=%s actor=%s source_agent=%s content=%s",
-            fact_id[:16], trusted_actor_id, source_agent_id, content_preview,
+            "DELETE fact_id=%s actor=%s source_agent=%s content_chars=%d",
+            fact_id[:16], trusted_actor_id, source_agent_id, len(content_preview),
         )
         erasure_verified = bool(erasure.get("erasure_verified", False))
         if not erasure_verified:

@@ -392,24 +392,27 @@ def test_a_replay_after_undo_does_not_claim_the_replacement(env) -> None:
     assert _temporal(db, old)["system_expired_at"] is None
 
 
-def _pending_review(db, predecessor: str, successor: str) -> None:
+def _pending_review(db, predecessor: str, successor: str, *, machine: bool = False) -> None:
+    """A case waiting for review: a person's edit, or (``machine``) SLM's own guess."""
     from superlocalmemory.storage.correction_cases import CorrectionActor, propose_on_connection
 
-    machine = CorrectionActor("consolidator", "host_attested", "canonical_writer")
+    actor = (CorrectionActor("consolidator", "host_attested", "canonical_writer") if machine
+             else CorrectionActor("a-person", "host_authenticated", "trusted"))
     with db.raw_connection() as conn:
         propose_on_connection(
             conn, case_id="pending-" + predecessor, profile_id="default", scope="personal",
             predecessor_fact_id=predecessor, successor_fact_id=successor,
-            reason_code="consolidation_update", actor=machine,
-            idempotency_key="pending-" + predecessor,
+            reason_code="consolidation_update" if machine else "direct_content_correction",
+            actor=actor, idempotency_key="pending-" + predecessor,
             is_profile_active=lambda _p: True, is_actor_trusted=lambda _a: True)
 
 
 def test_a_correction_waiting_for_review_is_reported_plainly(env) -> None:
+    """A person's edit waiting for review still blocks a replace (4.1.22)."""
     from superlocalmemory.core.remember_replaces import replace_after_save
 
     db, runtime = env
-    old, proposed, new = _fact(db, "Old."), _fact(db, "Machine's guess."), _fact(db, "New.")
+    old, proposed, new = _fact(db, "Old."), _fact(db, "A person's edit."), _fact(db, "New.")
     _pending_review(db, old, proposed)
     out = replace_after_save(runtime, _engine(db), replaces=old, profile_id="default",
                              successor_fact_ids=[new], operation_id="op-pending",
@@ -417,6 +420,24 @@ def test_a_correction_waiting_for_review_is_reported_plainly(env) -> None:
     assert out["ok"] is False and "waiting for review" in out["reason"]
     assert "try again" not in out["reason"]
     assert _temporal(db, old)["system_expired_at"] is None
+
+
+def test_a_machine_guess_waiting_for_review_no_longer_blocks(env) -> None:
+    """Varun, 2026-10-06: the user's explicit replace wins over SLM's own
+    unreviewed proposal, which is closed as overtaken (core/overtaken_cases.py)."""
+    from superlocalmemory.core.remember_replaces import replace_after_save
+
+    db, runtime = env
+    old, proposed, new = _fact(db, "Old."), _fact(db, "Machine's guess."), _fact(db, "New.")
+    _pending_review(db, old, proposed, machine=True)
+    out = replace_after_save(runtime, _engine(db), replaces=old, profile_id="default",
+                             successor_fact_ids=[new], operation_id="op-pending",
+                             trusted_actor_id=ACTOR)
+    assert out["ok"] is True, out
+    assert _temporal(db, old)["system_expired_at"] is not None
+    assert [dict(r)["user_action"] for r in db.execute(
+        "SELECT user_action FROM correction_cases_overtaken WHERE case_id = ?",
+        ("pending-" + old,))] == ["replace"]
 
 
 def test_after_save_reports_an_already_replaced_target(env) -> None:

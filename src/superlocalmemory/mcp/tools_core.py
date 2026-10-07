@@ -1346,12 +1346,8 @@ def register_core_tools(server, get_engine: Callable) -> None:
                 path = "/api/memories/" + urllib.parse.quote(fact_id, safe="")
                 if named:
                     path += "?profile_id=" + urllib.parse.quote(named, safe="")
-                    result = await asyncio.to_thread(_routed_daemon_call, "DELETE", path)
-                else:
-                    result = await asyncio.to_thread(
-                        daemon_request, "DELETE", path,
-                    )
-                if named and isinstance(result, dict) and result.get("code"):
+                result = await asyncio.to_thread(_routed_daemon_call, "DELETE", path)
+                if isinstance(result, dict) and result.get("code"):
                     return result
                 if isinstance(result, dict) and result.get("success"):
                     # The daemon's DELETE route announces it (once, for every

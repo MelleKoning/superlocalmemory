@@ -1792,7 +1792,9 @@ def list_corrections(request: Request, limit: int = 100, profile_id: str = ""):
         )
         cases = _correction_store_for(engine, target_profile).list_cases(
             target_profile, limit=limit)
-        return {"success": True, "corrections": [_correction_case_response(case) for case in cases]}
+        from superlocalmemory.server.routes.overtaken import overtaken_for  # a user action closed
+        return {"success": True, "corrections": [_correction_case_response(case) for case in cases],
+                "overtaken": overtaken_for(engine, target_profile, limit)}
     except HTTPException:
         raise
     except _UnknownRoutedProfile as exc:

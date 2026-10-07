@@ -1290,21 +1290,16 @@ def _delete_fact(db: DatabaseManager, fact_id: str, profile_id: str) -> dict[str
     # writer outage turns a real lifecycle conflict into a misleading 503.
     # A dedicated erasure workflow owns ledger removal; ordinary forget never
     # deletes a fact that is part of immutable correction history.
-    try:
-        protected = db.execute(
-            "SELECT 1 FROM correction_cases "
-            "WHERE profile_id=? AND (predecessor_fact_id=? OR successor_fact_id=?) LIMIT 1",
-            (profile_id, fact_id, fact_id),
-        )
-    except Exception as exc:
-        if "no such table" in str(exc).lower():
-            protected = []
-        else:
-            raise
-    if protected:
-        raise CanonicalMutationConflict(
-            "fact is protected by correction history; resolve the correction before forgetting it"
-        )
+    # 4.1.22: a pending MACHINE proposal is overtaken by the user's delete, in
+    # this same transaction (core/overtaken_cases.py); any other case refuses.
+    from superlocalmemory.core import overtaken_cases as _ot
+    from superlocalmemory.core.correction_protection import blocking_cases, protection_message
+
+    blocked = blocking_cases(db, profile_id, fact_id)
+    if blocked:
+        raise CanonicalMutationConflict(protection_message(blocked))
+    _ot.overtake(db, _ot.cases_naming(db, [fact_id]), user_action="delete",
+                 actor_id=f"canonical-writer:{profile_id}", operation_id=f"delete:{fact_id}")
     db.delete_fact(fact_id, profile_id=profile_id)
     return {
         "ok": True,
@@ -1423,6 +1418,12 @@ def _propose_correction_successor(
     )
 
     trusted_actor_id = _payload_text(payload, "trusted_actor_id")
+    from superlocalmemory.core import overtaken_cases as _ot  # the user's edit wins
+
+    _ot.overtake(connection, _ot.cases_naming(connection, [fact_id], predecessor_only=True,
+                                              profile_id=profile_id),
+                 user_action="update", actor_id=trusted_actor_id,
+                 operation_id=f"correction:{fact_id}:{persisted_id}")
     actor = CorrectionActor(
         actor_id=trusted_actor_id,
         actor_kind="host_authenticated",

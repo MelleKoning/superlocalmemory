@@ -1063,6 +1063,7 @@ def create_all_tables(conn: sqlite3.Connection) -> None:
     # V32 DDL: its triggers sit on association_edges and empty activation_cache.
     from superlocalmemory.storage import fact_search_changes, graph_generation
     conn.executescript(graph_generation.DDL + fact_search_changes.ddl(conn))
+    from superlocalmemory.core.overtaken_cases import ensure_table; ensure_table(conn)  # noqa: E702
 
     # Additive columns on tables that predate them.
     #
@@ -1075,6 +1076,8 @@ def create_all_tables(conn: sqlite3.Connection) -> None:
     # succeeded.
     _add_missing_columns(conn)
     _create_memory_kind_index(conn)
+    from superlocalmemory.storage.fts_residue import enable_quietly
+    enable_quietly(conn)  # a deleted memory's words leave the keyword index at once
 
     # Seed schema version on first run.
     existing = conn.execute(
@@ -1103,7 +1106,7 @@ def drop_all_tables(conn: sqlite3.Connection) -> None:
     from superlocalmemory.storage import fact_search_changes, graph_generation
     for trigger in (*graph_generation.trigger_names(), *fact_search_changes.trigger_names()):
         conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
-    for table in (graph_generation.TABLE, fact_search_changes.TABLE): conn.execute(f"DROP TABLE IF EXISTS {table}")  # noqa: E701
+    for table in (graph_generation.TABLE, fact_search_changes.TABLE, "correction_cases_overtaken"): conn.execute(f"DROP TABLE IF EXISTS {table}")  # noqa: E701
 
     # V32 tables first (they may FK to base tables)
     from superlocalmemory.storage.schema_v32 import V32_ROLLBACK

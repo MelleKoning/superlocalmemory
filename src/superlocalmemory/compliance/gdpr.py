@@ -915,6 +915,9 @@ class GDPRCompliance:
         targets = [(dict(r)["fact_id"], dict(r).get("memory_id")) for r in rows]
         target_fact_ids = [fid for fid, _ in targets]
         counts["facts"] = len(targets)
+        from superlocalmemory.core import erasure_scrub  # words outside projections
+        named = {fid: erasure_scrub.entities_of(self._db, profile_id, fid) for fid in target_fact_ids}
+        erasure_scrub.prepare(self._db)
 
         if targets:
             import uuid as _uuid
@@ -965,6 +968,13 @@ class GDPRCompliance:
                 except Exception:
                     pass
 
+        try:
+            for fid in target_fact_ids:
+                erasure_scrub.scrub(self._db, profile_id, fid, named[fid])
+        except Exception as exc:
+            logger.error("GDPR entity erase: text scrub failed: %s", exc)
+            counts["text_scrub_failed"] = 1
+
         # Delete temporal events
         self._db.execute(
             "DELETE FROM temporal_events WHERE entity_id = ? AND profile_id = ?",
@@ -1003,7 +1013,7 @@ class GDPRCompliance:
                 counts.get(marker)
                 for marker in (
                     "vector_store_failures",
-                    "audit_request_failed",
+                    "audit_request_failed", "text_scrub_failed",
                     *(f"{table}_failed" for table, _ in self._FACT_KEYED_TABLES),
                 )
             )

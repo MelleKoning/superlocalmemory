@@ -334,18 +334,23 @@ def apply_replacement(conn: sqlite3.Connection, profile_id: str,
     current = _current(query, facts, profile_id)
     if not current:
         raise ReplacementRefused(f"Nothing current to replace: {replaces} was already replaced.")
-    # A fact may hold one open case at a time. One waiting for review blocks
-    # this one; say so, rather than a retry that can never succeed.
-    waiting = query(
-        "SELECT predecessor_fact_id FROM correction_cases WHERE profile_id = ? "
-        "AND status = 'proposed' AND predecessor_fact_id IN ("
-        + ",".join("?" for _ in current) + ") LIMIT 1",
-        (profile_id, *(f.fact_id for f in current)))
+    # A fact may hold one open case at a time. One a PERSON proposed, waiting
+    # for review, blocks this one; say so, rather than a retry that can never
+    # succeed. One SLM proposed by itself is overtaken by this explicit request
+    # (core/overtaken_cases.py, Varun 2026-10-06), in this same transaction.
+    from superlocalmemory.core import overtaken_cases as _ot
+
+    open_cases = [c for c in _ot.cases_naming(conn, [f.fact_id for f in current],
+                                              predecessor_only=True)
+                  if c["profile_id"] == profile_id and c["status"] == "proposed"]
+    waiting = _ot.blocking(open_cases)
     if waiting:
         raise ReplacementRefused(
-            f"{waiting[0][0]} has a correction waiting for review, so nothing was replaced. "
-            f"Review it (list_corrections, review_correction) in profile {profile_id!r}, "
-            "then repeat this request.")
+            f"{waiting[0]['predecessor_fact_id']} has a correction waiting for review, so "
+            f"nothing was replaced. Review it (list_corrections, review_correction) in profile "
+            f"{profile_id!r}, then repeat this request.")
+    _ot.overtake(conn, open_cases, user_action="replace", actor_id=actor_id,
+                 operation_id=f"replaces:{replaces}:{successor}")
     actor = CorrectionActor(actor_id=ledger_actor_id(actor_id),
                             actor_kind="host_authenticated", trust_tier="trusted")
     try:
