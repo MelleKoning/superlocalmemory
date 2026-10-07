@@ -458,6 +458,33 @@ def _refuse_if_correction_protected(db: Any, profile_id: str, fact_id: str) -> N
         raise CanonicalMutationConflict(protection_message(cases))
 
 
+def _delete_canonical(
+    engine: Any, fact_id: str, profile_id: str, content_preview: str, *,
+    trusted_actor_id: str, canonical_runtime: Any | None, idempotency_key: str | None,
+) -> str | None:
+    """The last protection check and the fact delete, in one transaction.
+
+    Returns the content preview, or None when the writer no longer found the
+    fact. Raises ``CanonicalMutationConflict`` when the fact is protected.
+    """
+    if canonical_runtime is not None:
+        result = dict(canonical_runtime.delete_fact(
+            profile_id, fact_id, idempotency_key=idempotency_key,
+        ))
+        if not result.get("ok"):
+            return None
+        return content_preview or str(result.get("content_preview", ""))
+    from superlocalmemory.core.overtaken_cases import cases_naming, overtake
+
+    with engine._db.transaction():  # the delete and the cases it closes: one txn
+        _refuse_if_correction_protected(engine._db, profile_id, fact_id)
+        overtake(engine._db, cases_naming(engine._db, [fact_id]),
+                 user_action="delete", actor_id=trusted_actor_id,
+                 operation_id=f"delete:{fact_id}")
+        engine._db.delete_fact(fact_id, profile_id=profile_id)
+    return content_preview
+
+
 def delete_fact_authorized(
     engine: Any,
     fact_id: str,
@@ -532,6 +559,9 @@ def delete_fact_authorized(
 
     remove_result = None
     if exists:
+        from superlocalmemory.core import delete_refusal
+
+        before_removal = delete_refusal.snapshot(engine, profile_id, fact_id)
         try:
             remove_result = service.remove(engine._db, op_ctx, memory_id=memory_id)
         except Exception as exc:
@@ -564,23 +594,21 @@ def delete_fact_authorized(
     mark_erasing(profile_id, fact_id)
     try:
         if exists:
-            if canonical_runtime is not None:
-                result = dict(canonical_runtime.delete_fact(
-                    profile_id, fact_id, idempotency_key=idempotency_key,
-                ))
-                if not result.get("ok"):
-                    return {"ok": False, "error": f"Memory {fact_id} not found"}
-                if not content_preview:
-                    content_preview = str(result.get("content_preview", ""))
-            else:
-                from superlocalmemory.core.overtaken_cases import cases_naming, overtake
+            from superlocalmemory.core.remember_runtime import CanonicalMutationConflict
 
-                with engine._db.transaction():  # the delete and the cases it closes: one txn
-                    _refuse_if_correction_protected(engine._db, profile_id, fact_id)
-                    overtake(engine._db, cases_naming(engine._db, [fact_id]),
-                             user_action="delete", actor_id=trusted_actor_id,
-                             operation_id=f"delete:{fact_id}")
-                    engine._db.delete_fact(fact_id, profile_id=profile_id)
+            try:
+                content_preview = _delete_canonical(
+                    engine, fact_id, profile_id, content_preview,
+                    trusted_actor_id=trusted_actor_id,
+                    canonical_runtime=canonical_runtime, idempotency_key=idempotency_key,
+                )
+            except CanonicalMutationConflict:
+                # Refused at the last check (a protecting case appeared after
+                # the first): the fact stays, so its search entries come back.
+                delete_refusal.restore(engine, before_removal, erasure_id)
+                raise
+            if content_preview is None:
+                return {"ok": False, "error": f"Memory {fact_id} not found"}
 
         # Purge projections for a fresh delete and re-run (idempotently) for a
         # resumed cleanup so an orphaned source memory is reclaimed on retry.
