@@ -15,7 +15,10 @@ left, so an interrupted run is finished by running it again):
    summaries): scrubbed by core/erasure_scrub.py. No undo copy, by design.
 4. ``keyword_index`` — words of deleted rows still inside the keyword index
    blocks: the index is rewritten once, and set to drop deleted words at once.
-5. ``obligations`` — failed ledger entries settled by proof
+5. ``unfinished_deletes`` — memories a delete started on and never finished:
+   an ordinary delete's memory is made findable again (storage/unfinished_deletes);
+   an unfinished erasure of a person or profile is never undone, only counted.
+6. ``obligations`` — failed ledger entries settled by proof
    (integrity_obligations); admin cancellations with a live subject untouched.
 
 Never: drop a constraint, invent a parent, delete history, delete content-
@@ -87,10 +90,14 @@ _ONE_RUN = threading.Lock()
 
 class Repair:
     def __init__(self, db_path: str | Path, *, limits: Limits | None = None,
-                 on_batch: Callable[[str, int], None] | None = None) -> None:
+                 on_batch: Callable[[str, int], None] | None = None,
+                 engine: Any = None) -> None:
         self.db_path = Path(db_path)
         self.limits = limits or Limits()
         self.on_batch = on_batch
+        #: The running engine (daemon), needed to rebuild a restored memory's
+        #: search entries. None: such memories are counted, not restored.
+        self.engine = engine
 
     # -- plumbing -----------------------------------------------------------
 
@@ -215,6 +222,34 @@ class Repair:
                                  {"rows": removed}, {"rows": 0}, undoable=False)
         stats.add("vectors.other_spaces", removed)
 
+    def _unfinished_deletes(self, stats: RunStats) -> None:
+        from superlocalmemory.storage import unfinished_deletes as ud
+
+        conn = self._connect()
+        try:
+            found = ud.find(conn)
+        finally:
+            conn.close()
+        for item in found:
+            if item.origin == ud.ERASURE:
+                stats.add("unfinished_deletes.erasure_to_run_again", 1)
+            elif self.engine is None:
+                stats.add("unfinished_deletes.needs_slm_running", 1)
+            elif ud.restore(self.engine, item):
+                conn = self._connect()
+                try:
+                    with self._held(stats, conn):
+                        receipts.receipt(conn, stats.run_id, "restore_unfinished_delete",
+                                         f"atomic_facts:{item.fact_id}",
+                                         "a delete started and never finished; the person was "
+                                         "told it did not happen", {"findable": False},
+                                         {"findable": True}, undoable=False)
+                finally:
+                    conn.close()
+                stats.add("unfinished_deletes.restored", 1)
+            else:
+                stats.add("unfinished_deletes.not_restored", 1)
+
     def _erased_text(self, stats: RunStats) -> None:
         from superlocalmemory.core import erasure_scrub
         from superlocalmemory.storage.database import DatabaseManager
@@ -312,7 +347,8 @@ class Repair:
 
     # -- public -----------------------------------------------------------
 
-    STEPS = ("orphans", "vectors", "erased_text", "keyword_index", "obligations")
+    STEPS = ("orphans", "vectors", "erased_text", "keyword_index", "unfinished_deletes",
+             "obligations")
 
     def apply(self, run_id: str | None = None) -> dict[str, Any]:
         if not _ONE_RUN.acquire(blocking=False):

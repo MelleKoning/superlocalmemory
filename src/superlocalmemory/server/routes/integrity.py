@@ -72,7 +72,7 @@ def post_repair(request: Request, body: RepairRequest) -> dict[str, Any]:
                                         "nothing was changed")
     repair = Repair(_db_path(request), limits=Limits(
         batch_size=body.batch_size, pause_s=body.pause_ms / 1000.0,
-        max_seconds=body.max_seconds))
+        max_seconds=body.max_seconds), engine=getattr(request.app.state, "engine", None))
     try:
         if body.undo_run_id:
             return {"undone": body.undo_run_id, "restored": repair.undo(body.undo_run_id),
