@@ -11,7 +11,9 @@ global); every filter it declared must find it right after the save answers,
 and must still find the MEMORY once enrichment has replaced the first fact
 with derived ones.
 
-Tags are not covered: there is no tag filter on recall yet (G05).
+Each save also carries tags (4.1.22 G05): recall, search and list_recent must
+find it by an exact tag filter the same way, although no tag label appears in
+its words.
 
 Composed path: a REAL daemon subprocess and a REAL ``slm mcp`` stdio child.
 """
@@ -31,10 +33,11 @@ RUN = uuid.uuid4().hex[:6].upper()
 PROJECT = f"synthetic-heron-{RUN.lower()}"
 OTHER = transport.PROFILE  # a named profile the lane pre-creates
 
+TAG = f"parity-label-{RUN.lower()}"
 SAVES = {
-    "decision": dict(kind="decision", project=PROJECT),
-    "rule-global": dict(kind="rule", project=PROJECT, scope="global"),
-    "procedure-named": dict(kind="procedure", project=PROJECT, profile_id=OTHER),
+    "decision": dict(kind="decision", project=PROJECT, tags=f"{TAG},decided"),
+    "rule-global": dict(kind="rule", project=PROJECT, scope="global", tags=TAG),
+    "procedure-named": dict(kind="procedure", project=PROJECT, profile_id=OTHER, tags=TAG),
 }
 
 
@@ -88,11 +91,26 @@ def _queries(label: str) -> list[tuple[str, dict]]:
         ("recall", dict(query=query, kind=declared["kind"], **profile)),
         ("recall", dict(query=query, project=PROJECT, **profile)),
         ("recall", dict(query=query, kind=declared["kind"], project=PROJECT, **profile)),
+        ("recall", dict(query=query, tags=TAG.upper(), **profile)),
+        ("recall", dict(query=query, tags=[TAG, "absent-label"], tags_match="any", **profile)),
+        ("search", dict(query=query, tags=TAG, kind=declared["kind"], **profile)),
+        ("list_recent", dict(tags=TAG, **profile)),
     ]
     if declared.get("scope") == "global":
         asks.append(("recall", dict(query=query, kind=declared["kind"], profile_id=OTHER,
                                     include_global=True)))
     return asks
+
+
+def _excluded(label: str) -> list[tuple[str, dict]]:
+    """A tag the memory does not carry must hide it on every tool, or the
+    positive tag checks above would pass on a store this small regardless."""
+    query = _content(label)
+    declared = SAVES[label]
+    profile = {"profile_id": declared["profile_id"]} if "profile_id" in declared else {}
+    return [("recall", dict(query=query, tags="absent-label", **profile)),
+            ("search", dict(query=query, tags="absent-label", **profile)),
+            ("list_recent", dict(tags="absent-label", **profile))]
 
 
 def _misses(lane) -> list:
@@ -102,6 +120,9 @@ def _misses(lane) -> list:
         for tool, arguments in _queries(label):
             if want not in _found_memories(lane, tool, limit=10, **arguments):
                 misses.append((label, tool, sorted(k for k in arguments if k != "query")))
+        for tool, arguments in _excluded(label):
+            if want in _found_memories(lane, tool, limit=10, **arguments):
+                misses.append((label, tool, "found under a tag it does not carry"))
     return misses
 
 
