@@ -42,6 +42,33 @@ KEEP    deliberately still names the deleted profile: immutable receipts and
         audit records of what happened under it, and the ids-only change feed
         that tells cached indexes to drop it.
 
+DECISION TABLE (the code's DECISIONS dict is authoritative; the reason for each
+table is recorded there)
+
+MOVE    action_outcomes, association_edges, atomic_facts, bm25_tokens,
+        canonical_entities, ccq_audit_log, ccq_consolidated_blocks,
+        completion_manifests, consolidation_log, correction_cases_overtaken,
+        correction_events, dead_letter_operations, derivation_lineage,
+        embedding_metadata, embedding_quantization_metadata, entity_aliases,
+        fact_access_log, fact_consolidations, fact_context, fact_importance,
+        fact_outcome_score, fact_retention, fact_temporal_validity,
+        feedback_records, graph_edges, memories, memory_archive,
+        memory_kind_history, memory_merge_log, memory_scenes, pinned_facts,
+        polar_embeddings, projection_obligations, projection_outbox,
+        projection_tombstones, provenance, reembed_next_map, reembed_prev_map,
+        scene_fact_members, temporal_events, tool_events, vector_row_map
+MERGE   consolidated_summaries, entity_profiles, fact_entity_associations,
+        ingestion_log, trust_scores
+REKEY   correction_cases, ingestion_operations
+VEC     fact_embeddings, reembed_next_vec, reembed_prev_vec, reembed_trash_vec
+DELETE  activation_cache, backup_destinations, behavioral_assertions,
+        behavioral_patterns, community_summaries, compliance_audit,
+        core_memory_blocks, cross_platform_sync_log, entity_communities,
+        graph_generation, memory_kind_runs, mesh_events, mesh_locks,
+        mesh_messages, mesh_peers, mesh_state, pending_outcomes,
+        persona_summary, rbac_memberships, soft_prompt_templates
+KEEP    erasure_receipts, fact_search_changes, profiles, write_commits
+
 Canonical entities first MERGE by name (case-insensitive, the resolver's own
 rule): a moved entity that default already knows is folded into default's, and
 every reference to it -- links, aliases, temporal rows, edges, summaries, the
@@ -199,10 +226,6 @@ def _check(conn: Any, tables: list[str]) -> None:
                                    "when it has finished")
 
 
-def _cols(conn: Any, table: str) -> set[str]:
-    return {r[1] for r in conn.execute(f'PRAGMA table_info("{table}")')}
-
-
 def _repoint_json(conn: Any, table: str, key: str, column: str, profile: str,
                   old: str, new: str) -> None:
     rows = conn.execute(f'SELECT "{key}", "{column}" FROM "{table}" WHERE profile_id = ? '
@@ -267,7 +290,7 @@ def _rekey(conn: Any, table: str, source: str, target: str) -> None:
 def _move_vectors(conn: Any, table: str, source: str, target: str) -> int:
     rows = conn.execute(f'SELECT rowid, embedding FROM "{table}" WHERE profile_id = ?',
                         (source,)).fetchall()
-    if rows:  # one bulk delete, then the same rowids back: 20k vectors in ~1 s, not ~13 s
+    if rows:  # one bulk delete, then the same rowids back (20k vectors: 6.7 s, was 12.9 s)
         conn.execute(f'DELETE FROM "{table}" WHERE profile_id = ?', (source,))
         conn.executemany(f'INSERT INTO "{table}" (rowid, profile_id, embedding) VALUES (?, ?, ?)',
                          [(rowid, target, embedding) for rowid, embedding in rows])

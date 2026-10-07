@@ -213,3 +213,22 @@ def test_sidecars_move_pending_memories_and_drop_learned_state(store):
         assert conn.execute("SELECT profile_id FROM bandit_arms").fetchall() == [("default",)]
     with sqlite3.connect(str(pending)) as conn:
         assert conn.execute("SELECT profile_id FROM pending_memories").fetchall() == [("default",)]
+
+
+def test_the_docstring_decision_table_matches_the_code():
+    import re
+
+    from superlocalmemory.storage import profile_fold
+
+    doc = profile_fold.__doc__.split("DECISION TABLE", 1)[1].split("Canonical entities", 1)[0]
+    listed: dict[str, str] = {}
+    action = None
+    for line in doc.splitlines():
+        head = re.match(r"^(MOVE|MERGE|REKEY|VEC|DELETE|KEEP)\s+(.*)$", line)
+        if head:
+            action, line = head.group(1).lower(), head.group(2)
+        elif action is None or not line.startswith(" "):
+            continue
+        for name in re.findall(r"[a-z_0-9]+", line):
+            listed[name] = action
+    assert listed == {t: a for t, (a, _why) in profile_fold.DECISIONS.items()}
