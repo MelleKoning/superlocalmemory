@@ -42,6 +42,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -62,6 +63,12 @@ class _Entry:
     file_id: tuple[int, int] | None
     thread: threading.Thread
     closed: bool = field(default=False)
+    #: Held while a statement runs, so ``close_all`` on another thread waits for it.
+    busy: threading.Lock = field(default_factory=threading.Lock)
+
+#: How long ``close_all`` waits for a statement in flight before leaving that
+#: connection to garbage collection rather than closing it under the statement.
+CLOSE_WAIT_SECONDS = 10.0
 
 
 class ReadConnectionPool:
@@ -80,10 +87,14 @@ class ReadConnectionPool:
 
     def checkout(self) -> sqlite3.Connection | None:
         """This thread's connection, or None when the caller must open its own."""
+        entry = self.checkout_entry()
+        return entry.conn if entry is not None else None
+
+    def checkout_entry(self) -> _Entry | None:
         file_id = self._file_id()
         entry: _Entry | None = getattr(self._local, "entry", None)
         if entry is not None and not entry.closed and entry.file_id == file_id:
-            return entry.conn
+            return entry
         if entry is not None:
             self.discard_current()
         if file_id is None:
@@ -97,7 +108,7 @@ class ReadConnectionPool:
         with self._lock:
             self._entries[id(entry)] = entry
         self._local.entry = entry
-        return conn
+        return entry
 
     def discard_current(self) -> None:
         """Close and forget this thread's connection (after an error)."""
@@ -107,6 +118,19 @@ class ReadConnectionPool:
             with self._lock:
                 self._entries.pop(id(entry), None)
             self._close(entry)
+
+    def forget_current(self) -> None:
+        """Drop this thread's connection while holding its busy lock (close it inline)."""
+        entry: _Entry | None = getattr(self._local, "entry", None)
+        self._local.entry = None
+        if entry is not None:
+            with self._lock:
+                self._entries.pop(id(entry), None)
+            entry.closed = True
+            try:
+                entry.conn.close()
+            except sqlite3.Error:
+                pass
 
     def close_all(self) -> None:
         """Close every thread's connection. The pool stays usable afterwards."""
@@ -136,11 +160,15 @@ class ReadConnectionPool:
 
     @staticmethod
     def _close(entry: _Entry) -> None:
-        entry.closed = True
+        entry.closed = True  # its thread opens a fresh one from now on
+        if not entry.busy.acquire(timeout=CLOSE_WAIT_SECONDS):
+            return  # a statement is still running: garbage collection closes it
         try:
             entry.conn.close()
         except sqlite3.Error:
             pass
+        finally:
+            entry.busy.release()
 
 
 __all__ = ["MAX_THREADS", "ReadConnectionPool", "is_plain_read"]
@@ -155,11 +183,17 @@ def execute_read(pool: ReadConnectionPool, sql: str, params: tuple,
     backoff. Any other error drops the connection before it propagates, so a
     connection in an unknown state is never used again.
     """
-    import time
-
-    conn = pool.checkout()
-    if conn is None:
+    entry = pool.checkout_entry()
+    if entry is None:
         return fresh(sql, params)
+    with entry.busy:
+        if entry.closed:  # closed by another thread since the checkout
+            return fresh(sql, params)
+        return _run(pool, entry.conn, sql, params, retries, base_delay)
+
+
+def _run(pool: ReadConnectionPool, conn: sqlite3.Connection, sql: str, params: tuple,
+         retries: int, base_delay: float) -> list:
     last: Exception | None = None
     for attempt in range(retries):
         try:
@@ -173,12 +207,12 @@ def execute_read(pool: ReadConnectionPool, sql: str, params: tuple,
                 last = exc
                 time.sleep(base_delay * (2 ** attempt))
                 continue
-            pool.discard_current()
+            pool.forget_current()
             raise
         except BaseException:
-            pool.discard_current()
+            pool.forget_current()
             raise
-    pool.discard_current()
+    pool.forget_current()
     raise last  # type: ignore[misc]
 
 

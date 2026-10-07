@@ -197,3 +197,20 @@ def test_only_plain_reads_qualify() -> None:
     for sql in ("INSERT INTO t VALUES (1)", "PRAGMA table_info(t)", "VACUUM", "ATTACH 'x' AS y",
                 "BEGIN", "EXPLAIN QUERY PLAN SELECT 1"):
         assert not rcp.is_plain_read(sql), sql
+
+
+def test_close_waits_for_a_read_in_flight_on_another_thread(db: DatabaseManager) -> None:
+    """close() from one thread must not close a connection mid-statement on another."""
+    db.execute("SELECT v FROM notes")
+    entry = db._read_pool._local.entry
+    entry.busy.acquire()  # a statement is running on it
+    closed = threading.Event()
+    t = threading.Thread(target=lambda: (db.close(), closed.set()))
+    t.start()
+    assert not closed.wait(timeout=0.3), "close() did not wait for the read in flight"
+    assert [tuple(r) for r in entry.conn.execute("SELECT v FROM notes")] == [("one",)]
+    entry.busy.release()
+    t.join(timeout=30)
+    assert closed.is_set()
+    with pytest.raises(sqlite3.ProgrammingError):
+        entry.conn.execute("SELECT 1")
