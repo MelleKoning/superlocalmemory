@@ -61,7 +61,10 @@ const HASHED = ['od-brain.js', 'od-graph.js', 'fact-detail.js', 'od-memories.js'
                 'od-ops-health.js',
                 // 4.1.21: the live event stream subscribes to memory.captured;
                 // a stale copy would keep listening for an event nobody emits.
-                'events.js'];
+                'events.js',
+                // 4.1.22: Settings shows a running embedding re-index; a stale copy
+                // would keep answering a started switch with "Saved".
+                'od-reindex.js', 'od-decay-preview.js'];
 
 describe('cache-bust params match file content', function () {
   const html = readFileSync(join(UI, 'index.html'), 'utf8');

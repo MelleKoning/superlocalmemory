@@ -64,10 +64,11 @@
       ? response.json().catch(function () { return {}; })
       : Promise.resolve({});
     return details.then(function (data) {
-      var message = data.error || data.detail || data.message ||
-        ('Request failed with status ' + response.status);
-      var error = new Error(message);
+      var d = data || {};  // 409/422 bodies put a machine code in `error`, the sentence in `detail`
+      var detail = typeof d.detail === 'string' ? d.detail : (d.detail && d.detail.message);
+      var error = new Error(detail || d.error || d.message || ('Request failed with status ' + response.status));
       error.status = response.status;
+      error.body = d;
       throw error;
     });
   }
@@ -94,11 +95,16 @@
   function authPost(url, body) { return authRequest(url, 'POST', body); }
 
   /* ── Helpers ──────────────────────────────────────────────── */
-  function esc(s) {
-    return String(s == null ? '' : s)
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-      .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  /** .catch handler: the status code and the daemon's own reason, never a bare "Error". */
+  function failed(id, label, after) {
+    return function (e) {
+      var m = (e && e.status ? 'Error ' + e.status : 'Error') + ': ' + ((e && e.message) || 'request failed');
+      if (id) setSt(id, m, false);
+      toast(label + ' failed — ' + m, true);
+      if (after) after(e);
+    };
   }
+  function readOk(r) { return requireSuccess(r).then(function (ok) { return ok.json(); }); }
   function toast(msg, err) {
     if (typeof window.showToast === 'function') { window.showToast(msg); return; }
     var d = document.createElement('div');
@@ -205,16 +211,15 @@
     // mutating, so core.js attaches the X-Install-Token automatically.
     btn.disabled = true;
     btn.textContent = 'Restarting…';
-    fetch('/api/daemon/restart', { method: 'POST', credentials: 'same-origin' })
+    fetch('/api/daemon/restart', { method: 'POST', credentials: 'same-origin' }).then(requireSuccess)
       .then(function () {
         btn.textContent = 'Restarting… reconnecting';
         setTimeout(function () { window.location.reload(); }, 4000);
       })
-      .catch(function () {
+      .catch(failed(null, 'Restart request', function () {
         btn.disabled = false;
         btn.textContent = 'Restart daemon now';
-        if (typeof showToast === 'function') showToast('Restart request failed');
-      });
+      }));
   }
   function makeRestartNote(id) {
     var wrap = el('div', { id: P + '-' + id + '-restart' }, {
@@ -232,70 +237,7 @@
   }
 
   /* ── Layout ───────────────────────────────────────────────── */
-  /* Decay preview — three curves, one per source-trust level.
-     Shows what the kappa setting actually does before it is saved: the same
-     memory strength fading at three different rates depending on where the
-     memory came from. At kappa 0 the three curves coincide, which is the
-     honest picture of trust-modulation being off. */
-  var DECAY_TRUSTS = [
-    { trust: 0.0, color: '#e0245e', label: 'low trust' },
-    { trust: 0.5, color: '#f59e0b', label: 'medium' },
-    { trust: 1.0, color: '#10b981', label: 'trusted' }
-  ];
-
-  function buildDecayPreview() {
-    var wrap = el('div', null, { display:'flex', flexDirection:'column', gap:'6px' });
-    var cvs = el('canvas', { id: P + '-forg-decay' });
-    cvs.width = 300; cvs.height = 96;
-    Object.assign(cvs.style, {
-      border:'1px solid var(--border)', borderRadius:'4px', display:'block'
-    });
-    wrap.appendChild(cvs);
-    var key = el('div', null, { display:'flex', gap:'10px' });
-    DECAY_TRUSTS.forEach(function (t) {
-      key.appendChild(el('span', { text: t.label },
-        { fontSize:'10.5px', color: t.color, fontFamily:'var(--font-mono)' }));
-    });
-    wrap.appendChild(key);
-    return wrap;
-  }
-
-  /* The decay rate is per HOUR, and the window is chosen so the three curves
-     are actually distinguishable. At a strong memory's strength (100, the
-     configured maximum) retention over sixty days is indistinguishable from
-     zero for every trust level, so a two-month preview would draw three flat
-     lines along the bottom and say nothing. Three days separates them. */
-  var DECAY_HOURS = 72;
-  var DECAY_STRENGTH = 100.0;
-
-  function retentionAt(hours, kappa, trust) {
-    // Mirrors math/ebbinghaus.trust_modulated_retention exactly:
-    //   lambda_eff = (1 / S) * (1 + kappa * (1 - trust))
-    //   retention  = exp(-lambda_eff * hours)
-    var lambdaEff = (1.0 / DECAY_STRENGTH) * (1.0 + kappa * (1.0 - trust));
-    return Math.exp(-lambdaEff * hours);
-  }
-
-  function drawDecayCurve(kappa) {
-    var cvs = q('forg-decay');
-    if (!cvs || !cvs.getContext) return;
-    var ctx = cvs.getContext('2d');
-    var W = cvs.width, H = cvs.height, STEPS = 72;
-    ctx.clearRect(0, 0, W, H);
-    DECAY_TRUSTS.forEach(function (t) {
-      ctx.beginPath();
-      for (var i = 0; i <= STEPS; i++) {
-        var hours = (i / STEPS) * DECAY_HOURS;
-        var retention = retentionAt(hours, kappa, t.trust);
-        var x = (i / STEPS) * (W - 2) + 1;
-        var y = H - 2 - retention * (H - 4);
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
-      ctx.strokeStyle = t.color;
-      ctx.lineWidth = 1.6;
-      ctx.stroke();
-    });
-  }
+  function drawDecay(kappa) { if (window.odDecayPreview) window.odDecayPreview.draw(kappa); }
 
   function makeRow(lbl, desc, key, ctrl) {
     var d = el('div', { 'data-set':'', 'data-txt':(lbl + ' ' + key).toLowerCase() });
@@ -490,9 +432,32 @@
     var ep = q('endpoint') ? q('endpoint').value : '';
     if (k)  { body.api_key = k; }
     if (ep) { body.base_url = ep; body.endpoint = ep; }
-    authPost('/api/v3/mode/set', body).then(function (r) { return r.json(); })
-      .then(function () { setSt('mode', 'Saved', true); toast('Mode saved'); loadMode(); })
-      .catch(function () { setSt('mode', 'Error', false); toast('Mode save failed', true); });
+    authPost('/api/v3/mode/set', body).then(modelSaved('mode', 'Mode', loadMode))
+      .catch(failed('mode', 'Mode save', reindexBusy));
+  }
+  /** 202: the model switch was queued as a background re-index — started, not done. */
+  function modelSaved(id, label, reload) {
+    return function (r) {
+      return r.json().then(function (d) {
+        if (r.status === 202) {
+          setSt(id, 'Started: ' + (d.detail || 're-indexing in the background'), null);
+          toast(label + ': re-indexing in the background');
+          if (window.odReindex) window.odReindex.track(d);
+        } else { setSt(id, d.message || 'Saved', d.needs_reindex ? null : true); toast(label + ' saved'); }
+        reload();
+      });
+    };
+  }
+  function reindexBusy(e) {
+    if (e && e.status === 409 && e.body && e.body.error === 'reindex_running' && window.odReindex) {
+      window.odReindex.conflict(e.body);
+    }
+  }
+  function testEndpoint(id, url, body) {
+    fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
+      .then(readOk).then(function (d) {
+        setSt(id, d.success ? (d.message || 'OK') : 'Failed: ' + (d.error || 'no reason given'), !!d.success);
+      }).catch(failed(id, 'Test'));
   }
   function testMode() {
     setSt('mode', 'Testing…', null);
@@ -502,12 +467,7 @@
     var ep = q('endpoint') ? q('endpoint').value : '';
     if (k)  { body.api_key = k; }
     if (ep) { body.base_url = ep; body.endpoint = ep; }
-    fetch('/api/v3/provider/test', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
-    }).then(function (r) { return r.json(); })
-      .then(function (d) {
-        setSt('mode', d.success ? esc(d.message || 'OK') : 'Failed: ' + esc(d.error || ''), d.success);
-      }).catch(function (e) { setSt('mode', 'Error: ' + e.message, false); });
+    testEndpoint('mode', '/api/v3/provider/test', body);
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -543,7 +503,9 @@
       makeRow('Endpoint', 'OpenAI-compatible URL', 'embedding.api_endpoint', epInp),
       makeRow('API Key', 'optional', 'embedding.api_key', keyInp),
       makeRow('Info', '', '', infoEl),
-      makeRow('Actions', '', '', bRow(saveBtn, testBtn, st))
+      makeRow('Actions', '', '', bRow(saveBtn, testBtn, st)),
+      makeRow('Re-index', 'A model change re-embeds every memory in the background', '',
+              window.odReindex ? window.odReindex.panel(authPost) : el('span'))
     ]);
   }
   function loadEmb() {
@@ -564,6 +526,7 @@
         var inf = q('emb-info');
         if (inf) inf.textContent = 'Embedding configuration unavailable. Check daemon health and retry.';
       }).then(fillModelSuggestions);
+    if (window.odReindex) window.odReindex.refresh();
   }
   function saveEmb() {
     setSt('emb', 'Saving…', null);
@@ -575,23 +538,16 @@
           embedding_dimension: parseInt(q('emb-dim') ? q('emb-dim').value : '768') || 768,
           embedding_key:       q('emb-key')      ? q('emb-key').value      : '' }
       : { embedding_provider:'default' };
-    authPost('/api/v3/mode/set', body).then(function (r) { return r.json(); })
-      .then(function () { setSt('emb', 'Saved', true); toast('Embedding config saved'); loadEmb(); })
-      .catch(function () { setSt('emb', 'Error', false); toast('Embedding save failed', true); });
+    authPost('/api/v3/mode/set', body).then(modelSaved('emb', 'Embedding config', loadEmb))
+      .catch(failed('emb', 'Embedding save', reindexBusy));
   }
   function testEmb() {
     setSt('emb', 'Testing…', null);
     var ep = q('emb-endpoint') ? q('emb-endpoint').value : '';
     if (!ep) { setSt('emb', 'Enter endpoint first', null); return; }
-    fetch('/api/v3/embedding/test', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ api_endpoint: ep,
-        model_name: q('emb-model') ? q('emb-model').value : '',
-        api_key:    q('emb-key')   ? q('emb-key').value   : '' })
-    }).then(function (r) { return r.json(); })
-      .then(function (d) {
-        setSt('emb', d.success ? esc(d.message || 'OK') : 'Failed: ' + esc(d.error || ''), d.success);
-      }).catch(function (e) { setSt('emb', 'Error: ' + e.message, false); });
+    testEndpoint('emb', '/api/v3/embedding/test', { api_endpoint: ep,
+      model_name: q('emb-model') ? q('emb-model').value : '',
+      api_key:    q('emb-key')   ? q('emb-key').value   : '' });
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -644,7 +600,7 @@
         toast('Storage backends saved');
         showRestartNote('stor', !!d.restart_required);
         loadStorage();
-      }).catch(function () { setSt('stor', 'Error', false); toast('Storage save failed', true); });
+      }).catch(failed('stor', 'Storage save'));
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -667,10 +623,10 @@
         recall_include_global: glSw.classList.contains('on')
       }).then(function (r) { return r.json(); })
         .then(function (d) {
-          setSt('scope', d.success !== false ? 'Applied' : esc(d.error || 'Error'), d.success !== false);
+          setSt('scope', d.success !== false ? 'Applied' : (d.error || 'Not applied'), d.success !== false);
           if (d.success !== false) loadScope();
         })
-        .catch(function () { setSt('scope', 'Error', false); toast('Scope save failed', true); });
+        .catch(failed('scope', 'Scope save', loadScope));
     }
     defSel.addEventListener('change', save);
     shSw.addEventListener('od-toggle', save);
@@ -722,10 +678,10 @@
         }
       }).then(function (r) { return r.json(); })
         .then(function (d) {
-          setSt('rt', d.success !== false ? 'Applied' : esc(d.error || 'Error'), d.success !== false);
+          setSt('rt', d.success !== false ? 'Applied' : (d.error || 'Not applied'), d.success !== false);
           if (d.success !== false) loadRuntime();
         })
-        .catch(function () { setSt('rt', 'Error', false); toast('Save failed', true); });
+        .catch(failed('rt', 'Recall settings save', loadRuntime));
     }
     // Ranges save on release ('change'), not each drag tick ('input').
     topkInp.addEventListener('change', save);
@@ -778,8 +734,7 @@
         capture_bugs:      swBug.classList.contains('on')
       });
       authPut('/api/v3/auto-capture/config', body)
-        .then(function (r) { if (!r.ok) throw new Error('Save failed'); loadCapture(); })
-        .catch(function () { toast('Auto-capture save failed', true); });
+        .then(function () { loadCapture(); }).catch(failed(null, 'Auto-capture save', loadCapture));
     }
     sw.addEventListener('od-toggle', save);
     swDec.addEventListener('od-toggle', save);
@@ -815,8 +770,7 @@
       authPut('/api/v3/auto-recall/config', {
           enabled:          sw.classList.contains('on'),
           on_session_start: swSess.classList.contains('on')
-        }).then(function (r) { if (!r.ok) throw new Error('Save failed'); loadRecall(); })
-        .catch(function () { toast('Auto-recall save failed', true); });
+        }).then(function () { loadRecall(); }).catch(failed(null, 'Auto-recall save', loadRecall));
     }
     sw.addEventListener('od-toggle', save);
     swSess.addEventListener('od-toggle', save);
@@ -852,7 +806,7 @@
           act_r_mode: arSw.classList.contains('on')
         }).then(function (r) { return r.json(); })
         .then(function () { setSt('ai', 'Saved', true); loadInvoke(); })
-        .catch(function () { toast('Auto-invoke save failed', true); });
+        .catch(failed('ai', 'Auto-invoke save', loadInvoke));
     }
     sw.addEventListener('od-toggle', save);
     arSw.addEventListener('od-toggle', save);
@@ -892,13 +846,13 @@
     var statsEl = el('span', { id: P + '-forg-stats', text:'Loading…' },
       { fontSize:'12px', color:'var(--fg-2)', fontFamily:'var(--font-mono)' });
     var kapR = makeRange('forg-kap', '0', '5', '0.1', '2.0');
-    var decayEl = buildDecayPreview();
+    var decayEl = window.odDecayPreview ? window.odDecayPreview.build() : el('span');
     var saveBtn = makeBtn('forg-save', 'Save Forgetting', true);
     var st = makeSt('forg');
     var restNote = makeRestartNote('forg');
     saveBtn.addEventListener('click', saveForgetting);
     kapR.querySelector('input').addEventListener('input', function () {
-      drawDecayCurve(parseFloat(this.value));
+      drawDecay(parseFloat(this.value));
     });
     kapR.querySelector('input').addEventListener('change', saveForgetting);
     onSw.addEventListener('od-toggle',  saveForgetting);
@@ -942,7 +896,7 @@
           kap.value = kv;
           var dK = q('forg-kap-disp'); if (dK) dK.textContent = kv.toFixed(2);
         }
-        drawDecayCurve(kv);
+        drawDecay(kv);
       }).catch(function () {});
     fetch('/api/v3/forgetting/stats').then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
@@ -974,7 +928,7 @@
         showRestartNote('forg', !!d.restart_required);
         loadForgetting();
       })
-      .catch(function () { setSt('forg', 'Error', false); toast('Forgetting save failed', true); });
+      .catch(failed('forg', 'Forgetting save'));
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -996,25 +950,24 @@
         .then(function (r) { return r.json(); })
         .then(function (d) {
           if (d.ok === false) {
-            toast('Failed: ' + esc(d.error || ''), true);
+            toast('Failed: ' + (d.error || 'no reason given'), true);
             sw.classList.toggle('on', !on);
             sw.setAttribute('aria-checked', String(!on));
           } else {
             toast(on ? 'Evolution engine enabled' : 'Evolution engine disabled');
             loadEvolution();
           }
-        }).catch(function () {
-          toast('Evolution toggle failed', true);
+        }).catch(failed(null, 'Evolution toggle', function () {
           sw.classList.toggle('on', !on);
           sw.setAttribute('aria-checked', String(!on));
-        });
+        }));
     });
     saveBtn.addEventListener('click', function () {
       setSt('evo', 'Saving…', null);
       authPost('/api/evolution/config', { backend: q('evo-bk') ? q('evo-bk').value : 'auto' })
         .then(function (r) { return r.json(); })
         .then(function (d) { if (d.ok === false) throw new Error(d.error || 'Save failed'); setSt('evo', 'Saved', true); loadEvolution(); })
-        .catch(function () { setSt('evo', 'Error', false); toast('Evolution save failed', true); });
+        .catch(failed('evo', 'Evolution save'));
     });
     return makeGrp('Skill Evolution', 'skill', [
       makeRow('Enable evolution engine', 'Off by default — makes background LLM calls to improve skills', 'evolution.enabled', sw),
@@ -1050,10 +1003,11 @@
       setSt('bk', 'Creating…', null);
       authPost('/api/backup/create', {}).then(function (r) { return r.json(); })
         .then(function (d) {
-          setSt('bk', d.success ? 'Done: ' + esc(d.filename || '') : 'Failed', d.success);
-          toast(d.success ? 'Backup created' : 'Backup failed', !d.success);
+          if (!d.success) throw new Error(d.message || d.error || 'the backup was not created');
+          setSt('bk', 'Done: ' + (d.filename || ''), true);
+          toast('Backup created');
           loadBackup();
-        }).catch(function () { setSt('bk', 'Error', false); toast('Backup failed', true); });
+        }).catch(failed('bk', 'Backup'));
     });
     var cloudBtn = el('button', { type:'button' });
     cloudBtn.className = 'btn sm ghost';
@@ -1091,7 +1045,7 @@
         enabled:        q('bk-en') ? q('bk-en').classList.contains('on') : true
       }).then(function (r) { return r.json(); })
       .then(function (d) { if (d.success === false) throw new Error(d.message || 'Save failed'); setSt('bk', 'Saved', true); toast('Backup settings saved'); loadBackup(); })
-      .catch(function () { setSt('bk', 'Error', false); toast('Backup save failed', true); });
+      .catch(failed('bk', 'Backup save'));
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -1110,11 +1064,7 @@
           setSt('mesh', 'Saved', true);
           showRestartNote('mesh', !!d.restart_required);
         })
-        .catch(function () {
-          setSt('mesh', 'Error', false);
-          toast('Mesh save failed', true);
-          loadMesh();
-        });
+        .catch(failed('mesh', 'Mesh save', loadMesh));
     });
     return makeGrp('Mesh Network', 'mesh', [
       makeRow('Enable mesh sync', 'Synchronise memories across devices on the same local network', 'mesh.enabled', sw),
@@ -1177,7 +1127,7 @@
         showRestartNote('trust', !!d.restart_required);
         loadTrust();
       })
-      .catch(function () { setSt('trust', 'Error', false); toast('Trust save failed', true); });
+      .catch(failed('trust', 'Trust save'));
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -1229,7 +1179,7 @@
       window: parseInt(q('rl-window') ? q('rl-window').value : '60')  || 60
     }).then(function (r) { return r.json(); })
       .then(function (d) { setSt('rl', 'Saved', true); _rlSetLb(d); loadRateLimit(); })
-      .catch(function () { setSt('rl', 'Error', false); toast('Rate limit save failed', true); });
+      .catch(failed('rl', 'Rate limit save'));
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -1282,7 +1232,7 @@
         toast('Daemon settings saved');
         showRestartNote('dmn', !!d.restart_required);
         loadDaemon();
-      }).catch(function () { setSt('dmn', 'Error', false); toast('Daemon save failed', true); });
+      }).catch(failed('dmn', 'Daemon save'));
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -1375,7 +1325,6 @@
     saveAllBtn.addEventListener('click', function () {
       ['mode-save','emb-save','stor-save','forg-save','trust-save','rl-save','evo-save','bk-save','dmn-save']
         .forEach(function (i) { var b = q(i); if (b) b.click(); });
-      saveBackupConfig();
       syncBadge.className = 'badge';
       syncBadge.innerHTML = '<span class="dot"></span> Check each section';
     });
@@ -1392,6 +1341,8 @@
      BOOT
   ═══════════════════════════════════════════════════════════ */
   window.odRenderSettings = odRenderSettings;
+  // A finished re-index changes the live model: show the daemon's new truth.
+  if (window.odReindex) window.odReindex.onFinish(function () { loadEmb(); });
 
   document.addEventListener('DOMContentLoaded', function () {
     var pane = document.getElementById('settings-pane');

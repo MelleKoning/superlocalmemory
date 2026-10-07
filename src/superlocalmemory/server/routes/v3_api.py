@@ -310,18 +310,10 @@ async def set_mode(request: Request):
             source="PUT /api/v3/mode",
         )
 
-        # V3.3: Check if embedding model changed — flag for re-indexing
-        needs_reindex = (
-            old_config.embedding.provider != new_config.embedding.provider
-            or old_config.embedding.model_name != new_config.embedding.model_name
-        )
-
-        return {
-            "success": True,
-            "mode": new_mode,
-            "needs_reindex": needs_reindex,
-            "message": "Embedding re-indexing will run on next recall." if needs_reindex else "",
-        }
+        # A quick switch grafts retrieval/math/channel presets only: the embedding
+        # model never changes here (POST /mode/set and PUT /embedding/config do that,
+        # as a background re-index), so there is never anything to re-index.
+        return {"success": True, "mode": new_mode, "needs_reindex": False, "message": ""}
     except Exception as e:
         return _internal_error()
 
@@ -558,7 +550,7 @@ async def set_full_config(request: Request):
 
         # Update embedding only when the dashboard explicitly sent those fields;
         # absence means "leave it alone" (AIDEV-86 / broader fix).
-        _queued = None  # a background re-index started by this save, if any
+        _queued, _note = None, {}  # a background re-index started by this save; what a 200 says
         _emb_fields = ("embedding_provider", "embedding_endpoint", "embedding_key",
                        "embedding_model", "embedding_dimension")
         if any(k in body for k in _emb_fields):
@@ -606,7 +598,8 @@ async def set_full_config(request: Request):
             if _refusal is not None:
                 return _refusal
             if _queued is None:
-                config.embedding = _new_emb
+                from superlocalmemory.server.routes.embedding_reindex import saved_switch_note
+                _note, config.embedding = saved_switch_note(request, _old_emb, _new_emb), _new_emb
 
         # When the mode actually changed, apply the new mode's structural presets
         # (retrieval topology, math thresholds, channel weights) so the user gets
@@ -647,7 +640,7 @@ async def set_full_config(request: Request):
         }
         if _queued is not None:  # embedding stays live until the background re-index is done
             return JSONResponse({**_saved, **json.loads(_queued.body)}, status_code=202)
-        return _saved
+        return {**_saved, **_note}
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     except Exception as e:
@@ -812,14 +805,10 @@ async def set_embedding_config(request: Request):
             _refuse_incompatible_embedding(config, old_emb, new_model, new_dim, new_provider=new_provider))
         if refusal is not None:
             return refusal
+        from superlocalmemory.server.routes.embedding_reindex import saved_switch_note
+        note = saved_switch_note(request, old_emb, new_emb)  # never "on next recall": see there
         config.embedding = new_emb
         await _apply_runtime_config(request, config, mode_change=False)
-
-        needs_reindex = (
-            old_emb.provider != new_provider
-            or old_emb.model_name != new_model
-            or old_emb.dimension != new_dim
-        )
 
         # Kill workers so next request uses new config
         try:
@@ -832,7 +821,7 @@ async def set_embedding_config(request: Request):
             "provider": new_provider,
             "model_name": new_model,
             "dimension": new_dim,
-            "needs_reindex": needs_reindex,
+            **note,
         }
     except Exception as e:
         return _internal_error()

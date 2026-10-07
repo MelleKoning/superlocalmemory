@@ -25,7 +25,6 @@ from .helpers import (
     delete_profile_from_db,
     _load_profiles_json, _save_profiles_json,
 )
-from superlocalmemory.storage.memory_write import memory_write
 from superlocalmemory.server.profile_runtime import (
     commit_daemon_profile_switch,
     get_profile_runtime,
@@ -225,7 +224,8 @@ async def create_profile(body: ProfileSwitch, request: Request):
 
 @router.delete("/api/profiles/{name}")
 async def delete_profile(name: str, request: Request):
-    """Delete a profile. Moves its memories to 'default'."""
+    """Delete a profile. Moves all of its memories -- and everything that makes
+    them findable, linked and correctable -- to 'default'."""
     try:
         if name == 'default':
             raise HTTPException(status_code=400, detail="Cannot delete 'default' profile")
@@ -251,29 +251,16 @@ async def delete_profile(name: str, request: Request):
         # profile being deleted (not the active one).
         from superlocalmemory.server.rbac_enforce import require_manage as _rbac_manage
         _rbac_manage(request, profile=name)
-        # Move data to default before deleting (bypasses CASCADE).
-        # memory_write: write lock + busy_timeout — two UPDATEs are atomic.
-        moved = 0
-        with memory_write(DB_PATH) as conn:
-            try:
-                cur = conn.execute(
-                    "UPDATE atomic_facts SET profile_id = 'default' WHERE profile_id = ?",
-                    (name,),
-                )
-                moved = cur.rowcount
-            except Exception:
-                pass
-            try:
-                cur2 = conn.execute(
-                    "UPDATE memories SET profile_id = 'default' WHERE profile_id = ?",
-                    (name,),
-                )
-                moved += cur2.rowcount
-            except Exception:
-                pass
-
-        # Delete from BOTH stores
-        delete_profile_from_db(name)
+        # Every profile-scoped row moves, merges or goes, in one memory.db
+        # transaction with the profile row (storage/profile_fold.py).
+        from superlocalmemory.storage.profile_fold import ProfileFoldError
+        from superlocalmemory.storage.profile_fold_sidecars import SidecarFoldError
+        try:
+            counts = await asyncio.to_thread(delete_profile_from_db, name)
+        except (ProfileFoldError, SidecarFoldError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        moved = int(counts.get("memories") or 0)
+        facts = int(counts.get("atomic_facts") or 0)
 
         profiles = json_config.get('profiles', {})
         profiles.pop(name, None)
@@ -283,7 +270,9 @@ async def delete_profile(name: str, request: Request):
         authorization.complete()
         return {
             "success": True,
-            "message": f"Profile '{name}' deleted. {moved} memories moved to 'default'.",
+            "message": (f"Profile '{name}' deleted. {moved} memories ({facts} facts) "
+                        "moved to 'default'."),
+            "moved": {k: v for k, v in counts.items() if isinstance(v, int) and v},
         }
 
     except HTTPException:

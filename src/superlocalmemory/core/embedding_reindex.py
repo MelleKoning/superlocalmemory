@@ -57,6 +57,18 @@ class Refused(RuntimeError):
     """A request that cannot be honoured; the message says why, in plain words."""
 
 
+def space_changed(live: Any, target: Any) -> bool:
+    """True when ``target`` needs its own vectors (not the live space or an alias)."""
+    return not sp.same_space(sp.signature_of(live), sp.signature_of(target))
+
+
+def pending_switch_message(live: Any, target: Any) -> str:
+    """What happens to a model change saved without starting a job: never "on next recall"."""
+    return (f"Saved. Your memories are re-indexed with {target.model_name} in the background "
+            "once the SLM daemon loads this configuration; recall keeps using "
+            f"{live.model_name} until the switch completes. Progress: slm embedder status")
+
+
 def get_runner() -> "ReindexRunner | None":
     return _RUNNER
 
@@ -536,4 +548,5 @@ class _Cancelled(Exception):
     pass
 
 
-__all__ = ["NoChange", "Refused", "ReindexRunner", "get_runner", "notify_pending"]
+__all__ = ["NoChange", "Refused", "ReindexRunner", "get_runner", "notify_pending",
+           "pending_switch_message", "space_changed"]
