@@ -30,6 +30,10 @@ from superlocalmemory.cli.daemon import DaemonConflict, DaemonUnprocessable, dae
 
 _BASE = "/api/v3/embedding/reindex"
 _NOT_RUNNING = "The SLM daemon is not running. Start it with: slm serve"
+#: A rollback starts and tests the previous model inside the request (9.9-22 s
+#: measured on a 22k-fact store under load); a short timeout reported "not
+#: running" for a rollback the daemon went on to start.
+_ROLLBACK_TIMEOUT_S = 300.0
 
 
 def _out(args: Namespace, command: str, data: dict, text: str) -> None:
@@ -52,10 +56,10 @@ def _fail(args: Namespace, command: str, message: str, code: str = "REFUSED") ->
 
 
 def _request(args: Namespace, command: str, method: str, path: str = "",
-             body: dict | None = None) -> dict:
+             body: dict | None = None, timeout: float = 60.0) -> dict:
     try:
         result = daemon_request(method, _BASE + path, body, preserve_conflict=True,
-                                preserve_unprocessable=True, timeout_seconds=60.0)
+                                preserve_unprocessable=True, timeout_seconds=timeout)
     except DaemonConflict as exc:
         _fail(args, command, exc.detail, "CONFLICT")
     except DaemonUnprocessable as exc:
@@ -124,9 +128,9 @@ def _status(args: Namespace) -> None:
     _out(args, "status", data, _status_text(data))
 
 
-def _simple(command: str, path: str):
+def _simple(command: str, path: str, timeout: float = 60.0):
     def handler(args: Namespace) -> None:
-        data = _request(args, command, "POST", path, {})
+        data = _request(args, command, "POST", path, {}, timeout=timeout)
         text = data.get("detail") or ""
         if "job" in data:
             text = f"{text}\n{describe(data['job'])}".strip()
@@ -137,7 +141,7 @@ def _simple(command: str, path: str):
 
 
 _HANDLERS = {"switch": _switch, "status": _status,
-             "rollback": _simple("rollback", "/rollback"),
+             "rollback": _simple("rollback", "/rollback", timeout=_ROLLBACK_TIMEOUT_S),
              "cancel": _simple("cancel", "/cancel"),
              "forget-previous": _simple("forget-previous", "/forget-previous")}
 
