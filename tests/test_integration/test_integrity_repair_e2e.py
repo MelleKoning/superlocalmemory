@@ -20,6 +20,7 @@ import pytest
 from tests.test_integration.test_erasure_integrity_e2e import (  # noqa: F401 - fixture
     _remember_complete,
     daemon,
+    stub_embedder,  # ``daemon`` needs it; pytest resolves fixtures per module
 )
 from tests.test_integration.test_per_request_profile_e2e import REPO_ROOT, RealDaemon
 
