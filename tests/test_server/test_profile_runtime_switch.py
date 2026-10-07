@@ -318,7 +318,9 @@ def test_recall_health_tick_holds_runtime_lease() -> None:
     health_thread.start()
     assert recall_entered.wait(2)
     switch_thread.start()
-    _wait_for(lambda: runtime.transitioning)
+    # The switch has begun: it holds background work back and waits for the
+    # probe's lease (requests keep flowing until the drain).
+    _wait_for(lambda: runtime.background_paused)
     assert not switch_committed.wait(0.05)
 
     release_recall.set()

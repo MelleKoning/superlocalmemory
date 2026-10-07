@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -16,6 +17,8 @@ from typing import Callable, Iterator
 
 from superlocalmemory.infra.data_root import state_path
 
+logger = logging.getLogger(__name__)
+
 _RUNTIME_BIND_LOCK = threading.Lock()
 _REQUEST_PROFILE: ContextVar[str | None] = ContextVar(
     "slm_request_profile", default=None,
@@ -25,6 +28,13 @@ _REQUEST_PROFILE: ContextVar[str | None] = ContextVar(
 # profile switch or engine reconfigure is aborted with HTTP 503.
 # Tests can monkeypatch this module-level value to keep runs fast.
 _DRAIN_TIMEOUT_SECS: float = 5.0
+
+#: Before that drain, how long a transition waits for background units already
+#: running (one memory being materialized, a warm-up recall) to finish, with new
+#: ones held back. Requests are served normally meanwhile. A background unit
+#: could hold its lease longer than the drain timeout on a large store, so a
+#: settings change or profile switch failed with 503 though nothing was wrong.
+_BACKGROUND_SETTLE_SECS: float = 30.0
 
 
 class TransitionDrainTimeout(Exception):
@@ -58,6 +68,7 @@ class ProfileRuntime:
         self._active_operations = 0
         self._transitioning = False
         self._background_paused = 0
+        self._background_active = 0  # leases taken through operation_nowait()
 
     @property
     def snapshot(self) -> ProfileSnapshot:
@@ -117,7 +128,27 @@ class ProfileRuntime:
             if self._transitioning or self._background_paused:
                 return None
             self._active_operations += 1
+            self._background_active += 1
             return self._snapshot
+
+    def _release_background(self) -> None:
+        with self._condition:
+            self._background_active -= 1
+            self._condition.notify_all()
+        self.release_operation()
+
+    def _settle_background(self) -> None:
+        """With background admission paused (caller holds the condition): wait,
+        bounded, for running background units to finish. Requests keep being
+        admitted, so this never holds anyone."""
+        deadline = _time.monotonic() + _BACKGROUND_SETTLE_SECS
+        while self._background_active > 0:
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                logger.info("transition: %d background unit(s) still running after %.0f s",
+                            self._background_active, _BACKGROUND_SETTLE_SECS)
+                return
+            self._condition.wait(timeout=min(remaining, 0.25))
 
     def release_operation(self) -> None:
         with self._condition:
@@ -158,7 +189,7 @@ class ProfileRuntime:
             yield snapshot
         finally:
             if acquired:
-                self.release_operation()
+                self._release_background()
 
     def transition(
         self,
@@ -171,12 +202,21 @@ class ProfileRuntime:
         within _DRAIN_TIMEOUT_SECS.  The flag is always reset on timeout so
         the daemon remains responsive (no permanent _transitioning=True wedge).
         """
-        deadline = _time.monotonic() + _DRAIN_TIMEOUT_SECS
+        with self.pausing_background():
+            return self._transition(target_profile, commit)
+
+    def _transition(
+        self,
+        target_profile: str,
+        commit: Callable[[ProfileSnapshot, str], None],
+    ) -> ProfileSnapshot:
         with self._condition:
             while self._transitioning:
                 self._condition.wait()
             if target_profile == self._snapshot.profile_id:
                 return self._snapshot
+            self._settle_background()
+            deadline = _time.monotonic() + _DRAIN_TIMEOUT_SECS
             self._transitioning = True
             while self._active_operations > 0:
                 remaining = deadline - _time.monotonic()
@@ -186,7 +226,7 @@ class ProfileRuntime:
                     self._condition.notify_all()
                     raise TransitionDrainTimeout(
                         f"Profile switch to '{target_profile}' timed out after "
-                        f"{_DRAIN_TIMEOUT_SECS:.0f}s: {self._active_operations} "
+                        f"{_DRAIN_TIMEOUT_SECS:g}s: {self._active_operations} "
                         "in-flight operation(s) did not drain. "
                         "Try again when no active requests are in progress."
                     )
@@ -220,11 +260,17 @@ class ProfileRuntime:
         within ``drain_timeout`` (default _DRAIN_TIMEOUT_SECS, same semantics as
         transition()).
         """
+        with self.pausing_background():
+            return self._reconfigure(commit, drain_timeout)
+
+    def _reconfigure(self, commit: Callable[[ProfileSnapshot], None],
+                     drain_timeout: float | None) -> ProfileSnapshot:
         budget = _DRAIN_TIMEOUT_SECS if drain_timeout is None else float(drain_timeout)
-        deadline = _time.monotonic() + budget
         with self._condition:
             while self._transitioning:
                 self._condition.wait()
+            self._settle_background()
+            deadline = _time.monotonic() + budget
             self._transitioning = True
             while self._active_operations > 0:
                 remaining = deadline - _time.monotonic()
@@ -232,7 +278,7 @@ class ProfileRuntime:
                     self._transitioning = False
                     self._condition.notify_all()
                     raise TransitionDrainTimeout(
-                        f"Engine reconfigure timed out after {budget:.0f}s: "
+                        f"Engine reconfigure timed out after {budget:g}s: "
                         f"{self._active_operations} in-flight operation(s) did not drain."
                     )
                 self._condition.wait(timeout=min(remaining, 0.25))
