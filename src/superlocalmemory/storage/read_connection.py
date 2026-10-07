@@ -128,7 +128,13 @@ def read_only_snapshot(db: object, *, timeout_ms: int = 5_000) -> AbstractContex
     ``db_path``) or a path.
     """
     path = getattr(db, "db_path", db)
-    return ReadConnectionFactory(Path(str(path)), timeout_ms=timeout_ms).snapshot()
+    factory = ReadConnectionFactory(Path(str(path)), timeout_ms=timeout_ms)
+    if not factory.memory_db.exists():
+        return factory.snapshot()  # raises the same ReadConnectionError as before
+    # A reused per-thread connection (storage/snapshot_pool.py).
+    from superlocalmemory.storage import snapshot_pool
+
+    return snapshot_pool.snapshot(factory.memory_db, timeout_ms, factory.snapshot)
 
 
 __all__ = ["ReadConnectionError", "ReadConnectionFactory", "ReadConnectionLease",

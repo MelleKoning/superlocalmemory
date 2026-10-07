@@ -551,6 +551,8 @@ class DatabaseManager:
         pool = getattr(self, "_read_pool", None)
         if pool is not None:
             pool.close_all()
+        from superlocalmemory.storage import snapshot_pool
+        snapshot_pool.close_path(self.db_path)
 
     def __enter__(self) -> DatabaseManager:
         return self
