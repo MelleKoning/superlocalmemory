@@ -28,6 +28,7 @@ from tests.test_integration.test_erasure_integrity_e2e import (  # noqa: F401 - 
     _remember_complete,
     _ro,
     daemon,
+    stub_embedder,
 )
 
 
