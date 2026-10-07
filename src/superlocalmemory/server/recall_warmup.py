@@ -61,13 +61,8 @@ FULL_PATH_QUERY = "memory recall performance"
 def run_warmup_recalls(engine: Any, profile_runtime: Any, *,
                        warm_spreading_activation: Callable[[Any, Any], Any]) -> None:
     """Fire the start-up recalls, then warm the on-device check's model."""
-    from superlocalmemory.retrieval import entity_graph_warmup
-
     try:
-        # Under ``building`` throughout: a person's recall that meets the
-        # warm-up holding the entity graph reports it warming, never waits.
-        with skip_answer_check(), entity_graph_warmup.building(
-                entity_graph_warmup.channel_of(engine)):
+        with skip_answer_check():
             _recalls(engine, profile_runtime, warm_spreading_activation)
     except BaseException:
         _set_phase("failed")
@@ -87,8 +82,8 @@ def _recalls(engine: Any, profile_runtime: Any,
     _set_phase("indexes")
     kind_scope.warm(engine, profile_id)
     # The entity graph next, directly: built inside the first recall it cost
-    # that recall ~6 s, and a person's first recall queued behind it. While it
-    # builds, a recall reports entity_graph ``warming`` instead of waiting.
+    # that recall ~6 s. It builds off the cache lock; a recall meanwhile reports
+    # entity_graph ``warming`` instead of waiting (retrieval/adjacency_rcu).
     _set_phase("entity_graph")
     entity_graph_warmup.warm(engine, profile_id)
     _set_phase("recalls")

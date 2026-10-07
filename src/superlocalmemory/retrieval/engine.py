@@ -499,7 +499,7 @@ class RetrievalEngine:
             # the code no longer makes.
             try:
                 candidate_ids = [fr.fact_id for fr in fused[:100]]
-                # None: the daemon's start-up build holds the graph right now.
+                # None: another thread builds this scope's graph, none usable cached.
                 eg_scores = entity_graph_warmup.score_candidates_unless_warming(
                     self._entity, query, candidate_ids, profile_id,
                     include_global=include_global, include_shared=include_shared)

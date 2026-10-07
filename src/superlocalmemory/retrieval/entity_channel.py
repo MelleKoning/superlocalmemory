@@ -22,6 +22,7 @@ from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from superlocalmemory.retrieval import adjacency_rcu as _rcu
 from superlocalmemory.retrieval import adjacency_refresh as _refresh, spreading
 from superlocalmemory.retrieval.scope_policy import (
     authorized_fact_ids,
@@ -307,7 +308,8 @@ class EntityGraphChannel:
     ) -> None:
         """Load graph adjacency into memory (all edges, bidirectional; an LRU of
         ``SLM_ADJ_CACHE_PROFILES`` scopes). A copy that only lacks additions is
-        served while one rebuild runs beside recall (retrieval/adjacency_refresh).
+        served while one rebuild runs beside recall (retrieval/adjacency_refresh); any
+        other build runs off the lock (retrieval/adjacency_rcu: may raise GraphWarming).
         """
         # Check staleness: profile changed or new edges added since last load
         scope_key = (profile_id, bool(include_global), bool(include_shared))
@@ -344,20 +346,9 @@ class EntityGraphChannel:
                     current_fact_count=current_fact_count, now=_now_ec):
                 self._adj_slots.move_to_end(scope_key)
                 return self._restore_slot(scope_key, slot)
-        _seq = _refresh.log_head(self._db)
-        slot = self._load_adjacency_from_db(
-            profile_id,
-            include_global=include_global,
-            include_shared=include_shared,
-            current_count=current_count,
-            current_fact_count=current_fact_count,
-            now=_now_ec,
-        )
-        # Replacing an existing key keeps its old position, so the reload also
-        # counts as a use for LRU ordering.
-        self._adj_slots[scope_key] = slot
-        if _seq is not None:
-            _refresh.note_loaded(self, scope_key, _seq)
+        slot = _rcu.build_slot(self, scope_key, current_count=current_count,
+                               current_fact_count=current_fact_count, now=_now_ec)
+        self._restore_slot(scope_key, slot)
         self._adj_slots.move_to_end(scope_key)
         while len(self._adj_slots) > _adj_cache_profiles():
             self._adj_slots.popitem(last=False)
