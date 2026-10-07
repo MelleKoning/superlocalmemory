@@ -310,7 +310,7 @@ def test_a_killed_daemon_keeps_the_old_space_and_resumes_the_job(lane):
     assert code == 202, body
     job_id = body["job"]["job_id"]
     deadline = time.monotonic() + 120
-    while time.monotonic() < deadline and (lane.status()["job"] or {}).get("done", 0) < 16:
+    while time.monotonic() < deadline and (lane.status()["job"] or {}).get("done", 0) < 24:
         time.sleep(0.2)
     # Erase a memory mid-job: it must not survive in the staged space.
     victim = lane.rows("SELECT fact_id FROM atomic_facts WHERE content LIKE ?",
@@ -322,6 +322,7 @@ def test_a_killed_daemon_keeps_the_old_space_and_resumes_the_job(lane):
     state = lane.rows("SELECT state, cursor, done FROM embedding_reindex_jobs WHERE job_id = ?",
                       (job_id,))[0]
     assert state[0] in ("running", "catching_up") and state[1] > 0, state
+    done_before_kill = state[2]
     assert lane.vec_dimension() == 384, "a killed job changed the live space"
     assert lane.rows("PRAGMA quick_check")[0][0] == "ok"
     lane.daemon = lane.start()
@@ -330,8 +331,11 @@ def test_a_killed_daemon_keeps_the_old_space_and_resumes_the_job(lane):
     job = lane.wait_job(job_id, ("activated", "failed"))
     assert job["state"] == "activated", job
     total = lane.rows("SELECT COUNT(*) FROM atomic_facts")[0][0]
-    assert EMBEDDED["stub-third"] < total * 1.5, (
-        f"the job restarted from zero: {EMBEDDED['stub-third']} texts for {total} memories")
+    # Resuming re-does at most one batch (4) plus a probe per start (2); starting
+    # over would re-embed everything done before the kill (>= 24).
+    assert EMBEDDED["stub-third"] < total + done_before_kill / 2, (
+        f"the job restarted from zero: {EMBEDDED['stub-third']} texts for {total} memories, "
+        f"{done_before_kill} done before the kill")
     assert lane.vec_dimension() == 512
     assert _which(lane.probe_top()) == "ALPHA"
     for table in ("fact_embeddings", "reembed_prev_map", "embedding_metadata"):
@@ -370,3 +374,29 @@ def test_forget_previous_frees_the_previous_space(lane):
     assert lane.status()["previous_vectors_kept"] is False
     code, body = lane.daemon.request("POST", "/api/v3/embedding/reindex/rollback", {})
     assert code == 409, body
+
+
+def test_a_model_named_in_config_by_hand_is_reindexed_in_the_background(lane):
+    """Engine start used to re-embed right there; now it serves the stored space."""
+    _stop_and_reap(lane)
+    config_path = lane.data_root / "config.json"
+    config = json.loads(config_path.read_text())
+    config["embedding"].update({"model_name": "stub-old", "dimension": 768})
+    config_path.write_text(json.dumps(config))
+    DELAY["stub-old"] = 0.3
+    lane.daemon = lane.start()
+    assert lane.vec_dimension() == 384, "start-up rebuilt the vectors instead of serving them"
+    assert _which(lane.probe_top()) == "BETA", "start-up paired the new model with old vectors"
+    job = lane.status()["job"]
+    assert job["to"] == "stub-old::768" and job["state"] in sp_active(), job
+    assert json.loads(config_path.read_text())["embedding"]["model_name"] == "stub-new", (
+        "config.json must name the model that is live until the switch is done")
+    DELAY["stub-old"] = 0.0
+    done = lane.wait_job(job["job_id"], ("activated", "failed"))
+    assert done["state"] == "activated", done
+    assert lane.vec_dimension() == 768 and _which(lane.probe_top()) == "ALPHA"
+
+
+def sp_active() -> tuple:
+    from superlocalmemory.storage.embedding_spaces import ACTIVE_STATES
+    return ACTIVE_STATES
