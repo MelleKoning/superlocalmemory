@@ -76,28 +76,10 @@ def _prompt(message: str, default: str = "") -> str:
 
 
 def _get_ram_gb() -> float:
-    """Get total system RAM in GB."""
-    try:
-        import psutil
-        return psutil.virtual_memory().total / (1024 ** 3)
-    except ImportError:
-        pass
-    # Fallback: macOS
-    if platform.system() == "Darwin":
-        try:
-            out = subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True)
-            return int(out.strip()) / (1024 ** 3)
-        except Exception:
-            pass
-    # Fallback: Linux
-    try:
-        with open("/proc/meminfo", encoding="utf-8") as f:
-            for line in f:
-                if line.startswith("MemTotal:"):
-                    return int(line.split()[1]) / (1024 ** 2)
-    except Exception:
-        pass
-    return 0.0
+    """Get total system RAM in GB (core.machine; kept here so tests can patch it)."""
+    from superlocalmemory.core.machine import total_ram_gb
+
+    return total_ram_gb()
 
 
 def _ollama_available() -> bool:
