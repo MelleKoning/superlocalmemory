@@ -4702,6 +4702,12 @@ def _register_daemon_routes(application: FastAPI) -> None:
         )
         if not _trusted:
             return public
+        # The database and file reads below run in a worker thread: on the
+        # loop they held every other request (finished recalls included) for
+        # seconds while the daemon warmed up (tests/server/test_health_never_...).
+        ops, integrity, projection, reindex = await asyncio.to_thread(
+            lambda: (_ops_failure_counts(engine, application), _version_integrity_payload(),
+                     _projection_health(), _reindex_health(application.state)))
         return {
             "status": "ok",
             "ready": fully_ready,
@@ -4723,20 +4729,20 @@ def _register_daemon_routes(application: FastAPI) -> None:
             "active_profile": profile_snapshot.profile_id,
             "profile_generation": profile_snapshot.generation,
             # operational failure counts (visible to all team members)
-            **_ops_failure_counts(engine, application),
+            **ops,
             # issue #107: does this daemon's *imported* code still match the
             # installed distribution? ``version`` above reports what this
             # process loaded, which is self-consistent and therefore cannot
             # reveal staleness on its own. Loopback-only, alongside the other
             # operational metadata.
-            "version_integrity": _version_integrity_payload(),
+            "version_integrity": integrity,
             # How far behind the second graph store is. A drain that stops
             # advancing is the failure that does not announce itself: every
             # other signal here stays green while the graph quietly diverges
             # from the record, and the only symptom is answers that are subtly
             # worse. A depth that does not fall is the thing to alert on.
-            "projection": _projection_health(),
-            "embedding_reindex": _reindex_health(application.state),
+            "projection": projection,
+            "embedding_reindex": reindex,
         }
 
     @application.get("/recall")
@@ -5614,31 +5620,39 @@ def _register_daemon_routes(application: FastAPI) -> None:
 
         profile_snapshot = get_profile_runtime(application.state).snapshot
         config = getattr(application.state, "config", None)
-        fact_count = 0
-        entity_count = 0
-        edge_count = 0
-        projection_queue_depth = 0
-        if engine is not None:
-            try:
-                fact_count = engine._db.get_fact_count(profile_snapshot.profile_id)
-                entities = engine._db.execute(
-                    "SELECT COUNT(*) AS c FROM canonical_entities "
-                    "WHERE profile_id = ?",
-                    (profile_snapshot.profile_id,),
-                )
-                entity_count = int(dict(entities[0])["c"]) if entities else 0
-                edges = engine._db.execute(
-                    "SELECT COUNT(*) AS c FROM graph_edges WHERE profile_id = ?",
-                    (profile_snapshot.profile_id,),
-                )
-                edge_count = int(dict(edges[0])["c"]) if edges else 0
-            except Exception:
-                logger.debug("daemon status count query failed", exc_info=True)
-            try:
-                from superlocalmemory.storage import projection_outbox
-                projection_queue_depth = projection_outbox.depth(engine._db)
-            except Exception:
-                logger.debug("projection queue depth unavailable", exc_info=True)
+        # Counts read the database: in a worker thread, never on the event loop
+        # (tests/server/test_health_never_blocks_the_event_loop.py).
+        def _counts():
+            fact_count = 0
+            entity_count = 0
+            edge_count = 0
+            projection_queue_depth = 0
+            if engine is not None:
+                try:
+                    fact_count = engine._db.get_fact_count(profile_snapshot.profile_id)
+                    entities = engine._db.execute(
+                        "SELECT COUNT(*) AS c FROM canonical_entities "
+                        "WHERE profile_id = ?",
+                        (profile_snapshot.profile_id,),
+                    )
+                    entity_count = int(dict(entities[0])["c"]) if entities else 0
+                    edges = engine._db.execute(
+                        "SELECT COUNT(*) AS c FROM graph_edges WHERE profile_id = ?",
+                        (profile_snapshot.profile_id,),
+                    )
+                    edge_count = int(dict(edges[0])["c"]) if edges else 0
+                except Exception:
+                    logger.debug("daemon status count query failed", exc_info=True)
+                try:
+                    from superlocalmemory.storage import projection_outbox
+                    projection_queue_depth = projection_outbox.depth(engine._db)
+                except Exception:
+                    logger.debug("projection queue depth unavailable", exc_info=True)
+            return (fact_count, entity_count, edge_count, projection_queue_depth,
+                    _ops_failure_counts(engine, application))
+
+        (fact_count, entity_count, edge_count, projection_queue_depth,
+         ops) = await asyncio.to_thread(_counts)
         db_path = getattr(config, "db_path", None)
         db_size_mb = (
             round(db_path.stat().st_size / 1024 / 1024, 2)
@@ -5705,7 +5719,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
             # "Optimizing memory…" line from this. Defaults to idle before start.
             "self_heal": globals().get("_SELF_HEAL_STATUS", {"state": "idle"}),
             # operational failure counts (dead-letter, degraded, stalled)
-            **_ops_failure_counts(engine, application),
+            **ops,
         }
 
     @application.get("/api/v3/components")

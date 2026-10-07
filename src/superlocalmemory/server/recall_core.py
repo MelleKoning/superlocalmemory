@@ -203,7 +203,9 @@ async def run_recall(engine: Any, call: RecallCall, *, app_state: Any) -> dict:
                 profile=call.profile_id or snapshot.profile_id,
                 profile_generation=snapshot.generation, facets=call.facets,
             )
-        return _envelope(engine, call, future.result(), snapshot)
+        # Reads memory text and serialises: on the executor, never the loop, which
+        # every other request (and the next recall's answer) is waiting on.
+        return await loop.run_in_executor(None, _envelope, engine, call, future.result(), snapshot)
     finally:
         if not call.fast:
             RECALL_SEMAPHORE.release()
