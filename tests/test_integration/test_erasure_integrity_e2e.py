@@ -37,6 +37,10 @@ from tests.test_integration.test_per_request_profile_e2e import (
 )
 
 
+from tests.test_integration.test_mcp_declared_kind_transport import (  # noqa: E402,F401
+    stub_embedder,  # the fixture, used by ``daemon``
+)
+
 ERASE_PROFILE = "g07erase"
 MODEL_CACHE = os.environ.get("SLM_TEST_MODEL_CACHE", "")
 
@@ -54,8 +58,11 @@ def _model_cache_or_skip() -> None:
 
 
 @pytest.fixture(scope="module")
-def daemon(tmp_path_factory):
-    _model_cache_or_skip()
+def daemon(tmp_path_factory, stub_embedder):
+    # With SLM_TEST_MODEL_CACHE the real local model embeds; without it the
+    # hermetic stub embedder does, so these tests always run (never skip).
+    if MODEL_CACHE:
+        _model_cache_or_skip()
     root = tmp_path_factory.mktemp("g07-erasure")
     data_root = root / "data"
     data_root.mkdir()
@@ -67,7 +74,10 @@ def daemon(tmp_path_factory):
         "mode": "a", "active_profile": "default", "daemon_port": port,
         "daemon_enable_legacy_port": False, "mesh_enabled": False,
         "scale_auto_promote_enabled": False,
-        "embedding": {"model_name": "nomic-ai/nomic-embed-text-v1.5", "dimension": 768},
+        "embedding": ({"model_name": "nomic-ai/nomic-embed-text-v1.5", "dimension": 768}
+                      if MODEL_CACHE else
+                      {"provider": "openai", "api_endpoint": f"{stub_embedder}/v1",
+                       "model_name": "stub-embed", "dimension": 768, "api_key": ""}),
         "retrieval": {"sufficiency_judge": "off"},
     }), encoding="utf-8")
     env = _child_env(data_root, port, root / "home", root / "cache")
