@@ -19,9 +19,11 @@ profile. ``saved_by``, ``about``, ``kind`` and ``tags`` are hard filters: only
 memories that match are kept, even if that leaves none, because the caller
 asked for exactly that. ``project`` filters too, but recall falls back to
 unfiltered results - and says so - when nothing it found was saved under the
-project (``retrieval.project_scope``). ``prefer_project`` never filters; it
-only ranks that project's memories higher. Reads only; ``matching_fact_ids``
-never raises (a failure keeps nothing rather than everything).
+project (``retrieval.project_scope``), unless ``project_strict`` asks it to
+keep only that project's memories even if that leaves none. ``prefer_project``
+never filters; it only ranks that project's memories higher. Reads only;
+``matching_fact_ids`` never raises (a failure keeps nothing rather than
+everything).
 
 ``tags`` (4.1.22 G05): exact label matching, composed with every other facet
 as AND. A label's identity is ``core.tag_identity.tag_key`` - Unicode NFC,
@@ -107,14 +109,20 @@ class Facets:
     #: "all" (every requested label must be on the memory) or "any" (at
     #: least one). Anything else given by a caller collapses to "all".
     tags_match: str = "all"
+    #: 4.1.22: ``project`` keeps only that project's memories even when that
+    #: leaves none, like every other filter. Off: the 4.1.21 fall-back.
+    project_strict: bool = False
 
     @classmethod
     def of(cls, project: object = None, agent: object = None, about: object = None,
           kind: object = None, prefer_project: object = None,
-          tags: object = None, tags_match: object = None) -> "Facets":
-        return cls(_clean_project(project), _clean(agent), _clean(about), _clean(kind),
+          tags: object = None, tags_match: object = None,
+          project_strict: object = False) -> "Facets":
+        clean = _clean_project(project)
+        return cls(clean, _clean(agent), _clean(about), _clean(kind),
                    _clean_project(prefer_project), _clean_tags(tags),
-                   _clean_tags_match(tags_match))
+                   _clean_tags_match(tags_match),
+                   bool(project_strict) and clean is not None)
 
     @property
     def narrows(self) -> bool:
@@ -133,7 +141,7 @@ class Facets:
                                   ("prefer_project", self.prefer_project),
                                   ("tags", ",".join(self.tags) if self.tags else None),
                                   ("tags_match", self.tags_match if self.tags else None))
-                if v is not None}
+                if v is not None} | ({"project_strict": "true"} if self.project_strict else {})
 
 
 def _chunks(items: list[str], size: int = 500) -> Iterable[list[str]]:

@@ -65,8 +65,9 @@ def test_filter_by_name_matches_a_saved_path(db) -> None:
     legacy = _save(db, "d")
     scoped = narrow(db, [path, name, other, legacy], "default", Facets.of(project="SLM"))
     assert scoped.kept == (path, name)
-    assert scoped.report == {"filter": {"project": "SLM", "key": "slm", "applied": True,
-                                        "matched": 2, "note": ""}}
+    assert scoped.report == {"filter": {
+        "project": "SLM", "key": "slm", "applied": True, "strict": False, "matched": 2,
+        "note": "", "identity": {"name": "SLM", "rule": "last folder name, ignoring case"}}}
 
 
 def test_filter_matching_nothing_keeps_everything_and_says_why(db) -> None:

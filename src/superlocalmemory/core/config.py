@@ -1419,6 +1419,8 @@ class SLMConfig:
             embedding_deployment=emb_data.get("deployment_name", ""),
             embedding_model_name=emb_data.get("model_name", ""),
             embedding_dimension=int(emb_data.get("dimension", 0) or 0),
+            embedding_ollama_model=emb_data.get("ollama_model", ""),
+            embedding_ollama_base_url=emb_data.get("ollama_base_url", ""),
             base_dir=raw_base_dir,
         )
         config.active_profile = data.get("active_profile", "default")
@@ -1753,6 +1755,8 @@ class SLMConfig:
                 "api_endpoint": self.embedding.api_endpoint,
                 "api_key": self.embedding.api_key,
                 "deployment_name": self.embedding.deployment_name,
+                "ollama_model": self.embedding.ollama_model,
+                "ollama_base_url": self.embedding.ollama_base_url,
             },
             # Persist the complete retrieval contract.  Saving only the
             # cross-encoder subset silently reset channel limits, evidence
@@ -1963,6 +1967,8 @@ class SLMConfig:
         embedding_deployment: str = "",
         embedding_model_name: str = "",
         embedding_dimension: int = 0,
+        embedding_ollama_model: str = "",
+        embedding_ollama_base_url: str = "",
     ) -> SLMConfig:
         """The mode's presets alone — nothing read from disk."""
         # resolve base dir via slm_home() at call time when base_dir is not explicit.
@@ -1986,6 +1992,14 @@ class SLMConfig:
                     provider="openai",
                     api_endpoint=embedding_endpoint,
                     api_key=embedding_key,
+                )
+            elif _a_provider == "ollama":
+                _a_emb = EmbeddingConfig(
+                    model_name="nomic-ai/nomic-embed-text-v1.5",
+                    dimension=768,
+                    provider=_a_provider,
+                    ollama_model=embedding_ollama_model or "nomic-embed-text",
+                    ollama_base_url=embedding_ollama_base_url or "http://localhost:11434",
                 )
             else:
                 _a_emb = EmbeddingConfig(
@@ -2030,6 +2044,14 @@ class SLMConfig:
                     provider="openai",
                     api_endpoint=embedding_endpoint,
                     api_key=embedding_key,
+                )
+            elif _b_provider == "ollama":
+                _b_emb = EmbeddingConfig(
+                    model_name="nomic-ai/nomic-embed-text-v1.5",
+                    dimension=768,
+                    provider=_b_provider,
+                    ollama_model=embedding_ollama_model or "nomic-embed-text",
+                    ollama_base_url=embedding_ollama_base_url or "http://localhost:11434",
                 )
             else:
                 _b_emb = EmbeddingConfig(

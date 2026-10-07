@@ -130,6 +130,8 @@ def pool_recall(query: str, limit: int = 10, **kwargs: Any) -> PoolRecallRespons
         _recall_kwargs["tags"] = list(_tags)
     if "tags" in _recall_kwargs and (kwargs.get("tags_match") or "").strip():
         _recall_kwargs["tags_match"] = kwargs["tags_match"].strip()
+    if kwargs.get("project_strict") and "project" in _recall_kwargs:
+        _recall_kwargs["project_strict"] = True
     # S-M2: a context load (session start, auto-injection) is not a question.
     # Only an explicit False is forwarded, so every other call is unchanged;
     # a caller inside ``skip_answer_check()`` is covered by the proxy itself.

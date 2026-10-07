@@ -114,7 +114,8 @@ class LLMBackbone:
             host = config.api_base or os.environ.get(
                 "OLLAMA_HOST", _OLLAMA_DEFAULT_BASE,
             )
-            self._base_url = f"{host.rstrip('/')}/api/chat"
+            self._ollama_host = host.rstrip("/")
+            self._base_url = f"{self._ollama_host}/api/chat"
         elif self._provider == "openrouter":
             self._api_key = self._resolve_api_key(config)
             self._base_url = config.api_base or _OPENROUTER_URL
@@ -137,15 +138,24 @@ class LLMBackbone:
     def is_available(self) -> bool:
         """True when the provider is ready for requests.
 
-        For Ollama: always True (no API key needed). The num_ctx and
-        keep_alive guards in _build_ollama() protect against memory spikes.
-        The recall-path warm-only guard lives in Summarizer, not here —
-        store/fact-extraction should always use the LLM in Mode B.
+        For Ollama: no API key is ever needed, but that is not the same
+        question as whether anything is actually listening at the
+        configured host. 4.1.22: a saved Mode B with no Ollama running (or
+        one that has since stopped) reported available forever, so Mode B
+        never degraded to Mode A the way every caller of this method
+        already expects to for every other unavailable provider. The
+        reachability check itself is bounded and cached (see
+        ``ollama_reachability``), so this stays cheap on the hot,
+        once-per-fact paths that call it. The num_ctx and keep_alive guards
+        in _build_ollama() protect against memory spikes once a request is
+        actually sent.
         """
         if not self._provider:
             return False
         if self._provider == "ollama":
-            return True
+            from superlocalmemory.llm.ollama_reachability import ollama_reachable
+
+            return ollama_reachable(self._ollama_host)
         # v3.6.12 (modeb-1): a custom local OpenAI-compatible endpoint
         # (llama.cpp, LM Studio, vLLM) needs NO API key — _build_openai already
         # omits the Authorization header when the key is empty. Treat a

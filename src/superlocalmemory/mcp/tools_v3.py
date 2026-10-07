@@ -317,6 +317,7 @@ def register_v3_tools(server, get_engine: Callable) -> None:
         profile_id: str = "",
         tags: "str | list[str]" = "",
         tags_match: str = "all",
+        project_strict: bool = False,
     ) -> dict:
         """Recall with per-channel score breakdown.
 
@@ -376,6 +377,8 @@ def register_v3_tools(server, get_engine: Callable) -> None:
                        else {}),
                     **({"tags_match": tags_match.strip()}
                        if (tags_match or "").strip().lower() == "any" else {}),
+                    **({"project_strict": True}
+                       if project_strict and (project or "").strip() else {}),
                 )
             )
             if ((profile_id or "").strip() and isinstance(raw, dict)
