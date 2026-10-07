@@ -99,10 +99,6 @@ _KNOWN_DEAD: dict[str, str] = {
     "mcp/cli_fallback.py": "DEAD — no importer at all, not even a test",
     "mcp/tools.py": "seeded 4.0.6 — triage",
     "optimize/metrics/exporters.py": "seeded 4.0.6 — triage",
-    "server/routes/abstraction.py": "seeded 4.0.6 — triage (route registry?)",
-    "server/routes/chat.py": "seeded 4.0.6 — triage (route registry?)",
-    "server/routes/insights.py": "seeded 4.0.6 — triage (route registry?)",
-    "server/routes/timeline.py": "seeded 4.0.6 — triage (route registry?)",
     "server/ui.py": "seeded 4.0.6 — triage",
     "storage/migration_v33.py": "seeded 4.0.6 — triage",
 }
@@ -177,9 +173,24 @@ def _importers_by_stem() -> dict[str, set[pathlib.Path]]:
     for path in _SRC.rglob("*.py"):
         if "__pycache__" in path.parts:
             continue
-        for name in _module_names_imported_by([path]):
+        for name in _module_names_imported_by([path]) | _routers_loaded_by_name(path):
             index.setdefault(name, set()).add(path)
     return index
+
+
+def _routers_loaded_by_name(path: pathlib.Path) -> set[str]:
+    """Route modules a daemon imports by name in its optional-router loop
+    (``for _mod_name in ("learning", ..., "integrity"): __import__(...)``).
+    A module named there IS wired; one that is missing from the loop is not."""
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    if "superlocalmemory.server.routes.{_mod_name}" not in text:
+        return set()
+    import re
+
+    names: set[str] = set()
+    for group in re.findall(r"for _mod_name in \(([^)]*)\)", text):
+        names.update(re.findall(r'"([a-z_]+)"', group))
+    return names
 
 
 def test_no_new_dead_modules(_importers_by_stem) -> None:
