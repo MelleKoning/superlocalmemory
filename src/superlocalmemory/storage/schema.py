@@ -1063,6 +1063,7 @@ def create_all_tables(conn: sqlite3.Connection) -> None:
     # V32 DDL: its triggers sit on association_edges and empty activation_cache.
     from superlocalmemory.storage import fact_search_changes, graph_generation
     conn.executescript(graph_generation.DDL + fact_search_changes.ddl(conn))
+    from superlocalmemory.core.overtaken_cases import ensure_table; ensure_table(conn)  # noqa: E702
 
     # Additive columns on tables that predate them.
     #

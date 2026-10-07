@@ -41,8 +41,21 @@ ERASE_PROFILE = "g07erase"
 MODEL_CACHE = os.environ.get("SLM_TEST_MODEL_CACHE", "")
 
 
+def _model_cache_or_skip() -> None:
+    """Every test here waits for a memory's enrichment to complete, and it
+    cannot complete without the embedding model: the daemon runs offline with
+    a private HOME, so without ``SLM_TEST_MODEL_CACHE`` the operation stays
+    ``queryable`` forever (measured: 300 s, then "never completed"). Say so
+    at once instead of timing out."""
+    hub = os.path.join(MODEL_CACHE, "hub", "models--nomic-ai--nomic-embed-text-v1.5")
+    if not MODEL_CACHE or not os.path.isdir(hub):
+        pytest.skip("needs SLM_TEST_MODEL_CACHE pointing at a Hugging Face cache that holds "
+                    "nomic-ai/nomic-embed-text-v1.5 (enrichment cannot complete without it)")
+
+
 @pytest.fixture(scope="module")
 def daemon(tmp_path_factory):
+    _model_cache_or_skip()
     root = tmp_path_factory.mktemp("g07-erasure")
     data_root = root / "data"
     data_root.mkdir()
@@ -103,6 +116,7 @@ def _remember_complete(daemon: RealDaemon, text: str, profile: str) -> list[str]
     key = f"g07-{uuid.uuid4().hex[:10]}"
     daemon.remember(text, profile, key)
     deadline = time.monotonic() + 300
+    rows: list[tuple] = []
     while time.monotonic() < deadline:
         rows = _ro(daemon, "SELECT state, final_fact_ids_json FROM ingestion_operations "
                    "WHERE profile_id = ? AND idempotency_key = ?", (profile or "default", key))
@@ -113,7 +127,8 @@ def _remember_complete(daemon: RealDaemon, text: str, profile: str) -> list[str]
             assert live, "the memory produced no stored fact"
             return live
         time.sleep(0.5)
-    raise AssertionError("remember never completed enrichment")
+    raise AssertionError("remember never completed enrichment; last state "
+                         f"{rows[0][0] if rows else 'not journaled'}")
 
 
 def _text_copies(daemon: RealDaemon, needle: str) -> dict[str, int]:
@@ -340,9 +355,11 @@ def _overtaken(daemon: RealDaemon, case_id: str) -> list[tuple]:
 
 def test_delete_and_edit_go_through_a_machine_proposal(daemon: RealDaemon) -> None:
     tag = uuid.uuid4().hex[:6]
-    first = _remember_complete(daemon, f"Synthetic wren tally {tag} north hedge note", "")[0]
-    second = _remember_complete(daemon, f"Synthetic finch tally {tag} south hedge note", "")[0]
-    third = _remember_complete(daemon, f"Synthetic robin tally {tag} west hedge note", "")[0]
+    # Different topics: near-duplicates are merged into one fact on save.
+    first = _remember_complete(daemon, f"Synthetic {tag}: the wren nest is in the hedge", "")[0]
+    second = _remember_complete(daemon, f"Synthetic {tag}: Halden repaired the barn roof", "")[0]
+    third = _remember_complete(daemon, f"Synthetic {tag}: the ferry leaves at seven", "")[0]
+    assert len({first, second, third}) == 3
     deleting = _machine_case(daemon, first, second)
     editing = _machine_case(daemon, third, second)
 
@@ -355,7 +372,7 @@ def test_delete_and_edit_go_through_a_machine_proposal(daemon: RealDaemon) -> No
 
     for _ in range(45):
         code, body = daemon.request("PATCH", f"/api/memories/{third}",
-                                    {"content": f"Synthetic robin tally {tag} east hedge note"})
+                                    {"content": f"Synthetic {tag}: the ferry leaves at eight"})
         if code != 503:
             break
         time.sleep(2)

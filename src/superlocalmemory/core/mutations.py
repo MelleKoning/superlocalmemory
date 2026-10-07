@@ -575,11 +575,12 @@ def delete_fact_authorized(
             else:
                 from superlocalmemory.core.overtaken_cases import cases_naming, overtake
 
-                with engine._db.transaction():  # the user's delete closes machine proposals
+                with engine._db.transaction():  # the delete and the cases it closes: one txn
+                    _refuse_if_correction_protected(engine._db, profile_id, fact_id)
                     overtake(engine._db, cases_naming(engine._db, [fact_id]),
                              user_action="delete", actor_id=trusted_actor_id,
                              operation_id=f"delete:{fact_id}")
-                engine._db.delete_fact(fact_id, profile_id=profile_id)
+                    engine._db.delete_fact(fact_id, profile_id=profile_id)
 
         # Purge projections for a fresh delete and re-run (idempotently) for a
         # resumed cleanup so an orphaned source memory is reclaimed on retry.

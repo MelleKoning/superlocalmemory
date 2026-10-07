@@ -527,6 +527,12 @@ def _cmd_kinds_dispatch(args: Namespace) -> None:
     cmd_kinds(args)
 
 
+def _cmd_corrections_dispatch(args: Namespace) -> None:
+    """4.1.22: corrections a user action overtook (cli/corrections_cmd.py)."""
+    from superlocalmemory.cli.corrections_cmd import run
+    run(args)
+
+
 def _cmd_view_dispatch(args: Namespace) -> None:
     """4.1.21: saved views through the daemon (cli/view_cmd.py)."""
     from superlocalmemory.cli.view_cmd import cmd_view
@@ -670,6 +676,7 @@ def dispatch(args: Namespace) -> None:
         "summary": _cmd_summary_dispatch,
         "kinds": _cmd_kinds_dispatch,
         "view": _cmd_view_dispatch,
+        "corrections": _cmd_corrections_dispatch,
     }
     handler = handlers.get(args.command)
     if handler:

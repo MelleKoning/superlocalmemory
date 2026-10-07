@@ -39,8 +39,13 @@ MACHINE_REASONS = frozenset({"consolidation_update", "consolidation_supersede",
 MACHINE_ACTOR_KIND = "host_attested"
 OVERTAKEN = "overtaken by a user action"
 
-DDL = """
-CREATE TABLE IF NOT EXISTS correction_cases_overtaken (
+#: Created with the rest of the schema (storage/schema.py create_all_tables)
+#: and, as a no-op guard, by ``overtake`` itself. Not a migration on purpose:
+#: a migration on memory.db makes every upgrade copy memory.db first (about
+#: 8 s per GB before SLM answers), and this table only ever receives rows
+#: when a user acts. Ids and lifecycle metadata only, like the ledger itself.
+DDL = (
+    """CREATE TABLE IF NOT EXISTS correction_cases_overtaken (
     overtake_id INTEGER PRIMARY KEY AUTOINCREMENT,
     case_id TEXT NOT NULL,
     profile_id TEXT NOT NULL,
@@ -54,13 +59,22 @@ CREATE TABLE IF NOT EXISTS correction_cases_overtaken (
     operation_id TEXT NOT NULL,
     closed_reason TEXT NOT NULL,
     overtaken_at TEXT NOT NULL,
-    restored_at TEXT
+    restored_at TEXT,
+    restored_by TEXT
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_correction_cases_overtaken_case "
+    "ON correction_cases_overtaken (case_id, restored_at)",
+    "CREATE INDEX IF NOT EXISTS idx_correction_cases_overtaken_profile "
+    "ON correction_cases_overtaken (profile_id, overtake_id)",
 )
-"""
 
 
 class RestoreRefused(ValueError):
     """The case cannot be put back as it was."""
+
+
+class OvertakeRaced(RuntimeError):
+    """A case changed between being read and being closed; the action aborts."""
 
 
 def _run(target: Any, sql: str, params: tuple = ()) -> list[dict]:
@@ -78,16 +92,19 @@ def is_machine_pending(case: dict) -> bool:
             and str(case.get("proposed_by_actor_kind")) == MACHINE_ACTOR_KIND)
 
 
-def cases_naming(target: Any, fact_ids: Iterable[str], *,
-                 predecessor_only: bool = False) -> list[dict]:
-    """Every case whose foreign key refers to one of the facts (any profile)."""
+def cases_naming(target: Any, fact_ids: Iterable[str], *, predecessor_only: bool = False,
+                 profile_id: str | None = None) -> list[dict]:
+    """Every case whose foreign key refers to one of the facts: any profile
+    (the foreign key does not care), or only ``profile_id``'s when given."""
     ids = list(dict.fromkeys(str(f) for f in fact_ids))
     if not ids:
         return []
     ph = ",".join("?" * len(ids))
-    where = f"predecessor_fact_id IN ({ph})" + (
-        "" if predecessor_only else f" OR successor_fact_id IN ({ph})")
+    where = f"(predecessor_fact_id IN ({ph})" + (
+        ")" if predecessor_only else f" OR successor_fact_id IN ({ph}))")
     params = tuple(ids) if predecessor_only else tuple(ids) * 2
+    if profile_id is not None:
+        where, params = where + " AND profile_id = ?", (*params, profile_id)
     try:
         return _run(target, f"SELECT * FROM correction_cases WHERE {where} "  # noqa: S608
                     "ORDER BY created_at, case_id", params)
@@ -102,15 +119,26 @@ def blocking(cases: Iterable[dict]) -> list[dict]:
     return [c for c in cases if not is_machine_pending(c)]
 
 
+def ensure_table(target: Any) -> None:
+    """Create the audit table if this store predates it. Idempotent, no data."""
+    for statement in DDL:
+        target.execute(statement)
+
+
 def overtake(target: Any, cases: Iterable[dict], *, user_action: str, actor_id: str,
              operation_id: str) -> list[str]:
     """Close machine-pending cases for a user action. Call inside the action's
-    own write transaction so the case closes only if the action happens."""
+    own write transaction so the case closes only if the action happens.
+
+    Each case is removed only if it is STILL a pending machine proposal; if it
+    changed since it was read (reviewed meanwhile), nothing is moved and
+    ``OvertakeRaced`` aborts the caller's transaction, action included.
+    """
     closed: list[str] = []
     todo = [c for c in cases if is_machine_pending(c)]
     if not todo:
         return closed
-    target.execute(DDL)
+    ensure_table(target)
     now = datetime.now(timezone.utc).isoformat()
     for case in todo:
         case_id = str(case["case_id"])
@@ -125,8 +153,12 @@ def overtake(target: Any, cases: Iterable[dict], *, user_action: str, actor_id: 
              json.dumps(case, sort_keys=True), json.dumps(events, sort_keys=True),
              user_action, actor_id or "unknown", operation_id, OVERTAKEN, now))
         target.execute("DELETE FROM correction_events WHERE case_id = ?", (case_id,))
-        target.execute("DELETE FROM correction_cases WHERE case_id = ? AND status = 'proposed'",
-                       (case_id,))
+        gone = _run(target, "DELETE FROM correction_cases WHERE case_id = ? AND status = ? "
+                    "AND version = ? RETURNING case_id",
+                    (case_id, "proposed", case.get("version")))
+        if not gone:
+            raise OvertakeRaced(f"correction case {case_id} changed while the {user_action} "
+                                "ran; nothing was changed, try again")
         closed.append(case_id)
     logger.info("correction cases overtaken by a user %s: %s", user_action,
                 ",".join(c[:12] for c in closed))
@@ -139,41 +171,82 @@ def _insert(target: Any, table: str, row: dict) -> None:
                    f"VALUES ({', '.join('?' * len(cols))})", tuple(row[c] for c in cols))
 
 
-def restore(target: Any, case_id: str) -> dict[str, Any]:
-    """Put an overtaken case back, exactly as it was. Idempotent per case."""
-    rows = _run(target, "SELECT * FROM correction_cases_overtaken WHERE case_id = ? AND "
-                "restored_at IS NULL ORDER BY overtake_id DESC LIMIT 1", (case_id,))
-    if not rows:
-        raise RestoreRefused(f"no overtaken case {case_id} waiting to be restored")
-    row = rows[0]
-    case, events = json.loads(row["case_json"]), json.loads(row["events_json"])
+def _refusal(target: Any, case: dict) -> str | None:
+    """Why ``case`` cannot be put back right now, or None if it can."""
+    case_id = case["case_id"]
     for side in ("predecessor_fact_id", "successor_fact_id"):
         if not _run(target, "SELECT 1 FROM atomic_facts WHERE fact_id = ?", (case[side],)):
-            raise RestoreRefused(f"{case[side]} no longer exists (the user removed it), so "
-                                 f"case {case_id} cannot come back")
+            return (f"{case[side]} no longer exists (it was deleted), so case {case_id} "
+                    "cannot come back")
+    if _run(target, "SELECT 1 FROM correction_cases WHERE case_id = ? OR (profile_id = ? "
+            "AND idempotency_key = ?)", (case_id, case["profile_id"], case["idempotency_key"])):
+        return f"case {case_id} was proposed again since, so it is already back"
     if _run(target, "SELECT 1 FROM correction_cases WHERE profile_id = ? AND "
             "predecessor_fact_id = ? AND status IN ('proposed', 'applied')",
             (case["profile_id"], case["predecessor_fact_id"])):
-        raise RestoreRefused(f"{case['predecessor_fact_id']} has another open correction now")
+        return (f"{case['predecessor_fact_id']} has another open correction now (the user's "
+                "own); reject or roll that back first")
+    return None
+
+
+def _waiting(target: Any, case_id: str) -> dict | None:
+    try:
+        rows = _run(target, "SELECT * FROM correction_cases_overtaken WHERE case_id = ? AND "
+                    "restored_at IS NULL ORDER BY overtake_id DESC LIMIT 1", (case_id,))
+    except Exception as exc:
+        if "no such table" in str(exc).lower():
+            return None
+        raise
+    return rows[0] if rows else None
+
+
+def restore(target: Any, case_id: str, *, profile_id: str | None = None,
+            actor_id: str = "") -> dict[str, Any]:
+    """Put an overtaken case back, exactly as it was. Once per overtake.
+
+    ``profile_id`` limits it to that profile's cases (another profile's case is
+    "not found", like a missing one). Call inside one write transaction.
+    """
+    row = _waiting(target, case_id)
+    if row is None or (profile_id is not None and row["profile_id"] != profile_id):
+        raise RestoreRefused(f"no overtaken case {case_id} waiting to be restored")
+    case, events = json.loads(row["case_json"]), json.loads(row["events_json"])
+    why = _refusal(target, case)
+    if why:
+        raise RestoreRefused(why)
     _insert(target, "correction_cases", case)
     for event in events:
         _insert(target, "correction_events", event)
-    target.execute("UPDATE correction_cases_overtaken SET restored_at = ? WHERE overtake_id = ?",
-                   (datetime.now(timezone.utc).isoformat(), row["overtake_id"]))
+    target.execute("UPDATE correction_cases_overtaken SET restored_at = ?, restored_by = ? "
+                   "WHERE overtake_id = ?", (datetime.now(timezone.utc).isoformat(),
+                                             actor_id or "unknown", row["overtake_id"]))
     return {"restored": case_id, "events": len(events)}
 
 
-def listing(target: Any, limit: int = 100) -> list[dict]:
+_LISTED = ("overtake_id, case_id, profile_id, predecessor_fact_id, successor_fact_id, "
+           "reason_code, user_action, actor_id, operation_id, closed_reason, overtaken_at, "
+           "restored_at, restored_by, case_json")
+
+
+def listing(target: Any, profile_id: str | None = None, limit: int = 100) -> list[dict]:
+    """Overtaken cases, newest first: ids, who, when, and whether (and why not)
+    each can be put back. No memory text: the ledger never holds any."""
+    where, params = ("WHERE profile_id = ? ", (profile_id,)) if profile_id is not None else ("", ())
     try:
-        return _run(target, "SELECT overtake_id, case_id, profile_id, predecessor_fact_id, "
-                    "successor_fact_id, reason_code, user_action, actor_id, operation_id, "
-                    "closed_reason, overtaken_at, restored_at FROM correction_cases_overtaken "
-                    "ORDER BY overtake_id DESC LIMIT ?", (limit,))
+        rows = _run(target, f"SELECT {_LISTED} FROM correction_cases_overtaken {where}"  # noqa: S608
+                    "ORDER BY overtake_id DESC LIMIT ?", (*params, int(limit)))
     except Exception as exc:
         if "no such table" in str(exc).lower():
             return []
         raise
+    out = []
+    for row in rows:
+        case = json.loads(row.pop("case_json"))
+        why = "already restored" if row["restored_at"] else _refusal(target, case)
+        out.append({**row, "restorable": why is None, "not_restorable_because": why})
+    return out
 
 
-__all__ = ["MACHINE_REASONS", "OVERTAKEN", "RestoreRefused", "blocking", "cases_naming",
-           "is_machine_pending", "listing", "overtake", "restore"]
+__all__ = ["MACHINE_REASONS", "OVERTAKEN", "OvertakeRaced", "RestoreRefused", "blocking",
+           "cases_naming", "ensure_table", "is_machine_pending", "listing", "overtake",
+           "restore"]

@@ -1420,7 +1420,8 @@ def _propose_correction_successor(
     trusted_actor_id = _payload_text(payload, "trusted_actor_id")
     from superlocalmemory.core import overtaken_cases as _ot  # the user's edit wins
 
-    _ot.overtake(connection, _ot.cases_naming(connection, [fact_id], predecessor_only=True),
+    _ot.overtake(connection, _ot.cases_naming(connection, [fact_id], predecessor_only=True,
+                                              profile_id=profile_id),
                  user_action="update", actor_id=trusted_actor_id,
                  operation_id=f"correction:{fact_id}:{persisted_id}")
     actor = CorrectionActor(
