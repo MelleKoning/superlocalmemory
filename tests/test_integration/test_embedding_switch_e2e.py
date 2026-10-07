@@ -218,12 +218,14 @@ def lane(tmp_path_factory):
 
 
 def _stop_and_reap(lane: Lane) -> None:
-    """Stop the daemon, then wait for ITS descendants (by pid) to exit.
+    """Stop the daemon; every model worker it started must be gone with it.
 
-    A model worker that the engine rebuilt by the last switch is still loading
-    when the daemon stops; it reads no stdin until loaded and leaves by its
-    parent watchdog a few seconds later. Only pids observed as this daemon's
-    own descendants are waited for, and killed if they outlive the wait.
+    4.1.21's shutdown closed the engine built at start-up. After a switch (or
+    any hot reconfigure) that engine is already closed and the LIVE one was
+    never closed, so its model workers lived on until their parent watchdog
+    noticed. A clean stop ends them itself, within its own worker timeouts.
+    Only this daemon's own descendant pids are looked at; any left are killed
+    after the assertion so the run stays clean.
     """
     import psutil
 
@@ -232,9 +234,10 @@ def _stop_and_reap(lane: Lane) -> None:
     except psutil.Error:
         kids = []
     lane.daemon.stop(lane.foreign)
-    _gone, alive = psutil.wait_procs(kids, timeout=20)
+    _gone, alive = psutil.wait_procs(kids, timeout=3)
     for proc in alive:
         proc.kill()
+    assert not alive, f"model workers outlived the daemon stop: {[p.pid for p in alive]}"
 
 
 def test_before_any_switch_the_probe_finds_alpha_in_the_old_space(lane):
