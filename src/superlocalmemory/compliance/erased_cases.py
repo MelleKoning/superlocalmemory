@@ -116,4 +116,35 @@ def delete_erased_facts(db: Any, targets: list[tuple[str, str | None]], profile_
     counts["correction_cases_erased"] = len(closed)
 
 
-__all__ = ["ERASED_ON_REQUEST", "close_for_erasure", "delete_erased_facts", "ensure_table"]
+def erase_profile_cases(db: Any, profile_id: str, *, erasure_id: str) -> int:
+    """Before a whole profile is erased: close every case naming one of its
+    facts (an audit row is kept only where the case is filed under another
+    profile), drop the cases still filed under it, and its own audit rows.
+    One transaction. Returns the number of cases removed.
+
+    Without this the ledger's ``ON DELETE RESTRICT`` refused the delete of
+    every fact and memory the profile's corrections named, and the erasure
+    stopped partway with a foreign-key error.
+    """
+    try:
+        with db.transaction():
+            fact_ids = [str(dict(r)["fact_id"]) for r in db.execute(
+                "SELECT fact_id FROM atomic_facts WHERE profile_id = ?", (profile_id,))]
+            closed = close_for_erasure(db, fact_ids, erasure_id=erasure_id, actor_id="gdpr")
+            own = [str(dict(r)["case_id"]) for r in db.execute(
+                "SELECT case_id FROM correction_cases WHERE profile_id = ?", (profile_id,))]
+            for case_id in own:
+                db.execute("DELETE FROM correction_events WHERE case_id = ?", (case_id,))
+                db.execute("DELETE FROM correction_cases WHERE case_id = ?", (case_id,))
+            if closed:  # the table exists: close_for_erasure created it
+                db.execute("DELETE FROM correction_cases_erased WHERE profile_id = ?",
+                           (profile_id,))
+    except Exception as exc:
+        if "no such table: correction_cases" in str(exc):
+            return 0  # a store from before the correction ledger
+        raise
+    return len(closed) + len(own)
+
+
+__all__ = ["ERASED_ON_REQUEST", "close_for_erasure", "delete_erased_facts",
+           "ensure_table", "erase_profile_cases"]
