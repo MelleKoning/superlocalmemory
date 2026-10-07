@@ -437,8 +437,12 @@ def test_a_copying_batch_yields_to_recall_and_rests(store, monkeypatch):
     yields: list[int] = []
     rests: list[float] = []
     real_sleep = time.sleep
+    from types import SimpleNamespace
     monkeypatch.setattr(steps, "_yield_to_recall", lambda: yields.append(1))
-    monkeypatch.setattr(steps.time, "sleep", lambda s: rests.append(s) or real_sleep(0))
+    # Only the steps module's clock: the runner loop's own sleeps must not count.
+    monkeypatch.setattr(steps, "time", SimpleNamespace(
+        perf_counter=time.perf_counter, monotonic=time.monotonic,
+        sleep=lambda s: rests.append(s) or real_sleep(0)))
     monkeypatch.setattr(steps, "BATCH", 5)
     old = FakeEmbedder(8, "old")
     monkeypatch.setattr(steps, "build_embedder", lambda cfg: old)

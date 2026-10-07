@@ -3593,7 +3593,8 @@ async def lifespan(application: FastAPI):
     canonical_writer_stopped = _release_canonical_remember_runtime(application)
     _profile_runtime = None
     _engine = None
-    engine = getattr(application.state, "engine", None) or engine  # the live one, not the first
+    from superlocalmemory.server.live_engine import engine_to_close
+    engine = engine_to_close(application.state, engine)  # the live one, not the first
     if engine is not None and materializer_stopped and canonical_writer_stopped:
         try:
             engine.close()
