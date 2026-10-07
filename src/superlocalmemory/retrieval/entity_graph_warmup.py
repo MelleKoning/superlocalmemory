@@ -29,7 +29,7 @@ import logging
 import time
 from typing import Any
 
-from superlocalmemory.retrieval.adjacency_rcu import GraphWarming
+from superlocalmemory.retrieval.adjacency_rcu import GraphWarming, building_here
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +60,15 @@ def warm(engine: Any, profile_id: str) -> bool:
         return False
     t0 = time.monotonic()
     try:
-        with lock:  # released while the graph builds (adjacency_rcu)
+        with building_here(), lock:  # released while the graph builds (adjacency_rcu)
             channel._ensure_adjacency(
                 profile_id,
                 include_global=bool(getattr(channel, "include_global", False)),
                 include_shared=bool(getattr(channel, "include_shared", False)),
             )
+    except GraphWarming:
+        logger.info("entity graph for profile %s is already being built", profile_id)
+        return True
     except Exception as exc:  # noqa: BLE001 -- a recall builds it instead
         logger.warning("entity graph warm-up failed (%s)", type(exc).__name__)
         return False

@@ -43,6 +43,30 @@ def _set_phase(phase: str) -> None:
         _state["phase"] = phase
 
 
+def begin(engine: Any) -> threading.Thread | None:
+    """Daemon start, before the embedding model is loaded: build the graph now.
+
+    The entity graph needs no model, so it starts at once instead of after the
+    model load, and from here on a graph build never runs on a recall's clock
+    (``adjacency_rcu.prefer_background_builds``): a recall that arrives first
+    reports the channel ``warming`` instead of building it itself.
+    """
+    from superlocalmemory.retrieval import adjacency_rcu, entity_graph_warmup
+
+    try:
+        adjacency_rcu.prefer_background_builds(True)
+        profile_id = str(getattr(engine, "profile_id", "") or "default")
+        thread = threading.Thread(target=entity_graph_warmup.warm, args=(engine, profile_id),
+                                  name="slm-graph-warmup", daemon=True)
+        thread.start()
+    except Exception as exc:  # noqa: BLE001 -- the warm-up builds it later instead
+        logger.warning("early entity graph build not started (%s)", type(exc).__name__)
+        return None
+    with _state_lock:
+        _state["graph_thread"] = thread
+    return thread
+
+
 def warmup_status() -> dict[str, Any]:
     """``{"phase": ..., "warm": bool, "warming": [what is still being built]}``."""
     with _state_lock:
@@ -85,7 +109,12 @@ def _recalls(engine: Any, profile_runtime: Any,
     # that recall ~6 s. It builds off the cache lock; a recall meanwhile reports
     # entity_graph ``warming`` instead of waiting (retrieval/adjacency_rcu).
     _set_phase("entity_graph")
-    entity_graph_warmup.warm(engine, profile_id)
+    with _state_lock:
+        early = _state.get("graph_thread")
+    if early is not None:
+        early.join()  # started by ``begin``; bounded by the build itself
+    else:
+        entity_graph_warmup.warm(engine, profile_id)
     _set_phase("recalls")
     for query in WARMUP_QUERIES:
         with profile_runtime.operation_nowait() as snapshot:
@@ -129,4 +158,4 @@ def warm_answer_check(engine: Any) -> bool:
 
 
 __all__ = ["FULL_PATH_QUERY", "WARMUP_QUERIES", "run_warmup_recalls", "warm_answer_check",
-           "warmup_status"]
+           "begin", "warmup_status"]

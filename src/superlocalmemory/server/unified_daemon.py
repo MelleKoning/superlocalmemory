@@ -2593,8 +2593,8 @@ async def lifespan(application: FastAPI):
             it reads graph_edges from disk. After this warmup completes, all
             subsequent queries hit the warm page cache at <2s.
 
-            Runs after embedding warm (embed first so recall can use it).
-            Named 'recall-warmup' so it appears clearly in thread dumps.
+            Runs after embedding warm (embed first so recall can use it); the
+            entity graph starts at once (recall_warmup.begin). Thread 'recall-warmup'.
 
             v3.x: each warmup query holds its own operation_nowait() lease
             (previously one lease across both queries held for up to 20s,
@@ -2602,6 +2602,8 @@ async def lifespan(application: FastAPI):
             transition preempts remaining queries; they complete on next boot.
             """
             import time as _t
+            from superlocalmemory.server.recall_warmup import begin, run_warmup_recalls
+            begin(engine)
             for _ in range(60):
                 if _embedding_warm:
                     break
@@ -2611,8 +2613,6 @@ async def lifespan(application: FastAPI):
                 # 4.1.18: the system's own recalls — never asked of the answer
                 # check, so a daemon start sends and bills nothing. See
                 # server/recall_warmup.py for what each recall warms.
-                from superlocalmemory.server.recall_warmup import run_warmup_recalls
-
                 run_warmup_recalls(
                     engine, profile_runtime,
                     warm_spreading_activation=_warm_spreading_activation,

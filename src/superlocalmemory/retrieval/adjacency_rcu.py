@@ -25,18 +25,25 @@ finished slot is swapped in under the lock. While it runs:
   that scope: ``GraphWarming`` is raised and recall reports the entity-graph
   channel ``warming`` (incomplete, never "found nothing").
 
-A recall that finds no build in flight builds the graph itself, exactly as
-before: a one-shot command has no warm-up to rely on. A removed memory is still
-never shaped into an answer by a stale graph (retrieval/adjacency_refresh).
+A recall that finds no build in flight builds the graph itself, as before: a
+one-shot command has no warm-up to rely on. The long-running daemon instead
+calls ``prefer_background_builds()``: there a build never runs on a recall's
+clock -- it starts beside the recall, which reports ``warming`` -- because on a
+just-started, loaded machine the cold build took 3-11 s of the first recalls.
+A removed memory is still never shaped into an answer by a stale graph
+(retrieval/adjacency_refresh).
 """
 
 from __future__ import annotations
 
 import copy
+import logging
 import threading
 from typing import Any
 
 from superlocalmemory.retrieval import adjacency_refresh as _refresh
+
+logger = logging.getLogger(__name__)
 
 
 class GraphWarming(RuntimeError):
@@ -45,6 +52,45 @@ class GraphWarming(RuntimeError):
 
 _inflight: set[tuple[int, tuple]] = set()
 _inflight_lock = threading.Lock()
+_background = False
+_local = threading.local()
+
+
+def prefer_background_builds(on: bool = True) -> None:
+    """Daemon policy: build beside recall, never on its clock."""
+    global _background
+    _background = bool(on)
+
+
+class building_here:
+    """This thread is a builder (warm-up or background): it builds in place."""
+
+    def __enter__(self):
+        self._prev = getattr(_local, "builder", False)
+        _local.builder = True
+        return self
+
+    def __exit__(self, *exc):
+        _local.builder = self._prev
+        return False
+
+
+def _start_background(channel: Any, scope_key: tuple) -> None:
+    if build_in_flight(channel, scope_key):
+        return
+
+    def run() -> None:
+        profile_id, include_global, include_shared = scope_key
+        try:
+            with building_here(), channel._cache_lock:
+                channel._ensure_adjacency(profile_id, include_global=include_global,
+                                          include_shared=include_shared)
+        except GraphWarming:
+            pass  # another thread got there first
+        except Exception as exc:  # noqa: BLE001 -- the next recall starts another
+            logger.warning("background entity graph build failed (%s)", type(exc).__name__)
+
+    threading.Thread(target=run, name="slm-graph-build", daemon=True).start()
 
 
 def build_in_flight(channel: Any, scope_key: tuple) -> bool:
@@ -68,6 +114,9 @@ def build_slot(channel: Any, scope_key: tuple, *, current_count: int,
     Returns with the lock held again and the slot installed. Raises
     ``GraphWarming`` when another thread is already building this scope.
     """
+    if _background and not getattr(_local, "builder", False):
+        _start_background(channel, scope_key)
+        raise GraphWarming(f"entity graph for {scope_key[0]!r} is being built")
     key = (id(channel), scope_key)
     if not _claim(key):
         raise GraphWarming(f"entity graph for {scope_key[0]!r} is being built")
@@ -94,4 +143,5 @@ def build_slot(channel: Any, scope_key: tuple, *, current_count: int,
     return slot
 
 
-__all__ = ["GraphWarming", "build_in_flight", "build_slot"]
+__all__ = ["GraphWarming", "build_in_flight", "build_slot", "building_here",
+           "prefer_background_builds"]
