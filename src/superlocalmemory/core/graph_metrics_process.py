@@ -31,21 +31,13 @@ the daemon's own interpreter, which is the stall this exists to remove.
 from __future__ import annotations
 
 import concurrent.futures
-import multiprocessing
-import os
 import sqlite3
 from typing import Any
 
+from superlocalmemory.core.background_process import NICE_INCREMENT, run_in_child
+
 #: Generous: the 22k-fact store takes seconds; a pathological one must not hang a cycle.
 TIMEOUT_SECONDS = 900.0
-NICE_INCREMENT = 10
-
-
-def _lower_priority() -> None:
-    try:
-        os.nice(NICE_INCREMENT)
-    except (AttributeError, OSError):  # Windows has no nice; priority is best effort
-        pass
 
 
 def child_compute(db_path: str, profile_id: str, damping: float) -> dict[str, Any]:
@@ -74,20 +66,15 @@ def compute_rows_in_child(db: Any, profile_id: str, damping: float) -> dict[str,
     db_path = getattr(db, "db_path", None)
     if db_path is None:
         return {"error": "no store path to compute from", "engine": "networkx"}
-    ctx = multiprocessing.get_context("spawn")
-    pool = concurrent.futures.ProcessPoolExecutor(
-        max_workers=1, mp_context=ctx, initializer=_lower_priority)
     try:
-        future = pool.submit(child_compute, str(db_path), profile_id, float(damping))
-        return future.result(timeout=TIMEOUT_SECONDS)
-    except concurrent.futures.TimeoutError:
+        return run_in_child(child_compute, str(db_path), profile_id, float(damping),
+                            timeout=TIMEOUT_SECONDS)
+    except (concurrent.futures.TimeoutError, TimeoutError):
         return {"error": f"graph metrics process exceeded {TIMEOUT_SECONDS:.0f}s",
                 "engine": "networkx"}
     except Exception as exc:  # noqa: BLE001 -- reported, retried next cycle
         return {"error": f"graph metrics process failed: {type(exc).__name__}: {exc}",
                 "engine": "networkx"}
-    finally:
-        pool.shutdown(wait=False, cancel_futures=True)
 
 
 __all__ = ["NICE_INCREMENT", "TIMEOUT_SECONDS", "child_compute", "compute_rows_in_child"]

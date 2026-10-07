@@ -53,6 +53,12 @@ def begin(engine: Any) -> threading.Thread | None:
     """
     from superlocalmemory.retrieval import adjacency_rcu, entity_graph_warmup
 
+    # The in-memory vector index decodes every stored vector: in a child
+    # process for this daemon (retrieval/vector_index_build.py).
+    retrieval = getattr(engine, "_retrieval_engine", engine)
+    vectors = getattr(retrieval, "_kind_vectors", None)
+    if vectors is not None and hasattr(vectors, "build_in_child"):
+        vectors.build_in_child = True
     try:
         adjacency_rcu.prefer_background_builds(entity_graph_warmup.channel_of(engine))
         profile_id = str(getattr(engine, "profile_id", "") or "default")
