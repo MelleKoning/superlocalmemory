@@ -4623,6 +4623,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
             "canonical_remember_runtime",
             None,
         )
+        from superlocalmemory.server.recall_warmup import warmup_status as _recall_warmup_status
         readiness = {
             "engine": engine is not None,
             "migrations": migrations_ready,
@@ -4631,11 +4632,10 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 and getattr(writer_runtime, "ready", False)
             ),
             "embedding": embedding_ready,
-            # 4.1.22: why the embedding model is not warm, when the last
-            # warmup attempt actually failed (e.g. a first run offline with
-            # no cached model) rather than merely still being in progress.
-            # None while warming normally, or once warm.
+            # 4.1.22: why the embedding model is not warm when its warmup failed (None
+            # while warming or warm); what the recall warm-up is still building.
             "embedding_warmup_error": _embedding_warmup_error,
+            "recall_warmup": _recall_warmup_status(),
             "recall_health": recall_health.get("recall_healthy") is True,
             "migration_failures": migration_failures,
             # Which of those are the reason this daemon will not serve, as

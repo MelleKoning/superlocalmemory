@@ -90,9 +90,11 @@ NO_EMBEDDING: ChannelStatus = "no_embedding"
 #: others failed, calling this "found nothing" hides the actual fault.
 NO_CANDIDATES: ChannelStatus = "no_candidates"
 #: Needed the query embedding, but the embedding model was still loading when
-#: this recall stopped waiting (a just-started daemon). Transient: the same
-#: question shortly afterwards gets this channel back. Reported as incomplete,
-#: never as "found nothing".
+#: this recall stopped waiting (a just-started daemon) -- or, for
+#: ``entity_graph``, the daemon's start-up build of the graph held it
+#: (retrieval/entity_graph_warmup). Transient: the same question shortly
+#: afterwards gets this channel back. Reported as incomplete, never as
+#: "found nothing".
 WARMING: ChannelStatus = "warming"
 
 ALL_STATUSES: frozenset[str] = frozenset({
