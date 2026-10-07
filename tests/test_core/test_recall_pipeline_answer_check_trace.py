@@ -32,7 +32,7 @@ _ENVELOPE_4_1_20 = _ENVELOPE_4_1_19 | {
 #: 4.1.21 (#150): what a recall's project filter or preference did.
 _ENVELOPE_4_1_21 = _ENVELOPE_4_1_20 | {"project_scope"}
 #: 4.1.22: whether the answer was checked, in one word, and why.
-_ENVELOPE_4_1_22 = _ENVELOPE_4_1_21 | {"answerability", "answerability_reason"}
+_ENVELOPE_4_1_22 = _ENVELOPE_4_1_21 | {"answerability", "answerability_reason", "tag_scope"}
 
 
 @pytest.fixture(autouse=True)
