@@ -181,9 +181,9 @@ def _worker_main() -> None:
                 try:
                     import torch
                     with torch.inference_mode():
-                        scores = model.predict(pairs)
+                        scores = predict_by_length(model, pairs)
                 except ImportError:
-                    scores = model.predict(pairs)
+                    scores = predict_by_length(model, pairs)
                 _respond({
                     "ok": True,
                     "scores": [float(s) for s in scores],
@@ -239,6 +239,35 @@ _KNOWN_BACKENDS = ("onnx", "", "pytorch", "torch")
 # Duplicated as a literal on purpose: this module runs as a bare subprocess
 # and must not import the retrieval package (or, transitively, httpx).
 _REMOTE_BACKENDS = ("openai", "remote")
+
+
+#: Pairs per forward pass when scoring by length (see predict_by_length).
+LENGTH_BATCH = 8
+
+
+def predict_by_length(model, pairs: list[tuple[str, str]],
+                      batch_size: int = LENGTH_BATCH) -> list[float]:
+    """Score ``pairs`` shortest first, in small batches; scores in input order.
+
+    A batch is padded to its longest pair. Recall's 30-60 candidates mix short
+    facts (median 64 tokens) with whole saved texts (512, the limit), so one
+    batch padded every pair to 512: measured on a live-store copy, 287 ms
+    instead of 170 ms per recall. Scores differ only by float rounding
+    (<= 2e-6 measured; the single batch's scores already depended on which
+    long text happened to share it) and never changed an order in testing.
+    """
+    if not pairs:
+        return []
+    order = sorted(range(len(pairs)), key=lambda i: (len(pairs[i][1]), i))
+    ordered = [pairs[i] for i in order]
+    try:
+        ranked = model.predict(ordered, batch_size=batch_size)
+    except TypeError:  # a scorer without batch_size: one call, same order
+        ranked = model.predict(ordered)
+    scores = [0.0] * len(pairs)
+    for slot, i in enumerate(order):
+        scores[i] = float(ranked[slot])
+    return scores
 
 
 def _load_model(
