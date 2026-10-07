@@ -344,8 +344,9 @@ def test_review_rejects_a_profile_id_that_is_not_text(routed) -> None:
 
 
 def test_a_waiting_candidate_in_the_routed_profile_can_be_reviewed_there(routed) -> None:
-    """A candidate enrichment proposed blocks the replace; the refusal names the
-    profile, and the routed listing and review are what clear it."""
+    """A person's edit waiting for review blocks the replace; the refusal names
+    the profile, and the routed listing and review are what clear it. (A
+    candidate SLM proposed by itself no longer blocks: 4.1.22, overtaken.)"""
     from superlocalmemory.storage.correction_cases import (
         CorrectionActor,
         propose_on_connection,
@@ -356,13 +357,13 @@ def test_a_waiting_candidate_in_the_routed_profile_can_be_reviewed_there(routed)
     [old_id] = _save(client, OLD, "i8-old")["fact_ids"]
     [other] = _save(client, "The platform release train was moved once already.",
                      "i8-other")["fact_ids"]
-    actor = CorrectionActor(actor_id="candidate-detector", actor_kind="host_attested",
-                            trust_tier="canonical_writer")
+    actor = CorrectionActor(actor_id="a-person", actor_kind="host_authenticated",
+                            trust_tier="trusted")
     with engine._db.raw_connection() as conn:
         propose_on_connection(
             conn, case_id="i8waitingcase000", profile_id="work", scope="personal",
             predecessor_fact_id=old_id, successor_fact_id=other,
-            reason_code="temporal_contradiction", actor=actor,
+            reason_code="direct_content_correction", actor=actor,
             idempotency_key="i8-waiting", is_profile_active=lambda p: p == "work",
             is_actor_trusted=lambda a: a == actor)
         conn.commit()

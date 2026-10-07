@@ -1106,7 +1106,7 @@ def drop_all_tables(conn: sqlite3.Connection) -> None:
     from superlocalmemory.storage import fact_search_changes, graph_generation
     for trigger in (*graph_generation.trigger_names(), *fact_search_changes.trigger_names()):
         conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
-    for table in (graph_generation.TABLE, fact_search_changes.TABLE): conn.execute(f"DROP TABLE IF EXISTS {table}")  # noqa: E701
+    for table in (graph_generation.TABLE, fact_search_changes.TABLE, "correction_cases_overtaken"): conn.execute(f"DROP TABLE IF EXISTS {table}")  # noqa: E701
 
     # V32 tables first (they may FK to base tables)
     from superlocalmemory.storage.schema_v32 import V32_ROLLBACK
