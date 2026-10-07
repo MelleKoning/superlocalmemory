@@ -73,7 +73,7 @@ def pick_mode_b_model(
                 chosen = recs[int(choice) - 1].model_id
             else:
                 chosen = choice
-        if chosen not in installed_ids:
+        if chosen.removesuffix(":latest") not in installed_ids:
             print(f"  Pull it first: ollama pull {chosen}")
 
     config.llm = dataclasses.replace(config.llm, provider="ollama", model=chosen)

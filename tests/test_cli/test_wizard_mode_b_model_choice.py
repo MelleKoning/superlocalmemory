@@ -122,3 +122,16 @@ class TestOllamaUnreachable:
         reloaded = SLMConfig.load(tmp_path / "config.json")
         assert reloaded.llm.provider == "ollama"
         assert reloaded.llm.model == "gemma3:4b"
+
+
+def test_typing_the_latest_tag_of_an_installed_model_needs_no_pull(capsys) -> None:
+    from types import SimpleNamespace
+
+    from superlocalmemory.cli.model_choice import pick_mode_b_model
+    from superlocalmemory.core.config import LLMConfig
+
+    config = SimpleNamespace(llm=LLMConfig(provider="ollama", model=""))
+    pick_mode_b_model(config, interactive=True, prompt=lambda *_a: "llama3.2:latest",
+                      installed=["llama3.2:latest", "gemma3:4b"], ram_gb=24.0)
+    assert config.llm.model == "llama3.2:latest"
+    assert "ollama pull" not in capsys.readouterr().out
