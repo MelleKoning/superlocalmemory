@@ -2283,7 +2283,8 @@ async def lifespan(application: FastAPI):
         _apply_deployment_runtime(config, deployment)
         application.state.deployment = deployment
         from superlocalmemory.core import embedding_reindex_daemon as _reindex
-        engine = MemoryEngine(_reindex.prepare_daemon_config(config))
+        config = _reindex.prepare_daemon_config(config)  # finishes an interrupted switch
+        engine = MemoryEngine(config)
         engine.initialize()
 
         # Load the embedding model now, off the request path, the way the
