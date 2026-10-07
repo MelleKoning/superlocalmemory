@@ -134,4 +134,4 @@ def test_typing_the_latest_tag_of_an_installed_model_needs_no_pull(capsys) -> No
     pick_mode_b_model(config, interactive=True, prompt=lambda *_a: "llama3.2:latest",
                       installed=["llama3.2:latest", "gemma3:4b"], ram_gb=24.0)
     assert config.llm.model == "llama3.2:latest"
-    assert "ollama pull" not in capsys.readouterr().out
+    assert "Pull it first" not in capsys.readouterr().out
