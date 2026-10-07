@@ -17,14 +17,15 @@ Composed path: a REAL daemon subprocess and a REAL ``slm mcp`` stdio child.
 """
 from __future__ import annotations
 
-import os
 import time
 import uuid
-from pathlib import Path
 
 import pytest
 
 import tests.test_integration.test_mcp_declared_kind_transport as transport
+from tests.test_integration.test_mcp_declared_kind_transport import (  # noqa: F401
+    stub_embedder,  # the fixture, used by ``lane``
+)
 
 RUN = uuid.uuid4().hex[:6].upper()
 PROJECT = f"synthetic-heron-{RUN.lower()}"
@@ -42,30 +43,14 @@ def _content(label: str) -> str:
             f"setting {len(label)} for synthetic checks.")
 
 
-#: The machine's own model cache, offline: enrichment needs the embedding
-#: model, and the isolated cache every daemon test gets is empty.
-def _real_home() -> Path:  # the test process's HOME is a temporary folder
-    try:
-        import pwd
-
-        return Path(pwd.getpwuid(os.getuid()).pw_dir)
-    except (ImportError, KeyError):
-        return Path.home()
-
-
-_MODEL_CACHE = _real_home() / ".cache" / "huggingface"
-_HAS_MODEL = (_MODEL_CACHE / "hub" / "models--nomic-ai--nomic-embed-text-v1.5").is_dir()
-
-
 @pytest.fixture(scope="module")
-def lane(tmp_path_factory):
+def lane(tmp_path_factory, stub_embedder):
+    # The hermetic stub embedder (same as the transport tests): enrichment
+    # runs on every machine, with no model download and no real model cache.
     original = transport.MCP_TOOLS
     transport.MCP_TOOLS = original + ",list_recent,search"
     root = tmp_path_factory.mktemp("raw-parity")
-    if _HAS_MODEL:
-        (root / "cache").mkdir()
-        (root / "cache" / "huggingface").symlink_to(_MODEL_CACHE)
-    lane = transport._Lane(root)
+    lane = transport._Lane(root, stub_embedder)
     try:
         lane.open_mcp()
         for label, declared in SAVES.items():
@@ -135,7 +120,6 @@ def test_the_first_queryable_fact_carries_what_was_declared(lane):
             assert scope[1] == declared.get("profile_id", "default"), (label, scope)
 
 
-@pytest.mark.skipif(not _HAS_MODEL, reason="no local embedding model: enrichment cannot run")
 def test_every_declared_filter_still_finds_the_memory_once_enriched(lane):
     # Enrichment waits for a warm embedding model. A daemon that cannot embed
     # here (seen with this test environment on 4.1.22 itself: the model loads

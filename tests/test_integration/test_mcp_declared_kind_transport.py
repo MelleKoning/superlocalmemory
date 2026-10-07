@@ -152,7 +152,7 @@ def _start_daemon(
 class _Lane:
     """One daemon plus one MCP stdio child, restartable on the same store."""
 
-    def __init__(self, root: Path, models_url: str) -> None:
+    def __init__(self, root: Path, models_url: str | None = None) -> None:
         self.root = root
         self.models_url = models_url
         self.data_root = root / "data"
