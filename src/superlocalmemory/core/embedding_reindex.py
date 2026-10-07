@@ -44,6 +44,8 @@ _RUNNER: "ReindexRunner | None" = None
 _IDLE_POLL_S = 2.0
 _PURGE_EVERY_S = 30.0
 _CATCH_UP_ROUNDS = 50
+_QUIET_WAIT_S = 60.0
+_MAX_BACKOFF_S = 60.0
 
 
 class NoChange(ValueError):
@@ -319,15 +321,19 @@ class ReindexRunner:
             job = self._prepare(job, embedder, target.dimension)
             if job["state"] == "running":
                 job = self._bulk(job, embedder, target.dimension)
+            backoff = 1.0
             for _attempt in range(20):
                 if job["state"] == "catching_up":
                     job = self._catch_up(job, embedder, target.dimension)
                 if job["state"] != "ready":
                     break
-                job = activate_job(self, job, embedder, target)
+                with self._background_paused():
+                    self._wait_for_quiet()
+                    job = activate_job(self, job, embedder, target)
                 handed_over = job["state"] == "activated"
-            if job["state"] in sp.ACTIVE_STATES and not self._stop.is_set():
-                time.sleep(2.0)  # e.g. requests did not drain: try again next pass
+                if job["state"] == "ready":  # requests did not drain: every try holds them
+                    self._stop.wait(backoff)
+                    backoff = min(backoff * 2, _MAX_BACKOFF_S)
         except _Cancelled:
             self._fail(job, "cancelled", state="cancelled")
         except (steps.StepFailed, ActivationFailed) as exc:
@@ -341,6 +347,35 @@ class ReindexRunner:
         finally:
             if embedder is not None and not handed_over:
                 steps.close_embedder(embedder)
+
+    def _background_paused(self):
+        from contextlib import nullcontext
+
+        if self.app_state is None:
+            return nullcontext()
+        from superlocalmemory.server.profile_runtime import get_profile_runtime
+
+        return get_profile_runtime(self.app_state).pausing_background()
+
+    def _wait_for_quiet(self) -> None:
+        """Enter the swap when nothing is in flight, so its drain holds no one.
+
+        The swap waits for admitted requests and holds new ones meanwhile; under
+        steady load a request is always in flight, and each try that times out
+        stalls everyone for the drain timeout. A quiet moment makes the drain
+        immediate. Bounded: after _QUIET_WAIT_S it tries anyway.
+        """
+        if self.app_state is None:
+            return
+        from superlocalmemory.core.recall_gate import in_flight
+        from superlocalmemory.server.profile_runtime import get_profile_runtime
+
+        runtime = get_profile_runtime(self.app_state)
+        deadline = time.monotonic() + _QUIET_WAIT_S
+        while time.monotonic() < deadline and not self._stop.is_set():
+            if runtime.active_operations == 0 and in_flight() == 0:
+                return
+            time.sleep(0.02)
 
     def _check(self) -> None:
         if self._cancel.is_set():

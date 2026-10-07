@@ -6176,7 +6176,7 @@ def _run_materializer_operation(
     holding the operation lease during the transition drain window.
     """
     # Writer-priority: don't acquire a new lease when a transition is draining.
-    if runtime is not None and runtime.transitioning:
+    if runtime is not None and (runtime.transitioning or runtime.background_paused):
         if expected_profile_id is not None:
             raise _PendingProfileMismatchError(
                 "pending materialization deferred during profile transition"
