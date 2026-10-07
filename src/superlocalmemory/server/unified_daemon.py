@@ -6843,7 +6843,6 @@ def start_server(port: int = _DEFAULT_PORT) -> None:
     """Start the unified daemon. Blocks until stopped."""
     global _start_time
     install_thread_dump_signal()
-    from superlocalmemory.server.interpreter_tuning import apply_switch_interval; apply_switch_interval()  # noqa: E702,E501
     assert_no_durable_root_conflict()
     import socket
 
