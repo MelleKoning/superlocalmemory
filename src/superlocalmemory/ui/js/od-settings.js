@@ -28,6 +28,7 @@
   var P  = 'od-s';
   var _captureConfig = {};  // preserves full capture config for merge-on-save
   var _tokenCache    = null;
+  var _modelCatalog  = null; // GET /api/v3/models/catalog response, fetched once
 
   /* ── Auth helper ──────────────────────────────────────────── */
   function tokenError(message) {
@@ -160,6 +161,15 @@
       border:'1px solid var(--border)', background:'var(--card-2)',
       color:'var(--fg)', padding:'0 10px', fontSize:'13px',
       minWidth:'160px', maxWidth:'260px', outline:'none' });
+    return i;
+  }
+  /** Same styled input as makeTin, with a datalist attached via the `list`
+   *  attribute so the suggestions show while typing is still free-form. */
+  function makeSuggest(id, ph) {
+    var i = makeTin(id, ph);
+    var list = el('datalist', { id: P + '-' + id + '-list' });
+    i.setAttribute('list', P + '-' + id + '-list');
+    i.appendChild(list);
     return i;
   }
   function makeRange(id, min, max, step, val) {
@@ -327,6 +337,92 @@
   }
 
   /* ═══════════════════════════════════════════════════════════
+     Model suggestions (4.1.22) — GET /api/v3/models/catalog once, then
+     populate the LLM and embedding datalists and a one-line hint per input.
+     Never throws: a failed/absent catalog just leaves plain text inputs.
+  ═══════════════════════════════════════════════════════════ */
+  function clearDatalist(dl) {
+    while (dl.firstChild) dl.removeChild(dl.firstChild);
+  }
+  function addOption(dl, value, text) {
+    var opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = text; // never innerHTML with catalog data
+    dl.appendChild(opt);
+  }
+  function stripLatest(tag) { return (tag || '').replace(/:latest$/, ''); }
+  function computeModelHint(value, provider, cat) {
+    if (!cat) return '';
+    if (provider === 'ollama') {
+      var rec = (cat.local_recommendations || []).filter(function (r) { return r.model === value; })[0];
+      if (rec) return rec.reason;
+    }
+    var hosted = (cat.hosted_llms || []).filter(function (m) { return m.id === value; })[0];
+    if (hosted) return hosted.price + ' per million tokens. ' + hosted.advice;
+    if (provider === 'ollama' && value) {
+      var installed = (cat.ollama && cat.ollama.installed) || [];
+      var found = installed.some(function (n) { return stripLatest(n) === stripLatest(value); });
+      if (!found) return 'Not installed. Pull it first: ollama pull ' + value;
+    }
+    return '';
+  }
+  function computeEmbHint(value, cat) {
+    if (!cat || !value) return '';
+    var all = (cat.local_embedders || []).concat(cat.hosted_embedders || []);
+    var m = all.filter(function (e) { return e.id === value; })[0];
+    if (!m) return '';
+    return m.advice + (m.dimension ? ' (dimension ' + m.dimension + ')' : '');
+  }
+  function updateModelHint() {
+    var inp = q('model'), hintEl = q('model-hint');
+    if (!inp || !hintEl) return;
+    var provider = q('provider') ? q('provider').value : 'none';
+    hintEl.textContent = computeModelHint(inp.value, provider, _modelCatalog);
+  }
+  function updateEmbHint() {
+    var inp = q('emb-model'), hintEl = q('emb-model-hint');
+    if (!inp || !hintEl) return;
+    hintEl.textContent = computeEmbHint(inp.value, _modelCatalog);
+  }
+  function fillModelSuggestions() {
+    var cat = _modelCatalog;
+    var modelDl = q('model-list'), embDl = q('emb-model-list');
+    if (modelDl) clearDatalist(modelDl);
+    if (embDl) clearDatalist(embDl);
+    var provider = q('provider') ? q('provider').value : 'none';
+    if (cat) {
+      if (provider === 'ollama' && modelDl) {
+        (cat.local_recommendations || []).forEach(function (r) { addOption(modelDl, r.model, r.reason); });
+      } else if (provider === 'openrouter' && modelDl) {
+        (cat.hosted_llms || []).forEach(function (m) {
+          addOption(modelDl, m.id, m.label + ' — ' + m.price + ' — ' + m.advice);
+        });
+      }
+      if (embDl) {
+        (cat.local_embedders || []).concat(cat.hosted_embedders || []).forEach(function (m) {
+          addOption(embDl, m.id, m.label + ' — ' + m.advice);
+        });
+      }
+      var modelInp = q('model');
+      if (modelInp && provider === 'ollama' && !modelInp.value && cat.best_local_llm) {
+        modelInp.value = cat.best_local_llm;
+      }
+    }
+    updateModelHint();
+    updateEmbHint();
+  }
+  function loadModelCatalog() {
+    return fetch('/api/v3/models/catalog').then(function (r) {
+      if (!r.ok) throw new Error('models catalog unavailable');
+      return r.json();
+    }).then(function (d) {
+      _modelCatalog = d || null;
+    }).catch(function () {
+      _modelCatalog = null;
+    }).then(fillModelSuggestions);
+  }
+
+  /* ═══════════════════════════════════════════════════════════
      GROUP 1 — Operating Mode & LLM
   ═══════════════════════════════════════════════════════════ */
   function buildMode() {
@@ -340,7 +436,8 @@
       { v:'openrouter', l:'OpenRouter' }, { v:'openai', l:'OpenAI' },
       { v:'anthropic', l:'Anthropic' }
     ]);
-    var modelInp = makeTin('model', 'e.g. llama3.2');
+    var modelInp = makeSuggest('model', 'e.g. gemma3:4b');
+    var modelHint = el('span', { id: P + '-model-hint' }, { fontSize:'12px', color:'var(--fg-2)' });
     var keyInp   = makeTin('apikey', 'sk-... or your key', 'password');
     var epInp    = makeTin('endpoint', 'http://localhost:11434');
     var saveBtn  = makeBtn('mode-save', 'Save Mode', true);
@@ -350,12 +447,15 @@
       var a = this.value === 'a';
       [provSel, modelInp, keyInp, epInp].forEach(function (i) { i.disabled = a; });
     });
+    provSel.addEventListener('change', fillModelSuggestions);
+    modelInp.addEventListener('input', updateModelHint);
     saveBtn.addEventListener('click', saveMode);
     testBtn.addEventListener('click', testMode);
     return makeGrp('Operating Mode & LLM Provider', 'operations', [
       makeRow('Mode', 'Select operating mode', 'mode', modeSel),
       makeRow('Provider', 'LLM backend (Mode B/C)', 'llm.provider', provSel),
       makeRow('Model', '', 'llm.model', modelInp),
+      makeRow('', '', '', modelHint),
       makeRow('API Key', 'Stored locally, never sent to Qualixar', 'llm.api_key', keyInp),
       makeRow('Base URL / Endpoint', 'Custom endpoint for Ollama, LM Studio', 'llm.base_url', epInp),
       makeRow('Actions', '', '', bRow(saveBtn, testBtn, st))
@@ -379,7 +479,7 @@
           ep.value = '';
           ep.placeholder = d.endpoint || 'http://localhost:11434';
         }
-      }).catch(function () {});
+      }).catch(function () {}).then(fillModelSuggestions);
   }
   function saveMode() {
     setSt('mode', 'Saving…', null);
@@ -418,7 +518,8 @@
       { v:'default', l:'Default (local nomic-embed-text)' },
       { v:'openai',  l:'Custom OpenAI-compatible endpoint' }
     ]);
-    var modelInp = makeTin('emb-model', 'e.g. Qwen3-Embedding');
+    var modelInp = makeSuggest('emb-model', 'e.g. Qwen3-Embedding');
+    var modelHint = el('span', { id: P + '-emb-model-hint' }, { fontSize:'12px', color:'var(--fg-2)' });
     var dimInp   = makeTin('emb-dim', '768', 'number');
     dimInp.style.minWidth = '80px'; dimInp.style.maxWidth = '100px';
     var epInp  = makeTin('emb-endpoint', 'http://localhost:8045/v1/embeddings');
@@ -431,11 +532,13 @@
       var c = this.value === 'openai';
       [modelInp, dimInp, epInp, keyInp].forEach(function (i) { i.disabled = !c; });
     });
+    modelInp.addEventListener('input', updateEmbHint);
     saveBtn.addEventListener('click', saveEmb);
     testBtn.addEventListener('click', testEmb);
     return makeGrp('Embeddings & Retrieval', 'memories', [
       makeRow('Provider', 'Local model is private and free', 'embedding.provider', provSel),
       makeRow('Model Name', 'For custom endpoints', 'embedding.model_name', modelInp),
+      makeRow('', '', '', modelHint),
       makeRow('Dimensions', '768 local · 1024/3072 cloud', 'embedding.dimension', dimInp),
       makeRow('Endpoint', 'OpenAI-compatible URL', 'embedding.api_endpoint', epInp),
       makeRow('API Key', 'optional', 'embedding.api_key', keyInp),
@@ -460,7 +563,7 @@
       }).catch(function () {
         var inf = q('emb-info');
         if (inf) inf.textContent = 'Embedding configuration unavailable. Check daemon health and retry.';
-      });
+      }).then(fillModelSuggestions);
   }
   function saveEmb() {
     setSt('emb', 'Saving…', null);
@@ -1282,6 +1385,7 @@
 
     container.insertBefore(hub, container.firstChild);
     loadAll();
+    loadModelCatalog(); // once per pane render — not repeated on loadAll() reloads
   }
 
   /* ═══════════════════════════════════════════════════════════
