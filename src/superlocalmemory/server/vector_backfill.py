@@ -36,6 +36,17 @@ logger = logging.getLogger(__name__)
 _CHUNK = 800
 
 
+def profile_ids(db: Any) -> list[str]:
+    """Every profile of the store; ``default`` when the table cannot be read."""
+    try:
+        ids = [str(dict(r)["profile_id"]) for r in
+               db.execute("SELECT profile_id FROM profiles ORDER BY profile_id")]
+    except Exception as exc:  # noqa: BLE001 -- the repair still covers default
+        logger.warning("vector repair: profiles unreadable (%s); default only", type(exc).__name__)
+        ids = []
+    return ids or ["default"]
+
+
 def visible_fact_ids(db: Any, profile_id: str) -> list[str]:
     """Every fact id of ``profile_id`` a caller may see, without reading row bodies."""
     rows = db.execute(
@@ -63,4 +74,4 @@ def missing_vectors(db: Any, store: Any, profile_id: str,
     return missing
 
 
-__all__ = ["missing_vectors", "visible_fact_ids"]
+__all__ = ["missing_vectors", "profile_ids", "visible_fact_ids"]

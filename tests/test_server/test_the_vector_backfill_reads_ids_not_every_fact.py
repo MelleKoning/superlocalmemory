@@ -93,3 +93,20 @@ def test_the_daemon_start_uses_it() -> None:
     body = source[source.index("def _backfill_vector_store"):source.index("def _self_heal")]
     assert "missing_vectors(" in body
     assert "get_all_facts(" not in body
+
+
+def test_every_profile_is_repaired_not_only_default(tmp_path: Path) -> None:
+    """Pre-existing: the repair asked the store for ``list_profiles()``, which the
+    store does not have, so it always fell back to ``default`` alone."""
+    db = _store(tmp_path)
+    assert set(vector_backfill.profile_ids(db)) >= {"default", "other"}
+    got = vector_backfill.missing_vectors(db, _Index(set()), "other", DIM)
+    assert [f for f, _, _ in got] == ["f-other"]
+
+
+def test_the_daemon_start_repairs_every_profile() -> None:
+    from superlocalmemory.server import unified_daemon
+
+    source = inspect.getsource(unified_daemon)
+    body = source[source.index("def _backfill_vector_store"):source.index("def _self_heal")]
+    assert "profile_ids(db)" in body

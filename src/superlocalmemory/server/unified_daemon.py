@@ -2659,11 +2659,8 @@ async def lifespan(application: FastAPI):
                 vs = VectorStore(_P(db_path), VectorStoreConfig(dimension=dim))
                 if not vs.available:
                     return
-                try:
-                    profiles = list(db.list_profiles()) or ["default"]
-                except Exception:
-                    profiles = ["default"]
-                from superlocalmemory.server.vector_backfill import missing_vectors
+                from superlocalmemory.server.vector_backfill import missing_vectors, profile_ids
+                profiles = profile_ids(db)  # every profile (the store has no list_profiles)
                 for pid in profiles:
                     # Ids first, embeddings only for the gap (server/vector_backfill).
                     missing = missing_vectors(db, vs, pid, dim)
