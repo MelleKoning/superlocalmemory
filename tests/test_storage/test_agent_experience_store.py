@@ -264,16 +264,41 @@ def test_normal_profile_deletion_purges_learning_receipts(
         assert conn.execute("SELECT 1 FROM profiles WHERE profile_id='alpha'").fetchone() is None
 
 
+class _Clock:
+    """A clock that moves only when the code under test sleeps."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+        self.slept = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += max(0.0, seconds)
+        self.slept += max(0.0, seconds)
+
+
 def test_write_busy_deadline_is_bounded_and_visible(
-    store: AgentExperienceStore, tmp_path: Path
+    store: AgentExperienceStore, tmp_path: Path, monkeypatch
 ) -> None:
+    """Another process holds the database: the write retries for the SQLite
+    busy deadline on its own clock, then says so. Measured on a controlled
+    clock, so a loaded machine cannot fail it (a stopwatch here once read
+    2.19 s for a 0.9 s deadline, all of it scheduling)."""
+    from superlocalmemory.storage import agent_experience as ae
+
+    clock = _Clock()
+    monkeypatch.setattr(ae, "time", clock)
     locked = sqlite3.connect(tmp_path / "learning.db", isolation_level=None)
     try:
         locked.execute("BEGIN IMMEDIATE")
-        started = time.monotonic()
-        with pytest.raises(LearningWriteBusyError):
+        real_start = time.monotonic()
+        with pytest.raises(LearningWriteBusyError, match="deadline exceeded"):
             store.record_experience(_experience())
-        assert time.monotonic() - started < 1.1
+        assert clock.slept <= ae._WRITE_DEADLINE_SECONDS + 1e-9  # never sleeps past it
+        assert clock.slept >= ae._WRITE_DEADLINE_SECONDS - 0.05  # it really retried
+        assert time.monotonic() - real_start < 30  # liveness only: no hang
     finally:
         locked.rollback()
         locked.close()
