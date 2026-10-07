@@ -413,7 +413,7 @@ def delete_profile_from_db(name: str) -> None:
     with memory_write(DB_PATH) as conn:
         conn.execute("PRAGMA foreign_keys=ON")
         # Purge role grants for this workspace (no FK CASCADE covers these).
-        for tbl in ("rbac_memberships",):
+        for tbl in ("rbac_memberships", "correction_cases_overtaken"):
             try:
                 conn.execute(f"DELETE FROM {tbl} WHERE profile_id = ?", (name,))
             except sqlite3.OperationalError:

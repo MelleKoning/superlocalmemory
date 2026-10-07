@@ -156,3 +156,28 @@ def test_restore_and_listing_stay_inside_the_profile(three):
     [listed] = ot.listing(engine._db, engine._profile_id)
     assert listed["restored_by"] == "me" and listed["not_restorable_because"] == (
         "already restored")
+
+
+def test_a_deleted_workspace_takes_its_overtaken_cases_with_it(tmp_path, monkeypatch):
+    """A workspace made later under the same name must not list them."""
+    from superlocalmemory.core import overtaken_cases as ot
+    from superlocalmemory.server.routes import helpers
+    from superlocalmemory.storage import schema as real_schema
+    from superlocalmemory.storage.database import DatabaseManager
+
+    db = DatabaseManager(tmp_path / "memory.db")
+    db.initialize(real_schema)
+    db.execute("INSERT OR IGNORE INTO profiles (profile_id, name) VALUES ('alice', 'Alice')")
+    for profile in ("alice", "bob"):
+        db.execute("INSERT INTO correction_cases_overtaken (case_id, profile_id, "
+                   "predecessor_fact_id, successor_fact_id, reason_code, case_json, "
+                   "events_json, user_action, actor_id, operation_id, closed_reason, "
+                   "overtaken_at) VALUES (?, ?, 'p', 's', 'consolidation_update', '{}', "
+                   "'[]', 'delete', 'u', 'op', ?, 'now')",
+                   (f"case-{profile}", profile, ot.OVERTAKEN))
+    monkeypatch.setattr(helpers, "DB_PATH", tmp_path / "memory.db")
+
+    helpers.delete_profile_from_db("alice")
+
+    assert [r["case_id"] for r in db.execute(
+        "SELECT case_id FROM correction_cases_overtaken")] == ["case-bob"]
