@@ -124,7 +124,8 @@ def activate_job(runner: Any, job: dict, embedder: Any, target: Any) -> dict:
             with steps.write_txn(conn, runner.db_path):
                 outcome["swap"] = activate(
                     conn, job, model_name=target.model_name, dimension=target.dimension,
-                    live_cfg=sp.public_config(target), prev_cfg=json.loads(job["from_config"]))
+                    live_cfg=sp.public_config(target), prev_cfg=json.loads(job["from_config"]),
+                    clean_mark=runner.clean_marks.get(int(job["job_id"]), -1))
             outcome["swap_lock_ms"] = round((time.perf_counter() - started) * 1000, 1)
             published = time.perf_counter()
             try:
@@ -145,8 +146,10 @@ def activate_job(runner: Any, job: dict, embedder: Any, target: Any) -> dict:
         except NotCaughtUp as exc:
             logger.info("re-index job %s caught new writes at the swap (%s); catching up",
                         job["job_id"], exc)
-            with steps.write_txn(conn, runner.db_path):
-                update_job(conn, job["job_id"], state="catching_up")
+            if not exc.only_logged:  # unexplained: back to a full comparison
+                runner.clean_marks.pop(int(job["job_id"]), None)
+                with steps.write_txn(conn, runner.db_path):
+                    update_job(conn, job["job_id"], state="catching_up")
             return get_job(conn, job["job_id"])
         except TransitionDrainTimeout as exc:
             logger.info("re-index job %s: requests did not drain (%s); retrying", job["job_id"], exc)

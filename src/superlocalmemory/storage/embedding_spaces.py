@@ -308,6 +308,9 @@ def purge_fact(conn: Any, fact_id: str) -> int:
 
 
 def drop_staging(conn: Any) -> None:
+    from superlocalmemory.storage import embedding_change_log
+
+    embedding_change_log.stop(conn)
     drop_vec(conn, NEXT_VEC)
     if table_exists(conn, NEXT_MAP):
         conn.execute(f"DELETE FROM {NEXT_MAP}")

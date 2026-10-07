@@ -420,6 +420,8 @@ def test_background_work_stays_paused_across_every_activation_try(store, monkeyp
 
     monkeypatch.setattr(act, "activate_job", fake_activate)
     monkeypatch.setattr(runner._stop, "wait", fake_wait)
+    monkeypatch.setattr(runner, "_catch_up_logged", lambda *a: None)
+    runner.clean_marks[1] = 0  # a clean full comparison already happened
     job, handed = runner._activate({"job_id": 1, "state": "ready"}, object(), _target())
     assert handed and job["state"] == "activated"
     assert [k for k, _ in seen] == ["try", "backoff", "try", "backoff", "try"]
@@ -455,3 +457,34 @@ def test_a_copying_batch_yields_to_recall_and_rests(store, monkeypatch):
     assert job["state"] == "activated" and job["copied"] == 20 and old.calls == 2, (job, old.calls)
     assert len(yields) >= 4, "copy-only batches did not yield to recall"
     assert len([r for r in rests if r > 0]) >= 4, "copy-only batches ran back to back"
+
+
+def test_an_edit_just_before_the_swap_is_caught_by_the_change_log(store, monkeypatch):
+    """The full comparison runs before the swap with no lock held; an edit that
+    lands after it must still be seen at the swap and staged again."""
+    from superlocalmemory.storage import embedding_change_log as change_log
+
+    root, db_path = store
+    edited = {"done": False}
+    real = er.ReindexRunner._catch_up_logged
+
+    def then_edit(self, job, embedder, dimension):
+        real(self, job, embedder, dimension)
+        if not edited["done"]:  # right after the last catch-up, before the lock
+            edited["done"] = True
+            conn = sqlite3.connect(db_path)
+            conn.execute("UPDATE atomic_facts SET content = 'reworded at the last moment' "
+                         "WHERE fact_id = 'f004'")
+            conn.commit()
+            conn.close()
+
+    monkeypatch.setattr(er.ReindexRunner, "_catch_up_logged", then_edit)
+    view = _run(root, db_path, {"new-model": FakeEmbedder(4, "new")}, monkeypatch)
+    assert view["state"] == "activated" and edited["done"], view
+    conn = sp.connect(db_path)
+    blob = conn.execute("SELECT embedding FROM atomic_facts WHERE fact_id='f004'").fetchone()[0]
+    assert np.allclose(np.frombuffer(blob, dtype=np.float32),
+                       _vec("reworded at the last moment", 4, "new")), \
+        "a fact edited just before the swap went live with its old words' vector"
+    assert not change_log.active(conn), "the change log outlived the switch"
+    conn.close()

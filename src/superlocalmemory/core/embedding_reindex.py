@@ -26,6 +26,7 @@ from typing import Any
 from superlocalmemory.core import embedding_reindex_secrets as secrets
 from superlocalmemory.core import embedding_reindex_steps as steps
 from superlocalmemory.storage import embedding_canonical_slots as slots
+from superlocalmemory.storage import embedding_change_log as change_log
 from superlocalmemory.storage import embedding_spaces as sp
 from superlocalmemory.storage.embedding_reindex_jobs import (
     JobConflict,
@@ -81,6 +82,8 @@ class ReindexRunner:
         self._last_purge = 0.0
         self.notice: str | None = None
         self.quiet: dict | None = None
+        #: job id -> change-log position of the last full diff that found nothing
+        self.clean_marks: dict[int, int] = {}
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -347,11 +350,14 @@ class ReindexRunner:
         backoff = 1.0
         with self._background_paused():
             for _attempt in range(20):
+                if job["state"] == "ready" and int(job["job_id"]) not in self.clean_marks:
+                    job = {**job, "state": "catching_up"}  # resumed: no clean diff yet
                 if job["state"] == "catching_up":
                     job = self._catch_up(job, embedder, target.dimension)
                 if job["state"] != "ready":
                     break
                 self._wait_for_quiet()
+                self._catch_up_logged(job, embedder, target.dimension)
                 job = activate_job(self, job, embedder, target)
                 if job["state"] == "activated":
                     return job, True
@@ -416,6 +422,7 @@ class ReindexRunner:
                     sp.ensure_side_tables(conn)
                     sp.create_vec(conn, sp.NEXT_VEC, dimension)
                     slots.ensure_next_columns(conn)
+                    change_log.start(conn)
                     update_job(conn, job["job_id"], state="running", started_at=time.time(),
                                total=count_facts(conn), cursor=0, done=0, next_rowid=0,
                                attempts=int(job.get("attempts") or 0) + 1)
@@ -424,12 +431,14 @@ class ReindexRunner:
                     sp.ensure_side_tables(conn)
                     sp.create_vec(conn, sp.NEXT_VEC, dimension)
                     slots.ensure_next_columns(conn)
+                    change_log.start(conn)
                     conn.execute(f"DELETE FROM {sp.NEXT_MAP}")
                     update_job(conn, job["job_id"], state="running", cursor=0, done=0)
             else:
                 stats = json.loads(job["stats"]) if job.get("stats") else {}
                 stats["resumed_at_done"] = int(job.get("done") or 0)
                 with steps.write_txn(conn, self.db_path):
+                    change_log.start(conn)  # a job begun before 4.1.22 GA had none
                     update_job(conn, job["job_id"], started_at=time.time(),
                                attempts=int(job.get("attempts") or 0) + 1,
                                stats=json.dumps(stats))
@@ -471,17 +480,44 @@ class ReindexRunner:
         finally:
             conn.close()
 
+    def _catch_up_logged(self, job: dict, embedder: Any, dimension: int) -> None:
+        """Re-stage only what the change log recorded since the last clean mark."""
+        job_id = int(job["job_id"])
+        conn = self._conn()
+        stats = self._stats(job)
+        try:
+            position = change_log.mark(conn)
+            ids = [str(r[0]) for r in conn.execute(
+                f"SELECT DISTINCT fact_id FROM {change_log.TABLE} WHERE seq > ?",
+                (self.clean_marks.get(job_id, position),))]
+            facts = []
+            for start in range(0, len(ids), 500):
+                chunk = ids[start:start + 500]
+                marks = ",".join("?" for _ in chunk)
+                facts += [(int(r[0]), str(r[1]), str(r[2]), r[3] or "") for r in conn.execute(
+                    f"SELECT rowid, fact_id, profile_id, content FROM atomic_facts "
+                    f"WHERE fact_id IN ({marks})", chunk)]
+            for start in range(0, len(facts), steps.BATCH):
+                steps.stage(conn, self.db_path, job, embedder, facts[start:start + steps.BATCH],
+                            dimension, rollback=job["kind"] == "rollback", stats=stats,
+                            cursor=None, catching_up=True)
+            self.clean_marks[job_id] = position
+        finally:
+            conn.close()
+
     def _catch_up(self, job: dict, embedder: Any, dimension: int) -> dict:
         conn = self._conn()
         stats = self._stats(job)
         try:
             for _round in range(_CATCH_UP_ROUNDS):
                 self._check()
+                position = change_log.mark(conn)  # read BEFORE the diff it vouches for
                 need, gone = staged_diff(conn)
                 if gone:
                     with steps.write_txn(conn, self.db_path, stats):
                         drop_gone(conn, gone)
                 if not need:
+                    self.clean_marks[int(job["job_id"])] = position
                     break
                 for start in range(0, len(need), steps.BATCH):
                     self._check()

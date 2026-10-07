@@ -27,6 +27,7 @@ from typing import Any, Iterator
 import numpy as np
 
 from superlocalmemory.storage import embedding_canonical_slots as slots
+from superlocalmemory.storage import embedding_change_log as change_log
 from superlocalmemory.storage import embedding_spaces as sp
 from superlocalmemory.storage.embedding_reindex_jobs import update_job
 
@@ -49,8 +50,11 @@ _METADATA_DDL = (
 class NotCaughtUp(RuntimeError):
     """The staged space no longer matches the live facts; catch up and retry."""
 
-    def __init__(self, missing: int, gone: int) -> None:
+    def __init__(self, missing: int, gone: int, *, only_logged: bool = False) -> None:
         self.missing, self.gone = missing, gone
+        #: True when every difference is in the change log (an incremental
+        #: catch-up closes it); False means a full diff is needed.
+        self.only_logged = only_logged
         super().__init__(f"{missing} facts new or changed, {gone} staged facts gone")
 
 
@@ -118,6 +122,21 @@ def staged_diff(conn: Any) -> tuple[list[tuple[int, str, str, str]], list[str]]:
         f"SELECT m.fact_id FROM {sp.NEXT_MAP} m LEFT JOIN atomic_facts f "
         "ON f.fact_id = m.fact_id WHERE f.fact_id IS NULL")]
     return need, gone
+
+
+def quick_verify(conn: Any, clean_mark: int) -> None:
+    """Under the swap's lock: O(changes) since the last clean full diff, plus two
+    index-only counts. Raises NotCaughtUp when anything moved."""
+    changed = change_log.changed_since(conn, clean_mark) if change_log.active(conn) else -1
+    missing = int(conn.execute(
+        f"SELECT COUNT(*) FROM atomic_facts f WHERE NOT EXISTS "
+        f"(SELECT 1 FROM {sp.NEXT_MAP} m WHERE m.fact_id = f.fact_id)").fetchone()[0])
+    gone = int(conn.execute(
+        f"SELECT COUNT(*) FROM {sp.NEXT_MAP} m WHERE NOT EXISTS "
+        "(SELECT 1 FROM atomic_facts f WHERE f.fact_id = m.fact_id)").fetchone()[0])
+    if changed != 0 or missing or gone:
+        raise NotCaughtUp(missing + max(changed, 1 if changed < 0 else 0), gone,
+                          only_logged=changed > 0 and not missing and not gone)
 
 
 # -- staged writes ------------------------------------------------------------
@@ -191,13 +210,15 @@ def _timed(timings: dict, name: str, started: float) -> float:
 
 
 def activate(conn: Any, job: dict, *, model_name: str, dimension: int,
-             live_cfg: dict, prev_cfg: dict) -> dict:
-    """Make the staged space live and keep the old one as the previous space."""
+             live_cfg: dict, prev_cfg: dict, clean_mark: int) -> dict:
+    """Make the staged space live and keep the old one as the previous space.
+
+    ``clean_mark``: the change-log position at which a full content-hash diff
+    (run before this, with no lock held) found nothing left to stage.
+    """
     timings: dict[str, float] = {}
     started = mark = time.perf_counter()
-    need, gone = staged_diff(conn)
-    if need or gone:
-        raise NotCaughtUp(len(need), len(gone))
+    quick_verify(conn, clean_mark)
     mark = _timed(timings, "verify_ms", mark)
     if sp.vec_dimension(conn, sp.NEXT_VEC) != dimension:
         raise RuntimeError("staged vector table has the wrong dimension")
@@ -225,6 +246,7 @@ def activate(conn: Any, job: dict, *, model_name: str, dimension: int,
             "AND k = 1", (probe[0], probe[1])).fetchone() is None:
         raise RuntimeError("the new vector index did not answer a search after the swap")
     staged = int(conn.execute(f"SELECT COUNT(*) FROM {sp.NEXT_MAP}").fetchone()[0])
+    change_log.stop(conn)
     conn.execute(f"DROP TABLE {sp.NEXT_MAP}")
     sp.ensure_side_tables(conn)  # the trigger needs the (empty) table
     sp.write_space(conn, job["to_signature"], live_cfg, job["from_signature"], prev_cfg,
@@ -252,6 +274,6 @@ def reverse(conn: Any, job: dict, *, model_name: str, dimension: int,
     sp.drop_side_tables_if_unused(conn)
 
 
-__all__ = ["NotCaughtUp", "StagedRow", "activate", "content_hash", "count_facts",
+__all__ = ["NotCaughtUp", "StagedRow", "activate", "quick_verify", "content_hash", "count_facts",
            "drop_gone", "facts_after", "fisher_blobs", "reverse", "staged_diff",
            "write_batch"]
