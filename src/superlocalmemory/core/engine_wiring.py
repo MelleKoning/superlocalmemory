@@ -277,6 +277,9 @@ def init_encoding(
     # V3.2: VectorStore (Phase 1) -- sqlite-vec KNN. Scene assignment also
     # consumes it, so initialize it before the encoding component is wired.
     vector_store = _init_vector_store(config)
+    from superlocalmemory.retrieval.canonical_vector_index import candidate_vector_source
+    consolidator.use_vector_source(  # recall's own exact neighbour search, not a full scan
+        candidate_vector_source(db, vector_store, config.embedding.dimension))
     scene_builder = SceneBuilder(db, embedder, vector_store=vector_store)
     entropy_gate = EntropyGate(
         embedder, config.encoding.entropy_threshold,

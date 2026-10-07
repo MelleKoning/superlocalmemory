@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Protocol
+from typing import Any, Protocol
 
 from superlocalmemory.core.config import EncodingConfig
 from superlocalmemory.storage.database import DatabaseManager
@@ -98,6 +98,57 @@ class MemoryConsolidator:
         self._embedder = embedder
         self._llm = llm
         self._cfg = config or EncodingConfig()
+        #: Exact nearest-neighbour source (sqlite-vec or the in-memory index),
+        #: shared with recall. None: fall back to reading every fact.
+        self._vectors: Any = None
+
+    def use_vector_source(self, vectors: Any) -> None:
+        """Search neighbours through recall's vector source instead of reading
+        and decoding every fact of the profile, once per new fact (measured on
+        a 21,847-fact store: about 7.7 s per fact, twice per fact)."""
+        self._vectors = vectors
+
+    def _similar(
+        self, new_fact: AtomicFact, profile_id: str, k: int, exclude: set[str],
+    ) -> list[tuple[AtomicFact, float]]:
+        """The ``k`` most similar visible facts with cosine > 0.5, best first.
+
+        Through the vector source: an exact top-k, then each hit loaded through
+        the profile's visibility rules (``get_facts_by_ids``), so a withheld or
+        deleted fact is never a candidate. The same set the full scan returns
+        whenever that scan saw every fact (stores under its 50,000 cap).
+        """
+        skip = set(exclude) | {new_fact.fact_id}
+        vectors = self._vectors
+        if vectors is not None and getattr(vectors, "available", True) and k > 0:
+            try:
+                hits = vectors.search(new_fact.embedding, top_k=k + len(skip),
+                                      profile_id=profile_id)
+            except Exception as exc:  # noqa: BLE001 — fall back, never fail a save
+                logger.debug("consolidation neighbour search fell back (%s)",
+                             type(exc).__name__)
+            else:
+                ids = [fid for fid, _ in hits if fid not in skip]
+                facts = {f.fact_id: f for f in self._db.get_facts_by_ids(ids, profile_id)}
+                out = []
+                for fid in ids:
+                    fact = facts.get(fid)
+                    if fact is None or fact.embedding is None:
+                        continue
+                    sim = _compute_similarity(new_fact.embedding, fact.embedding)
+                    if sim > 0.5:
+                        out.append((fact, sim))
+                out.sort(key=lambda t: (-t[1], t[0].fact_id))
+                return out[:k]
+        scored = []
+        for fact in self._db.get_all_facts(profile_id):
+            if fact.fact_id in skip:
+                continue
+            sim = _compute_similarity(new_fact.embedding, fact.embedding)
+            if sim > 0.5:
+                scored.append((fact, sim))
+        scored.sort(key=lambda t: (-t[1], t[0].fact_id))
+        return scored[:k]
 
     # -- Public API ---------------------------------------------------------
 
@@ -209,16 +260,9 @@ class MemoryConsolidator:
 
         # --- semantic candidates (top-K by embedding) ---
         if new_fact.embedding is not None and self._embedder is not None:
-            all_facts = self._db.get_all_facts(profile_id)
-            semantic_scored: list[tuple[AtomicFact, float]] = []
-            for fact in all_facts:
-                if fact.fact_id in seen_ids:
-                    continue
-                sim = _compute_similarity(new_fact.embedding, fact.embedding)
-                if sim > 0.5:
-                    semantic_scored.append((fact, sim))
-            semantic_scored.sort(key=lambda t: t[1], reverse=True)
-            for fact, _ in semantic_scored[: self._cfg.max_consolidation_candidates]:
+            semantic_scored = self._similar(new_fact, profile_id,
+                                            self._cfg.max_consolidation_candidates, seen_ids)
+            for fact, _ in semantic_scored:
                 if fact.fact_id not in seen_ids:
                     seen_ids.add(fact.fact_id)
                     candidate_facts.append(fact)
@@ -377,16 +421,9 @@ class MemoryConsolidator:
         """Link new fact to top-K most similar existing facts."""
         if new_fact.embedding is None:
             return
-        all_facts = self._db.get_all_facts(profile_id)
-        scored: list[tuple[str, float]] = []
-        for fact in all_facts:
-            if fact.fact_id == new_fact.fact_id:
-                continue
-            sim = _compute_similarity(new_fact.embedding, fact.embedding)
-            if sim > 0.5:
-                scored.append((fact.fact_id, sim))
-        scored.sort(key=lambda t: t[1], reverse=True)
-        for target_id, weight in scored[: self._cfg.semantic_edge_top_k]:
+        scored = [(f.fact_id, sim) for f, sim in
+                  self._similar(new_fact, profile_id, self._cfg.semantic_edge_top_k, set())]
+        for target_id, weight in scored:
             self._db.store_edge(GraphEdge(
                 profile_id=profile_id,
                 source_id=new_fact.fact_id,

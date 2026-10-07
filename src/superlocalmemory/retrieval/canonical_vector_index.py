@@ -38,7 +38,9 @@ question over the same store returns the same candidates every time.
 from __future__ import annotations
 
 import logging
+import threading
 import time
+import weakref
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -264,6 +266,25 @@ def _compact_if_sparse(part: _Partition) -> None:
     part.size = len(keep)
 
 
+_SHARED: "weakref.WeakKeyDictionary[object, dict[int, CanonicalVectorIndex]]" = (
+    weakref.WeakKeyDictionary())
+_SHARED_LOCK = threading.Lock()
+
+
+def shared_index(db, dimension: int) -> CanonicalVectorIndex:
+    """One in-memory index per database and dimension in this process.
+
+    Recall and consolidation read the same vectors: two instances would hold
+    the matrix twice and each pay the first full read.
+    """
+    with _SHARED_LOCK:
+        per_db = _SHARED.setdefault(db, {})
+        index = per_db.get(int(dimension))
+        if index is None:
+            index = per_db[int(dimension)] = CanonicalVectorIndex(db, dimension)
+        return index
+
+
 def candidate_vector_source(db, vector_store, dimension: int, index=None):
     """The vector candidate source the retrieval channels read.
 
@@ -273,8 +294,8 @@ def candidate_vector_source(db, vector_store, dimension: int, index=None):
     """
     if vector_store is not None and getattr(vector_store, "available", False):
         return vector_store
-    index = index if index is not None else CanonicalVectorIndex(db, dimension)
+    index = index if index is not None else shared_index(db, dimension)
     return index if index.available else vector_store
 
 
-__all__ = ["CanonicalVectorIndex", "candidate_vector_source"]
+__all__ = ["CanonicalVectorIndex", "candidate_vector_source", "shared_index"]
