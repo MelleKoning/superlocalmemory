@@ -121,3 +121,17 @@ def test_report_all_match_semantics_needs_every_label(db) -> None:
     report = build_report(db, "default", Facets.of(tags=["a", "b"], tags_match="all"), matched=0)
     # No single memory has BOTH a and b, so under "all" nothing exists.
     assert report["reason"] == "no_memory_has_tag"
+
+
+def test_report_says_unreadable_when_the_membership_read_fails(db, monkeypatch) -> None:
+    """tag_members swallows a DB error and returns None; the report must call
+    that unreadable, never "no memory has the tag" (a claim nobody checked)."""
+    _save(db, "x", tags="decision")
+
+    def broken(*_a, **_k):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(db, "execute", broken)
+    report = build_report(db, "default", Facets.of(tags="decision"), matched=0)
+    assert report["reason"] == "unreadable"
+    assert "could not be checked" in report["note"]

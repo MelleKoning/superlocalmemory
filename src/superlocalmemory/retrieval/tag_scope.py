@@ -77,7 +77,10 @@ def build_report(db: Any, profile_id: str, facets: Any, matched: int) -> dict:
     from superlocalmemory.retrieval.tag_search import tag_members
 
     try:
-        exists = bool(tag_members(db, profile_id, tags, match))
+        # tag_members never raises: None is its "could not read", which must
+        # be reported as unreadable, not as "no memory has the tag".
+        found = tag_members(db, profile_id, tags, match)
+        exists = None if found is None else bool(found)
     except Exception as exc:  # noqa: BLE001 — reported, never silent
         logger.warning("tag_scope existence check failed (%s)", type(exc).__name__)
         exists = None
