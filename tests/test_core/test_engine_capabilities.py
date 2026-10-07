@@ -198,6 +198,7 @@ class TestKindReconcileAtStart:
         first = make_engine(mode_a_config, capabilities=Capabilities.LIGHT)
         first.initialize()
         assert first.db.has_memory_kind_columns() is True
+        assert first._kind_reconcile.wait(timeout=30)  # its own pass, on a clean store
 
         mid = first.db.store_memory(
             MemoryRecord(profile_id=first.profile_id, content="s"))
@@ -210,10 +211,18 @@ class TestKindReconcileAtStart:
             "UPDATE atomic_facts SET memory_kind = 'decision', "
             "memory_kind_source = 'user' WHERE fact_id = ?", (fid,),
         )
+        first_dir = first.db.db_path.parent
         first.close()
+        # The window: an older version ran on this store, and its daemon wrote
+        # its version marker, as every version's daemon does at start.
+        (first_dir / ".last_version").write_text("4.1.18", encoding="utf-8")
 
         restarted = make_engine(mode_a_config, capabilities=Capabilities.LIGHT)
-        restarted.initialize()  # the repair must happen here, with no manual call
+        restarted.initialize()  # the repair starts here, with no manual call...
+        # ...on its own thread (4.1.22): start-up never waits for the scan.
+        assert restarted._kind_reconcile.wait(timeout=30)
+        assert restarted._kind_reconcile.snapshot()["state"] == "complete"
+        assert restarted._kind_reconcile.snapshot()["fixed"] == 1
         row = dict(restarted.db.execute(
             "SELECT fact_type FROM atomic_facts WHERE fact_id = ?", (fid,))[0])
         assert row["fact_type"] == "episodic"  # COARSE[DECISION]
@@ -222,13 +231,15 @@ class TestKindReconcileAtStart:
     def test_engine_start_never_fails_if_the_reconcile_itself_fails(
         self, make_engine, mode_a_config, monkeypatch,
     ) -> None:
-        import superlocalmemory.storage.memory_kind_store as mks_module
+        import superlocalmemory.storage.memory_kind_writes as writes_module
 
-        def _boom(self, profile_id, **kwargs):
+        def _boom(db, profile_id, **kwargs):
             raise RuntimeError("simulated reconcile failure")
 
-        monkeypatch.setattr(mks_module.MemoryKindStore, "reconcile_confirmed", _boom)
+        monkeypatch.setattr(writes_module, "reconcile_confirmed_pass", _boom)
         engine = make_engine(mode_a_config, capabilities=Capabilities.LIGHT)
         engine.initialize()  # must not raise
         assert engine._initialized is True
+        assert engine._kind_reconcile.wait(timeout=30)
+        assert engine._kind_reconcile.snapshot()["state"] == "failed"  # said, not hidden
         engine.close()

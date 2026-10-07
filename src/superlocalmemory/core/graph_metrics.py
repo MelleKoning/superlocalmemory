@@ -131,6 +131,31 @@ def _short_connection(db: Any) -> Any:
     yield conn
     conn.commit()
 
+@contextmanager
+def _read_connection(db: Any) -> Any:
+    """A connection for a READ, which never takes the store's write lock.
+
+    ``_short_connection`` goes through ``raw_connection``, which takes the
+    process-wide write lock even to read. Reading every edge of a large store
+    that way held it for 60 s on a 22k-fact store (4.1.21): saves and edits
+    failed and enrichment lost its lease meanwhile. A ``DatabaseManager``
+    store is read through a query-only snapshot instead; the consolidation
+    proxy (a bare connection) keeps its own connection.
+    """
+    if callable(getattr(type(db), "raw_connection", None)) and getattr(db, "db_path", None):
+        from superlocalmemory.storage.read_connection import read_only_snapshot
+
+        with read_only_snapshot(db) as conn:
+            yield conn
+        return
+    with _short_connection(db) as conn:
+        yield conn
+
+
+#: Rows written per transaction, so the write lock is released between them
+#: and an interactive save never waits behind the whole table.
+_WRITE_CHUNK = 500
+
 #: PageRank damping. Matches the previous whole-graph pass so scores stay
 #: comparable across the version that introduced this module.
 DEFAULT_DAMPING = 0.85
@@ -335,7 +360,7 @@ def _projection_is_current(db: Any, profile_id: str) -> bool:
 
         if not projection_outbox.is_available(db):
             return True
-        with _short_connection(db) as conn:
+        with _read_connection(db) as conn:
             row = conn.execute(
                 "SELECT COUNT(*) FROM projection_outbox WHERE profile_id = ?",
                 (profile_id,),
@@ -365,7 +390,7 @@ def compute_graph_metrics(
     started = time.monotonic()
     notes: list[str] = []
     try:
-        with _short_connection(db) as conn:
+        with _read_connection(db) as conn:
             nodes = _visible_fact_ids(conn, profile_id)
             edges = [
                 (str(source), str(target), float(weight))
@@ -495,49 +520,56 @@ def compute_graph_metrics(
 
 
 def _write(db: Any, profile_id: str, rows: list[tuple[Any, ...]]) -> int:
-    """Replace this profile's rows in one transaction.
+    """Replace this profile's rows, a bounded chunk per transaction.
 
-    Deleting first is what makes the table a projection rather than an
-    accumulation: a fact that has since been withheld or erased must lose its
-    row, or the ranker keeps scoring something recall will never return. The
-    delete and the insert share a transaction so no recall ever sees the
-    intermediate state where the profile has no metrics at all.
+    Deleting what is no longer visible is what makes the table a projection
+    rather than an accumulation: a fact that has since been withheld or erased
+    must lose its row, or the ranker keeps scoring something recall will never
+    return.
+
+    One transaction for the whole table held the store's write lock for 2.3 s
+    on a 22k-fact store - longer than an edit's 2 s budget, so edits failed
+    whenever a pass landed. Each chunk now commits on its own. Rows are
+    upserted, never deleted and re-inserted, so between chunks a recall sees
+    some scores from this pass and some from the last one, never a profile
+    with no metrics at all.
     """
-    removed = 0
-    with _short_connection(db) as conn:
-        _ensure_bridge_column(conn)
-        keep = {row[0] for row in rows}
+    with _read_connection(db) as conn:
         existing = {
             str(r[0]) for r in conn.execute(
                 "SELECT fact_id FROM fact_importance WHERE profile_id = ?",
                 (profile_id,),
             ).fetchall()
         }
-        stale = existing - keep
-        for index in range(0, len(list(stale)), 800):
-            chunk = list(stale)[index:index + 800]
-            placeholders = ",".join("?" for _ in chunk)
+    stale = sorted(existing - {row[0] for row in rows})
+    with _short_connection(db) as conn:
+        _ensure_bridge_column(conn)
+    for index in range(0, len(stale), 800):
+        chunk = stale[index:index + 800]
+        placeholders = ",".join("?" for _ in chunk)
+        with _short_connection(db) as conn:
             conn.execute(
                 f"DELETE FROM fact_importance WHERE profile_id = ? "
                 f"AND fact_id IN ({placeholders})",
                 (profile_id, *chunk),
             )
-            removed += len(chunk)
-        conn.executemany(
-            "INSERT INTO fact_importance "
-            "(fact_id, profile_id, pagerank_score, community_id, "
-            " degree_centrality, bridge_score, computed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, datetime('now')) "
-            "ON CONFLICT(fact_id) DO UPDATE SET "
-            "  profile_id = excluded.profile_id, "
-            "  pagerank_score = excluded.pagerank_score, "
-            "  community_id = excluded.community_id, "
-            "  degree_centrality = excluded.degree_centrality, "
-            "  bridge_score = excluded.bridge_score, "
-            "  computed_at = excluded.computed_at",
-            rows,
-        )
-    return removed
+    for index in range(0, len(rows), _WRITE_CHUNK):
+        with _short_connection(db) as conn:
+            conn.executemany(
+                "INSERT INTO fact_importance "
+                "(fact_id, profile_id, pagerank_score, community_id, "
+                " degree_centrality, bridge_score, computed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, datetime('now')) "
+                "ON CONFLICT(fact_id) DO UPDATE SET "
+                "  profile_id = excluded.profile_id, "
+                "  pagerank_score = excluded.pagerank_score, "
+                "  community_id = excluded.community_id, "
+                "  degree_centrality = excluded.degree_centrality, "
+                "  bridge_score = excluded.bridge_score, "
+                "  computed_at = excluded.computed_at",
+                rows[index:index + _WRITE_CHUNK],
+            )
+    return len(stale)
 
 
 def _ensure_bridge_column(conn: sqlite3.Connection) -> None:
@@ -570,7 +602,7 @@ def metrics_are_stale(db: Any, profile_id: str) -> tuple[bool, str]:
     column.
     """
     try:
-        with _short_connection(db) as conn:
+        with _read_connection(db) as conn:
             from superlocalmemory.storage.database import (
                 visible_fact_clause_for_connection,
             )

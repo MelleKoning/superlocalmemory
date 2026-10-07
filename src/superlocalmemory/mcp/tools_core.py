@@ -83,14 +83,17 @@ def _routed_daemon_call(method: str, path: str, body: dict | None = None) -> dic
     not in it) is an answer, returned with its code so the caller does not
     retry it; ``None`` still means the daemon did not answer.
     """
-    from superlocalmemory.cli.daemon import DaemonNotFound, daemon_request
+    from superlocalmemory.cli.daemon import DaemonConflict, DaemonNotFound, daemon_request
 
     try:
-        return daemon_request(method, path, body, preserve_not_found=True)
+        return daemon_request(method, path, body, preserve_not_found=True,
+                              preserve_conflict=True)
     except DaemonNotFound as exc:
         # The route's own code (unknown_profile) when it gave one.
         return {"success": False, "code": exc.error_code or exc.code, "retryable": False,
                 "error": exc.error_message or exc.message}
+    except DaemonConflict as exc:  # e.g. a correction already open: retrying cannot help
+        return {"success": False, "code": "CONFLICT", "retryable": False, "error": exc.detail}
 
 def _emit_event(event_type: str, payload: dict | None = None,
                 source_agent: str = "mcp_client") -> None:
@@ -280,13 +283,12 @@ def register_core_tools(server, get_engine: Callable) -> None:
                         # 4.1.14 audit: stripped — whitespace-only is legacy,
                         # padded ids travel canonical.
                         body["profile_id"] = profile_id.strip()
-                    request_flags = {"preserve_not_found": True}
+                    # A 422 refuses THIS request (a reused key, a bad
+                    # ``replaces``): an answer, never an outage to retry.
+                    request_flags = {"preserve_not_found": True, "preserve_unprocessable": True}
                     if replaces_id is not None:
-                        # Sent only when set, so a plain call is unchanged. The
-                        # daemon refuses an id it cannot honour with a 422,
-                        # which must surface, not read as an outage.
+                        # Sent only when set, so a plain call is unchanged.
                         body["replaces"] = replaces_id
-                        request_flags["preserve_unprocessable"] = True
                     body, request_flags = rk.with_declared_kind(body, request_flags, declared_kind)
                     resp = None
                     try:
@@ -366,9 +368,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
                                 else "Queryable now; canonical enrichment is still running."
                             ),
                         }
-                        if resp.get("replaced") is not None:
-                            stored_reply["replaced"] = resp["replaced"]
-                        return stored_reply
+                        return rk.with_receipt_notes(stored_reply, resp)
                     if attempt < 2:
                         await _asyncio.sleep(0.05 * (attempt + 1))
                 return {
@@ -484,9 +484,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
                     else "Queryable now; canonical enrichment is still running."
                 ),
             }
-            if stored.get("replaced") is not None:
-                pool_reply["replaced"] = stored["replaced"]
-            return pool_reply
+            return rk.with_receipt_notes(pool_reply, stored)
         except Exception:
             logger.exception("remember failed")
             return {
@@ -1387,10 +1385,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
             import asyncio
             import urllib.parse
 
-            from superlocalmemory.cli.daemon import (
-                daemon_request,
-                is_daemon_running,
-            )
+            from superlocalmemory.cli.daemon import is_daemon_running
             from superlocalmemory.mcp.request_profile import (
                 requested_profile,
                 routing_needs_daemon_error,
@@ -1399,19 +1394,11 @@ def register_core_tools(server, get_engine: Callable) -> None:
             named = requested_profile(profile_id)
             if await asyncio.to_thread(is_daemon_running):
                 path = "/api/memories/" + urllib.parse.quote(fact_id, safe="")
-                if named:
-                    result = await asyncio.to_thread(
-                        _routed_daemon_call, "PATCH", path,
-                        {"content": content.strip(), "profile_id": named},
-                    )
-                else:
-                    result = await asyncio.to_thread(
-                        daemon_request,
-                        "PATCH",
-                        path,
-                        {"content": content.strip()},
-                    )
-                if named and isinstance(result, dict) and result.get("code"):
+                body = {"content": content.strip(), **({"profile_id": named} if named else {})}
+                # A refusal (unknown profile, a correction already open) comes back
+                # with its code and retryable False; only no answer is retryable.
+                result = await asyncio.to_thread(_routed_daemon_call, "PATCH", path, body)
+                if isinstance(result, dict) and result.get("code"):
                     return result
                 if isinstance(result, dict) and result.get("success"):
                     return {

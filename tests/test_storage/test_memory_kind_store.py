@@ -290,7 +290,9 @@ class TestReconcileConfirmed:
         )
         # started, pre-row-1 check (still within budget), pre-row-2 check
         # (over budget) — deterministic instead of racing a real clock.
-        ticks = iter([0.0, 0.0, 10.0])
+        # Any later clock read (the lock-hold measurement) stays past the bound.
+        import itertools
+        ticks = itertools.chain([0.0, 0.0, 10.0], itertools.repeat(10.0))
         monkeypatch.setattr(time_mod, "perf_counter", lambda: next(ticks))
 
         fixed = store.reconcile_confirmed("default", max_seconds=1.0)

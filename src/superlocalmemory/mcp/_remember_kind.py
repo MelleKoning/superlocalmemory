@@ -67,9 +67,30 @@ def with_declared_kind(
     return {**body, "kind": declared}, {**flags, "preserve_unprocessable": True}
 
 
+def with_receipt_notes(reply: dict[str, Any], receipt: dict[str, Any]) -> dict[str, Any]:
+    """``reply`` plus what the daemon reported about this save beyond its ids.
+
+    ``replaced`` (only when the save asked to replace something) and
+    ``kind_conflict``: the words were already stored with ANOTHER confirmed
+    kind, which was kept. Never left out, so a caller is not told a kind was
+    recorded when it was not.
+    """
+    notes = {key: receipt[key] for key in ("replaced", "kind_conflict")
+             if receipt.get(key) is not None}
+    conflict = notes.get("kind_conflict")
+    if isinstance(conflict, dict):
+        notes["message"] = (
+            f"{reply.get('message', '')} These exact words were already saved as "
+            f"'{conflict.get('kept')}', which was kept; '{conflict.get('requested')}' "
+            "was not recorded. Change it explicitly if it is wrong."
+        ).strip()
+    return {**reply, **notes}
+
+
 def store_kwargs(declared: str) -> dict[str, str]:
     """Keyword arguments that pass ``declared`` to ``DaemonPoolProxy.store``."""
     return {"kind": declared} if declared else {}
 
 
-__all__ = ["kind_key_part", "parse_declared_kind", "store_kwargs", "with_declared_kind"]
+__all__ = ["kind_key_part", "parse_declared_kind", "store_kwargs", "with_declared_kind",
+           "with_receipt_notes"]

@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Sequence
 
@@ -100,6 +101,19 @@ def _checkpoint_after(db: "DatabaseManager") -> None:
         pass
 
 
+def _begin_immediate(conn: sqlite3.Connection) -> tuple[float, float]:
+    """Take the write lock; return ``(held-since clock, ms spent waiting for it)``.
+
+    A batch's write time used to start before BEGIN IMMEDIATE, so time spent
+    waiting behind another writer (up to 6.9 s on a large store) was reported,
+    and paced, as if the batch itself had held the lock that long.
+    """
+    asked = time.perf_counter()
+    conn.execute("BEGIN IMMEDIATE")
+    started = time.perf_counter()
+    return started, (started - asked) * 1000.0
+
+
 def _held_ms(started: float) -> float:
     return (time.perf_counter() - started) * 1000.0
 
@@ -132,8 +146,7 @@ def apply_batch(
     applied = 0
     skipped = 0
     with _batch_connection(db) as conn:
-        started = time.perf_counter()
-        conn.execute("BEGIN IMMEDIATE")
+        started, wait_ms = _begin_immediate(conn)
         try:
             for change in changes:
                 cols = change.new.as_columns(now)
@@ -190,12 +203,13 @@ def apply_batch(
                 conn.execute("ROLLBACK")
                 result = BatchResult(
                     applied=0, skipped=len(changes), cursor=new_cursor, run_still_active=False,
-                    write_ms=_held_ms(started),
+                    write_ms=_held_ms(started), wait_ms=wait_ms,
                 )
             else:
                 conn.commit()
                 result = BatchResult(applied=applied, skipped=skipped, cursor=new_cursor,
-                                     run_still_active=True, write_ms=_held_ms(started))
+                                     run_still_active=True, write_ms=_held_ms(started),
+                                     wait_ms=wait_ms)
         except Exception:
             conn.rollback()
             raise
@@ -219,8 +233,7 @@ def revert_batch(
 
     now = _now_iso()
     with _batch_connection(db) as conn:
-        started = time.perf_counter()
-        conn.execute("BEGIN IMMEDIATE")
+        started, wait_ms = _begin_immediate(conn)
         try:
             run_row = conn.execute(
                 "SELECT revert_cursor FROM memory_kind_runs WHERE run_id = ?", (run_id,),
@@ -302,7 +315,7 @@ def revert_batch(
     _checkpoint_after(db)
     return BatchResult(
         applied=applied, skipped=skipped, cursor=last_history_id, run_still_active=not finished,
-        write_ms=held,
+        write_ms=held, wait_ms=wait_ms,
     )
 
 
@@ -315,48 +328,87 @@ def revert_batch(
 _RECONCILE_DEFAULT_MAX_SECONDS = 0.25
 
 
-def reconcile_confirmed(
-    db: "DatabaseManager", profile_id: str, *, limit: int = 500,
-    max_seconds: float = _RECONCILE_DEFAULT_MAX_SECONDS,
-) -> int:
-    """Repair ``fact_type`` on confirmed rows a 4.1.18 downgrade window changed (I2).
+#: Only rows whose ``fact_type`` differs from what their confirmed kind maps to
+#: are read. The LIMIT used to apply to every confirmed row, so a store with
+#: more than ``limit`` of them only ever looked at the same first ones and never
+#: repaired a drifted row past them, on any start.
+_COARSE_CASE = "CASE memory_kind " + " ".join(
+    f"WHEN '{kind.value}' THEN '{fact_type}'" for kind, fact_type in COARSE.items()
+) + " END"
 
-    Bounded by both ``limit`` (rows read in one call) and ``max_seconds``
-    (wall-clock budget, checked before each row): whichever is hit first
-    stops the pass. A store with more mismatched rows than either bound
-    allows is left with some unfixed — they are picked up on a later call
-    (engine start calls this once per boot), never processed unbounded in
-    this one.
+_RECONCILE_SELECT_SQL = (
+    "SELECT rowid, fact_id, memory_kind, memory_kind_source, "
+    "memory_kind_confidence, fact_type FROM atomic_facts "
+    "WHERE profile_id = ? AND memory_kind_source IN ('user', 'caller') "
+    f"AND memory_kind IS NOT NULL AND fact_type IS NOT ({_COARSE_CASE}) LIMIT ?"
+)
+
+
+#: SQLite VM steps between two polls of ``should_stop`` during the read.
+_STOP_POLL_OPS = 10_000
+
+
+class ReconcileStopped(RuntimeError):
+    """``should_stop`` asked a reconcile pass to stop (the engine is closing)."""
+
+
+def _reconcile_candidates(
+    db: "DatabaseManager", profile_id: str, limit: int,
+    should_stop: Callable[[], bool] | None,
+) -> tuple[list[tuple[dict[str, Any], str]], int]:
+    """Drifted confirmed rows (at most ``limit``), read with NO write lock.
+
+    The read takes the tail of every confirmed row (the kind columns sit after
+    the vector): 22 s on a 2 GB store. It used to run inside BEGIN IMMEDIATE,
+    holding the write lock that whole time on every start. ``should_stop`` is
+    polled while SQLite works, so a closing engine is never held up by it.
     """
-    if not db.has_memory_kind_columns():
-        return 0
+    from superlocalmemory.storage.read_connection import read_only_snapshot
+
+    with read_only_snapshot(db) as snapshot:
+        if should_stop is not None:
+            snapshot.set_progress_handler(lambda: 1 if should_stop() else 0, _STOP_POLL_OPS)
+        try:
+            rows = [_row_dict(r) for r in snapshot.execute(
+                _RECONCILE_SELECT_SQL, (profile_id, limit)).fetchall()]
+        except sqlite3.OperationalError as exc:
+            if should_stop is not None and should_stop():
+                raise ReconcileStopped("reconcile read interrupted") from exc
+            raise
+    todo = [(d, COARSE[kind]) for d in rows
+            if (kind := parse_kind(d["memory_kind"])) is not None
+            and d["fact_type"] != COARSE[kind]]
+    return todo, len(rows)
+
+
+def _reconcile_repair(
+    db: "DatabaseManager", profile_id: str,
+    todo: Sequence[tuple[dict[str, Any], str]], max_seconds: float,
+) -> tuple[int, int, float]:
+    """One write transaction over the head of ``todo``, bounded by ``max_seconds``.
+
+    Returns ``(fixed, consumed, held_ms)``: rows repaired, rows looked at (a
+    row changed since it was read is left alone, and still counts as looked
+    at), and how long the write lock was held. The budget starts once the
+    lock is taken, so time spent waiting for it is not counted against it.
+    """
     now = _now_iso()
-    fixed = 0
-    started = time.perf_counter()
+    fixed = consumed = 0
     with db.raw_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        started = time.perf_counter()
         try:
-            rows = conn.execute(
-                "SELECT rowid, fact_id, memory_kind, memory_kind_source, "
-                "memory_kind_confidence, fact_type FROM atomic_facts "
-                "WHERE profile_id = ? AND memory_kind_source IN ('user', 'caller') "
-                "AND memory_kind IS NOT NULL LIMIT ?",
-                (profile_id, limit),
-            ).fetchall()
-            for row in rows:
+            for d, expected in todo:
                 if time.perf_counter() - started > max_seconds:
                     break
-                d = _row_dict(row)
-                parsed = parse_kind(d["memory_kind"])
-                if parsed is None:
-                    continue
-                expected = COARSE[parsed]
-                if d["fact_type"] == expected:
-                    continue
+                consumed += 1
+                # Guarded on what was read: a row changed since is left alone.
                 cur = conn.execute(
                     "UPDATE atomic_facts SET fact_type = ? WHERE rowid = ? "
-                    "AND profile_id = ? AND memory_kind IS ? AND memory_kind_source IS ?",
-                    (expected, d["rowid"], profile_id, d["memory_kind"], d["memory_kind_source"]),
+                    "AND profile_id = ? AND memory_kind IS ? AND memory_kind_source IS ? "
+                    "AND fact_type IS ?",
+                    (expected, d["rowid"], profile_id, d["memory_kind"],
+                     d["memory_kind_source"], d["fact_type"]),
                 )
                 if cur.rowcount == 1:
                     fixed += 1
@@ -374,7 +426,75 @@ def reconcile_confirmed(
         except Exception:
             conn.rollback()
             raise
-    return fixed
+        held_ms = (time.perf_counter() - started) * 1000.0
+    return fixed, consumed, held_ms
+
+
+def reconcile_confirmed(
+    db: "DatabaseManager", profile_id: str, *, limit: int = 500,
+    max_seconds: float = _RECONCILE_DEFAULT_MAX_SECONDS,
+) -> int:
+    """Repair ``fact_type`` on confirmed rows a 4.1.18 downgrade window changed (I2).
+
+    Bounded by both ``limit`` (rows read in one call) and ``max_seconds``
+    (wall-clock budget of the one write transaction, checked before each
+    row): whichever is hit first stops the pass. Rows left over are picked up
+    by a later call, never processed unbounded in this one.
+    """
+    if not db.has_memory_kind_columns():
+        return 0
+    todo, _read = _reconcile_candidates(db, profile_id, limit, None)
+    if not todo:
+        return 0
+    return _reconcile_repair(db, profile_id, todo, max_seconds)[0]
+
+
+@dataclass(frozen=True)
+class ReconcilePass:
+    """What one full background pass did."""
+
+    fixed: int
+    drifted: int
+    #: True when every drifted row the store had was looked at: fewer than
+    #: ``limit`` were found, and all of them were repaired or found changed.
+    complete: bool
+    transactions: int
+    max_hold_ms: float
+
+
+def reconcile_confirmed_pass(
+    db: "DatabaseManager", profile_id: str, *, limit: int = 5_000,
+    max_seconds: float = _RECONCILE_DEFAULT_MAX_SECONDS,
+    pause_seconds: float = 0.05,
+    should_stop: Callable[[], bool] | None = None,
+) -> ReconcilePass:
+    """The background form: read once with no lock, then repair in short turns.
+
+    Each write transaction is bounded by ``max_seconds`` and followed by a
+    ``pause_seconds`` gap, so saves and edits waiting on the write lock get
+    their turn between them. Raises ``ReconcileStopped`` when ``should_stop``
+    becomes true; whatever was already committed stays committed.
+    """
+    if not db.has_memory_kind_columns():
+        return ReconcilePass(0, 0, True, 0, 0.0)
+    todo, read = _reconcile_candidates(db, profile_id, limit, should_stop)
+    fixed = transactions = 0
+    max_hold_ms = 0.0
+    remaining = list(todo)
+    while remaining:
+        if should_stop is not None and should_stop():
+            raise ReconcileStopped("reconcile repair stopped")
+        got, consumed, held_ms = _reconcile_repair(db, profile_id, remaining, max_seconds)
+        max_hold_ms = max(max_hold_ms, held_ms)
+        transactions += 1
+        fixed += got
+        if consumed == 0:  # not even one row fitted the budget: never skip it
+            break
+        remaining = remaining[consumed:]
+        if remaining and pause_seconds > 0:
+            time.sleep(pause_seconds)
+    return ReconcilePass(fixed, len(todo), read < limit and not remaining,
+                         transactions, round(max_hold_ms, 1))
 
 
 def set_kinds(

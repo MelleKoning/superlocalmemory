@@ -5,6 +5,7 @@
 Routes: /api/memories, /api/graph, /api/search, /api/clusters, /api/clusters/{id}
 Uses V3 MemoryEngine for store/recall. Falls back to direct DB for list/graph.
 """
+from anyio.from_thread import run as _on_loop  # body of a sync route
 import json
 import logging
 import re
@@ -100,11 +101,10 @@ def _canonical_mutation_error(exc: Exception, detail: str) -> HTTPException:
         return HTTPException(404, detail="Not found")
     if isinstance(exc, CanonicalMutationConflict):
         return HTTPException(409, detail=str(exc))
-    if isinstance(exc, CanonicalRememberUnavailable):
-        return HTTPException(
-            503,
-            detail="canonical mutation writer is temporarily unavailable",
-        )
+    if isinstance(exc, CanonicalRememberUnavailable):  # contention: nothing changed
+        return HTTPException(503, headers={"Retry-After": "3"}, detail=(
+            "the memory store is busy finishing other writes; nothing was changed. "
+            "Retry in a few seconds"))
     return _internal_error(detail)
 
 
@@ -517,7 +517,7 @@ def _fetch_edges_v2(cursor, memory_ids: list) -> list:
 
 
 @router.get("/api/memories")
-async def get_memories(
+def get_memories(
     request: Request,
     category: Optional[str] = None,
     kind: Optional[str] = Query(
@@ -811,7 +811,7 @@ async def get_memories(
 
 
 @router.get("/api/memories/kind-counts")
-async def get_memory_kind_counts(
+def get_memory_kind_counts(
     request: Request,
     scope: Optional[str] = Query(
         None, description="Same 'shared'|'global'|'all' scope view as /api/memories.",
@@ -874,7 +874,7 @@ async def get_memory_kind_counts(
 
 
 @router.get("/api/graph")
-async def get_graph(
+def get_graph(
     request: Request,
     max_nodes: int = Query(100, ge=10, le=10000),
     min_importance: int = Query(1, ge=1, le=10),
@@ -1116,7 +1116,7 @@ async def search_memories(request: Request, body: SearchRequest):
 
 
 @router.get("/api/clusters")
-async def get_clusters(request: Request):
+def get_clusters(request: Request):
     """Get cluster information with member counts and statistics."""
     try:
         conn = get_db_connection()
@@ -1204,7 +1204,7 @@ async def get_clusters(request: Request):
 
 
 @router.get("/api/clusters/{cluster_id}")
-async def get_cluster_detail(
+def get_cluster_detail(
     request: Request,
     cluster_id: str,
     limit: int = Query(BROWSE_PAGE_SIZE, ge=1, le=200),
@@ -1294,7 +1294,7 @@ async def get_cluster_detail(
 
 
 @router.get("/api/memories/{memory_id}/facts")
-async def get_memory_facts(request: Request, memory_id: str):
+def get_memory_facts(request: Request, memory_id: str):
     """Get original memory text with all its child atomic facts.
 
     v3.7.8: previously routed through WorkerPool.shared(), a subprocess
@@ -1346,7 +1346,7 @@ async def get_memory_facts(request: Request, memory_id: str):
 
 
 @router.get("/api/memories/{memory_id}/detail")
-async def get_memory_detail(request: Request, memory_id: str):
+def get_memory_detail(request: Request, memory_id: str):
     """Full memory row + all child atomic facts (for dashboard modal)."""
     try:
         conn = get_db_connection()
@@ -1397,7 +1397,7 @@ async def get_memory_detail(request: Request, memory_id: str):
 
 
 @router.get("/api/facts/{fact_id}")
-async def get_fact_detail(request: Request, fact_id: str):
+def get_fact_detail(request: Request, fact_id: str):
     """Single atomic fact detail (for fact popup)."""
     try:
         conn = get_db_connection()
@@ -1498,7 +1498,7 @@ def _code_links_for_fact(fact_id: str) -> list[dict]:
 
 
 @router.delete("/api/memories/{fact_id}")
-async def delete_memory(request: Request, fact_id: str, profile_id: str = ""):
+def delete_memory(request: Request, fact_id: str, profile_id: str = ""):
     """Delete a specific memory (atomic fact) by ID.
 
     ``profile_id`` names the profile the memory belongs to, authorized like a
@@ -1548,7 +1548,7 @@ async def delete_memory(request: Request, fact_id: str, profile_id: str = ""):
 
 
 @router.post("/api/memories/{fact_id}/forget")
-async def forget_memory(request: Request, fact_id: str):
+def forget_memory(request: Request, fact_id: str):
     """S9-DASH-08: soft-forget a fact — flip archive_status='archived'.
 
     Non-destructive: the row stays in ``atomic_facts`` for audit and
@@ -1578,7 +1578,7 @@ async def forget_memory(request: Request, fact_id: str):
 
 
 @router.post("/api/memories/{fact_id}/merge")
-async def merge_memory(request: Request, fact_id: str):
+def merge_memory(request: Request, fact_id: str):
     """S9-DASH-08: merge this fact into another (keep the other).
 
     Body: ``{into: <kept_fact_id>}``.
@@ -1592,7 +1592,7 @@ async def merge_memory(request: Request, fact_id: str):
         run_pre_hook=False,
     )
     try:
-        body = await request.json()
+        body = _on_loop(request.json)
         kept = str((body or {}).get("into", "")).strip()
         if not kept:
             raise HTTPException(400, "Body field 'into' is required")
@@ -1624,7 +1624,7 @@ async def merge_memory(request: Request, fact_id: str):
 
 
 @router.patch("/api/memories/{fact_id}", status_code=202)
-async def edit_memory(request: Request, fact_id: str):
+def edit_memory(request: Request, fact_id: str):
     """Propose an immutable, review-required correction for one memory.
 
     A ``profile_id`` in the body names the profile the memory belongs to,
@@ -1632,7 +1632,7 @@ async def edit_memory(request: Request, fact_id: str):
     """
     profile = None
     try:
-        body = await request.json()
+        body = _on_loop(request.json)
         new_content = (body.get("content") or "").strip()
         if not new_content:
             raise HTTPException(status_code=400, detail="content is required")
@@ -1646,8 +1646,7 @@ async def edit_memory(request: Request, fact_id: str):
             profile=profile,
         )
         from superlocalmemory.core.mutations import update_fact_authorized
-
-        result = update_fact_authorized(
+        result = update_fact_authorized(  # embeds, may wait: never on the request loop
             engine,
             fact_id,
             new_content,
@@ -1683,7 +1682,7 @@ async def edit_memory(request: Request, fact_id: str):
 
 
 @router.post("/api/corrections/{case_id}/{action}")
-async def review_correction(request: Request, case_id: str, action: str):
+def review_correction(request: Request, case_id: str, action: str):
     """Apply, reject, or roll back a correction case.
 
     The caller authenticates through the daemon boundary.  It cannot select a
@@ -1695,7 +1694,7 @@ async def review_correction(request: Request, case_id: str, action: str):
     """
     profile = None
     try:
-        body = await request.json()
+        body = _on_loop(request.json)
         if action not in {"apply", "reject", "rollback"}:
             raise HTTPException(422, detail="action must be apply, reject, or rollback")
         expected_version = body.get("expected_version") if isinstance(body, dict) else None
@@ -1783,7 +1782,7 @@ def _correction_store_for(engine, active_profile: str):
 
 
 @router.get("/api/corrections")
-async def list_corrections(request: Request, limit: int = 100, profile_id: str = ""):
+def list_corrections(request: Request, limit: int = 100, profile_id: str = ""):
     """List bounded review metadata for one profile: the routed one when
     ``profile_id`` names it (authorized like a routed review), else the active one."""
     try:
@@ -1803,7 +1802,7 @@ async def list_corrections(request: Request, limit: int = 100, profile_id: str =
 
 
 @router.get("/api/corrections/{case_id}")
-async def get_correction(request: Request, case_id: str, profile_id: str = ""):
+def get_correction(request: Request, case_id: str, profile_id: str = ""):
     """Get one correction case without exposing raw memory text, from the
     routed profile when ``profile_id`` names it, else from the active one."""
     try:
@@ -1834,7 +1833,7 @@ _VALID_SCOPES = ("personal", "shared", "global")
 
 
 @router.patch("/api/memories/{fact_id}/scope")
-async def set_memory_scope(request: Request, fact_id: str):
+def set_memory_scope(request: Request, fact_id: str):
     """Set a memory's scope (personal | shared | global) + shared_with.
 
     Body: {"scope": "shared", "shared_with": "alice,bob"}. shared_with accepts a
@@ -1844,7 +1843,7 @@ async def set_memory_scope(request: Request, fact_id: str):
     fact). This is the write side of multi-scope sharing from the dashboard.
     """
     try:
-        body = await request.json()
+        body = _on_loop(request.json)
         scope = (body.get("scope") or "").strip().lower()
         if scope not in _VALID_SCOPES:
             raise HTTPException(400, detail=f"scope must be one of {_VALID_SCOPES}")

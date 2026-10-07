@@ -112,4 +112,19 @@ class ReadConnectionLease:
             self._snapshot.__exit__(exc_type, exc, traceback)
 
 
-__all__ = ["ReadConnectionError", "ReadConnectionFactory", "ReadConnectionLease"]
+def read_only_snapshot(db: object, *, timeout_ms: int = 5_000) -> AbstractContextManager:
+    """A query-only connection to ``db``'s file that takes NO write lock.
+
+    ``DatabaseManager.raw_connection`` takes the process-wide write lock even
+    for a pure read, so a long read through it (a whole-graph scan, a
+    full-table check) blocked every save and edit for its whole duration -
+    measured at 60 s on a 22k-fact store. In WAL mode a reader never blocks
+    a writer, so reads go here instead. ``db`` is a ``DatabaseManager`` (its
+    ``db_path``) or a path.
+    """
+    path = getattr(db, "db_path", db)
+    return ReadConnectionFactory(Path(str(path)), timeout_ms=timeout_ms).snapshot()
+
+
+__all__ = ["ReadConnectionError", "ReadConnectionFactory", "ReadConnectionLease",
+           "read_only_snapshot"]

@@ -167,6 +167,7 @@ class MemoryEngine:
         self._sheaf_checker = None
         self._provenance = None
         self._adaptive_learner = None
+        self._kind_reconcile = None  # background start-up kind check (kind_reconcile_task)
         self._compliance_checker = None
         self._vector_store = None
         self._access_log = None
@@ -235,6 +236,11 @@ class MemoryEngine:
             self._try_init_proxy()
 
         self._initialized = True
+        try:  # started once the engine is up, see _init_db_layer's note
+            from superlocalmemory.core.kind_reconcile_task import KindReconcileTask
+            self._kind_reconcile = KindReconcileTask(self._db, self._profile_id).start()
+        except Exception as exc:
+            logger.warning("Memory kind reconcile skipped at start: %s", exc)
         logger.info(
             "MemoryEngine initialized: mode=%s profile=%s capabilities=%s",
             self._config.mode.value, self._profile_id,
@@ -329,18 +335,11 @@ class MemoryEngine:
         from superlocalmemory.learning.adaptive import AdaptiveLearner
         self._adaptive_learner = AdaptiveLearner(self._db)
 
-        # 4.1.19 (L1-15): reconcile_confirmed existed, was unit-tested, and
-        # had no production caller — a 4.1.18 downgrade window's fact_type
-        # drift on an already-confirmed kind (LLD §6.5) was never actually
-        # repaired anywhere reachable. Engine start is bounded (rows and
-        # time, inside reconcile_confirmed itself) and, like every other
-        # best-effort migration above, a failure here is a warning, never a
-        # boot failure.
-        try:
-            from superlocalmemory.storage.memory_kind_store import MemoryKindStore
-            MemoryKindStore(self._db).reconcile_confirmed(self._profile_id)
-        except Exception as exc:
-            logger.warning("Memory kind reconcile skipped at start: %s", exc)
+        # 4.1.19 (L1-15): repair a 4.1.18 downgrade window's fact_type drift on
+        # confirmed kinds (LLD §6.5). 4.1.22: on its own thread, never on the
+        # start-up path - finding those rows reads the whole store (22 s on
+        # 2 GB). Its state is on the memory-kinds status; a failure is a
+        # warning there, never a failed start (core/kind_reconcile_task.py).
 
     def _try_init_proxy(self) -> None:
         """V3.5.9: Attach McpEmbedderProxy when running in LIGHT mode.
@@ -1350,6 +1349,9 @@ class MemoryEngine:
         from superlocalmemory.core.thread_join import executor_threads, join_threads
 
         owned_threads: list = []
+        reconcile, self._kind_reconcile = getattr(self, "_kind_reconcile", None), None
+        if reconcile is not None:  # interrupts its read; joined with the pools below
+            owned_threads.extend(reconcile.stop())
         scheduler = getattr(self, "_maintenance_scheduler", None)
         self._maintenance_scheduler = None
         if scheduler is not None:

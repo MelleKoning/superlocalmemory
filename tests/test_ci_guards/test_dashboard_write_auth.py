@@ -43,7 +43,7 @@ def test_memory_mutation_routes_require_authenticated_actor() -> None:
         "merge_memory",
         "edit_memory",
     ):
-        start = source.index(f"async def {function_name}")
+        start = source.index(f"def {function_name}(")  # sync or async route
         next_route = source.find("\n@router.", start + 1)
         block = source[start: next_route if next_route != -1 else None]
         assert "_authorize_memory_mutation" in block, function_name

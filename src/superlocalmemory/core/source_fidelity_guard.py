@@ -62,6 +62,54 @@ def _has_quarantine_column(db: Any) -> bool:
     return any(dict(row).get("name") == "quarantined" for row in rows)
 
 
+def judge_fidelity(
+    db: Any,
+    *,
+    profile_id: str,
+    fact_id: str,
+    content: str,
+    raw_content: str,
+) -> tuple[str | None, bool]:
+    """``(lineage reason or None, withhold?)``, with reads only - nothing written.
+
+    Split from the write so the check can run before the checkpoint's write
+    transaction opens (``core/derivation_lineage.plan_operation_lineage``);
+    ``withhold`` is applied inside it by ``withhold_fact``. Never raises.
+    """
+    try:
+        report = check_fact_against_source(content, raw_content)
+    except Exception as exc:  # pragma: no cover - defensive, pure function
+        logger.warning("source fidelity check failed for %s: %s", fact_id[:16], exc)
+        return None, False
+    if report.ok:
+        return None, False
+    released = _released_reason(db, profile_id, fact_id)
+    if released:
+        return released, False  # the user judged it correct; never withhold it again
+    if not WITHHOLD_REASONS & set(report.reasons):
+        return FLAGGED_PREFIX + "+".join(report.reasons), False
+    return REASON_PREFIX + "+".join(report.reasons), True
+
+
+def is_released(db: Any, *, profile_id: str, fact_id: str) -> bool:
+    """Whether the user has released this fact (read inside the write, to be sure)."""
+    return _released_reason(db, profile_id, fact_id) is not None
+
+
+def withhold_fact(db: Any, *, profile_id: str, fact_id: str, reason: str) -> None:
+    """Take a fact out of answers (``quarantined = 1``); reversible, loses nothing."""
+    if _has_quarantine_column(db):
+        db.execute(
+            "UPDATE atomic_facts SET quarantined = 1 "
+            "WHERE fact_id = ? AND profile_id = ? AND COALESCE(quarantined, 0) = 0",
+            (fact_id, profile_id),
+        )
+    logger.info(
+        "Withheld derived fact %s: it does not match its source (%s)",
+        fact_id[:16], reason[len(REASON_PREFIX):].replace("+", ","),
+    )
+
+
 def withhold_if_unfaithful(
     db: Any,
     *,
@@ -75,31 +123,12 @@ def withhold_if_unfaithful(
     Never raises: a failure to check leaves the fact as it was and is logged,
     because a fidelity check must never cost the user a write.
     """
-    try:
-        report = check_fact_against_source(content, raw_content)
-    except Exception as exc:  # pragma: no cover - defensive, pure function
-        logger.warning("source fidelity check failed for %s: %s", fact_id[:16], exc)
-        return None
-    if report.ok:
-        return None
-    released = _released_reason(db, profile_id, fact_id)
-    if released:
-        return released  # the user judged it correct; never withhold it again
-    if not WITHHOLD_REASONS & set(report.reasons):
-        return FLAGGED_PREFIX + "+".join(report.reasons)
-    reason = REASON_PREFIX + "+".join(report.reasons)
-    if _has_quarantine_column(db):
-        db.execute(
-            "UPDATE atomic_facts SET quarantined = 1 "
-            "WHERE fact_id = ? AND profile_id = ? AND COALESCE(quarantined, 0) = 0",
-            (fact_id, profile_id),
-        )
-    logger.info(
-        "Withheld derived fact %s: it does not match its source (%s)",
-        fact_id[:16], ",".join(report.reasons),
-    )
+    reason, withhold = judge_fidelity(db, profile_id=profile_id, fact_id=fact_id,
+                                      content=content, raw_content=raw_content)
+    if withhold and reason:
+        withhold_fact(db, profile_id=profile_id, fact_id=fact_id, reason=reason)
     return reason
 
 
 __all__ = ["FLAGGED_PREFIX", "REASON_PREFIX", "RELEASED_PREFIX", "WITHHOLD_REASONS",
-           "withhold_if_unfaithful"]
+           "is_released", "judge_fidelity", "withhold_fact", "withhold_if_unfaithful"]

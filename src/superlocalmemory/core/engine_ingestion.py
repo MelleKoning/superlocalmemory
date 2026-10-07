@@ -16,6 +16,7 @@ import os
 import uuid
 from typing import TYPE_CHECKING, Protocol
 
+from superlocalmemory.core.derivation_lineage import checkpoint_with_lineage
 from superlocalmemory.core.ingestion_command import (
     IngestionCommand,
     IngestionOperation,
@@ -231,7 +232,7 @@ def build_immediate_admission_handler(
                 created_at=now,
             )
 
-        from superlocalmemory.core.kind_assignment import assign_kinds
+        from superlocalmemory.core.kind_assignment import assign_kinds, store_fact_keeping_kind
 
         # A kind declared on the save is confirmed on the searchable fact now.
         fact = assign_kinds([fact], metadata=metadata, source_type=request.source_type,
@@ -271,7 +272,7 @@ def build_immediate_admission_handler(
                 shared_with=list(request.shared_with) or None,
             )
             fact.memory_id = db.store_memory(record)
-        return [db.store_fact(fact)]
+        return [store_fact_keeping_kind(db, fact, metadata=metadata, request=request)]
 
     return write_queryable
 
@@ -674,8 +675,8 @@ def build_engine_ingestion_command(
             checkpoint_fact_ids: tuple[str, ...],
             state: dict[str, bool],
         ) -> None:
-            repository.checkpoint_enriching(
-                operation.operation_id,
+            checkpoint_with_lineage(
+                repository, operation,
                 final_fact_ids=checkpoint_fact_ids,
                 derivation_version=_DERIVATION_VERSION,
                 derivation_state=state,
@@ -772,10 +773,7 @@ def build_engine_ingestion_command(
             operation.operation_id,
             final_fact_ids=(),
             derivation_version=_DERIVATION_VERSION,
-            derivation_state={
-                "pipeline_started": True,
-                "pipeline": False,
-            },
+            derivation_state={"pipeline_started": True, "pipeline": False},
             lease_owner=operation.lease_owner,
             lease_seconds=900.0,
         )
@@ -793,8 +791,8 @@ def build_engine_ingestion_command(
             fact_ids: tuple[str, ...],
             state: dict[str, bool],
         ) -> None:
-            repository.checkpoint_enriching(
-                operation.operation_id,
+            checkpoint_with_lineage(
+                repository, operation,
                 final_fact_ids=fact_ids,
                 derivation_version=_DERIVATION_VERSION,
                 derivation_state=state,
