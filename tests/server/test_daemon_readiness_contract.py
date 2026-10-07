@@ -76,6 +76,10 @@ def test_health_ready_requires_engine_migrations_writer_and_retrieval(
         # 4.1.22: the reason the last warmup attempt failed, when it did.
         # None once the embedding model is warm, as it is here.
         "embedding_warmup_error": None,
+        # 4.1.22: what the recall warm-up is still building. ``ready`` does not
+        # wait for it; this says it. Never started in this direct call.
+        "recall_warmup": {"phase": "pending", "warm": False,
+                          "warming": ["indexes", "entity_graph", "recalls"]},
         "recall_health": True,
         "retrieval": True,
         "migration_failures": [],
