@@ -37,6 +37,18 @@ class TestJsonEnvelope:
         assert "version" in output
         assert output["data"]["key"] == "value"
 
+    def test_output_is_compact_not_pretty_printed(self, capsys):
+        """Q9 (2026-10-06): --json is documented as agent-native output for
+        scripts/CI — a script or an agent capturing stdout pays per byte,
+        not per readable line. Same data, no indentation whitespace."""
+        json_print("test_cmd", data={"nested": {"a": [1, 2, 3]}})
+        raw = capsys.readouterr().out
+        assert raw.count("\n") == 1  # the envelope plus trailing newline only
+        assert json.loads(raw) == {
+            "success": True, "command": "test_cmd", "version": json.loads(raw)["version"],
+            "data": {"nested": {"a": [1, 2, 3]}},
+        }
+
     def test_error_envelope_structure(self, capsys):
         json_print("test_cmd", error={"code": "TEST_ERR", "message": "something failed"})
         output = json.loads(capsys.readouterr().out)

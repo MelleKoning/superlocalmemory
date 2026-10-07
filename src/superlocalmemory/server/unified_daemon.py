@@ -1055,7 +1055,7 @@ from superlocalmemory.server.recall_core import (  # noqa: E402
 
 
 def _facet_kwargs(project: str, saved_by: str, about: str, kind: str | None = None,
-                  prefer_project: str = "") -> dict:
+                  prefer_project: str = "", project_strict: bool = False) -> dict:
     """{"facets": ...} when any recall facet was given, else {} (stand-ins
     of the engine need not know about facets).
 
@@ -1070,7 +1070,7 @@ def _facet_kwargs(project: str, saved_by: str, about: str, kind: str | None = No
     from superlocalmemory.retrieval.facets import Facets
 
     facets = Facets.of(project=project, agent=saved_by, about=about, kind=kind,
-                       prefer_project=prefer_project)
+                       prefer_project=prefer_project, project_strict=project_strict)
     return {} if facets.empty else {"facets": facets}
 
 
@@ -1085,6 +1085,13 @@ from superlocalmemory.server.recall_fallback import (  # noqa: E402
 # thread once Ollama has loaded the embedding model. /health reports this
 # so MCP clients can wait for warm state before issuing recall calls.
 _embedding_warm: bool = False
+# 4.1.22: the reason the LAST warmup attempt failed (e.g. a first-run Mode A
+# embedder with no cached model and no network), so a daemon permanently
+# stuck warming says why instead of looking identical to one still loading
+# normally. Cleared on a successful warm; sanitized by warmup_error's
+# sanitized_warmup_error() -- this reaches /health, which an
+# unauthenticated remote caller can also see loopback-adjacent fields of.
+_embedding_warmup_error: str | None = None
 
 
 def upgrade_banner(previous: str, current: str) -> str:
@@ -2477,10 +2484,11 @@ async def lifespan(application: FastAPI):
         # report readiness. Combined with keep_alive=-1 in ollama_embedder.py
         # this keeps the embedding model resident forever after first warm-up.
         import threading
-        global _embedding_warm
+        global _embedding_warm, _embedding_warmup_error
         _embedding_warm = False
+        _embedding_warmup_error = None
         def _warmup_embedder():
-            global _embedding_warm
+            global _embedding_warm, _embedding_warmup_error
             import time as _t
             # RETRY: the retrieval engine / embedder can be created lazily a
             # moment AFTER this thread starts.  The old one-shot attempt often
@@ -2491,6 +2499,7 @@ async def lifespan(application: FastAPI):
             # processes writing memory.db → cross-process SQLITE_BUSY).  Poll
             # until the real embedder (retrieval_eng._embedder, the same one
             # recall uses) is available, warm it, and flip the flag.
+            last_error = ""
             for _attempt in range(240):  # ~120s max at 0.5s steps
                 try:
                     _re = retrieval_eng or getattr(engine, '_retrieval_engine', None)
@@ -2498,18 +2507,32 @@ async def lifespan(application: FastAPI):
                     if embedder is not None and hasattr(embedder, 'embed'):
                         embedder.embed("warmup")
                         _embedding_warm = True
+                        _embedding_warmup_error = None
                         logger.info(
                             "Embedding worker pre-warmed (model resident, "
                             "keep_alive=-1)"
                         )
                         return
                 except Exception as exc:
+                    from superlocalmemory.server.warmup_error import (
+                        sanitized_warmup_error,
+                    )
+                    last_error = sanitized_warmup_error(exc)
                     logger.debug("Embedding warmup attempt %d failed: %s",
                                  _attempt, exc)
                 _t.sleep(0.5)
+            # 4.1.22: a first run with no cached embedding model and no
+            # network (HF_HUB_OFFLINE) never gets past this point -- record
+            # WHY, not just that it is still "warming", so status/readiness
+            # and the ingestion-operation state can say the true reason
+            # instead of looking like a model that is merely slow to load.
+            _embedding_warmup_error = last_error or (
+                "the embedding model never became available (no error captured)"
+            )
             logger.warning(
-                "Embedding warmup did not complete after retries; /health "
-                "may report not-ready even though on-demand embeds work"
+                "Embedding warmup did not complete after retries (%s); /health "
+                "may report not-ready even though on-demand embeds work",
+                _embedding_warmup_error,
             )
 
         def _warmup_recall():
@@ -4544,6 +4567,11 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 and getattr(writer_runtime, "ready", False)
             ),
             "embedding": embedding_ready,
+            # 4.1.22: why the embedding model is not warm, when the last
+            # warmup attempt actually failed (e.g. a first run offline with
+            # no cached model) rather than merely still being in progress.
+            # None while warming normally, or once warm.
+            "embedding_warmup_error": _embedding_warmup_error,
             "recall_health": recall_health.get("recall_healthy") is True,
             "migration_failures": migration_failures,
             # Which of those are the reason this daemon will not serve, as
@@ -4694,6 +4722,9 @@ def _register_daemon_routes(application: FastAPI) -> None:
         # 4.1.21 (#150): rank this project's memories above others of similar
         # relevance; removes nothing.
         prefer_project: str = "",
+        # 4.1.22: with ``project``, keep only that project's memories even when
+        # that leaves none (no fall-back to unfiltered results).
+        project_strict: bool = False,
         # 4.1.19 WP8: only memories whose DISPLAYED kind matches. Refused
         # before any retrieval when it does not parse (never silently
         # ignored). See core.kind_query / retrieval.kind_filter.
@@ -4834,7 +4865,8 @@ def _register_daemon_routes(application: FastAPI) -> None:
             include_global=include_global, include_shared=include_shared,
             window=window, as_of=as_of, known_as_of=known_as_of, valid_at=valid_at,
             include_unknown=include_unknown,
-            facets=_facet_kwargs(project, saved_by, about, _kind, prefer_project).get("facets"),
+            facets=_facet_kwargs(project, saved_by, about, _kind, prefer_project,
+                                 project_strict).get("facets"),
             skip_answer_check=_skip_check, no_reorder=_check_request == "no_reorder",
             full=full, include_source=include_source,
             include_marker=bool(session_id),

@@ -315,6 +315,7 @@ def register_v3_tools(server, get_engine: Callable) -> None:
         project: str = "",
         prefer_project: str = "",
         profile_id: str = "",
+        project_strict: bool = False,
     ) -> dict:
         """Recall with per-channel score breakdown.
 
@@ -366,6 +367,8 @@ def register_v3_tools(server, get_engine: Callable) -> None:
                                                  ("prefer_project", prefer_project),
                                                  ("profile_id", profile_id))
                        if (v or "").strip()},
+                    **({"project_strict": True}
+                       if project_strict and (project or "").strip() else {}),
                 )
             )
             if ((profile_id or "").strip() and isinstance(raw, dict)

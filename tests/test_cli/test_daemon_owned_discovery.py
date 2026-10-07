@@ -479,7 +479,14 @@ def test_stop_request_stays_bound_to_captured_daemon_instance() -> None:
 
     request.assert_called_once_with(
         "http://127.0.0.1:43135/health",
-        timeout=2,
+        # 4.1.22: the "nothing proves a start is in progress" health probe
+        # reads with the same short, fixed budget as the starting-daemon
+        # polling loop (STARTING_PROBE_S) only on Windows, where a closed
+        # port cost the old, longer default the full read timeout on a
+        # platform slow to refuse it. POSIX (this test's platform) keeps
+        # the original 2 s budget -- see daemon_startup.health_probe_timeout
+        # and its correction after this test briefly expected 0.5 s here.
+        timeout=2.0,
     )
 
 

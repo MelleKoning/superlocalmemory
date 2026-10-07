@@ -520,6 +520,8 @@ def main() -> None:
                           help="Only memories saved under this project (a name or a path). "
                                "If none of the memories found were, the results are not "
                                "narrowed and recall says so.")
+    recall_p.add_argument("--project-strict", dest="project_strict", action="store_true",
+                          help="With --project: only that project's memories, even if none.")
     recall_p.add_argument("--prefer-project", dest="prefer_project", default="",
                           help="Rank memories saved under this project above others of "
                                "similar relevance; removes nothing.")

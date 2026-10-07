@@ -31,7 +31,7 @@ from superlocalmemory.core.config import (
     ChannelWeights,
     RetrievalConfig,
 )
-from superlocalmemory.retrieval import channel_status as chstat, kind_scope
+from superlocalmemory.retrieval import channel_status as chstat, kind_scope, project_search
 from superlocalmemory.retrieval.fusion import FusionResult, weighted_rrf
 from superlocalmemory.retrieval.rerank_pool import rerank_pool
 from superlocalmemory.retrieval.strategy import QueryStrategy, QueryStrategyClassifier
@@ -344,6 +344,10 @@ class RetrievalEngine:
             ch_results = kind_scope.supplement(  # search inside the kind (kind_scope)
                 self, ch_results, query=query, query_embedding=self._embed_query(query)[0],
                 profile_id=profile_id, kind=facets.kind, stage_ms=stage_ms)
+        if getattr(facets, "project", None):
+            ch_results = project_search.supplement(  # search inside the project
+                self, ch_results, query=query, query_embedding=self._embed_query(query)[0],
+                profile_id=profile_id, project=facets.project, stage_ms=stage_ms)
         _em("run_channels")
         # One request may need admission before fusion and again after optional
         # bridge/scene expansion.  Cache only the IDs checked during this one
@@ -718,69 +722,23 @@ class RetrievalEngine:
     ) -> dict | None:
         """Attach the precomputed community summary the top results fall into.
 
-        On-device-safe (market CRIT-1): a single read of the ≤N precomputed
-        community_summaries rows + a membership tally — never a per-query LLM
-        fan-out. Gated: fires only when >=2 of the top results AND >=40% of
-        them belong to one community, so precise factual queries are untouched.
-        Fail-open: any error returns None (recall is never affected).
+        Fail-open: any error returns None (recall is never affected). The
+        matching/gating/sample-bounding logic lives in
+        ``retrieval.community_context`` (Q9, 2026-10-06: extracted rather
+        than grown in place — this module is already over the 800-line cap).
         """
         if not results or not getattr(
             self._config, "enable_community_context", True,
         ):
             return None
         try:
-            import json
-            from collections import Counter
-
-            rows = [
-                dict(r) for r in self._db.execute(
-                    "SELECT community_id, summary, keywords, fact_ids_json, "
-                    "fact_count FROM community_summaries WHERE profile_id = ?",
-                    (profile_id,),
-                )
-            ]
-            if not rows:
-                return None
-
-            fact_to_cid: dict[str, int] = {}
-            summ_by_cid: dict[int, dict] = {}
-            for r in rows:
-                cid = int(r["community_id"])
-                summ_by_cid[cid] = r
-                try:
-                    for fid in json.loads(r.get("fact_ids_json") or "[]"):
-                        fact_to_cid[str(fid)] = cid
-                except (ValueError, TypeError):
-                    continue
-
-            top_ids = [
-                res.fact.fact_id
-                for res in results[:top_k]
-                if getattr(res, "fact", None) is not None
-            ]
-            tally = Counter(
-                fact_to_cid[fid] for fid in top_ids if fid in fact_to_cid
+            from superlocalmemory.retrieval.community_context import (
+                build_community_context,
             )
-            if not tally:
-                return None
-            best_cid, count = tally.most_common(1)[0]
-            coverage = count / len(top_ids) if top_ids else 0.0
-            if count < 2 or coverage < 0.4:
-                return None
 
-            row = summ_by_cid[best_cid]
-            try:
-                members = json.loads(row.get("fact_ids_json") or "[]")
-            except (ValueError, TypeError):
-                members = []
-            return {
-                "community_id": best_cid,
-                "summary": row.get("summary", ""),
-                "keywords": row.get("keywords", ""),
-                "member_fact_ids": members,
-                "coverage": round(coverage, 3),
-                "matched_results": count,
-            }
+            return build_community_context(
+                self._db, results, profile_id, top_k=top_k,
+            )
         except Exception as exc:
             logger.debug("community context skipped (fail-open): %s", exc)
             return None

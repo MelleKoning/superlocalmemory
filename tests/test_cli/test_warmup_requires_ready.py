@@ -85,3 +85,38 @@ def test_readiness_helpers() -> None:
     assert not is_fully_warm(None)
     assert "semantic recall is not healthy" in describe_not_ready(
         dict(_READY, ready=False, runtime_state="serving_degraded"))
+
+
+def test_a_genuinely_still_loading_model_keeps_the_old_wording() -> None:
+    """No recorded failure yet (readiness missing, or the field is None):
+    reads exactly as it did before this reason existed."""
+    assert describe_not_ready(_STARTING) == "loading the embedding model"
+    stuck_but_unrecorded = dict(
+        _STARTING, readiness={"embedding_warmup_error": None},
+    )
+    assert describe_not_ready(stuck_but_unrecorded) == "loading the embedding model"
+
+
+def test_a_failed_warmup_attempt_says_why_instead_of_implying_progress() -> None:
+    """4.1.22: a first run offline with no cached embedding model never gets
+    past "warming" on its own -- the recorded reason must say so, not read
+    identically to a model that is merely a few seconds from ready."""
+    stuck = dict(_STARTING, readiness={
+        "embedding_warmup_error": "LocalEntryNotFoundError: outgoing traffic "
+                                  "has been disabled",
+    })
+    out = describe_not_ready(stuck)
+    assert "last attempt failed" in out
+    assert "outgoing traffic has been disabled" in out
+
+
+def test_a_recorded_failure_also_surfaces_outside_the_warming_state() -> None:
+    """not_ready (engine/migrations not up yet, embedding never warmed
+    either) gets the same reason instead of the bare "not loaded yet"."""
+    not_ready = dict(
+        _STARTING, ready=False, embedding_warm=False, runtime_state="not_ready",
+        readiness={"embedding_warmup_error": "download failed"},
+    )
+    out = describe_not_ready(not_ready)
+    assert "not loaded yet" in out
+    assert "download failed" in out
