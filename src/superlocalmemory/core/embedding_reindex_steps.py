@@ -33,6 +33,11 @@ logger = logging.getLogger(__name__)
 
 BATCH = max(1, int(os.environ.get("SLM_REINDEX_BATCH", "32")))
 PAUSE_S = max(0.0, float(os.environ.get("SLM_REINDEX_PAUSE_S", "0.02")))
+#: After each batch the job rests this fraction of the time the batch took, so
+#: it never holds more than about half of the daemon's interpreter: a rollback
+#: that only copies vectors is pure Python, and back to back it raised recall's
+#: median from 1.9 s to 5.3 s on a 22k-fact store copy.
+DUTY_REST = max(0.0, float(os.environ.get("SLM_REINDEX_DUTY_REST", "1.0")))
 YIELD_MAX_S = 2.0
 RETRIES = 3
 PROBE_TEXT = "SuperLocalMemory re-index probe"
@@ -183,6 +188,8 @@ def write_txn(conn: Any, db_path: Any, stats: LockStats | None = None) -> Iterat
 def stage(conn: Any, db_path: Any, job: dict, embedder: Any, facts: list, dimension: int,
           *, rollback: bool, stats: LockStats, cursor: int | None, catching_up: bool) -> None:
     """Embed (or copy) one batch of facts and stage it in one short transaction."""
+    _yield_to_recall()  # copying never reaches the model call that yields
+    started = time.perf_counter()
     copied = copy_previous(conn, facts, dimension) if rollback else {}
     todo = [f for f in facts if f[1] not in copied]
     vectors = dict(zip((f[1] for f in todo),
@@ -193,8 +200,9 @@ def stage(conn: Any, db_path: Any, job: dict, embedder: Any, facts: list, dimens
         write_batch(conn, job, rows, cursor=cursor,
                     done_inc=0 if catching_up else len(facts), copied_inc=len(copied),
                     caught_up_inc=len(facts) if catching_up else 0)
-    if PAUSE_S:
-        time.sleep(PAUSE_S)
+    rest = max(PAUSE_S, (time.perf_counter() - started) * DUTY_REST)
+    if rest:
+        time.sleep(rest)
 
 
 def settle(db_path: Any, embedder: Any, model_name: str, dimension: int,

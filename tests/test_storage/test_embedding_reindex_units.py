@@ -425,3 +425,33 @@ def test_background_work_stays_paused_across_every_activation_try(store, monkeyp
     assert [k for k, _ in seen] == ["try", "backoff", "try", "backoff", "try"]
     assert all(paused for _, paused in seen), f"background work resumed between tries: {seen}"
     assert not runtime.background_paused
+
+
+def test_a_copying_batch_yields_to_recall_and_rests(store, monkeypatch):
+    """A rollback that only copies vectors never calls the model, so it must
+    yield to recall and rest after each batch on its own."""
+    root, db_path = store
+    _run(root, db_path, {"new-model": FakeEmbedder(4, "new")}, monkeypatch)
+    yields: list[int] = []
+    rests: list[float] = []
+    real_sleep = time.sleep
+    monkeypatch.setattr(steps, "_yield_to_recall", lambda: yields.append(1))
+    monkeypatch.setattr(steps.time, "sleep", lambda s: rests.append(s) or real_sleep(0))
+    monkeypatch.setattr(steps, "BATCH", 5)
+    old = FakeEmbedder(8, "old")
+    monkeypatch.setattr(steps, "build_embedder", lambda cfg: old)
+    runner = er.ReindexRunner(db_path=db_path, data_root=root)
+    runner.request_rollback()
+    runner.start()
+    try:
+        deadline = time.monotonic() + 30
+        while runner.status()["job"]["state"] in sp.ACTIVE_STATES and time.monotonic() < deadline:
+            real_sleep(0.05)
+    finally:
+        runner.stop()
+    job = runner.status()["job"]
+    # Two calls: the probe at the request and the probe at the job's start;
+    # every memory's vector was copied, none embedded.
+    assert job["state"] == "activated" and job["copied"] == 20 and old.calls == 2, (job, old.calls)
+    assert len(yields) >= 4, "copy-only batches did not yield to recall"
+    assert len([r for r in rests if r > 0]) >= 4, "copy-only batches ran back to back"
