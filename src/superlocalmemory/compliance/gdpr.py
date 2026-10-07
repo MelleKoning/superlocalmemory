@@ -957,16 +957,10 @@ class GDPRCompliance:
             [fid for fid, _mid in targets], counts,
         )
 
-        for fid, mid in targets:
-            self._db.delete_fact(fid)
-            if mid and not self._memory_has_siblings(mid, profile_id):
-                try:
-                    self._db.execute(
-                        "DELETE FROM memories WHERE memory_id = ? AND profile_id = ?",
-                        (mid, profile_id),
-                    )
-                except Exception:
-                    pass
+        if targets:  # correction history does not block erasure (compliance/erased_cases.py)
+            from superlocalmemory.compliance.erased_cases import delete_erased_facts
+            delete_erased_facts(self._db, targets, profile_id, erasure_id=op_id,
+                                has_siblings=self._memory_has_siblings, counts=counts)
 
         try:
             for fid in target_fact_ids:
@@ -1013,7 +1007,7 @@ class GDPRCompliance:
                 counts.get(marker)
                 for marker in (
                     "vector_store_failures",
-                    "audit_request_failed", "text_scrub_failed",
+                    "audit_request_failed", "text_scrub_failed", "projection_failed",
                     *(f"{table}_failed" for table, _ in self._FACT_KEYED_TABLES),
                 )
             )
