@@ -16,8 +16,10 @@ Do not edit by hand — regenerate instead.
 - `mcp_config.json`
 - `plugin.json`
 - `scripts/antigravity_hook_adapter.py`
+- `skills/slm-bot-memory/SKILL.md`
 - `skills/slm-cache/SKILL.md`
 - `skills/slm-compress/SKILL.md`
+- `skills/slm-getting-started-bot/SKILL.md`
 - `skills/slm-governance/SKILL.md`
 - `skills/slm-graph/SKILL.md`
 - `skills/slm-loop/SKILL.md`

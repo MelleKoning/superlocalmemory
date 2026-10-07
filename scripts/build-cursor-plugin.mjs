@@ -37,12 +37,54 @@ export const CURSOR_SERVER_ENV = Object.freeze({
   // know the option ignores it instead of refusing to start.
   UV_TORCH_BACKEND: 'cpu',
   TOKENIZERS_PARALLELISM: 'false',
+  // GB5 lite bot-host profile: the box is shared by every bot on it with
+  // 1.8-3.5 GiB free RAM, and the cross-encoder reranker subprocess alone
+  // measured ~200 MB resident once warm (plus its own PyTorch import). Turn
+  // it off here — opt-in via env, nowhere else — so recall still works (BM25
+  // + semantic + the other fusion channels), just without cross-encoder
+  // re-ordering of the fused results. Quality cost: reranking measurably
+  // improves top-of-list precision in SLM's own benchmarks (see
+  // bench-v342-locomo.md referenced in core/config.py); turning it off trades
+  // that precision for RAM headroom on a host where OOM would lose the
+  // session entirely. Set SLM_RERANKER_ENABLED=true to opt back in once RAM
+  // allows. SLM_RERANKER_IDLE_TIMEOUT is set too so a future re-enable (or a
+  // host that flips this at the MCP env level) recycles the worker quickly
+  // instead of holding it warm for the default 30 minutes.
+  SLM_RERANKER_ENABLED: 'false',
+  SLM_RERANKER_IDLE_TIMEOUT: '120',
+  // Explicit, not just relying on the default: one embedding worker, never a
+  // pool, on a computer this memory-tight.
+  SLM_MAX_EMBEDDING_WORKERS: '1',
 });
 
 const DESCRIPTION =
   'Local-first long-term memory for your agents and bots: remember, recall and '
   + 'session context stored on your own computer, with reversible compression '
   + 'and a cache for large tool outputs.';
+
+/**
+ * GB7 — the 4-6 skills visible to Grok Bot / Cursor, independent of the full
+ * ~12-skill set every other host gets (plugin/skills/). Chosen to match what
+ * this manifest's `SLM_MCP_PROFILE=core` (18 tools) can actually do, plus the
+ * two skills written specifically for a headless, hook-less bot host:
+ *   - slm-getting-started-bot / slm-bot-memory: new, bot-host-specific.
+ *   - slm-remember / slm-recall: the two tools every session uses.
+ *   - slm-session: what session_init/close_session do (no hooks run them here).
+ *   - slm-scope: the personal/shared/global model slm-bot-memory namespaces on.
+ * Deliberately excluded: slm-graph/slm-mesh/slm-governance/slm-loop (their
+ * tools are not in the core profile this manifest sets — listing a skill for
+ * a tool that is not installed would just teach the model to call something
+ * that does not exist) and slm-cache/slm-compress/slm-profile (useful, but
+ * over the 4-6 budget; still shipped to every other host).
+ */
+export const CURSOR_SKILLS = Object.freeze([
+  'slm-getting-started-bot',
+  'slm-bot-memory',
+  'slm-remember',
+  'slm-recall',
+  'slm-session',
+  'slm-scope',
+]);
 
 const KEYWORDS = ['memory', 'long-term-memory', 'local-first', 'mcp', 'agents'];
 const LOGO_SRC = path.join('assets', 'branding', 'slm-mark.svg');
@@ -91,7 +133,10 @@ export function renderCursorPluginJson(manifest) {
     mcpServers: './mcp.cursor.json',
     name: manifest.pluginName,
     repository: manifest.repository,
-    skills: './skills/',
+    // GB7: a curated 4-6, not the full set every other host gets — see
+    // CURSOR_SKILLS. A manifest field replaces folder discovery, so this
+    // points Cursor at cursor-skills/ instead of the full skills/ directory.
+    skills: './cursor-skills/',
     version: manifest.version,
   });
 }
@@ -127,9 +172,18 @@ export function renderCursorMarketplaceJson(manifest) {
  * @param {string} root repository root
  * @param {object} manifest parsed plugin-src/manifest.json
  * @param {string} pluginRoot absolute plugin/ directory
+ * @param {Map<string, string>} [fullSkillsPlan] the already-rendered
+ *   plugin/skills/<name>/SKILL.md entries build-plugin.mjs's buildPlan() has
+ *   by the time it calls this (skills are planned before cursorPlan runs).
+ *   Reusing those entries means the Cursor copy gets the exact same
+ *   version-stamped, attribution-normalized content as every other host,
+ *   through one rendering path instead of two that could drift apart.
+ *   Defaults to an empty Map so existing callers that don't need the
+ *   cursor-skills/ subset (tests of the other three files) still work; a
+ *   real build always passes the real plan.
  * @returns {Map<string, string>}
  */
-export function cursorPlan(root, manifest, pluginRoot) {
+export function cursorPlan(root, manifest, pluginRoot, fullSkillsPlan = new Map()) {
   const logoPath = path.join(root, LOGO_SRC);
   let logo;
   try {
@@ -137,10 +191,23 @@ export function cursorPlan(root, manifest, pluginRoot) {
   } catch (err) {
     throw new Error(`cursorPlan: cannot read logo ${logoPath}: ${err.message}`);
   }
-  return new Map([
+  const plan = new Map([
     [path.join(pluginRoot, '.cursor-plugin', 'plugin.json'), renderCursorPluginJson(manifest)],
     [path.join(pluginRoot, 'mcp.cursor.json'), renderCursorMcpJson(manifest)],
     [path.join(pluginRoot, ...LOGO_REL.split('/')), logo],
     [path.join(root, '.cursor-plugin', 'marketplace.json'), renderCursorMarketplaceJson(manifest)],
   ]);
+  for (const name of CURSOR_SKILLS) {
+    const srcKey = path.join(pluginRoot, 'skills', name, 'SKILL.md');
+    const content = fullSkillsPlan.get(srcKey);
+    if (content === undefined) {
+      throw new Error(
+        `cursorPlan: CURSOR_SKILLS names '${name}', but ${srcKey} is not in the rendered `
+        + 'skills plan (check plugin-src/manifest.json lists it, and plugin-src/skills/'
+        + `${name}/SKILL.md exists).`,
+      );
+    }
+    plan.set(path.join(pluginRoot, 'cursor-skills', name, 'SKILL.md'), content);
+  }
+  return plan;
 }

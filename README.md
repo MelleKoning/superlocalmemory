@@ -110,14 +110,57 @@ SLM is part of Qualixar's AI Reliability Engineering work: agent memory that is 
 
 | Surface | What you get | Docs |
 |---|---|---|
-| Editor plugins | Claude Code, Codex, VS Code / Copilot, Antigravity, Hermes. Each ships 12 skills, 4 sub-agents and session hooks | [IDE setup](docs/ide-setup.md), [Hermes](docs/hermes.md) |
+| Editor plugins | Claude Code, Codex, VS Code / Copilot, Antigravity, Hermes. Each ships 14 skills, 4 sub-agents and session hooks | [IDE setup](docs/ide-setup.md), [Hermes](docs/hermes.md) |
 | `slm connect <ide>` | Writes the MCP config for 12 IDEs, including Cursor, Windsurf, Zed, JetBrains, Gemini CLI and Claude Desktop | [IDE setup](docs/ide-setup.md) |
 | MCP | stdio (`slm mcp`) or HTTP at `http://127.0.0.1:8765/mcp/`; profiles from 8 to 103 tools | [MCP tools](docs/mcp-tools.md) |
 | Framework adapters | LangGraph, LangChain, LlamaIndex, CrewAI, AutoGen, Semantic Kernel, Microsoft Agent Framework, Google ADK, OpenAI Agents | [Framework adapters](docs/framework-adapters.md) |
 | Python SDK and HTTP API | `MemoryEngine` in your code; the local REST API | [API reference](docs/api-reference.md) |
 | Auto-capture hooks | `slm hooks install` for Claude Code, `--agent codex` for Codex | [Auto-memory](docs/auto-memory.md) |
+| Cursor-format plugin (Grok Bot, Cursor) | A marketplace-distributed plugin — different from `slm connect cursor` above — that runs on a shared, memory-tight computer with no hooks or dashboard | See below |
 
 Claude Code memory in two commands: `claude plugin marketplace add qualixar/superlocalmemory`, then `claude plugin install superlocalmemory@qualixar`.
+
+### Grok Bot (and other Cursor-format plugin hosts)
+
+Grok Bot runs plugins in Cursor's format: a `.cursor-plugin/plugin.json` manifest, not the
+`.claude-plugin/` one Claude Code reads. SuperLocalMemory ships both from one source, so the
+plugin works on Grok Bot's shared, memory-constrained computer without any manual MCP setup.
+
+**Install:** add the `qualixar` marketplace (`.cursor-plugin/marketplace.json` at this repo's
+root) in Grok Bot's Plugins screen, then add `superlocalmemory`. No API key, no sign-in step —
+the server runs locally on the Grok Bot computer, so nothing goes to a memory SaaS.
+*(The MCP server starts as `uvx --from superlocalmemory==<version> slm mcp`: a pinned,
+on-PATH command, with `UV_TORCH_BACKEND=cpu` so a GPU-less Linux box never pulls PyTorch's CUDA
+wheel stack. The first start resolves the package once; the first recall downloads the local
+embedding model once.)*
+
+**Try it:** tell any bot *"Remember that our Q4 theme is agent reliability."* Then open a
+different bot and ask *"What's our Q4 theme?"*
+
+**What's shared and what isn't:** every write is attributed to `SLM_AGENT_ID=cursor_plugin` —
+that is attribution, not an access boundary. If your bots share one `SLM_DATA_DIR` (the default
+on one Grok Bot computer), they share one memory store: anything stored without an explicit
+`scope` is visible to any bot that can reach that store, the same way two terminal sessions on
+one laptop would see each other's files. Mark a fact `scope=global` only when every bot on that
+computer should see it; a bot that genuinely needs private memory needs its own `SLM_DATA_DIR`.
+See the `slm-bot-memory` skill (ships with this plugin) for the full model, including what
+should never be stored on a computer shared with other bots (secrets, keys, other people's
+personal data).
+
+**Tools:** this plugin sets `SLM_MCP_PROFILE=core` — 18 tools (`remember`, `recall`, `search`,
+session lifecycle, compression/cache, corrections) — deliberately smaller than the 56-tool
+default profile every other host gets, so a shared computer is not listing tool descriptions
+for tiers it will not use.
+
+**Resources — the lite bot-host profile:** this plugin also sets `SLM_RERANKER_ENABLED=false`,
+`SLM_RERANKER_IDLE_TIMEOUT=120` and `SLM_MAX_EMBEDDING_WORKERS=1` by default, because the box is
+"shared by every bot on it" with as little as 1.8-3.5 GiB free. Measured on macOS, warm, after
+one remember and one recall: about 390 MB resident with the reranker on (daemon + reranker
+worker + embedding worker) vs. about 190 MB with it off — recall still runs every other channel
+(BM25, semantic, entity graph, temporal, spreading activation, Hopfield) and fuses them, just
+without the cross-encoder re-ordering pass. Set `SLM_RERANKER_ENABLED=true` in the plugin's env
+block to trade that RAM back for ranking precision, or run `slm serve stop` when a bot is done
+with it.
 
 ## What developers use it for
 

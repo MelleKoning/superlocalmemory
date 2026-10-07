@@ -391,8 +391,10 @@ export function buildPlan(root, manifest) {
   // .claude-plugin/marketplace.json at REPO ROOT (not plugin root)
   // ---------------------------------------------------------------------------
   plan.set(path.join(root, '.claude-plugin', 'marketplace.json'), renderMarketplaceJson(manifest));
-  // Cursor format (Grok Bot): .cursor-plugin/ manifests, mcp.cursor.json, logo.
-  cursorPlan(root, manifest, pluginRoot).forEach((content, p) => plan.set(p, content));
+  // Cursor format (Grok Bot): .cursor-plugin/ manifests, mcp.cursor.json, logo,
+  // and the curated cursor-skills/ subset (built from the skills already
+  // rendered into `plan` above).
+  cursorPlan(root, manifest, pluginRoot, plan).forEach((content, p) => plan.set(p, content));
 
   // ---------------------------------------------------------------------------
   // Agents (verbatim)
@@ -449,7 +451,7 @@ export function buildPlan(root, manifest) {
   // ---------------------------------------------------------------------------
   // Root-level plugin-src files → plugin/ (.mcp.json, settings.json, requirements.txt)
   // ---------------------------------------------------------------------------
-  const rootFiles = ['.mcp.json', 'settings.json', 'requirements.txt'];
+  const rootFiles = ['.mcp.json', 'settings.json', 'requirements.txt', 'requirements-cpu-torch.txt'];
   for (const fname of rootFiles) {
     const srcFile = path.join(root, 'plugin-src', fname);
     if (fs.existsSync(srcFile)) {

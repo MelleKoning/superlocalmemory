@@ -671,7 +671,7 @@ def init_retrieval(
         channels["hopfield"] = hopfield_channel
 
     reranker = None
-    if config.retrieval.use_cross_encoder:
+    if config.retrieval.reranker_enabled():
         reranker = init_reranker(config.retrieval)
 
     profile_ch = ProfileChannel(db)

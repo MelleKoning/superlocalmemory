@@ -47,8 +47,14 @@ CODEX_MCP_CONFIG = CODEX_PLUGIN / ".codex" / "config.toml"
 
 # 7 skills — must match plugin/skills/
 EXPECTED_SKILLS = [
+    # GB7 (4.1.22): slm-bot-memory and slm-getting-started-bot, written for a
+    # headless/hook-less bot host, ship in the full skill set too (the
+    # content generalizes beyond Grok Bot — e.g. several Claude Code windows
+    # sharing one SLM_DATA_DIR hit the same cross-agent-memory questions).
+    "slm-bot-memory",
     "slm-cache",
     "slm-compress",
+    "slm-getting-started-bot",
     "slm-governance",
     "slm-graph",
     "slm-loop",

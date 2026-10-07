@@ -14,12 +14,24 @@ import path from 'node:path';
 
 import {
   CURSOR_SERVER_ENV,
+  CURSOR_SKILLS,
   cursorPlan,
   packagePin,
   renderCursorMarketplaceJson,
   renderCursorMcpJson,
   renderCursorPluginJson,
 } from '../build-cursor-plugin.mjs';
+
+/** A minimal fullSkillsPlan with every CURSOR_SKILLS name present, the way
+ * build-plugin.mjs's buildPlan() would have rendered them by the time it
+ * calls cursorPlan() for real. */
+function stubSkillsPlan(pluginRoot) {
+  const plan = new Map();
+  for (const name of CURSOR_SKILLS) {
+    plan.set(path.join(pluginRoot, 'skills', name, 'SKILL.md'), `# ${name}\n`);
+  }
+  return plan;
+}
 
 const MANIFEST = {
   version: '9.8.7',
@@ -63,6 +75,12 @@ describe('Cursor MCP definition', () => {
     assert.equal(server.env.UV_TORCH_BACKEND, 'cpu');
     assert.ok(!('SLM_DATA_DIR' in server.env), 'never re-point the store');
   });
+
+  test('GB5: opts into the lite bot-host profile (reranker off, short idle, one embedding worker)', () => {
+    assert.equal(server.env.SLM_RERANKER_ENABLED, 'false');
+    assert.equal(server.env.SLM_RERANKER_IDLE_TIMEOUT, '120');
+    assert.equal(server.env.SLM_MAX_EMBEDDING_WORKERS, '1');
+  });
 });
 
 describe('Cursor plugin.json', () => {
@@ -102,19 +120,39 @@ describe('Cursor marketplace.json', () => {
 });
 
 describe('cursorPlan', () => {
-  test('writes four files and fails loudly without the logo source', () => {
+  test('writes four files plus the curated skills, and fails loudly without the logo source', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'slm-cursor-'));
     const pluginRoot = path.join(tmp, 'plugin');
     assert.throws(() => cursorPlan(tmp, MANIFEST, pluginRoot), /logo/);
     fs.mkdirSync(path.join(tmp, 'assets', 'branding'), { recursive: true });
     fs.writeFileSync(path.join(tmp, 'assets', 'branding', 'slm-mark.svg'), '<svg/>\n');
-    const plan = cursorPlan(tmp, MANIFEST, pluginRoot);
+    const plan = cursorPlan(tmp, MANIFEST, pluginRoot, stubSkillsPlan(pluginRoot));
     assert.deepEqual([...plan.keys()].sort(), [
       path.join(tmp, '.cursor-plugin', 'marketplace.json'),
       path.join(pluginRoot, '.cursor-plugin', 'plugin.json'),
       path.join(pluginRoot, 'assets', 'logo.svg'),
       path.join(pluginRoot, 'mcp.cursor.json'),
+      ...CURSOR_SKILLS.map((name) => path.join(pluginRoot, 'cursor-skills', name, 'SKILL.md')),
     ].sort());
     assert.equal(plan.get(path.join(pluginRoot, 'assets', 'logo.svg')), '<svg/>\n');
+  });
+
+  test('GB7: fails loudly when a curated skill is missing from the rendered plan', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'slm-cursor-'));
+    const pluginRoot = path.join(tmp, 'plugin');
+    fs.mkdirSync(path.join(tmp, 'assets', 'branding'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'assets', 'branding', 'slm-mark.svg'), '<svg/>\n');
+    const incomplete = stubSkillsPlan(pluginRoot);
+    incomplete.delete(path.join(pluginRoot, 'skills', CURSOR_SKILLS[0], 'SKILL.md'));
+    assert.throws(
+      () => cursorPlan(tmp, MANIFEST, pluginRoot, incomplete),
+      new RegExp(CURSOR_SKILLS[0]),
+    );
+  });
+
+  test('GB7: CURSOR_SKILLS is 4-6 skills, the curated bot-host subset', () => {
+    assert.ok(CURSOR_SKILLS.length >= 4 && CURSOR_SKILLS.length <= 6, CURSOR_SKILLS.length);
+    assert.ok(CURSOR_SKILLS.includes('slm-getting-started-bot'));
+    assert.ok(CURSOR_SKILLS.includes('slm-bot-memory'));
   });
 });

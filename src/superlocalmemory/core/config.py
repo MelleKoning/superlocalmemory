@@ -13,6 +13,7 @@ Part of Qualixar | Author: Varun Pratap Bhardwaj
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -506,6 +507,24 @@ class RetrievalConfig:
                            "using %r, %r", self.kind_aware, self.kind_aware_boost,
                            enabled, boost)
         self.kind_aware, self.kind_aware_boost = enabled, boost
+
+    def reranker_enabled(self) -> bool:
+        """Whether the cross-encoder reranker should run right now.
+
+        `use_cross_encoder` is the user's persisted choice (config.json,
+        ``slm reconfigure``). GB5: ``SLM_RERANKER_ENABLED`` is a process-only
+        override for RAM-constrained shared hosts (the Cursor/Grok "lite" bot
+        profile) — read here, at the point of use, rather than written into
+        this field, so it can never leak into config.json through a later
+        ``SLMConfig.save()``. Unset env = the persisted value, unchanged.
+        Every caller that decides or *reports* whether the reranker is active
+        goes through this one method, so the dashboard/doctor/MCP status can
+        never disagree with what engine_wiring actually built.
+        """
+        override = os.environ.get("SLM_RERANKER_ENABLED")
+        if override is not None:
+            return override.strip().lower() not in ("0", "false", "no", "off")
+        return self.use_cross_encoder
 
 
 # ---------------------------------------------------------------------------

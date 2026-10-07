@@ -15,7 +15,6 @@ stubs plus /usr/bin:/bin — so the developer's own slm cannot decide the result
 
 from __future__ import annotations
 
-import hashlib
 import platform
 
 import pytest
@@ -23,6 +22,7 @@ import pytest
 from tests.test_plugin._plugin_sandbox import (
     REPO,
     SRC_SCRIPTS,
+    requirements_sentinel_digest,
     run,
     sandbox_env,
     stub_python,
@@ -113,7 +113,7 @@ def test_new_python_passes_the_guard_when_the_venv_is_used(tmp_path):
     stub_python(stubs, "3.12.4")
     venv = _venv_dir(tmp_path)
     write_exe(venv / "bin" / "python3", "#!/bin/sh\nexit 0\n")
-    digest = hashlib.sha256((PLUGIN_SRC / "requirements.txt").read_bytes()).hexdigest()
+    digest = requirements_sentinel_digest(PLUGIN_SRC)
     (tmp_path / "plugin-data" / ".venv-reqs.sha256").write_text(digest + "\n", encoding="utf-8")
 
     result = run(["bash", str(ENSURE)], _env(tmp_path, stubs))

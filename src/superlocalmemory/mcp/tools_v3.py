@@ -139,7 +139,7 @@ def register_v3_tools(server, get_engine: Callable) -> None:
             retrieval = _current_retrieval(engine)
             caps = {
                 "llm_available": engine._llm is not None,
-                "cross_encoder": engine._config.retrieval.use_cross_encoder,
+                "cross_encoder": engine._config.retrieval.reranker_enabled(),
                 "agentic_rounds": engine._config.retrieval.agentic_max_rounds,
                 "sheaf_at_encoding": engine._config.math.sheaf_at_encoding,
             }

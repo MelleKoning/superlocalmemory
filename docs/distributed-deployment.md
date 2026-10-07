@@ -469,13 +469,28 @@ have the `mesh_*` MCP tools and the dashboard **Mesh Peers** tab.
 | `SLM_RSS_BUDGET_MB` | **NEW** Global RSS budget for the health monitor watchdog (0 = auto, 40% of RAM) | auto |
 | `SLM_MAX_WORKER_MB` | Per-worker RSS limit before the per-worker watchdog triggers | `2048` |
 | `SLM_MAX_EMBEDDING_WORKERS` | Max parallel embedding worker processes | `1` |
-| `SLM_EMBED_WORKER_RSS_LIMIT_MB` | RSS limit per embedding worker process | `1500` |
-| `SLM_EMBED_IDLE_TIMEOUT` | Seconds before an idle embedding worker exits | `120` |
-| `SLM_EMBED_RECYCLE_AFTER` | Recycle embedding worker after N requests | `1000` |
-| `SLM_EMBED_RESPONSE_TIMEOUT` | Timeout (s) for a single embedding request | `30` |
-| `SLM_RERANKER_IDLE_TIMEOUT` | Seconds before an idle reranker worker exits | `120` |
+| `SLM_EMBED_WORKER_RSS_LIMIT_MB` | RSS limit per embedding worker process | `2500` |
+| `SLM_EMBED_IDLE_TIMEOUT` | Seconds before an idle embedding worker exits | `1800` |
+| `SLM_EMBED_RECYCLE_AFTER` | Recycle embedding worker after N requests | `5000` |
+| `SLM_EMBED_RESPONSE_TIMEOUT` | Timeout (s) for a single embedding request | `180` |
+| `SLM_RERANKER_ENABLED` | **NEW (4.1.22)** Process-only override for whether the cross-encoder reranker runs, regardless of the persisted `retrieval.use_cross_encoder` choice — never written back to config.json. `false`/`0`/`no`/`off` disables it; anything else (including unset) leaves the persisted choice in force | unset |
+| `SLM_RERANKER_IDLE_TIMEOUT` | Seconds before an idle reranker worker exits | `1800` |
 | `SLM_MIN_AVAILABLE_MEMORY_GB` | Minimum free system RAM before SLM defers heavy operations | `1.0` |
 | `SLM_TRIGRAM_BOOTSTRAP_RAM_MB` | Max RAM for trigram index bootstrap | `512` |
+
+**GB5 lite bot-host profile** (a shared, RAM-constrained box — e.g. the Cursor/Grok Bot
+plugin's `mcp.cursor.json`, which sets these by default): `SLM_RERANKER_ENABLED=false`,
+`SLM_RERANKER_IDLE_TIMEOUT=120`, `SLM_MAX_EMBEDDING_WORKERS=1`. Measured on macOS (daemon +
+workers, warm, after one remember and one recall on a fresh store): default profile (reranker
+on) ≈ 390 MB resident (daemon ~90 MB + reranker worker ~200 MB + embedding worker ~100 MB)
+vs. lite profile (reranker off) ≈ 190 MB resident (daemon ~100 MB + embedding worker ~90 MB,
+no reranker worker) — roughly halved, with the reranker subprocess being the single biggest
+line item. Quality cost: the cross-encoder reranker measurably improves top-of-list ranking
+precision in SLM's own benchmarks; with it off, recall still runs every other channel (BM25,
+semantic, entity graph, temporal, spreading activation, Hopfield) and fuses them by RRF, just
+without the cross-encoder re-ordering pass on top. These are macOS/arm64 numbers (PyTorch
+backend for both workers on this platform); a Linux/x86_64 CPU-only host will differ (its
+embedding worker tries ONNX first) and has not been measured here.
 
 ### Learning / bandit / signals
 

@@ -61,6 +61,12 @@ const NEW_SKILLS = [
   'slm-remember',
   'slm-session',
   'slm-status',
+  // GB7: cursorPlan() requires every CURSOR_SKILLS name to exist in the
+  // rendered skills plan (fails loudly otherwise, like the missing-logo
+  // check) — these three are the curated-set members not already above.
+  'slm-bot-memory',
+  'slm-getting-started-bot',
+  'slm-scope',
 ];
 
 // Minimal fixture manifest — DOC-CORRECT layout
@@ -256,19 +262,27 @@ describe('renderMarketplaceJson', () => {
 // TEST 4 — buildPlan: 7 skills in plugin/skills/, no commands/, marketplace at root
 // ---------------------------------------------------------------------------
 describe('buildPlan', () => {
-  test('builds 7 skills in plugin/skills/ + plugin.json + marketplace.json + agents + extras', async () => {
+  test('builds every fixture skill in plugin/skills/ + plugin.json + marketplace.json + agents + extras', async () => {
     const { buildPlan } = await getModule();
     const tmp = makeTmp();
     const manifest = setupFixture(tmp);
     const plan = buildPlan(tmp, manifest);
 
-    // 7 skill SKILL.md files
-    const skillFiles = [...plan.keys()].filter(k => k.endsWith('SKILL.md'));
-    assert.equal(skillFiles.length, 7, `expected 7 SKILL.md, got ${skillFiles.length}`);
+    // One SKILL.md per fixture skill, in plugin/skills/ specifically — NOT
+    // plugin/cursor-skills/, the GB7 curated subset, which also ends in
+    // "SKILL.md" and would otherwise double-count here.
+    const skillsDir = `plugin${path.sep}skills${path.sep}`;
+    const skillFiles = [...plan.keys()].filter(
+      (k) => k.endsWith('SKILL.md') && k.includes(skillsDir),
+    );
+    assert.equal(
+      skillFiles.length, NEW_SKILLS.length,
+      `expected ${NEW_SKILLS.length} SKILL.md, got ${skillFiles.length}`,
+    );
 
     // All in plugin/skills/
     for (const f of skillFiles) {
-      assert.ok(f.includes(`plugin${path.sep}skills${path.sep}`), `SKILL.md must be in plugin/skills/: ${f}`);
+      assert.ok(f.includes(skillsDir), `SKILL.md must be in plugin/skills/: ${f}`);
     }
 
     // plugin/.claude-plugin/plugin.json
@@ -293,6 +307,27 @@ describe('buildPlan', () => {
     // _GENERATED.md banner
     const banners = [...plan.keys()].filter(k => k.endsWith('_GENERATED.md'));
     assert.equal(banners.length, 1, 'exactly 1 _GENERATED.md banner in plugin root');
+  });
+
+  test('GB4: requirements-cpu-torch.txt propagates into plugin/ when present in plugin-src/', async () => {
+    const { buildPlan } = await getModule();
+    const tmp = makeTmp();
+    const manifest = setupFixture(tmp);
+    writeFile(tmp, 'plugin-src/requirements-cpu-torch.txt', 'torch==2.13.0\n');
+    const plan = buildPlan(tmp, manifest);
+    const pinFiles = [...plan.keys()].filter((k) => k.endsWith('requirements-cpu-torch.txt'));
+    assert.equal(pinFiles.length, 1, 'expected exactly one requirements-cpu-torch.txt in the plan');
+    assert.ok(pinFiles[0].includes(`plugin${path.sep}requirements-cpu-torch.txt`));
+    assert.equal(plan.get(pinFiles[0]), 'torch==2.13.0\n');
+  });
+
+  test('GB4: build does not fail when requirements-cpu-torch.txt is absent (optional rootFile)', async () => {
+    const { buildPlan } = await getModule();
+    const tmp = makeTmp();
+    const manifest = setupFixture(tmp); // no requirements-cpu-torch.txt written
+    const plan = buildPlan(tmp, manifest);
+    const pinFiles = [...plan.keys()].filter((k) => k.endsWith('requirements-cpu-torch.txt'));
+    assert.equal(pinFiles.length, 0);
   });
 
   test('manifest.targets.plugin validation: throws on missing plugin key', async () => {

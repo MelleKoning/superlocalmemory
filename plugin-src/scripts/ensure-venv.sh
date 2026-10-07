@@ -60,18 +60,36 @@ fi
 # Paths
 # ---------------------------------------------------------------------------
 REQ="${CLAUDE_PLUGIN_ROOT}/requirements.txt"
+TORCH_CPU_PIN_FILE="${CLAUDE_PLUGIN_ROOT}/requirements-cpu-torch.txt"
 VENV="${CLAUDE_PLUGIN_DATA}/venv"
 SENTINEL="${CLAUDE_PLUGIN_DATA}/.venv-reqs.sha256"
 VENV_TMP="${CLAUDE_PLUGIN_DATA}/venv.tmp"
 
 # ---------------------------------------------------------------------------
-# Compute sha256 of requirements.txt (cross-platform: prefer sha256sum, fall back to shasum -a 256)
+# Compute sha256 of requirements.txt, and of the CPU-torch pin file when it
+# exists (GB4: a pin bump alone must also trigger a rebuild).
+# (cross-platform: prefer sha256sum, fall back to shasum -a 256)
 # ---------------------------------------------------------------------------
-hash_req() {
+_sha256_of() {
     if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "${REQ}" | awk '{print $1}'
+        sha256sum "$1" | awk '{print $1}'
     else
-        shasum -a 256 "${REQ}" | awk '{print $1}'
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+
+hash_req() {
+    local combined
+    combined="$(_sha256_of "${REQ}")"
+    if [ -f "${TORCH_CPU_PIN_FILE}" ]; then
+        combined="${combined}:$(_sha256_of "${TORCH_CPU_PIN_FILE}")"
+    fi
+    # Fold the (possibly combined) digest down to one hash again so the
+    # sentinel stays a single opaque token either way.
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "${combined}" | sha256sum | awk '{print $1}'
+    else
+        printf '%s' "${combined}" | shasum -a 256 | awk '{print $1}'
     fi
 }
 
@@ -107,6 +125,30 @@ python3 -m venv "${VENV_TMP}"
 
 # Upgrade pip first (prefer binary to avoid source builds)
 "${VENV_TMP}/bin/pip" install --upgrade pip --prefer-binary --quiet
+
+# ---------------------------------------------------------------------------
+# GB4: CPU-only torch on CPU-only Linux. Plain PyPI resolution of the
+# `torch==X.Y.Z` requirement that requirements.txt pulls in transitively
+# installs the CUDA build on Linux (torch + triton + ~18 nvidia-* packages,
+# about 2.6 GiB) even when there is no GPU to use it. Pre-installing the
+# pinned version from the official CPU index first means the later
+# `pip install -r requirements.txt` below finds it already satisfied and
+# never touches the CUDA wheels. macOS, Windows, a host with a GPU, and a
+# user who already set SLM_TORCH_BACKEND or their own pip index are all left
+# exactly as before (see torch-cpu-resolve.sh).
+# shellcheck source=torch-cpu-resolve.sh
+. "$(dirname "${BASH_SOURCE[0]}")/torch-cpu-resolve.sh"
+if torch_cpu_should_force; then
+    if TORCH_PIN="$(torch_cpu_pin "${TORCH_CPU_PIN_FILE}")"; then
+        echo "SLM plugin: Linux, no GPU detected — installing ${TORCH_PIN} from ${TORCH_CPU_INDEX_URL} (set SLM_TORCH_BACKEND=cuda to opt out)." >&2
+        "${VENV_TMP}/bin/pip" install \
+            --require-virtualenv \
+            --prefer-binary \
+            --quiet \
+            --index-url "${TORCH_CPU_INDEX_URL}" \
+            "${TORCH_PIN}"
+    fi
+fi
 
 # Install requirements
 "${VENV_TMP}/bin/pip" install \

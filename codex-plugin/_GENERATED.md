@@ -21,8 +21,10 @@ Version: **4.1.21**
 - `agents/slm-memory-advisor.md`
 - `agents/slm-optimize-advisor.md`
 - `commands/slm-loop.md`
+- `skills/slm-bot-memory/SKILL.md`
 - `skills/slm-cache/SKILL.md`
 - `skills/slm-compress/SKILL.md`
+- `skills/slm-getting-started-bot/SKILL.md`
 - `skills/slm-governance/SKILL.md`
 - `skills/slm-graph/SKILL.md`
 - `skills/slm-loop/SKILL.md`

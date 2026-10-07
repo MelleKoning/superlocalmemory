@@ -223,7 +223,7 @@ async def get_mode(request: Request):
             "endpoint": _endpoint_host,
             "capabilities": {
                 "llm_available": bool(config.llm.provider),
-                "cross_encoder": config.retrieval.use_cross_encoder if hasattr(config, 'retrieval') else False,
+                "cross_encoder": config.retrieval.reranker_enabled() if hasattr(config, 'retrieval') else False,
             },
         }
     except Exception as e:

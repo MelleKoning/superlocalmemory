@@ -10,6 +10,7 @@ a real python3) can leak into the answer.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -24,6 +25,22 @@ SYSTEM_PATH = "/usr/bin:/bin"
 
 def system_path_has_slm() -> bool:
     return shutil.which("slm", path=SYSTEM_PATH) is not None
+
+
+def requirements_sentinel_digest(plugin_root: Path) -> str:
+    """Mirror ensure-venv.sh's `hash_req` exactly (GB4): sha256(requirements.txt),
+    folded with sha256(requirements-cpu-torch.txt) when that file exists, then
+    re-hashed once more so the sentinel stays a single opaque token either way.
+    A hand test that precomputes the OLD single-file digest silently stops
+    matching the real sentinel the day a CPU-torch pin file is added — this is
+    the one place both sides read, so they cannot drift apart again.
+    """
+    req = plugin_root / "requirements.txt"
+    combined = hashlib.sha256(req.read_bytes()).hexdigest()
+    torch_pin = plugin_root / "requirements-cpu-torch.txt"
+    if torch_pin.is_file():
+        combined = f"{combined}:{hashlib.sha256(torch_pin.read_bytes()).hexdigest()}"
+    return hashlib.sha256(combined.encode("utf-8")).hexdigest()
 
 
 def write_exe(path: Path, body: str) -> Path:

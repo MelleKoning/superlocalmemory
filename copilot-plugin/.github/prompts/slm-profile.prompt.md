@@ -94,7 +94,8 @@ configured MCP server instance.
 
 ## Configuring the initial profile
 
-In your `.mcp.json` (Claude Code) or `.codex/config.toml` (Codex):
+Set it where your host defines the MCP server's environment — `.mcp.json` (Claude
+Code), `.codex/config.toml` (Codex), or `mcp.cursor.json` (Cursor / Grok Bot):
 
 ```json
 "env": {

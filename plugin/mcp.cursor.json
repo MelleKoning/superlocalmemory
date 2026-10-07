@@ -10,8 +10,11 @@
       "command": "uvx",
       "env": {
         "SLM_AGENT_ID": "cursor_plugin",
+        "SLM_MAX_EMBEDDING_WORKERS": "1",
         "SLM_MCP_PROFILE": "core",
         "SLM_NON_INTERACTIVE": "1",
+        "SLM_RERANKER_ENABLED": "false",
+        "SLM_RERANKER_IDLE_TIMEOUT": "120",
         "TOKENIZERS_PARALLELISM": "false",
         "UV_TORCH_BACKEND": "cpu"
       }
