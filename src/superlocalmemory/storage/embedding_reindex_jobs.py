@@ -101,10 +101,12 @@ def public_view(job: dict | None, *, now: float | None = None) -> dict | None:
     done = min(int(job.get("done") or 0), total) if total else int(job.get("done") or 0)
     eta = None
     started = job.get("started_at")
-    if job["state"] in ("running", "catching_up") and started and done > 0 and total > done:
-        rate = done / max(now - float(started), 1e-6)
-        eta = round((total - done) / rate, 1) if rate > 0 else None
     stats = json.loads(job["stats"]) if job.get("stats") else {}
+    this_run = done - int(stats.get("resumed_at_done") or 0)
+    if job["state"] in ("running", "catching_up") and started and this_run > 0 and total > done:
+        rate = this_run / max(now - float(started), 1e-6)
+        eta = round((total - done) / rate, 1) if rate > 0 else None
+    stats.pop("_samples", None)
     return {
         "job_id": job["job_id"], "kind": job["kind"], "state": job["state"],
         "from": job["from_signature"], "to": job["to_signature"],

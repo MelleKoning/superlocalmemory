@@ -25,6 +25,7 @@ from typing import Any
 
 from superlocalmemory.core import embedding_reindex_secrets as secrets
 from superlocalmemory.core import embedding_reindex_steps as steps
+from superlocalmemory.storage import embedding_canonical_slots as slots
 from superlocalmemory.storage import embedding_spaces as sp
 from superlocalmemory.storage.embedding_reindex_jobs import (
     JobConflict,
@@ -76,6 +77,7 @@ class ReindexRunner:
         self._prebuilt: dict[int, Any] = {}
         self._thread: threading.Thread | None = None
         self._last_purge = 0.0
+        self.notice: str | None = None
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -106,7 +108,8 @@ class ReindexRunner:
                           "restart SLM once and try again")
         return str(row["live_signature"]), json.loads(row["live_config"])
 
-    def request_switch(self, target: Any, *, kind: str = "switch") -> dict:
+    def request_switch(self, target: Any, *, kind: str = "switch",
+                       prebuilt: Any = None) -> dict:
         target_sig = sp.signature_of(target)
         with self._api_lock:
             conn = self._conn()
@@ -118,6 +121,8 @@ class ReindexRunner:
                     job = create_job(conn, kind=kind, from_sig=live_sig, to_sig=target_sig,
                                      from_cfg=live_cfg, to_cfg=sp.public_config(target),
                                      total=count_facts(conn))
+                    if prebuilt is not None:  # before COMMIT: the runner cannot see it yet
+                        self._prebuilt[int(job["job_id"])] = prebuilt
             finally:
                 conn.close()
         if kind == "switch":  # a rollback's key already sits under PREVIOUS
@@ -150,9 +155,13 @@ class ReindexRunner:
                 steps.close_embedder(embedder)
             raise Refused(f"the previous model {prev.model_name} is not available ({exc}); "
                           "make it available again, then retry the rollback") from exc
-        view = self.request_switch(prev, kind="rollback")
-        self._prebuilt[view["job_id"]] = embedder
-        return view
+        try:
+            return self.request_switch(prev, kind="rollback", prebuilt=embedder)
+        except BaseException:
+            for key in [k for k, v in self._prebuilt.items() if v is embedder]:
+                self._prebuilt.pop(key, None)
+            steps.close_embedder(embedder)
+            raise
 
     def cancel(self) -> dict:
         conn = self._conn()
@@ -199,7 +208,8 @@ class ReindexRunner:
             job = active_job(conn) or latest_job(conn)
             row = sp.read_space(conn)
             previous = row.get("prev_signature") if row else None
-            return {"job": public_view(job), "live": row["live_signature"] if row else None,
+            return {"job": public_view(job), "notice": self.notice,
+                    "live": row["live_signature"] if row else None,
                     "previous": previous if previous and sp.has_previous(conn) else previous,
                     "previous_vectors_kept": sp.has_previous(conn)}
         finally:
@@ -222,8 +232,10 @@ class ReindexRunner:
         except NoChange:
             return None
         except JobConflict as exc:
-            logger.warning("embedding model %s was named while %s; it was not queued",
-                           target.model_name, exc)
+            self.notice = (f"{target.model_name} was named in the configuration while {exc}; "
+                           "it was not queued. Switch to it when this one is done: "
+                           f"slm embedder switch {target.model_name} --dimension {target.dimension}")
+            logger.warning("%s", self.notice)
         except Exception as exc:
             logger.error("could not queue a re-index to %s: %s", target.model_name, exc)
         return None
@@ -236,20 +248,41 @@ class ReindexRunner:
                 conn = self._conn()
                 try:
                     job = active_job(conn)
-                    if job is None and time.monotonic() - self._last_purge > _PURGE_EVERY_S:
-                        self._last_purge = time.monotonic()
-                        if sp.table_exists(conn, sp.PURGE):
-                            with steps.write_txn(conn, self.db_path):
-                                sp.purge_pending(conn)
+                    busy = job is None and self._housekeeping(conn)
                 finally:
                     conn.close()
                 if job is not None:
                     self._run(job)
                     continue
+                if busy:
+                    time.sleep(steps.PAUSE_S or 0.02)
+                    continue
             except Exception as exc:  # the thread must outlive any one bad pass
                 logger.error("embedding re-index runner pass failed: %s", exc)
             self._wake.wait(_IDLE_POLL_S)
             self._wake.clear()
+
+    def _housekeeping(self, conn: Any) -> bool:
+        """Between jobs: drop a replaced space, clear spent column twins, purge."""
+        if sp.table_exists(conn, sp.TRASH_VEC):
+            with steps.write_txn(conn, self.db_path):
+                sp.drop_vec(conn, sp.TRASH_VEC)
+            return True
+        latest = latest_job(conn)
+        stats = json.loads(latest["stats"]) if latest and latest.get("stats") else {}
+        clear = stats.get("clear")
+        if isinstance(clear, dict):
+            with steps.write_txn(conn, self.db_path):
+                cursor = slots.clear_next_chunk(conn, int(clear.get("cursor") or 0))
+                stats["clear"] = "done" if cursor is None else {"cursor": cursor}
+                update_job(conn, latest["job_id"], stats=json.dumps(stats))
+            return True
+        if time.monotonic() - self._last_purge > _PURGE_EVERY_S:
+            self._last_purge = time.monotonic()
+            if sp.table_exists(conn, sp.PURGE):
+                with steps.write_txn(conn, self.db_path):
+                    sp.purge_pending(conn)
+        return False
 
     def _key_for(self, job: dict) -> str:
         role = secrets.TARGET if job["kind"] == "switch" else secrets.PREVIOUS
@@ -258,10 +291,13 @@ class ReindexRunner:
     def _fail(self, job: dict, message: str, state: str = "failed") -> None:
         conn = self._conn()
         try:
+            current = get_job(conn, job["job_id"]) or job
+            stats = json.loads(current["stats"]) if current.get("stats") else {}
+            stats["clear"] = {"cursor": 0}  # the column twins hold part of the new space
             with steps.write_txn(conn, self.db_path):
                 sp.drop_staging(conn)
                 update_job(conn, job["job_id"], state=state, error=message,
-                           finished_at=time.time())
+                           finished_at=time.time(), stats=json.dumps(stats))
         finally:
             conn.close()
         if job["kind"] == "switch":
@@ -322,6 +358,7 @@ class ReindexRunner:
                     sp.drop_staging(conn)
                     sp.ensure_side_tables(conn)
                     sp.create_vec(conn, sp.NEXT_VEC, dimension)
+                    slots.ensure_next_columns(conn)
                     update_job(conn, job["job_id"], state="running", started_at=time.time(),
                                total=count_facts(conn), cursor=0, done=0, next_rowid=0,
                                attempts=int(job.get("attempts") or 0) + 1)
@@ -329,12 +366,16 @@ class ReindexRunner:
                 with steps.write_txn(conn, self.db_path):  # staging lost: start over
                     sp.ensure_side_tables(conn)
                     sp.create_vec(conn, sp.NEXT_VEC, dimension)
+                    slots.ensure_next_columns(conn)
                     conn.execute(f"DELETE FROM {sp.NEXT_MAP}")
                     update_job(conn, job["job_id"], state="running", cursor=0, done=0)
             else:
+                stats = json.loads(job["stats"]) if job.get("stats") else {}
+                stats["resumed_at_done"] = int(job.get("done") or 0)
                 with steps.write_txn(conn, self.db_path):
                     update_job(conn, job["job_id"], started_at=time.time(),
-                               attempts=int(job.get("attempts") or 0) + 1)
+                               attempts=int(job.get("attempts") or 0) + 1,
+                               stats=json.dumps(stats))
             return get_job(conn, job["job_id"])
         finally:
             conn.close()

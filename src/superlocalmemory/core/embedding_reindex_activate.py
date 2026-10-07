@@ -88,7 +88,8 @@ def _reverse(runner: Any, conn: Any, job: dict, error: str) -> None:
         reverse(conn, job, model_name=source.model_name, dimension=source.dimension,
                 live_cfg=json.loads(job["from_config"]))
         update_job(conn, job["job_id"], state="failed", error=error,
-                   finished_at=time.time(), activated_at=None)
+                   finished_at=time.time(), activated_at=None,
+                   stats=json.dumps({"clear": {"cursor": 0}}))
     try:
         cfg = _load_config(runner)
         take_preset_embedder(cfg)  # never leave the handed-over model behind
@@ -154,6 +155,7 @@ def _record(runner: Any, conn: Any, job: dict, outcome: dict) -> None:
     current = get_job(conn, job["job_id"])
     stats = json.loads(current["stats"]) if current.get("stats") else {}
     stats["activation"] = outcome
+    stats["clear"] = {"cursor": 0}  # the twins now hold the replaced space's vectors
     with steps.write_txn(conn, runner.db_path):
         update_job(conn, job["job_id"], stats=json.dumps(stats))
         if job["kind"] == "rollback":  # the switch it undid

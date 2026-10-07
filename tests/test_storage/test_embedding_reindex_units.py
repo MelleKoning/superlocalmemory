@@ -160,8 +160,7 @@ def test_erasure_trigger_works_without_sqlite_vec_and_purges_vectors(store):
         sp.create_vec(conn, sp.NEXT_VEC, 4)
         conn.execute(f"INSERT INTO {sp.NEXT_VEC}(rowid, profile_id, embedding) VALUES (7, "
                      "'default', ?)", (np.zeros(4, dtype=np.float32).tobytes(),))
-        conn.execute(f"INSERT INTO {sp.NEXT_MAP} VALUES ('f001', 'default', 7, 'h', x'00', "
-                     "NULL, NULL)")
+        conn.execute(f"INSERT INTO {sp.NEXT_MAP} VALUES ('f001', 'default', 7, 'h')")
     plain = sqlite3.connect(db_path)  # no sqlite-vec loaded, like many writers
     plain.execute("DELETE FROM atomic_facts WHERE fact_id = 'f001'")
     plain.commit()
@@ -320,4 +319,48 @@ def test_an_erased_fact_leaves_no_vector_in_staging_or_previous(store, monkeypat
     with steps.write_txn(conn, db_path):
         sp.purge_pending(conn)
     assert conn.execute(f"SELECT COUNT(*) FROM {sp.PREV_VEC}").fetchone()[0] == before - 1
+    conn.close()
+
+
+def test_the_swap_renames_columns_and_the_runner_clears_what_it_replaced(store, monkeypatch):
+    """Two switches: the vector columns are swapped by name, the replaced values
+    are cleared afterwards, and the space from two switches ago is dropped."""
+    root, db_path = store
+    _run(root, db_path, {"new-model": FakeEmbedder(4, "new")}, monkeypatch)
+    conn = sp.connect(db_path)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(atomic_facts)")}
+    assert {"embedding_next", "fisher_mean_next", "fisher_variance_next"} <= cols
+    old_in_twin = conn.execute("SELECT COUNT(*) FROM atomic_facts WHERE length(embedding_next) = 32"
+                               ).fetchone()[0]
+    assert old_in_twin == 20, "after the swap the twins hold the replaced 8-d vectors"
+    trigger = conn.execute("SELECT sql FROM sqlite_master WHERE name = "
+                           "'trg_atomic_facts_search_change_update_vector'").fetchone()[0]
+    assert "embedding," in trigger and "embedding_next" not in trigger
+    conn.close()
+    monkeypatch.setattr(steps, "build_embedder", lambda cfg: FakeEmbedder(6, "third"))
+    runner = er.ReindexRunner(db_path=db_path, data_root=root)
+    runner.request_switch(_target("third-model", 6))
+    runner.start()
+    try:
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            conn = sp.connect(db_path)
+            try:
+                job = runner.status()["job"]
+                stats = conn.execute(f"SELECT stats FROM {sp.JOBS} ORDER BY job_id DESC LIMIT 1"
+                                     ).fetchone()[0]
+                done = (job["state"] == "activated" and json.loads(stats).get("clear") == "done"
+                        and not sp.table_exists(conn, sp.TRASH_VEC))
+            finally:
+                conn.close()
+            if done:
+                break
+            time.sleep(0.05)
+    finally:
+        runner.stop()
+    conn = sp.connect(db_path)
+    assert conn.execute("SELECT COUNT(*) FROM atomic_facts WHERE embedding_next IS NOT NULL OR "
+                        "fisher_mean_next IS NOT NULL").fetchone()[0] == 0
+    assert not sp.table_exists(conn, sp.TRASH_VEC), "the space from two switches ago was kept"
+    assert sp.vec_dimension(conn, sp.PREV_VEC) == 4 and sp.vec_dimension(conn, "fact_embeddings") == 6
     conn.close()

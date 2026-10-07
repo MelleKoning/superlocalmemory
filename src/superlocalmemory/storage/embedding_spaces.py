@@ -25,7 +25,9 @@ Three facts, each measured on sqlite 3.53 / sqlite-vec 0.1.9, shape it:
   ``IF NOT EXISTS`` rather than by a migration: a memory.db migration makes every
   upgrade copy memory.db (about 8 s per GB).
 
-Rows hold ids, hashes and vectors -- never memory text.
+Rows hold ids, hashes and vectors -- never memory text. The staged copies of
+the canonical vector columns live in ``atomic_facts`` itself
+(storage/embedding_canonical_slots.py).
 """
 
 from __future__ import annotations
@@ -45,6 +47,9 @@ NEXT_VEC = "reembed_next_vec"
 NEXT_MAP = "reembed_next_map"
 PREV_VEC = "reembed_prev_vec"
 PREV_MAP = "reembed_prev_map"
+#: The space from two switches ago, renamed aside inside the swap (14 ms) and
+#: dropped after it (630 ms on a 22k-fact store), outside the request window.
+TRASH_VEC = "reembed_trash_vec"
 PURGE = "reembed_purge"
 TRIGGER = "trg_reembed_fact_erased"
 #: The shadow tables sqlite-vec 0.1.x creates for ``vec0(profile_id TEXT
@@ -98,10 +103,7 @@ CREATE TABLE IF NOT EXISTS {NEXT_MAP} (
     fact_id         TEXT PRIMARY KEY,
     profile_id      TEXT NOT NULL,
     vec_rowid       INTEGER NOT NULL UNIQUE,
-    content_hash    TEXT NOT NULL,
-    embedding       BLOB NOT NULL,
-    fisher_mean     BLOB,
-    fisher_variance BLOB
+    content_hash    TEXT NOT NULL
 )""", f"""
 CREATE TABLE IF NOT EXISTS {PREV_MAP} (
     fact_id      TEXT PRIMARY KEY,
@@ -328,7 +330,7 @@ def has_previous(conn: Any) -> bool:
 
 
 __all__ = [
-    "ACTIVE_STATES", "JOBS", "LIVE_VEC", "NEXT_MAP", "NEXT_VEC", "PREV_MAP",
+    "ACTIVE_STATES", "JOBS", "LIVE_VEC", "TRASH_VEC", "NEXT_MAP", "NEXT_VEC", "PREV_MAP",
     "PREV_VEC", "PURGE", "SPACE", "TERMINAL_STATES", "TRIGGER", "VEC_SHADOWS",
     "config_from_public", "connect", "create_vec", "drop_previous", "drop_staging",
     "drop_side_tables_if_unused", "drop_vec", "ensure_control_tables",

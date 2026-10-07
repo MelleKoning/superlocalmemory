@@ -131,7 +131,10 @@ def health_payload(app_state: Any) -> dict | None:
     if runner is None:
         return None
     try:
-        conn = sp.connect(runner.db_path)
+        import sqlite3
+
+        conn = sqlite3.connect(f"file:{runner.db_path}?mode=ro", uri=True, timeout=5)
+        conn.row_factory = sqlite3.Row
         try:
             view = public_view(active_job(conn) or latest_job(conn))
         finally:
@@ -140,8 +143,10 @@ def health_payload(app_state: Any) -> dict | None:
         return {"state": "unknown", "error": str(exc)}
     if view is None:
         return None
-    return {k: view[k] for k in ("job_id", "kind", "state", "done", "total", "eta_seconds",
-                                 "from", "to", "error")}
+    payload = {k: view[k] for k in ("job_id", "kind", "state", "done", "total", "eta_seconds",
+                                    "from", "to", "error")}
+    payload["notice"] = getattr(runner, "notice", None)
+    return payload
 
 
 __all__ = ["health_payload", "prepare_daemon_config", "start_for_daemon"]
