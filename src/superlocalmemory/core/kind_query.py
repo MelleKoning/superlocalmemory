@@ -26,6 +26,7 @@ from superlocalmemory.retrieval.kind_filter import filter_items_by_kind, overfet
 from superlocalmemory.storage.memory_kinds import MemoryKind, kind_fields, parse_kind
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle avoidance only
+    from superlocalmemory.core.tag_query import TagFilter
     from superlocalmemory.storage.database import DatabaseManager
     from superlocalmemory.storage.models import AtomicFact
 
@@ -143,6 +144,7 @@ def list_recent_facts(
     db: "DatabaseManager", profile_id: str, limit: int, kind: str | None, *,
     display_min_confidence: float = _DEFAULT_DISPLAY_MIN_CONFIDENCE,
     truncated: list[bool] | None = None,
+    tag_filter: "TagFilter | None" = None,
 ) -> list["AtomicFact"]:
     """``get_all_facts``, newest first, with an optional displayed-kind filter.
 
@@ -158,12 +160,21 @@ def list_recent_facts(
     did not look far enough to find. Callers that can surface this (MCP,
     CLI, HTTP) should, rather than returning a short answer with no sign it
     might be incomplete.
+
+    ``tag_filter`` (4.1.22 G05): only memories carrying the tags, found by
+    membership first (``core.tag_query``), so a rare tag is never crowded
+    out; ``kind`` then filters inside that set.
     """
+    fetch = lambda n: db.get_all_facts(profile_id, limit=n)  # noqa: E731
+    if tag_filter:
+        from superlocalmemory.core import tag_query
+
+        fetch = tag_query.recent_fetch(
+            db, profile_id, tag_query.members(db, profile_id, tag_filter))
     if not kind:
-        return db.get_all_facts(profile_id, limit=limit)
+        return fetch(limit)
     facts, was_truncated = _windowed_kind_fetch(
-        lambda n: db.get_all_facts(profile_id, limit=n), limit, kind,
-        display_min_confidence=display_min_confidence,
+        fetch, limit, kind, display_min_confidence=display_min_confidence,
     )
     if truncated is not None:
         truncated.append(was_truncated)
@@ -174,17 +185,24 @@ def search_facts(
     db: "DatabaseManager", query: str, profile_id: str, limit: int, kind: str | None, *,
     display_min_confidence: float = _DEFAULT_DISPLAY_MIN_CONFIDENCE,
     truncated: list[bool] | None = None,
+    tag_filter: "TagFilter | None" = None,
 ) -> list["AtomicFact"]:
     """``search_facts_fts`` with an optional displayed-kind filter.
 
     Same windowed over-fetch contract (and ``truncated`` out-param) as
-    ``list_recent_facts``.
+    ``list_recent_facts``, and the same ``tag_filter``: the full-text match
+    runs only among the tagged memories.
     """
+    fetch = lambda n: db.search_facts_fts(query, profile_id, limit=n)  # noqa: E731
+    if tag_filter:
+        from superlocalmemory.core import tag_query
+
+        fetch = tag_query.search_fetch(
+            db, query, profile_id, tag_query.members(db, profile_id, tag_filter))
     if not kind:
-        return db.search_facts_fts(query, profile_id, limit=limit)
+        return fetch(limit)
     facts, was_truncated = _windowed_kind_fetch(
-        lambda n: db.search_facts_fts(query, profile_id, limit=n), limit, kind,
-        display_min_confidence=display_min_confidence,
+        fetch, limit, kind, display_min_confidence=display_min_confidence,
     )
     if truncated is not None:
         truncated.append(was_truncated)

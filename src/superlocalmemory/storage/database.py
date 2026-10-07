@@ -2003,20 +2003,11 @@ class DatabaseManager:
         include_shared: bool = False,
     ) -> list[AtomicFact]:
         """Full-text search via FTS5, joined to facts table for reconstruction."""
-        # v3.6.12 (search-1): the raw query was passed straight into FTS5 MATCH,
-        # so any '?', '-', quote, or trailing boolean keyword (AND/OR/NOT) raised
-        # an FTS5 syntax error. Tokenize to word characters, quote each token,
-        # and OR-join — mirrors the recall BM25 channel's safe MATCH expression.
-        import re as _re
+        from superlocalmemory.storage.fts_terms import search_match_expression
 
-        from superlocalmemory.storage.fts_terms import version_match_phrases
-        tokens = [t for t in _re.findall(r"\w+", query.lower()) if t]
-        # A dotted version is also matched whole (storage.fts_terms): its
-        # single numbers are too common to tell one release from another.
-        terms = [*(f'"{t}"' for t in tokens), *version_match_phrases(query)]
-        if not terms:
+        match_expr = search_match_expression(query)  # safe MATCH syntax
+        if not match_expr:
             return []
-        match_expr = " OR ".join(terms)
         where, params = _scope_where(
             profile_id,
             include_global=include_global,

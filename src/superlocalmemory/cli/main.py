@@ -107,6 +107,18 @@ _NO_DAEMON_COMMANDS = {
 }
 
 
+def _add_tag_args(parser: argparse.ArgumentParser) -> None:
+    """``--tag`` (repeatable) and ``--tags-match`` for recall and list (4.1.22)."""
+    parser.add_argument("--tag", dest="tags", action="append", default=None,
+                        metavar="LABEL",
+                        help="Only memories saved with this tag. Repeat for more tags; "
+                             "case and spacing do not matter.")
+    parser.add_argument("--tags-match", dest="tags_match", choices=("all", "any"),
+                        default="all",
+                        help="With several --tag: 'all' (default) needs every tag, "
+                             "'any' needs at least one.")
+
+
 def _command_requires_daemon(args: argparse.Namespace) -> bool:
     """Return whether global dispatch should ensure the daemon first.
 
@@ -532,6 +544,7 @@ def main() -> None:
     recall_p.add_argument("--kind", default="",
                           help="Only memories of this kind (e.g. decision, rule, status). "
                                "See 'slm remember --help' for the full list.")
+    _add_tag_args(recall_p)
     recall_p.add_argument(
         "--as-of", dest="as_of", default="",
         help="Point-in-time recall: an ISO-8601 timestamp "
@@ -625,6 +638,7 @@ def main() -> None:
     )
     list_p.add_argument("--kind", default="",
                        help="Only memories of this kind (e.g. decision, rule, status).")
+    _add_tag_args(list_p)
     list_p.add_argument("--json", action="store_true", help="Output structured JSON (agent-native)")
 
     # -- Diagnostics ---------------------------------------------------

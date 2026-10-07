@@ -5805,8 +5805,14 @@ def _register_daemon_routes(application: FastAPI) -> None:
         return result
 
     @application.get("/list")
-    async def list_facts(request: Request, limit: int = 50, kind: str = ""):
+    async def list_facts(request: Request, limit: int = 50, kind: str = "",
+                         tags: list[str] | None = Query(default=None),
+                         tags_match: str = "all"):
         """Most recent memories, newest first.
+
+        ``tags`` / ``tags_match`` (4.1.22): only memories carrying the tags, as
+        GET /recall takes them; ``tag_scope`` says what was found. The fetch
+        runs off the event loop, so a cold tag scan never stalls /health.
 
         ``kind`` (L3-20) narrows to one of the nine memory kinds, the same
         filter ``list_recent`` (MCP) and ``slm list`` (CLI) already take —
@@ -5830,7 +5836,12 @@ def _register_daemon_routes(application: FastAPI) -> None:
         from superlocalmemory.server.rbac_enforce import require_permission
         require_permission(request, Permission.READ, profile=profile_id)
         try:
-            facts = list_recent_facts(engine._db, profile_id, limit, parsed_kind)
+            from superlocalmemory.core import tag_query
+
+            _tags = tag_query.TagFilter.of(_recall_tags_param(tags), tags_match)
+            facts = await asyncio.to_thread(
+                list_recent_facts, engine._db, profile_id, limit, parsed_kind,
+                tag_filter=_tags)
             items = [
                 {
                     "content": f.content[:100],
@@ -5841,7 +5852,9 @@ def _register_daemon_routes(application: FastAPI) -> None:
                 }
                 for f in facts
             ]
-            return {"results": items, "count": len(items)}
+            return await asyncio.to_thread(
+                tag_query.with_report, {"results": items, "count": len(items)},
+                engine._db, profile_id, _tags)
         except HTTPException:
             raise
         except Exception:

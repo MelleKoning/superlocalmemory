@@ -749,7 +749,8 @@ def register_core_tools(server, get_engine: Callable) -> None:
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
     @admits(OperationKind.RECALL)
     async def search(query: str, limit: int = CANONICAL_RECALL_LIMIT, kind: str = "",
-                     profile_id: str = "") -> dict:
+                     profile_id: str = "", tags: "str | list[str]" = "",
+                     tags_match: str = "all") -> dict:
         """Full-text search across memories using FTS5 with BM25 ranking.
 
         ``kind`` (4.1.19 WP8) keeps only results whose kind — the same nine
@@ -761,7 +762,11 @@ def register_core_tools(server, get_engine: Callable) -> None:
         access sets it to the key's profile, whatever this computer is using.
         A name that is not an existing profile is refused, never silently
         treated as empty (4.1.22).
+
+        ``tags`` / ``tags_match`` (4.1.22): only memories carrying the tags,
+        exactly as ``recall`` takes them; ``tag_scope`` says what was found.
         """
+        from superlocalmemory.core import tag_query
         from superlocalmemory.core.kind_query import (
             InvalidKind,
             engine_display_min_confidence,
@@ -784,10 +789,11 @@ def register_core_tools(server, get_engine: Callable) -> None:
             # threshold and be labelled (confirmed/suggested/legacy) at another.
             _display_min_confidence = engine_display_min_confidence(engine)
             _truncated: list[bool] = []
+            _tags = tag_query.TagFilter.of(tags, tags_match)
             facts = search_facts(
                 engine._db, query, pid, limit, parsed_kind,
                 display_min_confidence=_display_min_confidence,
-                truncated=_truncated,
+                truncated=_truncated, tag_filter=_tags,
             )
             items = []
             for f in facts:
@@ -805,7 +811,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
             # was filled and the store was not exhausted.
             if _truncated and _truncated[0]:
                 result["kind_filter_truncated"] = True
-            return result
+            return tag_query.with_report(result, engine._db, pid, _tags)
         except Exception as exc:
             logger.exception("search failed")
             return {"success": False, "error": str(exc)}
@@ -883,7 +889,8 @@ def register_core_tools(server, get_engine: Callable) -> None:
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
     @admits(OperationKind.RECALL)
     async def list_recent(limit: int = CANONICAL_LIST_LIMIT, kind: str = "",
-                          profile_id: str = "") -> dict:
+                          profile_id: str = "", tags: "str | list[str]" = "",
+                          tags_match: str = "all") -> dict:
         """List most recently stored memories, newest first.
 
         ``kind`` (4.1.19 WP8) keeps only memories whose kind — the same nine
@@ -895,7 +902,11 @@ def register_core_tools(server, get_engine: Callable) -> None:
         access sets it to the key's profile, whatever this computer is using.
         A name that is not an existing profile is refused, never silently
         treated as empty (4.1.22).
+
+        ``tags`` / ``tags_match`` (4.1.22): only memories carrying the tags,
+        newest first, exactly as ``recall`` takes them.
         """
+        from superlocalmemory.core import tag_query
         from superlocalmemory.core.kind_query import (
             InvalidKind,
             engine_display_min_confidence,
@@ -921,10 +932,11 @@ def register_core_tools(server, get_engine: Callable) -> None:
             # threshold and be labelled (confirmed/suggested/legacy) at another.
             _display_min_confidence = engine_display_min_confidence(engine)
             _truncated: list[bool] = []
+            _tags = tag_query.TagFilter.of(tags, tags_match)
             facts = list_recent_facts(
                 engine._db, pid, limit, parsed_kind,
                 display_min_confidence=_display_min_confidence,
-                truncated=_truncated,
+                truncated=_truncated, tag_filter=_tags,
             )
             items = []
             for f in facts:
@@ -940,7 +952,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
             # 4.1.19 L2-13/M2: see the matching note in search() above.
             if _truncated and _truncated[0]:
                 result["kind_filter_truncated"] = True
-            return result
+            return tag_query.with_report(result, engine._db, pid, _tags)
         except Exception as exc:
             logger.exception("list_recent failed")
             return {"success": False, "error": str(exc)}

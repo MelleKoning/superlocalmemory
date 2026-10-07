@@ -1690,10 +1690,27 @@ def _kind_display(fields: dict) -> str:
     return str(label)
 
 
+def _tags_qs(args: Namespace) -> str:
+    """``--tag`` / ``--tags-match`` as recall query parameters (4.1.22).
+
+    Each ``--tag`` is its own ``tags=`` so the daemon keeps them as separate
+    labels; a single one may also be comma-separated ("a,b" is two tags).
+    """
+    from urllib.parse import quote
+
+    tags = [t.strip() for t in (getattr(args, "tags", None) or []) if (t or "").strip()]
+    if not tags:
+        return ""
+    match = getattr(args, "tags_match", "all") or "all"
+    return "".join(f"&tags={quote(t)}" for t in tags) + (
+        "&tags_match=any" if match == "any" else "")
+
+
 def cmd_list(args: Namespace) -> None:
     """List recent memories chronologically."""
     from superlocalmemory.core.config import CANONICAL_LIST_LIMIT, SLMConfig
     from superlocalmemory.core.engine import MemoryEngine
+    from superlocalmemory.core import tag_query
     from superlocalmemory.core.kind_query import (
         InvalidKind,
         engine_display_min_confidence,
@@ -1725,12 +1742,16 @@ def cmd_list(args: Namespace) -> None:
         # The query already returns newest-first; pushing the bound into SQL
         # keeps this from deserializing the whole table to show twenty rows.
         _truncated: list[bool] = []
+        _tags = tag_query.TagFilter.of(getattr(args, "tags", None) or None,
+                                       getattr(args, "tags_match", "all"))
         facts = list_recent_facts(
             engine._db, engine.profile_id, limit, parsed_kind,
             display_min_confidence=_display_min_confidence,
-            truncated=_truncated,
+            truncated=_truncated, tag_filter=_tags,
         )
         kind_filter_truncated = bool(_truncated and _truncated[0])
+        _tag_note = tag_query.with_report({"count": len(facts)}, engine._db,
+                                          engine.profile_id, _tags).get("tag_scope")
     except Exception as exc:
         if use_json:
             from superlocalmemory.cli.json_output import json_print
@@ -1750,7 +1771,8 @@ def cmd_list(args: Namespace) -> None:
                 "fact_type": ftype, "created_at": (f.created_at or "")[:19],
                 **kind_fields(f, display_min_confidence=_display_min_confidence),
             })
-        _data = {"results": items, "count": len(items)}
+        _data = {"results": items, "count": len(items),
+                 **({"tag_scope": _tag_note} if _tag_note else {})}
         # 4.1.19 L2-13/M2: say so rather than returning a silent short answer
         # when the kind filter's windowed fetch hit its hard cap.
         if kind_filter_truncated:
@@ -1763,7 +1785,7 @@ def cmd_list(args: Namespace) -> None:
         return
 
     if not facts:
-        print("No memories stored yet.")
+        print((_tag_note or {}).get("note") or "No memories stored yet.")
     else:
         from superlocalmemory.storage.memory_kinds import kind_fields
 
@@ -2091,6 +2113,7 @@ def cmd_recall(args: Namespace) -> None:
             )
             if getattr(args, "project_strict", False) and (getattr(args, "project", "") or "").strip():
                 facet_qs += "&project_strict=true"
+            facet_qs += _tags_qs(args)
             kind_qs = f"&kind={quote(_kind)}" if _kind else ""
             result = daemon_request(
                 "GET",
@@ -2110,11 +2133,13 @@ def cmd_recall(args: Namespace) -> None:
                     empty_result_line,
                     incomplete_line,
                     project_line,
+                    tag_line,
                 )
                 incomplete = incomplete_line(result)
                 if not result["results"]:
                     return print("\n".join(filter(None, [
-                        empty_result_line(result), incomplete, project_line(result)])))
+                        empty_result_line(result), incomplete, project_line(result),
+                        tag_line(result)])))
                 # Text output.
                 # PR #101: ``dict.get(k, 0)`` returns the DEFAULT only when the
                 # key is ABSENT — a present-but-null value still reaches the

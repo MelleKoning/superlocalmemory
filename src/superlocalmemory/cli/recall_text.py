@@ -12,7 +12,8 @@ by a search that did not look everywhere. These lines say what was skipped.
 
 from __future__ import annotations
 
-__all__ = ["empty_result_line", "incomplete_line", "project_line", "remember_receipt_text"]
+__all__ = ["empty_result_line", "incomplete_line", "project_line", "remember_receipt_text",
+           "tag_line"]
 
 
 def incomplete_line(result: dict) -> str:
@@ -39,6 +40,15 @@ def project_line(result: dict) -> str:
     filt = scope.get("filter") if isinstance(scope, dict) else None
     if isinstance(filt, dict) and not filt.get("applied", True):
         return str(filt.get("note") or "These results are not narrowed to the project.")
+    return ""
+
+
+def tag_line(result: dict) -> str:
+    """Says why ``--tag`` left nothing: no memory carries the tag at all, or
+    some do but none matched the question (4.1.22), or ""."""
+    scope = result.get("tag_scope") or {}
+    if isinstance(scope, dict) and not scope.get("matched") and scope.get("note"):
+        return str(scope["note"])
     return ""
 
 

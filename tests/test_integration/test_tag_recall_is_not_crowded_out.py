@@ -206,3 +206,24 @@ def test_another_profiles_tagged_memory_never_appears(daemon) -> None:
     assert mine_ids, "the default profile's own tagged memory must be findable"
     assert theirs_ids, "the other profile's own tagged memory must be findable"
     assert not (mine_ids & theirs_ids)
+
+
+def test_list_with_a_tag_finds_the_oldest_tagged_memory_over_http(daemon) -> None:
+    """GET /list (the `slm list` / dashboard door) with ``tags``: the one old
+    tagged memory behind newer untagged ones, plus the response's report."""
+    label = f"list-label-{RUN.lower()}"
+    old = _save(daemon, f"Archive note {RUN}: the gate stays manual.", label,
+                f"tag-list-old-{RUN}")
+    for i in range(60):
+        _save(daemon, f"Newer untagged note {RUN} number {i}.", "", f"tag-list-new-{RUN}-{i}")
+    code, plain = daemon.request("GET", "/list", params={"limit": 10})
+    assert code == 200, plain
+    assert not set(old["fact_ids"]) & {r["fact_id"] for r in plain["results"]}
+    code, out = daemon.request("GET", f"/list?limit=10&tags={label.upper()}&tags=nope"
+                                      "&tags_match=any")
+    assert code == 200, out
+    assert set(old["fact_ids"]) <= {r["fact_id"] for r in out["results"]}, out
+    assert out["tag_scope"]["matched"] >= 1 and out["tag_scope"]["match"] == "any"
+    code, none = daemon.request("GET", f"/list?limit=10&tags={label}&tags=nope")
+    assert code == 200 and none["results"] == [], none
+    assert none["tag_scope"]["reason"] == "no_memory_has_tag", none["tag_scope"]
