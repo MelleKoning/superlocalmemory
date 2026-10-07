@@ -33,6 +33,14 @@ from superlocalmemory.storage.embedding_space_swap import NotCaughtUp, activate,
 logger = logging.getLogger(__name__)
 
 
+#: How long the swap waits for admitted requests to finish (new ones wait too).
+#: Measured on a 22k-fact store: saves stuck behind the store's own background
+#: writers held their lease past the default 5 s on 51 tries in a row, each try
+#: holding every request for 5 s for nothing. One longer wait, entered at a quiet
+#: moment, holds newcomers once and only as long as the slowest request.
+ACTIVATION_DRAIN_S = 30.0
+
+
 class ActivationFailed(RuntimeError):
     """The swap was reversed; the job is already marked failed."""
 
@@ -130,7 +138,8 @@ def activate_job(runner: Any, job: dict, embedder: Any, target: Any) -> dict:
         held = time.perf_counter()
         try:
             if runner.app_state is not None:
-                get_profile_runtime(runner.app_state).reconfigure(_commit)
+                get_profile_runtime(runner.app_state).reconfigure(
+                    _commit, drain_timeout=ACTIVATION_DRAIN_S)
             else:
                 _commit(None)
         except NotCaughtUp as exc:
@@ -143,6 +152,7 @@ def activate_job(runner: Any, job: dict, embedder: Any, target: Any) -> dict:
             logger.info("re-index job %s: requests did not drain (%s); retrying", job["job_id"], exc)
             return get_job(conn, job["job_id"])
         outcome["window_ms"] = round((time.perf_counter() - held) * 1000, 1)
+        outcome["quiet"] = getattr(runner, "quiet", None)
         _record(runner, conn, job, outcome)
         _settle(runner, conn, job, target)
         logger.info("embedding re-index job %s activated: %s", job["job_id"], outcome)

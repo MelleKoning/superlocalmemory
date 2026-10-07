@@ -80,6 +80,7 @@ class ReindexRunner:
         self._thread: threading.Thread | None = None
         self._last_purge = 0.0
         self.notice: str | None = None
+        self.quiet: dict | None = None
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -371,11 +372,21 @@ class ReindexRunner:
         from superlocalmemory.server.profile_runtime import get_profile_runtime
 
         runtime = get_profile_runtime(self.app_state)
-        deadline = time.monotonic() + _QUIET_WAIT_S
-        while time.monotonic() < deadline and not self._stop.is_set():
-            if runtime.active_operations == 0 and in_flight() == 0:
+        started = time.monotonic()
+        polls = ops_zero = recalls_zero = 0
+        while time.monotonic() - started < _QUIET_WAIT_S and not self._stop.is_set():
+            ops, recalls = runtime.active_operations, in_flight()
+            polls += 1
+            ops_zero += ops == 0
+            recalls_zero += recalls == 0
+            if ops == 0 and recalls == 0:
+                self.quiet = {"waited_s": round(time.monotonic() - started, 2), "found": True}
                 return
             time.sleep(0.02)
+        self.quiet = {"waited_s": round(time.monotonic() - started, 2), "found": False,
+                      "polls": polls, "no_requests": ops_zero, "no_recalls": recalls_zero}
+        logger.info("re-index: no quiet moment in %.0f s (%s); swapping anyway",
+                    _QUIET_WAIT_S, self.quiet)
 
     def _check(self) -> None:
         if self._cancel.is_set():

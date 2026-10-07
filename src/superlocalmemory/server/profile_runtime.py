@@ -212,13 +212,16 @@ class ProfileRuntime:
             self._condition.notify_all()
             return self._snapshot
 
-    def reconfigure(self, commit: Callable[[ProfileSnapshot], None]) -> ProfileSnapshot:
+    def reconfigure(self, commit: Callable[[ProfileSnapshot], None], *,
+                    drain_timeout: float | None = None) -> ProfileSnapshot:
         """Run a same-profile engine transition behind the operation barrier.
 
         Raises TransitionDrainTimeout if in-flight operations do not drain
-        within _DRAIN_TIMEOUT_SECS (same semantics as transition()).
+        within ``drain_timeout`` (default _DRAIN_TIMEOUT_SECS, same semantics as
+        transition()).
         """
-        deadline = _time.monotonic() + _DRAIN_TIMEOUT_SECS
+        budget = _DRAIN_TIMEOUT_SECS if drain_timeout is None else float(drain_timeout)
+        deadline = _time.monotonic() + budget
         with self._condition:
             while self._transitioning:
                 self._condition.wait()
@@ -229,7 +232,7 @@ class ProfileRuntime:
                     self._transitioning = False
                     self._condition.notify_all()
                     raise TransitionDrainTimeout(
-                        f"Engine reconfigure timed out after {_DRAIN_TIMEOUT_SECS:.0f}s: "
+                        f"Engine reconfigure timed out after {budget:.0f}s: "
                         f"{self._active_operations} in-flight operation(s) did not drain."
                     )
                 self._condition.wait(timeout=min(remaining, 0.25))
