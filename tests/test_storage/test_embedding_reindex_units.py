@@ -326,8 +326,14 @@ def test_the_swap_renames_columns_and_the_runner_clears_what_it_replaced(store, 
     """Two switches: the vector columns are swapped by name, the replaced values
     are cleared afterwards, and the space from two switches ago is dropped."""
     root, db_path = store
+    probe = sp.connect(db_path)
+    seq_before = probe.execute("SELECT COALESCE(MAX(seq), 0) FROM fact_search_changes").fetchone()[0]
+    probe.close()
     _run(root, db_path, {"new-model": FakeEmbedder(4, "new")}, monkeypatch)
     conn = sp.connect(db_path)
+    changed = conn.execute("SELECT COUNT(DISTINCT fact_id) FROM fact_search_changes WHERE seq > ? "
+                           "AND what = 'v'", (seq_before,)).fetchone()[0]
+    assert changed == 20, "caches following the change log were not told every vector changed"
     cols = {r[1] for r in conn.execute("PRAGMA table_info(atomic_facts)")}
     assert {"embedding_next", "fisher_mean_next", "fisher_variance_next"} <= cols
     old_in_twin = conn.execute("SELECT COUNT(*) FROM atomic_facts WHERE length(embedding_next) = 32"
@@ -364,3 +370,27 @@ def test_the_swap_renames_columns_and_the_runner_clears_what_it_replaced(store, 
     assert not sp.table_exists(conn, sp.TRASH_VEC), "the space from two switches ago was kept"
     assert sp.vec_dimension(conn, sp.PREV_VEC) == 4 and sp.vec_dimension(conn, "fact_embeddings") == 6
     conn.close()
+
+
+def test_a_row_replaced_mid_job_is_staged_again_not_swapped_in_empty(store, monkeypatch):
+    """REPLACE deletes and re-inserts without firing delete triggers: the staged
+    map still matches the content, only the empty twin shows the row needs work."""
+    root, db_path = store
+    monkeypatch.setattr(steps, "BATCH", 5)
+
+    def during(call):
+        if call == 3:  # f001 was staged by batch 1; replace its row now
+            conn = sqlite3.connect(db_path)
+            content = conn.execute("SELECT content FROM atomic_facts WHERE fact_id='f001'"
+                                   ).fetchone()[0]
+            conn.execute("INSERT OR REPLACE INTO atomic_facts (fact_id, memory_id, profile_id, "
+                         "content) VALUES ('f001', 'm1', 'default', ?)", (content,))
+            conn.commit()
+            conn.close()
+
+    view = _run(root, db_path, {"new-model": FakeEmbedder(4, "new", hook=during)}, monkeypatch)
+    assert view["state"] == "activated", view
+    conn = sp.connect(db_path)
+    blob = conn.execute("SELECT embedding FROM atomic_facts WHERE fact_id='f001'").fetchone()[0]
+    conn.close()
+    assert blob is not None and len(blob) == 16, "a replaced row went live with no vector"
