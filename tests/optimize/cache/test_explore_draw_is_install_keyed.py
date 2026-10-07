@@ -26,7 +26,7 @@ def _draws(rec: PerItemBoundaryRecord) -> list[float]:
 def token_file(tmp_path, monkeypatch):
     path = tmp_path / ".install_token"
     monkeypatch.setattr(security_primitives, "_install_token_path", lambda: path)
-    monkeypatch.setattr(boundary_store, "_explore_keys", {})
+    monkeypatch.setattr(boundary_store, "_explore_keys", {}, raising=False)
     return path
 
 
@@ -40,7 +40,7 @@ def test_another_install_draws_differently(token_file, monkeypatch) -> None:
     rec = PerItemBoundaryRecord(entry_id="w3", samples=[(0.9, 1), (0.7, 0)])
     token_file.write_text("a" * 64)
     first = _draws(rec)
-    monkeypatch.setattr(boundary_store, "_explore_keys", {})
+    monkeypatch.setattr(boundary_store, "_explore_keys", {}, raising=False)
     token_file.write_text("b" * 64)
     assert _draws(rec) != first
 
