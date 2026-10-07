@@ -165,3 +165,28 @@ def test_a_second_delete_after_the_race_is_refused_up_front(engine_with_mock_dep
         delete_fact_authorized(engine, keep, trusted_actor_id=_actor(), source_agent_id="test")
     assert len(calls) == 1, "refused by the first check: nothing was touched"
     assert _search_state(engine, keep) == settled
+
+
+def test_a_failed_restore_is_not_reported_as_nothing_changed(engine_with_mock_deps, monkeypatch):
+    """If the entries cannot all be put back, the refusal must not say nothing changed."""
+    from superlocalmemory.core import delete_refusal
+    from superlocalmemory.core.mutations import delete_fact_authorized
+    from superlocalmemory.core.remember_runtime import CanonicalMutationConflict
+
+    engine = engine_with_mock_deps
+    keep = _store(engine, _WORDS)
+    other = _store(engine, "Brellith walks the synthetic hound along the canal at dawn.")
+    _inject_between_checks(monkeypatch, engine, keep, other)
+
+    def broken(_engine, _snap):
+        raise RuntimeError("vector index offline")
+
+    monkeypatch.setattr(delete_refusal, "_restore_live", broken)
+    with pytest.raises(CanonicalMutationConflict) as refused:
+        delete_fact_authorized(engine, keep, trusted_actor_id=_actor(), source_agent_id="test")
+    message = str(refused.value)
+    assert "case-race (proposed)" in message
+    assert "Nothing was changed" not in message
+    assert "could not be put back" in message
+    state = _search_state(engine, keep)
+    assert state["fact"] == 1 and state["tombstone"] == 0, state

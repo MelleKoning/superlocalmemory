@@ -158,4 +158,12 @@ def restore(engine: Any, snap: SearchSnapshot, operation_id: str) -> bool:
         return False
 
 
-__all__ = ["SearchSnapshot", "restore", "snapshot"]
+def unrestored_message(refusal: str) -> str:
+    """The refusal, without claiming nothing changed when the restore failed."""
+    kept = ("The memory was kept, but some of its search entries could not be put "
+            "back, so it may not be found until its indexes are rebuilt.")
+    return refusal.replace("Nothing was changed.", kept) if "Nothing was changed." in refusal \
+        else f"{refusal} {kept}"
+
+
+__all__ = ["SearchSnapshot", "restore", "snapshot", "unrestored_message"]

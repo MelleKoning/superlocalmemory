@@ -602,11 +602,13 @@ def delete_fact_authorized(
                     trusted_actor_id=trusted_actor_id,
                     canonical_runtime=canonical_runtime, idempotency_key=idempotency_key,
                 )
-            except CanonicalMutationConflict:
+            except CanonicalMutationConflict as refused:
                 # Refused at the last check (a protecting case appeared after
                 # the first): the fact stays, so its search entries come back.
-                delete_refusal.restore(engine, before_removal, erasure_id)
-                raise
+                if delete_refusal.restore(engine, before_removal, erasure_id):
+                    raise
+                raise CanonicalMutationConflict(
+                    delete_refusal.unrestored_message(str(refused))) from refused
             if content_preview is None:
                 return {"ok": False, "error": f"Memory {fact_id} not found"}
 
