@@ -254,6 +254,8 @@ _FACT_ENTITY_REPAIR_MAX_RETRY_SECONDS = 30.0
 # second gets what the first left rather than a fresh grant.
 _REMEMBER_TOTAL_CEILING_SECONDS = 1.5
 _REMEMBER_ENRICHMENT_WAIT_SECONDS = 1.2
+#: Executor hand-off around the inline enrichment wait; inside the ceiling.
+_ENRICHMENT_HANDOFF_GRACE_SECONDS = 0.25
 # How long a remember waits for the canonical commit before answering
 # "accepted" instead: inside the 1.5 s ceiling with room for the response.
 # Past the old single 2.0 s deadline the answer was a 503 for a memory the
@@ -2659,24 +2661,11 @@ async def lifespan(application: FastAPI):
                 vs = VectorStore(_P(db_path), VectorStoreConfig(dimension=dim))
                 if not vs.available:
                     return
-                try:
-                    profiles = list(db.list_profiles()) or ["default"]
-                except Exception:
-                    profiles = ["default"]
+                from superlocalmemory.server.vector_backfill import missing_vectors, profile_ids
+                profiles = profile_ids(db)  # every profile (the store has no list_profiles)
                 for pid in profiles:
-                    facts = db.get_all_facts(pid)
-                    with_emb = [
-                        (f.fact_id, getattr(f, "profile_id", pid) or pid, f.embedding)
-                        for f in facts
-                        if getattr(f, "embedding", None) and len(f.embedding) == dim
-                    ]
-                    if not with_emb:
-                        continue
-                    indexed_ids = vs.indexed_fact_ids(pid)
-                    missing = [
-                        item for item in with_emb
-                        if item[0] not in indexed_ids
-                    ]
+                    # Ids first, embeddings only for the gap (server/vector_backfill).
+                    missing = missing_vectors(db, vs, pid, dim)
                     if not missing:
                         continue  # every metadata pointer has a vec0 payload
                     # Fix: route each upsert through db._lock with cooperative
@@ -4712,6 +4701,12 @@ def _register_daemon_routes(application: FastAPI) -> None:
         )
         if not _trusted:
             return public
+        # The database and file reads below run in a worker thread: on the
+        # loop they held every other request (finished recalls included) for
+        # seconds while the daemon warmed up (tests/server/test_health_never_...).
+        ops, integrity, projection, reindex = await asyncio.to_thread(
+            lambda: (_ops_failure_counts(engine, application), _version_integrity_payload(),
+                     _projection_health(), _reindex_health(application.state)))
         return {
             "status": "ok",
             "ready": fully_ready,
@@ -4733,20 +4728,20 @@ def _register_daemon_routes(application: FastAPI) -> None:
             "active_profile": profile_snapshot.profile_id,
             "profile_generation": profile_snapshot.generation,
             # operational failure counts (visible to all team members)
-            **_ops_failure_counts(engine, application),
+            **ops,
             # issue #107: does this daemon's *imported* code still match the
             # installed distribution? ``version`` above reports what this
             # process loaded, which is self-consistent and therefore cannot
             # reveal staleness on its own. Loopback-only, alongside the other
             # operational metadata.
-            "version_integrity": _version_integrity_payload(),
+            "version_integrity": integrity,
             # How far behind the second graph store is. A drain that stops
             # advancing is the failure that does not announce itself: every
             # other signal here stays green while the graph quietly diverges
             # from the record, and the only symptom is answers that are subtly
             # worse. A depth that does not fall is the thing to alert on.
-            "projection": _projection_health(),
-            "embedding_reindex": _reindex_health(application.state),
+            "projection": projection,
+            "embedding_reindex": reindex,
         }
 
     @application.get("/recall")
@@ -4975,6 +4970,9 @@ def _register_daemon_routes(application: FastAPI) -> None:
         enrichment on this path. The daemon materializer owns all model, graph,
         vector, and post-hook work after this response.
         """
+        # The 1.5 s ceiling counts from here, not from the durable write
+        # (tests/test_server/test_remember_ceiling_counts_from_the_request.py).
+        _request_started = time.monotonic()
         trusted_actor_id = _require_write_actor(request)
         _update_activity()
         engine = _get_engine_or_503()
@@ -5285,12 +5283,14 @@ def _register_daemon_routes(application: FastAPI) -> None:
             # states. A caller that asked to wait may exceed the shared ceiling,
             # because that is what asking to wait means; nobody else may.
             _elapsed = time.monotonic() - _store_started
-            _remaining = _REMEMBER_TOTAL_CEILING_SECONDS - _elapsed
+            _remaining = _REMEMBER_TOTAL_CEILING_SECONDS - (time.monotonic() - _request_started)
             if wait:
                 enrich_budget = _REMEMBER_ENRICHMENT_WAIT_SECONDS
             else:
+                # The hand-off grace below is part of the ceiling, not on top of it.
                 enrich_budget = min(
-                    1.0, _REMEMBER_ENRICHMENT_WAIT_SECONDS, max(0.0, _remaining),
+                    1.0, _REMEMBER_ENRICHMENT_WAIT_SECONDS,
+                    max(0.0, _remaining - _ENRICHMENT_HANDOFF_GRACE_SECONDS),
                 )
             if enrich_budget <= 0.0:
                 logger.warning(
@@ -5305,8 +5305,9 @@ def _register_daemon_routes(application: FastAPI) -> None:
             # writing to the database after this response has been sent — so the
             # write is simply reported as findable by wording and the background
             # pass picks it up, which is the intended degradation.
-            _permit = _enrichment_semaphore.acquire(blocking=False)
-            if not _permit:
+            # No time left inside the ceiling: no inline wait at all.
+            _permit = enrich_budget > 0.0 and _enrichment_semaphore.acquire(blocking=False)
+            if not _permit and enrich_budget > 0.0:
                 logger.warning(
                     "inline enrichment at capacity for %d fact(s) — deferred to "
                     "the background pass", len(fact_ids),
@@ -5329,7 +5330,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
                     _enrichment_semaphore.release()
                     raise
                 enriched = await asyncio.wait_for(
-                    _pending, timeout=enrich_budget + 0.25,
+                    _pending, timeout=enrich_budget + _ENRICHMENT_HANDOFF_GRACE_SECONDS,
                 )
             except _EnrichmentAtCapacity:
                 pass
@@ -5624,31 +5625,39 @@ def _register_daemon_routes(application: FastAPI) -> None:
 
         profile_snapshot = get_profile_runtime(application.state).snapshot
         config = getattr(application.state, "config", None)
-        fact_count = 0
-        entity_count = 0
-        edge_count = 0
-        projection_queue_depth = 0
-        if engine is not None:
-            try:
-                fact_count = engine._db.get_fact_count(profile_snapshot.profile_id)
-                entities = engine._db.execute(
-                    "SELECT COUNT(*) AS c FROM canonical_entities "
-                    "WHERE profile_id = ?",
-                    (profile_snapshot.profile_id,),
-                )
-                entity_count = int(dict(entities[0])["c"]) if entities else 0
-                edges = engine._db.execute(
-                    "SELECT COUNT(*) AS c FROM graph_edges WHERE profile_id = ?",
-                    (profile_snapshot.profile_id,),
-                )
-                edge_count = int(dict(edges[0])["c"]) if edges else 0
-            except Exception:
-                logger.debug("daemon status count query failed", exc_info=True)
-            try:
-                from superlocalmemory.storage import projection_outbox
-                projection_queue_depth = projection_outbox.depth(engine._db)
-            except Exception:
-                logger.debug("projection queue depth unavailable", exc_info=True)
+        # Counts read the database: in a worker thread, never on the event loop
+        # (tests/server/test_health_never_blocks_the_event_loop.py).
+        def _counts():
+            fact_count = 0
+            entity_count = 0
+            edge_count = 0
+            projection_queue_depth = 0
+            if engine is not None:
+                try:
+                    fact_count = engine._db.get_fact_count(profile_snapshot.profile_id)
+                    entities = engine._db.execute(
+                        "SELECT COUNT(*) AS c FROM canonical_entities "
+                        "WHERE profile_id = ?",
+                        (profile_snapshot.profile_id,),
+                    )
+                    entity_count = int(dict(entities[0])["c"]) if entities else 0
+                    edges = engine._db.execute(
+                        "SELECT COUNT(*) AS c FROM graph_edges WHERE profile_id = ?",
+                        (profile_snapshot.profile_id,),
+                    )
+                    edge_count = int(dict(edges[0])["c"]) if edges else 0
+                except Exception:
+                    logger.debug("daemon status count query failed", exc_info=True)
+                try:
+                    from superlocalmemory.storage import projection_outbox
+                    projection_queue_depth = projection_outbox.depth(engine._db)
+                except Exception:
+                    logger.debug("projection queue depth unavailable", exc_info=True)
+            return (fact_count, entity_count, edge_count, projection_queue_depth,
+                    _ops_failure_counts(engine, application))
+
+        (fact_count, entity_count, edge_count, projection_queue_depth,
+         ops) = await asyncio.to_thread(_counts)
         db_path = getattr(config, "db_path", None)
         db_size_mb = (
             round(db_path.stat().st_size / 1024 / 1024, 2)
@@ -5715,7 +5724,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
             # "Optimizing memory…" line from this. Defaults to idle before start.
             "self_heal": globals().get("_SELF_HEAL_STATUS", {"state": "idle"}),
             # operational failure counts (dead-letter, degraded, stalled)
-            **_ops_failure_counts(engine, application),
+            **ops,
         }
 
     @application.get("/api/v3/components")

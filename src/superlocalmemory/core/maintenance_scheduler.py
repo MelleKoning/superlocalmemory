@@ -250,7 +250,9 @@ class MaintenanceScheduler:
                 stale, why = metrics_are_stale(self._db, profile_id)
                 if not stale:
                     continue
-                report = compute_graph_metrics(self._db, profile_id)
+                # In a separate process: on the daemon's interpreter this pass
+                # stalled recalls for 5-9 s (core/graph_metrics_process.py).
+                report = compute_graph_metrics(self._db, profile_id, isolate=True)
                 if report.ok:
                     logger.info(
                         "Graph metrics at startup (%s): %s", why, report.summary(),
@@ -473,6 +475,7 @@ class MaintenanceScheduler:
                         backend = None
                     report = compute_graph_metrics(
                         self._db, profile_id, backend=backend,
+                        isolate=True,  # in a separate process unless a projection computes it
                     )
                     if report.ok:
                         logger.info("Graph metrics (%s): %s", why, report.summary())

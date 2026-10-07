@@ -141,31 +141,38 @@ class CanonicalVectorIndex(ChangeTrackedCache[_Partition]):
 
     # -- ChangeTrackedCache ----------------------------------------------
 
+    #: Daemon only (server/recall_warmup.begin): decode the stored vectors in a
+    #: child process (retrieval/vector_index_build.py). One-shot commands keep
+    #: building in place.
+    build_in_child = False
+
     def _build(self, profile_id: str) -> _Partition:
         t0 = time.monotonic()
-        rows = self._db.execute(
-            "SELECT fact_id, embedding FROM atomic_facts WHERE profile_id = ?"
-            f"{self._db.visible_fact_clause()} ORDER BY fact_id",
-            (profile_id,),
-        )
+        built = None
+        if self.build_in_child:
+            from superlocalmemory.retrieval import vector_index_build
+
+            built = vector_index_build.arrays_in_child(self._db, profile_id, self._dim)
+        if built is None:  # in place: one-shot use, or the child could not run
+            rows = self._db.execute(
+                "SELECT fact_id, embedding FROM atomic_facts WHERE profile_id = ?"
+                f"{self._db.visible_fact_clause()} ORDER BY fact_id",
+                (profile_id,),
+            )
+            built = partition_arrays(((dict(r)["fact_id"], dict(r)["embedding"]) for r in rows),
+                                     self._dim)
+        ids, matrix = built
         part = _Partition(self._dim)
-        ids: list[str] = []
-        vecs: list[np.ndarray] = []
-        for r in rows:
-            d = dict(r)
-            vec = self._decode(d["embedding"], d["fact_id"])
-            if vec is not None:
-                ids.append(str(d["fact_id"]))
-                vecs.append(vec)
-        if vecs:
-            part.matrix = np.vstack(vecs).astype(np.float32, copy=False)
-            part.ids = ids
-            part.row_of = {fid: i for i, fid in enumerate(ids)}
+        if ids:
+            part.matrix = matrix
+            part.ids = list(ids)
+            part.row_of = {fid: i for i, fid in enumerate(part.ids)}
             part.live = np.ones(len(ids), dtype=bool)
             part.size = len(ids)
         logger.info(
-            "in-memory vector index: %d vectors for profile %s in %.0f ms",
+            "in-memory vector index: %d vectors for profile %s in %.0f ms%s",
             part.count, profile_id, (time.monotonic() - t0) * 1000.0,
+            " (decoded in a separate process)" if self.build_in_child else "",
         )
         return part
 
@@ -203,16 +210,35 @@ class CanonicalVectorIndex(ChangeTrackedCache[_Partition]):
         return q / norm if norm >= 1e-10 else None
 
     def _decode(self, raw, fact_id) -> np.ndarray | None:
-        try:
-            vec = decode_embedding_array(raw, fact_id=str(fact_id))
-        except (ValueError, TypeError) as exc:
-            logger.warning("vector index skips fact %s: unreadable embedding (%s)",
-                           fact_id, exc)
-            return None
-        if vec is None or vec.ndim != 1 or vec.shape[0] != self._dim:
-            return None
-        norm = float(np.linalg.norm(vec))
-        return (vec / norm).astype(np.float32) if norm > 1e-10 else None
+        return normalized_vector(raw, fact_id, self._dim)
+
+
+def normalized_vector(raw, fact_id, dim: int) -> np.ndarray | None:
+    """A stored embedding as an L2-normalised float32 row, or None when unusable."""
+    try:
+        vec = decode_embedding_array(raw, fact_id=str(fact_id))
+    except (ValueError, TypeError) as exc:
+        logger.warning("vector index skips fact %s: unreadable embedding (%s)",
+                       fact_id, exc)
+        return None
+    if vec is None or vec.ndim != 1 or vec.shape[0] != dim:
+        return None
+    norm = float(np.linalg.norm(vec))
+    return (vec / norm).astype(np.float32) if norm > 1e-10 else None
+
+
+def partition_arrays(rows, dim: int) -> tuple[list[str], np.ndarray]:
+    """``(ids, matrix)`` from ``(fact_id, stored embedding)`` rows, in row order."""
+    ids: list[str] = []
+    vecs: list[np.ndarray] = []
+    for fact_id, raw in rows:
+        vec = normalized_vector(raw, fact_id, dim)
+        if vec is not None:
+            ids.append(str(fact_id))
+            vecs.append(vec)
+    matrix = (np.vstack(vecs).astype(np.float32, copy=False) if vecs
+              else np.zeros((0, dim), dtype=np.float32))
+    return ids, matrix
 
 
 def _top_k(scores: np.ndarray, ids: list[str], k: int) -> list[tuple[str, float]]:
@@ -298,4 +324,5 @@ def candidate_vector_source(db, vector_store, dimension: int, index=None):
     return index if index.available else vector_store
 
 
-__all__ = ["CanonicalVectorIndex", "candidate_vector_source", "shared_index"]
+__all__ = ["CanonicalVectorIndex", "candidate_vector_source", "normalized_vector",
+           "partition_arrays", "shared_index"]

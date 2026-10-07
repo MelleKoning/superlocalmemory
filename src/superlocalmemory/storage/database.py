@@ -501,6 +501,8 @@ class DatabaseManager:
         # an uncommitted foreign connection. Keep the active connection local
         # to the thread that owns the transaction.
         self._txn_state = threading.local()
+        from superlocalmemory.storage.read_connection_pool import ReadConnectionPool
+        self._read_pool = ReadConnectionPool(self.db_path, lambda: self._connect(shared=True))
         self._enable_wal()
 
     def _enable_wal(self) -> None:
@@ -546,7 +548,10 @@ class DatabaseManager:
             conn.close()
 
     def close(self) -> None:
-        """No-op for per-call connection model."""
+        """Close every thread's reused read connection (storage/read_connection_pool)."""
+        pool = getattr(self, "_read_pool", None)
+        if pool is not None:
+            pool.close_all()
 
     def __enter__(self) -> DatabaseManager:
         return self
@@ -554,8 +559,10 @@ class DatabaseManager:
     def __exit__(self, *args: Any) -> None:
         self.close()
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path), timeout=_BUSY_TIMEOUT_MS / 1000)
+    def _connect(self, *, shared: bool = False) -> sqlite3.Connection:
+        # shared: a reused read connection, which close() may close from another thread.
+        conn = sqlite3.connect(str(self.db_path), timeout=_BUSY_TIMEOUT_MS / 1000,
+                               check_same_thread=not shared)
         conn.row_factory = sqlite3.Row
         try:
             conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
@@ -769,7 +776,13 @@ class DatabaseManager:
             with self._lock:
                 return self._execute_one(sql, params)
         else:
-            # Read-only path: concurrent reads are safe in WAL mode.
+            # Read-only path: concurrent reads are safe in WAL mode. A plain
+            # read reuses this thread's connection (storage/read_connection_pool).
+            from superlocalmemory.storage import read_connection_pool as _rcp
+            pool = getattr(self, "_read_pool", None)
+            if pool is not None and _rcp.is_plain_read(sql):
+                return _rcp.execute_read(pool, sql, params, self._execute_one,
+                                         retries=_MAX_RETRIES, base_delay=_RETRY_BASE_DELAY)
             return self._execute_one(sql, params)
 
     # The two tables whose primary key is global but whose rows are owned by a

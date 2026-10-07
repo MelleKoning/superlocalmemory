@@ -371,6 +371,68 @@ def _projection_is_current(db: Any, profile_id: str) -> bool:
         return False
 
 
+def read_graph(conn: sqlite3.Connection, profile_id: str) -> tuple[list[str], list[tuple[str, str, float]]]:
+    """The profile's visible fact ids and logical edges, in deterministic order."""
+    nodes = _visible_fact_ids(conn, profile_id)
+    edges = [
+        (str(source), str(target), float(weight))
+        for source, target, _etype, weight, _pid
+        in iter_logical_edges(conn, profile_id)
+    ]
+    return nodes, edges
+
+
+def metrics_rows(profile_id: str, nodes: list[str], edges: list[tuple[str, str, float]],
+                 damping: float, pagerank: dict[str, float],
+                 communities: dict[str, int]) -> dict[str, Any]:
+    """``fact_importance`` rows from the engine's output; identical wherever it runs."""
+    notes: list[str] = []
+    # An engine only sees nodes that appear in an edge. Everything else is a
+    # visible fact with no graph position, and it gets the teleport share -- the
+    # value PageRank would give a node nothing links to.
+    node_set = set(nodes)
+    total = len(node_set)
+    base = (1.0 - damping) / float(total)
+    connected = {fid for fid in pagerank if fid in node_set}
+    isolated = node_set - connected
+    # Leave room for the isolated mass so the whole table still sums to ~1 and
+    # the ranker's absolute thresholds keep meaning what they meant.
+    headroom = max(0.0, 1.0 - base * len(isolated))
+    connected_mass = sum(pagerank[fid] for fid in connected) or 1.0
+
+    degree: dict[str, int] = {}
+    for source, target, _weight in edges:
+        degree[source] = degree.get(source, 0) + 1
+        degree[target] = degree.get(target, 0) + 1
+    divisor = float(total - 1) if total > 1 else 1.0
+
+    bridges = _bridge_scores(edges, total)
+    if bridges is None:
+        notes.append(f"bridge scores skipped above {BRIDGE_NODE_LIMIT} facts")
+
+    rows: list[tuple[Any, ...]] = []
+    for fact_id in nodes:
+        if fact_id in connected:
+            score = pagerank[fact_id] / connected_mass * headroom
+        else:
+            score = base
+        community = communities.get(fact_id)
+        rows.append((
+            fact_id,
+            profile_id,
+            round(float(score), 9),
+            int(community) if community is not None else None,
+            round(degree.get(fact_id, 0) / divisor, 6),
+            round(float((bridges or {}).get(fact_id, 0.0)), 6),
+        ))
+
+    return {
+        "rows": rows, "facts": total, "edges": len(edges), "connected": len(connected),
+        "isolated": len(isolated), "communities": len({c for c in communities.values()}),
+        "bridges_computed": bridges is not None, "notes": notes,
+    }
+
+
 def compute_graph_metrics(
     db: Any,
     profile_id: str,
@@ -378,6 +440,7 @@ def compute_graph_metrics(
     backend: Any = None,
     damping: float = DEFAULT_DAMPING,
     prefer: str = "networkx",
+    isolate: bool = False,
 ) -> GraphMetricsReport:
     """Recompute ``fact_importance`` for one profile. Returns what it did.
 
@@ -389,14 +452,16 @@ def compute_graph_metrics(
     """
     started = time.monotonic()
     notes: list[str] = []
+    if isolate and prefer != "cozo":
+        # The whole computation in a separate low-priority process
+        # (core/graph_metrics_process.py); this process only writes the rows.
+        from superlocalmemory.core.graph_metrics_process import compute_rows_in_child
+
+        return _store_computed(db, profile_id, started, notes,
+                               compute_rows_in_child(db, profile_id, damping))
     try:
         with _read_connection(db) as conn:
-            nodes = _visible_fact_ids(conn, profile_id)
-            edges = [
-                (str(source), str(target), float(weight))
-                for source, target, _etype, weight, _pid
-                in iter_logical_edges(conn, profile_id)
-            ]
+            nodes, edges = read_graph(conn, profile_id)
     except Exception as exc:  # noqa: BLE001
         return GraphMetricsReport(
             profile_id=profile_id,
@@ -452,52 +517,39 @@ def compute_graph_metrics(
                 notes=tuple(notes),
             )
 
-    # An engine only sees nodes that appear in an edge. Everything else is a
-    # visible fact with no graph position, and it gets the teleport share -- the
-    # value PageRank would give a node nothing links to.
-    node_set = set(nodes)
-    total = len(node_set)
-    base = (1.0 - damping) / float(total)
-    connected = {fid for fid in pagerank if fid in node_set}
-    isolated = node_set - connected
-    # Leave room for the isolated mass so the whole table still sums to ~1 and
-    # the ranker's absolute thresholds keep meaning what they meant.
-    headroom = max(0.0, 1.0 - base * len(isolated))
-    connected_mass = sum(pagerank[fid] for fid in connected) or 1.0
+    computed = metrics_rows(profile_id, nodes, edges, damping, pagerank, communities)
+    computed["engine"] = engine
+    return _store_computed(db, profile_id, started, notes, computed)
 
-    degree: dict[str, int] = {}
-    for source, target, _weight in edges:
-        degree[source] = degree.get(source, 0) + 1
-        degree[target] = degree.get(target, 0) + 1
-    divisor = float(total - 1) if total > 1 else 1.0
 
-    bridges = _bridge_scores(edges, total)
-    if bridges is None:
-        notes.append(f"bridge scores skipped above {BRIDGE_NODE_LIMIT} facts")
-
-    rows: list[tuple[Any, ...]] = []
-    for fact_id in nodes:
-        if fact_id in connected:
-            score = pagerank[fact_id] / connected_mass * headroom
-        else:
-            score = base
-        community = communities.get(fact_id)
-        rows.append((
-            fact_id,
-            profile_id,
-            round(float(score), 9),
-            int(community) if community is not None else None,
-            round(degree.get(fact_id, 0) / divisor, 6),
-            round(float((bridges or {}).get(fact_id, 0.0)), 6),
-        ))
-
+def _store_computed(db: Any, profile_id: str, started: float, notes: list[str],
+                    computed: dict[str, Any]) -> GraphMetricsReport:
+    """Write rows computed here or in the child process; the report either way."""
+    if computed.get("empty"):  # nothing visible: nothing written, as before
+        return GraphMetricsReport(
+            profile_id=profile_id, engine="none",
+            duration_ms=int((time.monotonic() - started) * 1000),
+            notes=("no visible facts",),
+        )
+    if computed.get("error"):
+        return GraphMetricsReport(
+            profile_id=profile_id, engine=computed.get("engine", "networkx"),
+            facts=computed.get("facts", 0), edges=computed.get("edges", 0),
+            error=computed["error"],
+            duration_ms=int((time.monotonic() - started) * 1000),
+            notes=tuple(notes) + tuple(computed.get("notes", ())),
+        )
+    notes = notes + list(computed.get("notes", ()))
+    rows = computed["rows"]
+    engine, total = computed["engine"], computed["facts"]
+    edges_n, connected_n, isolated_n = computed["edges"], computed["connected"], computed["isolated"]
     try:
         removed = _write(db, profile_id, rows)
     except Exception as exc:  # noqa: BLE001
         return GraphMetricsReport(
             profile_id=profile_id, engine=engine, facts=total,
-            edges=len(edges), connected=len(connected),
-            isolated=len(isolated),
+            edges=edges_n, connected=connected_n,
+            isolated=isolated_n,
             error=f"metrics computed but not stored: {exc}",
             duration_ms=int((time.monotonic() - started) * 1000),
             notes=tuple(notes),
@@ -507,16 +559,32 @@ def compute_graph_metrics(
         profile_id=profile_id,
         engine=engine,
         facts=total,
-        edges=len(edges),
-        connected=len(connected),
-        isolated=len(isolated),
-        communities=len({c for c in communities.values()}),
+        edges=edges_n,
+        connected=connected_n,
+        isolated=isolated_n,
+        communities=computed["communities"],
         written=len(rows),
         removed=removed,
-        bridges_computed=bridges is not None,
+        bridges_computed=computed["bridges_computed"],
         duration_ms=int((time.monotonic() - started) * 1000),
         notes=tuple(notes),
     )
+
+
+#: Longest one chunk waits for in-flight recalls, so steady recall traffic slows
+#: the write-back but can never stop it.
+_RECALL_YIELD_MAX_SECONDS = 30.0
+
+
+def _yield_to_recalls() -> None:
+    """Wait while a person's recall runs (bounded). Writing 22k rows beside a
+    recall stretched it to 6.1 s on a 22k-fact store (sampled); the rows are a
+    background projection and can land a moment later."""
+    from superlocalmemory.core import recall_gate
+
+    deadline = time.monotonic() + _RECALL_YIELD_MAX_SECONDS
+    while recall_gate.in_flight() > 0 and time.monotonic() < deadline:
+        time.sleep(0.05)
 
 
 def _write(db: Any, profile_id: str, rows: list[tuple[Any, ...]]) -> int:
@@ -554,6 +622,7 @@ def _write(db: Any, profile_id: str, rows: list[tuple[Any, ...]]) -> int:
                 (profile_id, *chunk),
             )
     for index in range(0, len(rows), _WRITE_CHUNK):
+        _yield_to_recalls()
         with _short_connection(db) as conn:
             conn.executemany(
                 "INSERT INTO fact_importance "
