@@ -427,9 +427,17 @@ class WriteCoordinator:
             else:
                 if self._stopping:
                     raise WriteCoordinatorError("canonical writer is stopping")
-        if not self._worker_ready.wait(timeout=2.0):
+        # As long as its own connection may wait for another writer (the shared
+        # busy policy, see _open_connection), plus time for the thread to run:
+        # a fixed 2 s failed the writer's start, and with it every save, while
+        # a migration or a large batch held memory.db or the machine was busy.
+        from superlocalmemory.storage.database import _BUSY_TIMEOUT_MS
+
+        start_bound = _BUSY_TIMEOUT_MS / 1000.0 + 2.0
+        if not self._worker_ready.wait(timeout=start_bound):
             self.stop()
-            raise WriteCoordinatorError("canonical writer did not start within two seconds")
+            raise WriteCoordinatorError(
+                f"canonical writer did not start within {start_bound:.0f} seconds")
         if self._worker_error is not None:
             error = self._worker_error
             self.stop()

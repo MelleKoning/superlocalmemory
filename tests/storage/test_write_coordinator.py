@@ -661,3 +661,27 @@ BEGIN SELECT RAISE(ABORT, 'write_commits receipts are immutable'); END;
         assert row[0] == "legacy-command"
     finally:
         conn.close()
+
+
+def test_a_slow_connection_open_does_not_fail_the_writer_start(tmp_path, monkeypatch) -> None:
+    """The writer's connection may wait for another writer as long as the shared
+    busy policy allows; its start must wait as long. A fixed 2 s failed every
+    save while a migration or a big batch held memory.db or the machine was busy."""
+    from superlocalmemory.storage import write_coordinator as wc
+
+    db_path = tmp_path / "memory.db"
+    _install_write_commits(db_path)
+    real_open = wc.WriteCoordinator._open_connection
+
+    def slow_open(self):
+        time.sleep(2.6)  # longer than the old fixed bound, well inside the busy policy
+        return real_open(self)
+
+    monkeypatch.setattr(wc.WriteCoordinator, "_open_connection", slow_open)
+    coordinator = wc.WriteCoordinator(db_path, owner_id="slow-open")
+    assert coordinator.claim_ownership()
+    try:
+        coordinator.start()
+        coordinator.execute("CREATE TABLE started (x INTEGER)")
+    finally:
+        coordinator.release_ownership()
