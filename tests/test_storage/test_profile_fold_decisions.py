@@ -232,3 +232,26 @@ def test_the_docstring_decision_table_matches_the_code():
         for name in re.findall(r"[a-z_0-9]+", line):
             listed[name] = action
     assert listed == {t: a for t, (a, _why) in profile_fold.DECISIONS.items()}
+
+
+def test_an_edge_default_already_has_is_not_doubled(store):
+    """After a same-name entity merge both profiles can hold the same edge; a
+    doubled edge would count the relation twice in every graph walk."""
+    from superlocalmemory.storage.profile_fold import fold_profile
+
+    conn = _open(store)
+    try:
+        for profile, edge in ((_X, "e-x"), ("default", "e-d"), (_X, "e-x-own")):
+            target = "fact-own" if edge == "e-x-own" else "fact-shared"
+            conn.execute("INSERT INTO graph_edges (edge_id, profile_id, source_id, target_id, "
+                         "edge_type, weight) VALUES (?, ?, 'ent-1', ?, 'entity', 1.0)",
+                         (edge, profile, target))
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        fold_profile(conn, _X)
+        conn.commit()
+        rows = sorted(tuple(r) for r in conn.execute(
+            "SELECT edge_id, profile_id FROM graph_edges"))
+        assert rows == [("e-d", "default"), ("e-x-own", "default")]
+    finally:
+        conn.close()

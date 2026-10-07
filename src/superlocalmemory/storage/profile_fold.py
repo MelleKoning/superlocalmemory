@@ -52,13 +52,13 @@ MOVE    action_outcomes, association_edges, atomic_facts, bm25_tokens,
         embedding_metadata, embedding_quantization_metadata, entity_aliases,
         fact_access_log, fact_consolidations, fact_context, fact_importance,
         fact_outcome_score, fact_retention, fact_temporal_validity,
-        feedback_records, graph_edges, memories, memory_archive,
+        feedback_records, memories, memory_archive,
         memory_kind_history, memory_merge_log, memory_scenes, pinned_facts,
         polar_embeddings, projection_obligations, projection_outbox,
         projection_tombstones, provenance, reembed_next_map, reembed_prev_map,
         scene_fact_members, temporal_events, tool_events, vector_row_map
 MERGE   consolidated_summaries, entity_profiles, fact_entity_associations,
-        ingestion_log, trust_scores
+        graph_edges, ingestion_log, trust_scores
 REKEY   correction_cases, ingestion_operations
 VEC     fact_embeddings, reembed_next_vec, reembed_prev_vec, reembed_trash_vec
 DELETE  activation_cache, backup_destinations, behavioral_assertions,
@@ -110,7 +110,7 @@ DECISIONS: dict[str, tuple[str, str]] = {
     "fact_entity_associations": (MERGE, "fact-entity links"),
     "entity_profiles": (MERGE, "per-entity knowledge; default's wins on a clash"),
     "consolidated_summaries": (MERGE, "per-entity summaries; default's wins on a clash"),
-    "graph_edges": (MOVE, "graph edges"),
+    "graph_edges": (MERGE, "graph edges; an edge default already has is not doubled"),
     "association_edges": (MOVE, "fact associations"),
     "temporal_events": (MOVE, "temporal rows"),
     "memory_scenes": (MOVE, "scenes (their member rows follow by trigger)"),
@@ -179,7 +179,8 @@ _REKEY = {
 }
 #: MERGE tables whose clash no UNIQUE index enforces: the natural key the code
 #: reads them by (one row per profile and key).
-_NATURAL = {"trust_scores": ("target_type", "target_id")}
+_NATURAL = {"trust_scores": ("target_type", "target_id"),
+            "graph_edges": ("source_id", "target_id", "edge_type")}
 #: Moved first: the scene trigger joins atomic_facts under the new profile.
 _FIRST = ("memories", "atomic_facts")
 
