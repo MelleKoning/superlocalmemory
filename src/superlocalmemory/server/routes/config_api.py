@@ -643,6 +643,39 @@ def get_ollama_models():
         return JSONResponse({"error": "Internal server error"}, status_code=500)
 
 
+@router.get("/models/catalog")
+def get_models_catalog():
+    """The model catalogue plus what to recommend on THIS computer (4.1.22).
+
+    Installed models come from ``get_ollama_models`` (the same one /api/tags
+    read, so no second probe); ``local_recommendations`` ranks them by SLM's
+    own extraction test and suggests pulls that fit this machine's memory.
+    """
+    from superlocalmemory.core import model_catalog
+    from superlocalmemory.core.machine import total_ram_gb
+
+    try:
+        ollama = get_ollama_models()
+        ollama = ollama if isinstance(ollama, dict) else {}
+        names = [m.get("name", "") for m in ollama.get("installed", [])]
+        ram = round(total_ram_gb(), 1) or None
+        recs = model_catalog.recommend_local_llms(ram, names)
+        return {
+            **model_catalog.catalog(),
+            "machine": {"ram_gb": ram},
+            "ollama": {"reachable": bool(ollama.get("reachable")),
+                       "detail": ollama.get("detail", ""), "installed": names},
+            "local_recommendations": [
+                {"model": r.model_id, "installed": r.installed, "fits": r.fits,
+                 "reason": r.reason, "label": r.entry.label if r.entry else r.model_id}
+                for r in recs],
+            "best_local_llm": model_catalog.best_local_llm(ram, names),
+        }
+    except Exception:
+        logger.exception("get_models_catalog failed")
+        return JSONResponse({"error": "Internal server error"}, status_code=500)
+
+
 @router.post("/ollama/validate")
 def post_ollama_validate(request: Request, body: OllamaModelCheck):
     """Ask the server to actually use the model, before anything is saved.

@@ -160,7 +160,9 @@ class TestSLMConfigForMode:
         assert cfg.mode == Mode.B
         assert cfg.llm.is_available is True
         assert cfg.llm.provider == "ollama"
-        assert cfg.llm.model == "llama3.2"
+        # 4.1.22: the catalogue default, not the old llama3.2 (it invented facts).
+        from superlocalmemory.core.model_catalog import DEFAULT_LOCAL_LLM
+        assert cfg.llm.model == DEFAULT_LOCAL_LLM != "llama3.2"
         assert cfg.embedding.is_cloud is False
         assert cfg.temporal_validator.mode == "b"
 
@@ -175,7 +177,8 @@ class TestSLMConfigForMode:
         )
         assert cfg.mode == Mode.C
         assert cfg.embedding.is_cloud is True
-        assert cfg.embedding.dimension == 3072
+        from superlocalmemory.core.model_catalog import OPENAI_EMBEDDING_DIMENSION
+        assert cfg.embedding.dimension == OPENAI_EMBEDDING_DIMENSION == 1536
         assert cfg.embedding.deployment_name == "embed-deploy"
         assert cfg.llm.is_available is True
         assert cfg.llm.provider == "openrouter"

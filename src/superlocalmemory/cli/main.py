@@ -104,6 +104,8 @@ _NO_DAEMON_COMMANDS = {
     "summary",
     # 4.1.19: backup encryption reads the credential store and files only.
     "backup",
+    # 4.1.22: `slm models` is a read-only catalogue + Ollama /api/tags report.
+    "models",
 }
 
 
@@ -653,6 +655,11 @@ def main() -> None:
 
     health_p = sub.add_parser("health", help="Math layer health (scoring, consistency, and lifecycle layers)")
     health_p.add_argument("--json", action="store_true", help="Output structured JSON (agent-native)")
+
+    models_p = sub.add_parser(
+        "models", help="Installed Ollama models + recommendations, and the hosted catalogue",
+    )
+    models_p.add_argument("--json", action="store_true", help="Output structured JSON (agent-native)")
 
     trace_p = sub.add_parser("trace", help="Recall with per-channel score breakdown")
     trace_p.add_argument("query", help="Search query")
