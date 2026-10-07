@@ -164,7 +164,9 @@ _SYSTEM_PROMPT = (
     "- semantic: objective fact about the world (jobs, locations, relations)\n"
     "- opinion: subjective belief or preference (likes, thinks, prefers)\n"
     "- prospective: something planned for later, with a date or deadline\n\n"
-    "Respond ONLY with a JSON array. Example:\n"
+    "Respond ONLY with a JSON array. The example below shows the format only: "
+    "its people, places and values are not in the conversation and must never "
+    "appear in your answer. Example:\n"
     '[{"text":"Alice works at Google as a software engineer",'
     '"fact_type":"semantic","entities":["Alice","Google"],'
     '"referenced_date":null,"importance":7,"confidence":0.95},'
