@@ -212,6 +212,7 @@ def health_probe_timeout(descriptor: Any) -> float:
 
 def wait_for_starting_daemon(
     *, cap: float | None = None, seconds: float | None = None,
+    already_waited: float = 0.0,
 ) -> tuple[Any, dict] | None:
     """Wait (bounded) for a starting daemon; return ``(descriptor, health)``.
 
@@ -234,6 +235,9 @@ def wait_for_starting_daemon(
     if seconds is None and first is not None and _recently_expired(first.instance_id):
         return None
     budget = start_wait_budget(cap) if seconds is None else max(0.0, float(seconds))
+    # Time the caller already spent on this request (its own first probe)
+    # comes out of the same budget: the wait is the call's, not a second one.
+    budget = max(0.0, budget - max(0.0, float(already_waited)))
     deadline = time.monotonic() + budget
     last_instance = getattr(first, "instance_id", "")
     while True:

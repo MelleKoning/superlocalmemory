@@ -493,3 +493,27 @@ def test_first_remember_after_a_real_cold_start_succeeds(tmp_path):
             proc.kill()
             proc.wait(timeout=5)
         _stop_spawned_daemon(env, tmp_path / "data")
+
+
+def test_the_first_probe_comes_out_of_the_same_budget(stubs, no_spawn, monkeypatch):
+    """The first health probe ran before the bounded wait and then the wait got
+    the whole budget again: a 1.5 s budget took 3 s on a loaded machine."""
+    from superlocalmemory.cli import daemon, daemon_startup
+
+    monkeypatch.setenv("SLM_DAEMON_START_WAIT_S", "1.5")
+    stubs(delay=600)  # never listens within the test
+    real_probe = daemon_startup.probe_health
+    calls = []
+
+    def slow_first_probe(d, port, remaining):
+        calls.append(remaining)
+        if len(calls) == 1:
+            time.sleep(0.8)
+            return None
+        return real_probe(d, port, remaining)
+
+    monkeypatch.setattr(daemon_startup, "probe_health", slow_first_probe)
+    began = time.monotonic()
+    assert daemon.daemon_request("POST", "/remember", {"content": "probe"}) is None
+    took = time.monotonic() - began
+    assert took < 1.5 + 0.6, took  # old: >= 0.8 + 1.5

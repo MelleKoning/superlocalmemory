@@ -598,11 +598,13 @@ def daemon_request(
     target_instance: str | None = None
     if descriptor is not None:
         if verify_health:
+            probe_began = time.monotonic()
             health = _startup.probe_health(
                 sys.modules[__name__], descriptor.port, _startup.health_probe_timeout(descriptor),
             )
             if health is None and unpinned:
-                ready = _startup.wait_for_starting_daemon(cap=wait_cap)
+                ready = _startup.wait_for_starting_daemon(
+                    cap=wait_cap, already_waited=time.monotonic() - probe_began)
                 if ready is not None:
                     descriptor, health = ready
             if health is None or not descriptor_matches_health(descriptor, health):
