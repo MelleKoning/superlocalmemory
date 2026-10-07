@@ -65,6 +65,8 @@ REVIEWED: dict[tuple[str, str, str], tuple[int, str]] = {
     # own data root's daemon through cli.daemon.daemon_request, which builds
     # http://127.0.0.1:<descriptor port> and sends via core.outbound_http.urlopen
     # (the gate: no proxy, no redirects). Nothing there opens a connection itself.
+    (_S + "llm/ollama_reachability.py", "_probe", "httpx.get"):
+        (1, "PROBE: is the configured Ollama answering (GET /api/tags, no body), cached"),
     (_S + "core/ollama_embedder.py", "OllamaEmbedder._check_availability", "httpx.get"):
         (1, "PROBE: Ollama model list (GET /api/tags)"),
     (_S + "core/ollama_validator.py", "validate_ollama_model", "httpx.post"):
