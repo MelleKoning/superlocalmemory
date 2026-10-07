@@ -6683,6 +6683,9 @@ def _start_pending_materializer() -> None:
                     ),
                 )
                 durable_complete, durable_failed = cycle_result or (0, 0)
+                if runtime.background_paused:  # a model switch is swapping: no spin
+                    time.sleep(0.25)
+                    continue
                 # Only backfill legacy pending items enqueued under the active
                 # profile — never materialize another profile's queued memory
                 # under whichever profile happens to be active now.

@@ -44,7 +44,7 @@ _RUNNER: "ReindexRunner | None" = None
 _IDLE_POLL_S = 2.0
 _PURGE_EVERY_S = 30.0
 _CATCH_UP_ROUNDS = 50
-_QUIET_WAIT_S = 60.0
+_QUIET_WAIT_S = 600.0  # background is paused meanwhile; requests are served
 _MAX_BACKOFF_S = 60.0
 
 
@@ -322,19 +322,12 @@ class ReindexRunner:
             job = self._prepare(job, embedder, target.dimension)
             if job["state"] == "running":
                 job = self._bulk(job, embedder, target.dimension)
-            backoff = 1.0
-            for _attempt in range(20):
-                if job["state"] == "catching_up":
-                    job = self._catch_up(job, embedder, target.dimension)
-                if job["state"] != "ready":
-                    break
+            if job["state"] in ("catching_up", "ready"):
+                # Held across every try: a background unit admitted during a
+                # backoff would be in flight again at the next try (measured:
+                # one materialization outlasts a whole try on a 22k-fact store).
                 with self._background_paused():
-                    self._wait_for_quiet()
-                    job = activate_job(self, job, embedder, target)
-                handed_over = job["state"] == "activated"
-                if job["state"] == "ready":  # requests did not drain: every try holds them
-                    self._stop.wait(backoff)
-                    backoff = min(backoff * 2, _MAX_BACKOFF_S)
+                    job, handed_over = self._activate(job, embedder, target)
         except _Cancelled:
             self._fail(job, "cancelled", state="cancelled")
         except (steps.StepFailed, ActivationFailed) as exc:
@@ -348,6 +341,24 @@ class ReindexRunner:
         finally:
             if embedder is not None and not handed_over:
                 steps.close_embedder(embedder)
+
+    def _activate(self, job: dict, embedder: Any, target: Any) -> tuple[dict, bool]:
+        from superlocalmemory.core.embedding_reindex_activate import activate_job
+
+        backoff = 1.0
+        for _attempt in range(20):
+            if job["state"] == "catching_up":
+                job = self._catch_up(job, embedder, target.dimension)
+            if job["state"] != "ready":
+                break
+            self._wait_for_quiet()
+            job = activate_job(self, job, embedder, target)
+            if job["state"] == "activated":
+                return job, True
+            if job["state"] == "ready":  # requests did not drain: every try holds them
+                self._stop.wait(backoff)
+                backoff = min(backoff * 2, _MAX_BACKOFF_S)
+        return job, False
 
     def _background_paused(self):
         from contextlib import nullcontext
