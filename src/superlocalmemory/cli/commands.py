@@ -531,6 +531,12 @@ def _cmd_view_dispatch(args: Namespace) -> None:
     cmd_view(args)
 
 
+def _cmd_models_dispatch(args: Namespace) -> None:
+    """4.1.22: installed + recommended models, no daemon (cli/models_cmd.py)."""
+    from superlocalmemory.cli.models_cmd import cmd_models
+    cmd_models(args)
+
+
 # ---- end SLM v3.6 Optimize dispatch functions ----
 
 
@@ -668,6 +674,7 @@ def dispatch(args: Namespace) -> None:
         "summary": _cmd_summary_dispatch,
         "kinds": _cmd_kinds_dispatch,
         "view": _cmd_view_dispatch,
+        "models": _cmd_models_dispatch,
     }
     handler = handlers.get(args.command)
     if handler:
