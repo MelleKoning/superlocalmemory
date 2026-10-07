@@ -492,3 +492,32 @@ def test_an_edit_just_before_the_swap_is_caught_by_the_change_log(store, monkeyp
         "a fact edited just before the swap went live with its old words' vector"
     assert not change_log.active(conn), "the change log outlived the switch"
     conn.close()
+
+
+def test_the_store_repair_removes_an_erased_memorys_staged_vector(store):
+    """The store repair (``slm db repair``) clears what an erasure queued in a
+    switch's staged or previous space, not only the switch's idle pass."""
+    from superlocalmemory.storage import integrity_receipts
+    from superlocalmemory.storage.integrity_repair import Repair, RunStats
+
+    root, db_path = store
+    plain = sqlite3.connect(db_path)
+    integrity_receipts.ensure_tables(plain)
+    plain.close()
+    conn = sp.connect(db_path)
+    with steps.write_txn(conn, db_path):
+        sp.ensure_side_tables(conn)
+        sp.create_vec(conn, sp.NEXT_VEC, 4)
+        conn.execute(f"INSERT INTO {sp.NEXT_VEC}(rowid, profile_id, embedding) VALUES (7, "
+                     "'default', ?)", (np.zeros(4, dtype=np.float32).tobytes(),))
+        conn.execute(f"INSERT INTO {sp.NEXT_MAP} VALUES ('f001', 'default', 7, 'h')")
+    plain = sqlite3.connect(db_path)
+    plain.execute("DELETE FROM atomic_facts WHERE fact_id = 'f001'")
+    plain.commit()
+    plain.close()
+    stats = RunStats(run_id="r1")
+    Repair(db_path)._vectors(stats)
+    assert conn.execute(f"SELECT COUNT(*) FROM {sp.NEXT_VEC}").fetchone()[0] == 0
+    assert conn.execute(f"SELECT COUNT(*) FROM {sp.PURGE}").fetchone()[0] == 0
+    assert stats.done.get("vectors.other_spaces") == 1
+    conn.close()

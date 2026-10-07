@@ -179,6 +179,7 @@ class Repair:
                 stats.add("vectors.skipped_no_extension", 1)
                 return
             conn.isolation_level = None
+            self._other_spaces(stats, conn)
             candidates = unreferenced_rowids(conn)
             if not candidates:
                 return
@@ -197,6 +198,22 @@ class Repair:
                                      {"rows": len(gone), "rowids": gone}, {"rows": 0},
                                      undoable=False)
                 stats.add("vectors.fact_embeddings", len(gone))
+
+    def _other_spaces(self, stats: RunStats, conn: sqlite3.Connection) -> None:
+        """Vectors of erased memories in a model switch's staged or previous
+        space (storage/embedding_spaces): queued when the memory was deleted,
+        removed here as well as by the switch's own idle pass."""
+        from superlocalmemory.storage import embedding_spaces as sp
+
+        if not sp.table_exists(conn, sp.PURGE):
+            return
+        with self._held(stats, conn):
+            removed = sp.purge_pending(conn)
+            if removed:
+                receipts.receipt(conn, stats.run_id, "remove_unreachable_vectors",
+                                 "embedding spaces", "their memory was erased",
+                                 {"rows": removed}, {"rows": 0}, undoable=False)
+        stats.add("vectors.other_spaces", removed)
 
     def _erased_text(self, stats: RunStats) -> None:
         from superlocalmemory.core import erasure_scrub
