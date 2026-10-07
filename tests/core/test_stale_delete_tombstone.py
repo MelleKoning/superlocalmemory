@@ -50,6 +50,12 @@ def _half_deleted(engine, fact_id: str) -> None:
     assert build_erasure_service(engine).remove(engine._db, ctx).tombstoned
 
 
+def _age(engine, fact_id: str, seconds: float) -> None:
+    with engine._db.raw_connection() as conn:
+        conn.execute("UPDATE projection_tombstones SET created_at = created_at - ? "
+                     "WHERE fact_id = ?", (seconds, fact_id))
+
+
 def _state(engine, fact_id: str) -> dict:
     index = engine._retrieval_engine._bm25
     return {
@@ -76,6 +82,14 @@ def test_a_refused_delete_heals_a_protected_memory_left_unfindable(engine_with_m
     _half_deleted(engine, kept)
     broken = _state(engine, kept)
     assert broken["tombstone"] == 1 and broken["bm25"] == 0 and not broken["in_live_index"]
+
+    from superlocalmemory.core.delete_refusal import STALE_AFTER_S
+
+    # A young tombstone may be an erasure still running elsewhere: left alone.
+    with pytest.raises(CanonicalMutationConflict, match="protected by correction history"):
+        delete_fact_authorized(engine, kept, trusted_actor_id=_actor(), source_agent_id="test")
+    assert _state(engine, kept) == broken
+    _age(engine, kept, STALE_AFTER_S + 1)
 
     with pytest.raises(CanonicalMutationConflict, match="protected by correction history"):
         delete_fact_authorized(engine, kept, trusted_actor_id=_actor(), source_agent_id="test")

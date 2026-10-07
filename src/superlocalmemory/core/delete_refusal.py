@@ -158,15 +158,24 @@ def restore(engine: Any, snap: SearchSnapshot, operation_id: str) -> bool:
         return False
 
 
+#: A tombstone younger than this may belong to an erasure still running in
+#: another process, or to a GDPR erasure of many facts (which does not use the
+#: in-process fence), so it is left alone. A delete's own window is seconds.
+STALE_AFTER_S = 600.0
+
+
 def _drop_stale_erasure(db: Any, profile_id: str, fact_id: str) -> bool:
-    """Remove the fact's tombstone and its erasure's open obligations, in one
-    transaction, if the fact is still stored. False when it is gone."""
+    """Remove the fact's stale tombstone and its erasure's open obligations, in
+    one transaction, if the fact is still stored. False when there is none."""
+    import time
+
     with db.transaction():
         if not db.execute("SELECT 1 FROM atomic_facts WHERE fact_id = ? AND profile_id = ? "
                           "LIMIT 1", (fact_id, profile_id)):
             return False
         rows = db.execute("SELECT erasure_id FROM projection_tombstones WHERE profile_id = ? "
-                          "AND fact_id = ?", (profile_id, fact_id))
+                          "AND fact_id = ? AND created_at < ?",
+                          (profile_id, fact_id, time.time() - STALE_AFTER_S))
         if not rows:
             return False
         db.execute("DELETE FROM projection_tombstones WHERE profile_id = ? AND fact_id = ?",
