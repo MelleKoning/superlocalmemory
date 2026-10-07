@@ -196,7 +196,7 @@ def _which(content: str) -> str:
     return "ALPHA" if "ALPHAMARK" in content else "BETA" if "BETAMARK" in content else content
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def lane(tmp_path_factory):
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Models)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -240,13 +240,13 @@ def _stop_and_reap(lane: Lane) -> None:
     assert not alive, f"model workers outlived the daemon stop: {[p.pid for p in alive]}"
 
 
-def test_before_any_switch_the_probe_finds_alpha_in_the_old_space(lane):
+def _before_any_switch_the_probe_finds_alpha_in_the_old_space(lane):
     assert lane.vec_dimension() == 768
     assert _which(lane.probe_top()) == "ALPHA"
     assert lane.status()["live"] == "stub-old::768"
 
 
-def test_recall_is_served_throughout_a_switch_and_flips_once_at_activation(lane):
+def _recall_is_served_throughout_a_switch_and_flips_once_at_activation(lane):
     DELAY["stub-new"] = 0.15
     seen: list[tuple[float, int, str]] = []
     stop = threading.Event()
@@ -295,7 +295,7 @@ def test_recall_is_served_throughout_a_switch_and_flips_once_at_activation(lane)
     assert health["embedding_reindex"]["state"] == "activated"
 
 
-def test_a_failing_model_fails_the_job_and_leaves_the_space_live(lane):
+def _a_failing_model_fails_the_job_and_leaves_the_space_live(lane):
     code, body = lane.switch("stub-flaky")
     assert code == 202, body
     job = lane.wait_job(body["job"]["job_id"], ("failed", "activated"))
@@ -306,7 +306,7 @@ def test_a_failing_model_fails_the_job_and_leaves_the_space_live(lane):
     assert _which(lane.probe_top()) == "BETA"
 
 
-def test_a_killed_daemon_keeps_the_old_space_and_resumes_the_job(lane):
+def _a_killed_daemon_keeps_the_old_space_and_resumes_the_job(lane):
     DELAY["stub-third"] = 0.6
     EMBEDDED.pop("stub-third", None)
     code, body = lane.switch("stub-third")
@@ -347,7 +347,7 @@ def test_a_killed_daemon_keeps_the_old_space_and_resumes_the_job(lane):
         assert not lane.rows(f"SELECT 1 FROM {table} WHERE fact_id = ?", (victim,)), table
 
 
-def test_rollback_restores_the_previous_answers(lane):
+def _rollback_restores_the_previous_answers(lane):
     code, body = lane.daemon.request("POST", "/api/v3/embedding/reindex/rollback", {})
     assert code == 202, body
     job = lane.wait_job(body["job"]["job_id"], ("activated", "failed"))
@@ -358,7 +358,7 @@ def test_rollback_restores_the_previous_answers(lane):
     assert lane.status()["previous"] == "stub-third::512"
 
 
-def test_an_erased_memory_leaves_nothing_in_the_previous_space(lane):
+def _an_erased_memory_leaves_nothing_in_the_previous_space(lane):
     victim = lane.rows("SELECT fact_id FROM atomic_facts WHERE content LIKE ?",
                        ("%inventory code Q011%",))[0][0]
     vec_rowid = lane.rows("SELECT vec_rowid FROM reembed_prev_map WHERE fact_id = ?",
@@ -370,7 +370,7 @@ def test_an_erased_memory_leaves_nothing_in_the_previous_space(lane):
         "the erased memory's vector survived in the previous space")
 
 
-def test_forget_previous_frees_the_previous_space(lane):
+def _forget_previous_frees_the_previous_space(lane):
     code, body = lane.daemon.request("POST", "/api/v3/embedding/reindex/forget-previous", {})
     assert code == 200 and body["freed_vectors"] > 0, body
     assert not lane.rows("SELECT 1 FROM sqlite_master WHERE name LIKE 'reembed_prev%'")
@@ -379,7 +379,7 @@ def test_forget_previous_frees_the_previous_space(lane):
     assert code == 409, body
 
 
-def test_a_model_named_in_config_by_hand_is_reindexed_in_the_background(lane):
+def _a_model_named_in_config_by_hand_is_reindexed_in_the_background(lane):
     """Engine start used to re-embed right there; now it serves the stored space."""
     _stop_and_reap(lane)
     config_path = lane.data_root / "config.json"
@@ -403,3 +403,23 @@ def test_a_model_named_in_config_by_hand_is_reindexed_in_the_background(lane):
 def sp_active() -> tuple:
     from superlocalmemory.storage.embedding_spaces import ACTIVE_STATES
     return ACTIVE_STATES
+
+
+#: One daemon carries its state from step to step, so the steps run in this
+#: order inside ONE test: a parallel run cannot split them across workers.
+STEPS = (
+    _before_any_switch_the_probe_finds_alpha_in_the_old_space,
+    _recall_is_served_throughout_a_switch_and_flips_once_at_activation,
+    _a_failing_model_fails_the_job_and_leaves_the_space_live,
+    _a_killed_daemon_keeps_the_old_space_and_resumes_the_job,
+    _rollback_restores_the_previous_answers,
+    _an_erased_memory_leaves_nothing_in_the_previous_space,
+    _forget_previous_frees_the_previous_space,
+    _a_model_named_in_config_by_hand_is_reindexed_in_the_background,
+)
+
+
+def test_a_model_switch_on_a_real_daemon_end_to_end(lane):
+    for step in STEPS:
+        print(f"\n-- {step.__name__}", flush=True)
+        step(lane)
