@@ -89,8 +89,14 @@ def _record_correction_candidate(
         operation_id, "correction-proposal", profile_id, predecessor_fact_id,
         successor_fact_id, reason_code,
     )
+    from superlocalmemory.core.remember_replaces import ledger_actor_id
+
     actor = CorrectionActor(
-        actor_id=trusted_actor_id,
+        # A local writer's install-token id (158-165 bytes) is longer than the
+        # ledger holds (128): every machine candidate from the Python API, the
+        # daemon-less CLI or MCP was refused and only logged. Same digest
+        # mapping as replacements use, so one writer is one ledger id.
+        actor_id=ledger_actor_id(trusted_actor_id),
         actor_kind="host_attested",
         trust_tier="canonical_writer",
     )
@@ -799,7 +805,13 @@ def run_store(
                          classifier=kind_classifier, db=db)
 
     stored_ids: list[str] = []
+    # Facts this save created (not an older fact a duplicate merged into). A
+    # machine correction between two of them hid the save's own newer
+    # statement from recall while the case waited for review: 37% of the
+    # machine cases on a 22k-fact store paired two facts of one save.
+    created_ids: set[str] = set(queryable_ids)
     for fact in facts:
+        merged_into_older = False
         try:
             if _fact_is_tombstoned(db, profile_id, fact.fact_id):
                 continue
@@ -913,6 +925,7 @@ def run_store(
                     if existing_fact is None:
                         continue
                     fact = existing_fact
+                    merged_into_older = target_id not in created_ids
 
                 if action.action_type.value in ("update", "supersede"):
                     # A consolidator UPDATE/SUPERSEDE is a review-required
@@ -927,7 +940,7 @@ def run_store(
                             f"missing fact {action.new_fact_id}"
                         )
                     fact = proposed_fact
-                    if action.existing_fact_id:
+                    if action.existing_fact_id and action.existing_fact_id not in created_ids:
                         _record_correction_candidate(
                             db,
                             operation_id=ingestion_operation_id,
@@ -949,6 +962,8 @@ def run_store(
         elif not is_queryable_promotion:
             db.store_fact(fact)
 
+        if not merged_into_older:
+            created_ids.add(fact.fact_id)
         if fact.fact_id not in stored_ids:
             stored_ids.append(fact.fact_id)
             if materialization_progress is not None:
@@ -1050,6 +1065,8 @@ def run_store(
                     )
                     for candidate in invalidations:
                         predecessor_fact_id = str(candidate.get("old_fact_id") or "")
+                        if predecessor_fact_id in created_ids:
+                            continue  # two facts of this same save
                         _record_correction_candidate(
                             db,
                             operation_id=ingestion_operation_id,
