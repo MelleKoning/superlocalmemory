@@ -571,6 +571,22 @@ def _store_computed(db: Any, profile_id: str, started: float, notes: list[str],
     )
 
 
+#: Longest one chunk waits for in-flight recalls, so steady recall traffic slows
+#: the write-back but can never stop it.
+_RECALL_YIELD_MAX_SECONDS = 30.0
+
+
+def _yield_to_recalls() -> None:
+    """Wait while a person's recall runs (bounded). Writing 22k rows beside a
+    recall stretched it to 6.1 s on a 22k-fact store (sampled); the rows are a
+    background projection and can land a moment later."""
+    from superlocalmemory.core import recall_gate
+
+    deadline = time.monotonic() + _RECALL_YIELD_MAX_SECONDS
+    while recall_gate.in_flight() > 0 and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+
 def _write(db: Any, profile_id: str, rows: list[tuple[Any, ...]]) -> int:
     """Replace this profile's rows, a bounded chunk per transaction.
 
@@ -606,6 +622,7 @@ def _write(db: Any, profile_id: str, rows: list[tuple[Any, ...]]) -> int:
                 (profile_id, *chunk),
             )
     for index in range(0, len(rows), _WRITE_CHUNK):
+        _yield_to_recalls()
         with _short_connection(db) as conn:
             conn.executemany(
                 "INSERT INTO fact_importance "

@@ -89,3 +89,41 @@ def test_a_failed_child_is_an_error_not_an_in_process_rerun(db, monkeypatch) -> 
     report = gm.compute_graph_metrics(db, "default", isolate=True)
     assert not report.ok and "graph metrics process failed" in (report.error or "")
     assert calls == []
+
+
+def test_the_write_back_waits_while_a_recall_runs(db, monkeypatch) -> None:
+    """Each chunk of the 22k-row write-back starts only once no recall is in flight."""
+    from superlocalmemory.core import recall_gate
+
+    seen: list[int] = []
+    real = gm._short_connection
+
+    class Spy:
+        def __init__(self, db_):
+            self.cm = real(db_)
+
+        def __enter__(self):
+            seen.append(recall_gate.in_flight())
+            return self.cm.__enter__()
+
+        def __exit__(self, *exc):
+            return self.cm.__exit__(*exc)
+
+    monkeypatch.setattr(gm, "_short_connection", Spy)
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        while recall_gate.in_flight():
+            recall_gate.end_recall()  # the recall finishes while the writer waits
+
+    monkeypatch.setattr(gm.time, "sleep", fake_sleep)
+    recall_gate.begin_recall()
+    try:
+        report = gm.compute_graph_metrics(db, "default")
+    finally:
+        while recall_gate.in_flight():
+            recall_gate.end_recall()
+    assert report.ok
+    assert sleeps, "the write-back never waited for the recall in flight"
+    assert seen[-1] == 0
