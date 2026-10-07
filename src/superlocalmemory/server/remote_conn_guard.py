@@ -52,6 +52,12 @@ MAX_OPEN_CONNECTIONS = 128
 TLS_HANDSHAKE_TIMEOUT_S = 10.0
 
 
+#: Bytes a connection may send between finishing its TLS handshake and being
+#: handed to the HTTP protocol (normally one loop turn). Past this the caller is
+#: flooding, not pipelining: the connection is closed instead of buffered.
+MAX_PENDING_BYTES = 1 << 20
+
+
 class _Limits:
     """Shared by every connection of one remote listener.
 
@@ -177,6 +183,7 @@ def tls_gate_protocol_class(context: ssl.SSLContext, base: type | None = None) -
             self._loop = http_kwargs.get("_loop") or asyncio.get_running_loop()
             self._transport: asyncio.Transport | None = None
             self._pending: list[bytes] = []
+            self._pending_bytes = 0
             self._eof = False
             self._lost: tuple[Exception | None] | None = None
             self._writing_paused = False
@@ -196,6 +203,13 @@ def tls_gate_protocol_class(context: ssl.SSLContext, base: type | None = None) -
             self._task = self._loop.create_task(self._handshake())
 
         def data_received(self, data: bytes) -> None:
+            self._pending_bytes += len(data)
+            if self._pending_bytes > MAX_PENDING_BYTES:
+                logger.warning("Remote listener: too much data before the request "
+                               "started; closing the connection.")
+                self._pending = []
+                self._give_up()
+                return
             self._pending.append(data)
 
         def eof_received(self) -> bool | None:
@@ -273,6 +287,7 @@ def tls_gate_protocol_class(context: ssl.SSLContext, base: type | None = None) -
 __all__ = [
     "HEADER_DEADLINE_S",
     "MAX_OPEN_CONNECTIONS",
+    "MAX_PENDING_BYTES",
     "MAX_WAITING_CONNECTIONS",
     "TLS_HANDSHAKE_TIMEOUT_S",
     "guarded_protocol_class",
