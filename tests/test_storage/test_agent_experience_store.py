@@ -422,3 +422,27 @@ def test_m040_rebuilds_same_named_index_from_the_wrong_table(tmp_path: Path) -> 
             ("idx_agent_experiences_profile_occurred",),
         ).fetchone()
         assert owner == ("agent_experiences",)
+
+
+def test_waiting_behind_this_processs_own_writers_is_not_a_busy_database(
+    store: AgentExperienceStore,
+) -> None:
+    """A writer ahead in this process's queue holding the lock longer than the
+    0.9 s SQLite deadline must not make the next receipt fail: nothing else
+    held the database. (The concurrent test failed this way under load.)"""
+    import threading
+
+    ahead = threading.Event()
+
+    def hold() -> None:
+        with store._lock:
+            ahead.set()
+            time.sleep(1.2)
+
+    t = threading.Thread(target=hold)
+    t.start()
+    ahead.wait(5)
+    try:
+        assert store.record_experience(_experience()) is True
+    finally:
+        t.join()

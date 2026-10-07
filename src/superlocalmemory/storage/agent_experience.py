@@ -22,6 +22,11 @@ from superlocalmemory.contracts.v402 import validate_agent_experience, validate_
 
 _T = TypeVar("_T")
 _WRITE_DEADLINE_SECONDS = 0.90
+#: Waiting behind this process's own receipt writers is a queue, not SQLite
+#: contention: it has its own, longer bound. Counting it against the busy
+#: deadline lost receipts whenever several agents wrote at once on a loaded
+#: machine, although no other process held the database.
+_QUEUE_WAIT_SECONDS = 5.0
 _PROCESS_LOCKS: dict[str, threading.Lock] = {}
 _PROCESS_LOCKS_GUARD = threading.Lock()
 _PROFILE_GATES: dict[str, "_ProfileAdmissionGate"] = {}
@@ -308,9 +313,10 @@ class AgentExperienceStore:
             raise ProfileAdmissionError("profile is inactive or closing for erasure")
 
     def _write(self, operation: Callable[[sqlite3.Connection], _T]) -> _T:
-        deadline = time.monotonic() + _WRITE_DEADLINE_SECONDS
-        if not self._lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
-            raise LearningWriteBusyError("learning receipt write deadline exceeded")
+        if not self._lock.acquire(timeout=_QUEUE_WAIT_SECONDS):
+            raise LearningWriteBusyError(
+                f"learning receipt writers in this process did not move for {_QUEUE_WAIT_SECONDS:.0f} s")
+        deadline = time.monotonic() + _WRITE_DEADLINE_SECONDS  # SQLite contention only
         try:
             while True:
                 conn: sqlite3.Connection | None = None
