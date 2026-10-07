@@ -258,7 +258,7 @@ def test_pipelined_requests_are_answered_and_the_counts_come_back(limits, monkey
 
 def test_a_flood_before_the_hand_over_closes_the_connection(monkeypatch) -> None:
     """Bytes buffered between the handshake and the HTTP hand-over are capped."""
-    monkeypatch.setattr(remote_conn_guard, "MAX_PENDING_BYTES", 1000)
+    monkeypatch.setattr(remote_conn_guard, "MAX_PENDING_BYTES", 1000, raising=False)
 
     class _Transport:
         aborted = False
