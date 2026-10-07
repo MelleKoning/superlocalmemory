@@ -107,15 +107,7 @@ class _NoDbPathWrapper:
 
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> list:
         return self._real.execute(sql, params)
-
-    def __getattr__(self, name: str) -> Any:
-        # Everything else the erasure uses (transaction(), raw_connection(), ...)
-        # is the real manager's: only db_path is hidden. A wrapper exposing
-        # execute() alone stopped being a database once the profile erasure
-        # began closing correction cases in one transaction.
-        if name == "db_path":
-            raise AttributeError(name)
-        return getattr(self._real, name)
+    # No db_path attribute — getattr(..., None) returns None for this wrapper.
 
 
 # ---------------------------------------------------------------------------
