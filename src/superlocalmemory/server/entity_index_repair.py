@@ -52,6 +52,27 @@ _GAP_WINDOWS_PER_CALL = 10
 _GAP_IDLE_BACKOFF_FLOOR_SECONDS = 1.0
 _GAP_IDLE_BACKOFF_CEILING_SECONDS = 3600.0
 
+#: Longest a batch waits for in-flight recalls before it runs anyway, so a
+#: steady stream of recalls slows the repair but can never stop it.
+_RECALL_YIELD_MAX_SECONDS = 30.0
+_RECALL_YIELD_POLL_SECONDS = 0.1
+
+
+async def _yield_to_recalls() -> None:
+    """Wait while a person's recall is running (bounded; see the constant).
+
+    Each batch re-reads part of the store; beside a recall it competed for the
+    same disk and interpreter and stretched recalls to seconds while the
+    daemon warmed up. The materializer and the embedding backfill already wait
+    for recalls the same way (core/recall_gate).
+    """
+    from superlocalmemory.core import recall_gate
+
+    waited = 0.0
+    while recall_gate.in_flight() > 0 and waited < _RECALL_YIELD_MAX_SECONDS:
+        await asyncio.sleep(_RECALL_YIELD_POLL_SECONDS)
+        waited += _RECALL_YIELD_POLL_SECONDS
+
 
 def _publish(application, status: dict, **extra) -> None:
     application.state.entity_index_status = {
@@ -87,6 +108,7 @@ async def run_entity_index_backfill(
 
     failures = 0
     while True:
+        await _yield_to_recalls()
         try:
             await asyncio.to_thread(
                 entity_index.backfill, Path(memory_db_path),
@@ -124,6 +146,7 @@ async def run_entity_index_gap_sweep(
     gap_failures = 0
     consecutive_empty_laps = 0
     while True:
+        await _yield_to_recalls()
         try:
             result = await asyncio.to_thread(
                 entity_index.repair_coverage_gap, Path(memory_db_path),
