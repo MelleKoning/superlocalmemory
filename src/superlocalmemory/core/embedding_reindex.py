@@ -323,11 +323,7 @@ class ReindexRunner:
             if job["state"] == "running":
                 job = self._bulk(job, embedder, target.dimension)
             if job["state"] in ("catching_up", "ready"):
-                # Held across every try: a background unit admitted during a
-                # backoff would be in flight again at the next try (measured:
-                # one materialization outlasts a whole try on a 22k-fact store).
-                with self._background_paused():
-                    job, handed_over = self._activate(job, embedder, target)
+                job, handed_over = self._activate(job, embedder, target)
         except _Cancelled:
             self._fail(job, "cancelled", state="cancelled")
         except (steps.StepFailed, ActivationFailed) as exc:
@@ -345,19 +341,23 @@ class ReindexRunner:
     def _activate(self, job: dict, embedder: Any, target: Any) -> tuple[dict, bool]:
         from superlocalmemory.core.embedding_reindex_activate import activate_job
 
+        # The pause is held across every try: a background unit admitted during a
+        # backoff would be in flight again at the next try (measured: one
+        # materialization outlasts a whole try on a 22k-fact store).
         backoff = 1.0
-        for _attempt in range(20):
-            if job["state"] == "catching_up":
-                job = self._catch_up(job, embedder, target.dimension)
-            if job["state"] != "ready":
-                break
-            self._wait_for_quiet()
-            job = activate_job(self, job, embedder, target)
-            if job["state"] == "activated":
-                return job, True
-            if job["state"] == "ready":  # requests did not drain: every try holds them
-                self._stop.wait(backoff)
-                backoff = min(backoff * 2, _MAX_BACKOFF_S)
+        with self._background_paused():
+            for _attempt in range(20):
+                if job["state"] == "catching_up":
+                    job = self._catch_up(job, embedder, target.dimension)
+                if job["state"] != "ready":
+                    break
+                self._wait_for_quiet()
+                job = activate_job(self, job, embedder, target)
+                if job["state"] == "activated":
+                    return job, True
+                if job["state"] == "ready":  # requests did not drain: every try holds them
+                    self._stop.wait(backoff)
+                    backoff = min(backoff * 2, _MAX_BACKOFF_S)
         return job, False
 
     def _background_paused(self):

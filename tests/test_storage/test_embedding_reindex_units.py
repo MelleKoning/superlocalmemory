@@ -394,3 +394,34 @@ def test_a_row_replaced_mid_job_is_staged_again_not_swapped_in_empty(store, monk
     blob = conn.execute("SELECT embedding FROM atomic_facts WHERE fact_id='f001'").fetchone()[0]
     conn.close()
     assert blob is not None and len(blob) == 16, "a replaced row went live with no vector"
+
+
+def test_background_work_stays_paused_across_every_activation_try(store, monkeypatch):
+    """A backoff between tries must not let a long background save back in."""
+    from types import SimpleNamespace
+
+    from superlocalmemory.core import embedding_reindex_activate as act
+    from superlocalmemory.server.profile_runtime import ProfileRuntime
+
+    root, db_path = store
+    runtime = ProfileRuntime("default")
+    runner = er.ReindexRunner(db_path=db_path, data_root=root,
+                              app_state=SimpleNamespace(profile_runtime=runtime))
+    seen: list[tuple[str, bool]] = []
+    tries = iter(["ready", "ready", "activated"])
+
+    def fake_activate(_runner, job, _embedder, _target):
+        seen.append(("try", runtime.background_paused))
+        return {**job, "state": next(tries)}
+
+    def fake_wait(_seconds):
+        seen.append(("backoff", runtime.background_paused))
+        return False
+
+    monkeypatch.setattr(act, "activate_job", fake_activate)
+    monkeypatch.setattr(runner._stop, "wait", fake_wait)
+    job, handed = runner._activate({"job_id": 1, "state": "ready"}, object(), _target())
+    assert handed and job["state"] == "activated"
+    assert [k for k, _ in seen] == ["try", "backoff", "try", "backoff", "try"]
+    assert all(paused for _, paused in seen), f"background work resumed between tries: {seen}"
+    assert not runtime.background_paused
