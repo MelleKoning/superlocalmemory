@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -208,3 +207,76 @@ def test_concurrent_external_observations_complete_without_deadlock(
         f"{_DEADLOCK_GUARD_S:.0f}s — the store's process lock likely deadlocked"
     )
     assert outcomes == [True] * 32
+
+
+# -- Bounded Loops nodes that never ran (slm-bridge/v1, bounded-loops 0.7.6) ---------------
+# gate_passed is tri-state in the contract: None means "no gate ran". A node that never ran
+# (an approval node, a join, a node that failed before its gate) honestly reports
+# attempts 0 with gate_passed None. Refusing it dropped the whole run.
+
+
+def _node(node_id: str, attempts, gate_passed, state: str = "SUCCEEDED") -> dict:
+    return {
+        "node_id": node_id,
+        "state": state,
+        "gate_passed": gate_passed,
+        "attempts": attempts,
+        "artifact_digests": [],
+    }
+
+
+def test_never_attempted_node_without_gate_verdict_is_accepted(
+    store: ExternalEvidenceStore,
+) -> None:
+    payload = _evidence()
+    payload["nodes"] = [_node("approval", 0, None, state="PENDING")]
+    assert store.record(payload) is True
+
+
+@pytest.mark.parametrize("gate_passed", [True, False])
+def test_zero_attempts_with_a_gate_verdict_is_refused(
+    store: ExternalEvidenceStore, gate_passed: bool,
+) -> None:
+    payload = _evidence()
+    payload["nodes"] = [_node("probe", 0, gate_passed)]
+    with pytest.raises(ExternalEvidenceValidationError, match="node gate metadata"):
+        store.record(payload)
+
+
+@pytest.mark.parametrize("attempts", [-1, True, False, "1", 1.0, None])
+def test_invalid_attempts_values_are_refused(store: ExternalEvidenceStore, attempts) -> None:
+    payload = _evidence()
+    payload["nodes"] = [_node("probe", attempts, None)]
+    with pytest.raises(ExternalEvidenceValidationError, match="node gate metadata"):
+        store.record(payload)
+
+
+def test_bounded_loops_076_document_with_approval_node_is_accepted(
+    store: ExternalEvidenceStore,
+) -> None:
+    payload = _evidence()
+    payload.update({
+        "run_ref": "release-gate-1",
+        "run_id": "graph-run-076",
+        "outcome": "SUCCEEDED",
+        "run_state": "SUCCEEDED",
+        "demonstration": False,
+        "eligible_for_learning": False,
+        "receipt": {
+            "sequence": 14,
+            "head_digest": "sha256:" + "9" * 64,
+            "trust": "local_hash_chain_only",
+        },
+        "nodes": [
+            _node("human_approval", 0, None, state="SKIPPED"),
+            {
+                "node_id": "build_and_test",
+                "state": "SUCCEEDED",
+                "gate_passed": True,
+                "attempts": 1,
+                "artifact_digests": ["sha256:" + "8" * 64],
+            },
+        ],
+    })
+    assert store.record(payload) is True
+    assert store.get("alpha", payload["workspace_id"], "release-gate-1") == payload

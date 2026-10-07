@@ -95,7 +95,7 @@ class ExternalEvidenceStore:
                         payload["run_ref"],
                     )
                     conn.execute("ROLLBACK")
-                    if _payload_digest(existing) == digest:
+                    if existing is not None and _payload_digest(existing) == digest:
                         return False
                     raise ExternalEvidenceConflictError(
                         "external run address has a different receipt head"
@@ -251,10 +251,15 @@ def _validate(payload: dict[str, Any]) -> None:
         )
         if not valid_node:
             raise ExternalEvidenceValidationError("node identifiers are invalid")
+        # gate_passed is tri-state (None = no gate ran): a node that never ran
+        # (an approval node, a join, a failure before its gate) honestly reports
+        # attempts 0 with no verdict. Only a verdict without an attempt is invalid.
         if (
             node["gate_passed"] not in (True, False, None)
+            or isinstance(node["attempts"], bool)
             or not isinstance(node["attempts"], int)
-            or node["attempts"] < 1
+            or node["attempts"] < 0
+            or (node["attempts"] == 0 and node["gate_passed"] is not None)
         ):
             raise ExternalEvidenceValidationError("node gate metadata is invalid")
         if not isinstance(node["artifact_digests"], list) or any(
