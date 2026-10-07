@@ -43,6 +43,7 @@ import numpy as np
 from superlocalmemory.storage.database import _scope_where
 from superlocalmemory.storage.embedding_codec import (
     EMBEDDING_BYTES,
+    expected_bytes,
     decode_embedding,
 )
 
@@ -65,7 +66,7 @@ def decode_embedding_array(raw: Any, *, fact_id: str) -> np.ndarray | None:
     """
     if raw is None or raw == "":
         return None
-    if isinstance(raw, (bytes, bytearray)) and len(raw) == EMBEDDING_BYTES:
+    if isinstance(raw, (bytes, bytearray)) and len(raw) == expected_bytes():
         return np.frombuffer(raw, dtype=np.float32)
     values = decode_embedding(raw, fact_id=fact_id)
     if values is None:

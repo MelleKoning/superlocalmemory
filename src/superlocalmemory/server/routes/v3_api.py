@@ -558,6 +558,7 @@ async def set_full_config(request: Request):
 
         # Update embedding only when the dashboard explicitly sent those fields;
         # absence means "leave it alone" (AIDEV-86 / broader fix).
+        _queued = None  # a background re-index started by this save, if any
         _emb_fields = ("embedding_provider", "embedding_endpoint", "embedding_key",
                        "embedding_model", "embedding_dimension")
         if any(k in body for k in _emb_fields):
@@ -577,14 +578,7 @@ async def set_full_config(request: Request):
             # fields, so a width that the store cannot hold arrived here
             # untouched while the other route refused it — one door bolted, the
             # other open.
-            if not bool(body.get("force")):
-                _refusal = _refuse_incompatible_embedding(
-                    config, config.embedding, _new_model, _new_dim,
-                    new_provider=_new_provider,
-                )
-                if _refusal is not None:
-                    return _refusal
-            config.embedding = EmbeddingConfig(
+            _new_emb = EmbeddingConfig(
                 provider=_new_provider,
                 api_endpoint=body.get("embedding_endpoint", ""),
                 api_key=body.get("embedding_key", ""),
@@ -601,6 +595,18 @@ async def set_full_config(request: Request):
                 api_version=_old_emb.api_version,
                 deployment_name=_old_emb.deployment_name,
             )
+            # 4.1.22: a new space is re-indexed in the background; the rest applies now.
+            from superlocalmemory.server.routes.embedding_reindex import queue_if_new_space
+            _queued = queue_if_new_space(request, _old_emb, _new_emb, force=bool(body.get("force")))
+            if _queued is not None and _queued.status_code != 202:
+                return _queued
+            _refusal = None if _queued is not None or bool(body.get("force")) or getattr(
+                request.app.state, "embedding_reindex", None) else _refuse_incompatible_embedding(
+                config, _old_emb, _new_model, _new_dim, new_provider=_new_provider)
+            if _refusal is not None:
+                return _refusal
+            if _queued is None:
+                config.embedding = _new_emb
 
         # When the mode actually changed, apply the new mode's structural presets
         # (retrieval topology, math thresholds, channel weights) so the user gets
@@ -630,7 +636,7 @@ async def set_full_config(request: Request):
         except Exception:
             pass
 
-        return {
+        _saved = {
             "success": True,
             "mode": new_mode,
             "provider": config.llm.provider or "none",
@@ -639,6 +645,9 @@ async def set_full_config(request: Request):
             "embedding_model": config.embedding.model_name,
             "embedding_dimension": config.embedding.dimension,
         }
+        if _queued is not None:  # embedding stays live until the background re-index is done
+            return JSONResponse({**_saved, **json.loads(_queued.body)}, status_code=202)
+        return _saved
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     except Exception as e:
@@ -738,8 +747,8 @@ def _refuse_incompatible_embedding(
                     f"this store holds {stored}-dimensional ones. Vectors of "
                     f"different widths cannot be compared, so every memory "
                     f"already stored would become unfindable by meaning. "
-                    f"Rebuild them first with: slm db migrate — or resend with "
-                    f"force=true if they have already been rebuilt."
+                    f"Switch with: slm embedder switch {new_model} --dimension "
+                    f"{effective} (re-indexes in the background) — or resend with force=true."
                 ),
             },
             status_code=409,
@@ -776,14 +785,7 @@ async def set_embedding_config(request: Request):
         # compared, so the store would keep answering similarity questions and
         # every answer would be noise. ``force=true`` is the escape hatch for
         # somebody who has already re-embedded.
-        if not bool(body.get("force")):
-            refusal = _refuse_incompatible_embedding(
-                config, old_emb, new_model, new_dim, new_provider=new_provider,
-            )
-            if refusal is not None:
-                return refusal
-
-        config.embedding = EmbeddingConfig(
+        new_emb = EmbeddingConfig(
             model_name=new_model,
             dimension=new_dim,
             provider=new_provider,
@@ -801,6 +803,16 @@ async def set_embedding_config(request: Request):
             api_version=old_emb.api_version,
             deployment_name=old_emb.deployment_name,
         )
+        # 4.1.22: a new embedding space is re-indexed in the background (202 + job).
+        from superlocalmemory.server.routes.embedding_reindex import queue_if_new_space
+        queued = queue_if_new_space(request, old_emb, new_emb, force=bool(body.get("force")))
+        if queued is not None:
+            return queued
+        refusal = None if bool(body.get("force")) or getattr(request.app.state, "embedding_reindex", None) else (
+            _refuse_incompatible_embedding(config, old_emb, new_model, new_dim, new_provider=new_provider))
+        if refusal is not None:
+            return refusal
+        config.embedding = new_emb
         await _apply_runtime_config(request, config, mode_change=False)
 
         needs_reindex = (

@@ -59,7 +59,10 @@ def test_a_different_width_is_refused(tmp_path) -> None:
     assert result.status_code == 409
     body = result.body.decode()
     assert "768" in body and "1024" in body
-    assert "slm db migrate" in body, "refusing without saying how to proceed"
+    # 4.1.21 named `slm db migrate`, which only applies schema migrations.
+    assert "slm embedder switch mxbai-embed-large --dimension 1024" in body, (
+        "refusing without naming the command that actually re-embeds")
+    assert "slm db migrate" not in body
 
 
 def test_the_same_width_is_allowed(tmp_path) -> None:

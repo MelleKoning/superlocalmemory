@@ -2293,6 +2293,8 @@ async def lifespan(application: FastAPI):
         deployment = load_deployment_config()
         _apply_deployment_runtime(config, deployment)
         application.state.deployment = deployment
+        from superlocalmemory.core import embedding_reindex_daemon as _reindex
+        config = _reindex.prepare_daemon_config(config)  # finishes an interrupted switch
         engine = MemoryEngine(config)
         engine.initialize()
 
@@ -2396,6 +2398,7 @@ async def lifespan(application: FastAPI):
             )
         )
         logger.info("Unified daemon: MemoryEngine initialized (mode=%s)", config.mode.value)
+        _reindex.start_for_daemon(application.state, config)  # resumes a model switch
 
         # v3.5.0: Backend Orchestrator — CozoDB (graph) + LanceDB (vector) backends.
         # Initialise AFTER engine so the retrieval channels exist to receive backends.
@@ -3602,6 +3605,8 @@ async def lifespan(application: FastAPI):
     canonical_writer_stopped = _release_canonical_remember_runtime(application)
     _profile_runtime = None
     _engine = None
+    from superlocalmemory.server.live_engine import engine_to_close
+    engine = engine_to_close(application.state, engine)  # the live one, not the first
     if engine is not None and materializer_stopped and canonical_writer_stopped:
         try:
             engine.close()
@@ -4404,6 +4409,8 @@ def _register_dashboard_routes(application: FastAPI) -> None:
     application.include_router(summaries_router)
     from superlocalmemory.server.routes.views import router as views_router
     application.include_router(views_router)
+    from superlocalmemory.server.routes.embedding_reindex import router as _reindex_router
+    application.include_router(_reindex_router)
     from superlocalmemory.server.routes.upgrade_restore import register as register_upgrade
     register_upgrade(application)
 
@@ -4676,7 +4683,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
         lifecycle_state = "ready" if base_ready else "starting"
         identity = getattr(application.state, "daemon_descriptor", None)
         from superlocalmemory.server.profile_runtime import get_profile_runtime
-
+        from superlocalmemory.core.embedding_reindex_daemon import health_payload as _reindex_health
         profile_snapshot = get_profile_runtime(application.state).snapshot
         # H-05 (3.7.9): operational metadata (pid, daemon identity including
         # capability_fingerprint/instance_id, active profile, readiness detail)
@@ -4739,6 +4746,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
             # from the record, and the only symptom is answers that are subtly
             # worse. A depth that does not fall is the thing to alert on.
             "projection": _projection_health(),
+            "embedding_reindex": _reindex_health(application.state),
         }
 
     @application.get("/recall")
@@ -6182,7 +6190,7 @@ def _run_materializer_operation(
     holding the operation lease during the transition drain window.
     """
     # Writer-priority: don't acquire a new lease when a transition is draining.
-    if runtime is not None and runtime.transitioning:
+    if runtime is not None and (runtime.transitioning or runtime.background_paused):
         if expected_profile_id is not None:
             raise _PendingProfileMismatchError(
                 "pending materialization deferred during profile transition"
@@ -6688,6 +6696,9 @@ def _start_pending_materializer() -> None:
                     ),
                 )
                 durable_complete, durable_failed = cycle_result or (0, 0)
+                if runtime.background_paused:  # a model switch is swapping: no spin
+                    time.sleep(0.25)
+                    continue
                 # Only backfill legacy pending items enqueued under the active
                 # profile — never materialize another profile's queued memory
                 # under whichever profile happens to be active now.

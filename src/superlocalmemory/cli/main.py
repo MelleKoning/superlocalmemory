@@ -1157,6 +1157,8 @@ def main() -> None:
     register_view_parser(sub)
     from superlocalmemory.cli.corrections_cmd import register_corrections_parsers
     register_corrections_parsers(sub)  # 4.1.22: corrections your own actions overtook
+    from superlocalmemory.cli.embedder_cmd import register_embedder_parser
+    register_embedder_parser(sub)
 
     from superlocalmemory.cli.backup_cmd import add_backup_parser
     add_backup_parser(sub)

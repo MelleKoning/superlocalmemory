@@ -57,6 +57,7 @@ class ProfileRuntime:
         self._snapshot = ProfileSnapshot(profile_id, generation)
         self._active_operations = 0
         self._transitioning = False
+        self._background_paused = 0
 
     @property
     def snapshot(self) -> ProfileSnapshot:
@@ -67,6 +68,36 @@ class ProfileRuntime:
     def transitioning(self) -> bool:
         with self._condition:
             return self._transitioning
+
+    @property
+    def active_operations(self) -> int:
+        """Admitted operations in flight (a transition waits for these)."""
+        with self._condition:
+            return self._active_operations
+
+    @property
+    def background_paused(self) -> bool:
+        """Background work must not take a new lease (requests are still served)."""
+        with self._condition:
+            return self._background_paused > 0
+
+    @contextmanager
+    def pausing_background(self) -> Iterator[None]:
+        """Let a coming transition drain without waiting on background work.
+
+        A background unit (one memory being materialized) can hold its lease
+        longer than the drain timeout on a large store, so a transition never
+        found a gap. While this is held, background admission is skipped;
+        requests are admitted as usual.
+        """
+        with self._condition:
+            self._background_paused += 1
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._background_paused -= 1
+                self._condition.notify_all()
 
     def acquire_operation(self) -> ProfileSnapshot:
         """Admit an operation only when no profile transition is active."""
@@ -83,7 +114,7 @@ class ProfileRuntime:
         drain window of a pending profile switch.
         """
         with self._condition:
-            if self._transitioning:
+            if self._transitioning or self._background_paused:
                 return None
             self._active_operations += 1
             return self._snapshot
@@ -181,13 +212,16 @@ class ProfileRuntime:
             self._condition.notify_all()
             return self._snapshot
 
-    def reconfigure(self, commit: Callable[[ProfileSnapshot], None]) -> ProfileSnapshot:
+    def reconfigure(self, commit: Callable[[ProfileSnapshot], None], *,
+                    drain_timeout: float | None = None) -> ProfileSnapshot:
         """Run a same-profile engine transition behind the operation barrier.
 
         Raises TransitionDrainTimeout if in-flight operations do not drain
-        within _DRAIN_TIMEOUT_SECS (same semantics as transition()).
+        within ``drain_timeout`` (default _DRAIN_TIMEOUT_SECS, same semantics as
+        transition()).
         """
-        deadline = _time.monotonic() + _DRAIN_TIMEOUT_SECS
+        budget = _DRAIN_TIMEOUT_SECS if drain_timeout is None else float(drain_timeout)
+        deadline = _time.monotonic() + budget
         with self._condition:
             while self._transitioning:
                 self._condition.wait()
@@ -198,7 +232,7 @@ class ProfileRuntime:
                     self._transitioning = False
                     self._condition.notify_all()
                     raise TransitionDrainTimeout(
-                        f"Engine reconfigure timed out after {_DRAIN_TIMEOUT_SECS:.0f}s: "
+                        f"Engine reconfigure timed out after {budget:.0f}s: "
                         f"{self._active_operations} in-flight operation(s) did not drain."
                     )
                 self._condition.wait(timeout=min(remaining, 0.25))

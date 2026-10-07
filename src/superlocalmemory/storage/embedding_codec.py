@@ -35,6 +35,8 @@ if TYPE_CHECKING:
 __all__ = [
     "EMBEDDING_DIM",
     "EMBEDDING_BYTES",
+    "expected_bytes",
+    "set_expected_dimension",
     "encode_embedding",
     "decode_embedding",
     "encode_float_vector",
@@ -43,6 +45,27 @@ __all__ = [
 
 EMBEDDING_DIM: int = 768
 EMBEDDING_BYTES: int = EMBEDDING_DIM * 4  # float32 = 4 bytes
+
+# The width this process's store actually holds. 768 was hard-coded, so on a
+# store of any other width (a 384- or 1536-wide model, or after switching to
+# one) EVERY read of every fact logged the "truncated write" warning below:
+# 852,628 lines in one 40-minute run on a 22k-fact store copy, with recall's
+# median at 21 s right after a switch. The engine sets it from the live space
+# (core/embedding_live.py); a mismatch is still reported, once per length.
+_expected_dim: int = EMBEDDING_DIM
+_reported_lengths: set[int] = set()
+
+
+def set_expected_dimension(dimension: int) -> None:
+    """The live space's width (called when an engine binds to its store)."""
+    global _expected_dim
+    if int(dimension) > 0 and int(dimension) != _expected_dim:
+        _expected_dim = int(dimension)
+        _reported_lengths.clear()
+
+
+def expected_bytes() -> int:
+    return _expected_dim * 4
 
 
 def encode_embedding(vec: list[float] | None) -> bytes | None:
@@ -102,7 +125,8 @@ def decode_embedding(
                 f"Corrupt embedding buffer for fact {fact_id!r}: "
                 f"{len(raw)} bytes is not a multiple of 4 (float32)"
             )
-        if len(raw) != EMBEDDING_BYTES:
+        if len(raw) != expected_bytes() and len(raw) not in _reported_lengths:
+            _reported_lengths.add(len(raw))
             # A torn write that happens to land on a 4-byte boundary is
             # indistinguishable from a short vector by length alone, and it was
             # accepted silently at debug level: 767 of 768 values still looks
@@ -112,8 +136,9 @@ def decode_embedding(
             logger.warning(
                 "embedding for fact %s is %d bytes (%d floats), not the expected "
                 "%d (%d floats) — expected only for a test vector; on a real "
-                "store this is a truncated write",
-                fact_id, len(raw), len(raw) // 4, EMBEDDING_BYTES, EMBEDDING_DIM,
+                "store this is a truncated write (further vectors of this size "
+                "are not reported)",
+                fact_id, len(raw), len(raw) // 4, expected_bytes(), _expected_dim,
             )
         return np.frombuffer(raw, dtype=np.float32).tolist()
 

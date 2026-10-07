@@ -309,7 +309,8 @@ def check_embedding_model_change(
         f"{new_model} emits {probe.dimension}-dimensional vectors and this store "
         f"holds {stored}-dimensional ones. Vectors of different widths cannot be "
         f"compared, so every memory already stored would become unfindable by "
-        f"meaning. Rebuild them first with: slm db migrate",
+        f"meaning. Switch with: slm embedder switch {new_model} --dimension "
+        f"{probe.dimension} (re-indexes in the background).",
         stored,
         probe.dimension,
     )

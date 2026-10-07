@@ -99,7 +99,8 @@ def test_a_wider_model_is_refused_not_warned_about(
     assert result.stored_dimension == 768
     assert result.new_dimension == 1024
     assert "768" in result.message and "1024" in result.message
-    assert "slm db migrate" in result.message, (
+    # 4.1.21 named `slm db migrate`, which never re-embeds anything.
+    assert "slm embedder switch mxbai-embed-large --dimension 1024" in result.message, (
         "refusing without saying how to proceed leaves the user stuck"
     )
 
