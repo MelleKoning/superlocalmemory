@@ -37,6 +37,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   memories.** It rewrites sqlite-vec rows that no longer match their memory's
   embedding and removes LanceDB rows for memories that are gone, withheld or
   soft-deleted; `slm db integrity` reports both counts.
+- **SLM checks your memory store after an upgrade, and Health offers Repair
+  now.** A few minutes after the first start of a new version, the store is
+  checked in the background; the check only reads. The dashboard's Health page
+  lists what it found in plain words, the sidebar marks Health while something
+  can be repaired, and **Repair now** saves a full backup copy first, runs the
+  same repair as `slm db repair`, and checks again. If the backup copy cannot
+  be made, nothing is changed.
+- **Every editor plugin ships in the npm package**: Codex, VS Code / Copilot,
+  Hermes and Antigravity alongside Claude Code, with all skills, agents and
+  rules. `slm codex install` now installs every skill and all four sub-agents.
+  [Editor and agent plugins](docs/plugins.md) gives each host's install
+  commands.
 - **Model advice carries SLM's own measured results**, and a model measured on
   a small sample is ranked conservatively.
 
@@ -74,6 +86,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   running on your computer.
 - A second suggestion about the same memory no longer logs a warning on every
   save.
+- A memory saved with the same words as another memory is no longer counted as
+  repair work that the repair could never do.
+- Maintenance never creates an empty database at a path where no store exists.
+- The Hermes guide named a release download that was never published; it now
+  installs the plugin from the repository. The VS Code guide named a connect
+  command that does not exist; it is `slm connect vscode-copilot --here`.
 - The laptop link no longer fails at start when two parts read its credential
   at the same time.
 - The `remember` tool is declared additive, so clients do not treat saving as a
