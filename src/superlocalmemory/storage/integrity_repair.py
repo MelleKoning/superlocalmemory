@@ -355,9 +355,8 @@ class Repair:
 
         conn = self._connect()
         try:
-            found, held = own.classify(conn)
-            for reason, n in held.items():
-                stats.add(f"own_facts.held_{reason}", n)
+            # Held-back memories are reported by plan() (before/after), not as work done.
+            found, _held = own.classify(conn)
             db = DatabaseManager(self.db_path)
             for item in found:
                 if self.limits.max_seconds is not None and (
