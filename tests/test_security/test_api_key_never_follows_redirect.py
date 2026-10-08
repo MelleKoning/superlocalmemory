@@ -32,7 +32,8 @@ from superlocalmemory.core import outbound_http
 REPO = Path(__file__).resolve().parents[2]
 _KEY = "api-key-must-not-travel"
 
-#: Files that READ the header on the server side (reviewed).
+#: Files that READ the header on the server side (reviewed), plus the one
+#: reviewed client, listed last.
 _REVIEWED_READERS = {
     "src/superlocalmemory/infra/auth_middleware.py",
     "src/superlocalmemory/server/access_gate.py",
@@ -41,6 +42,18 @@ _REVIEWED_READERS = {
     "src/superlocalmemory/server/ui.py",
     "src/superlocalmemory/server/unified_daemon.py",
     "src/superlocalmemory/server/write_identity.py",
+    # The one reviewed CLIENT. It forwards a relayed MCP request to this machine's
+    # own daemon and may attach the key (supplied by the local installation, never
+    # by the relay) to that request. It accepts only http://127.0.0.1:<port>/mcp
+    # as origin (anything else throws invalid_local_origin), sends with
+    # `redirect: 'error'` so any 3xx fails the request instead of being followed,
+    # and a frame's own headers cannot override the key.
+    # integrations/remote-gateway/tests/local-connector.test.mjs drives real
+    # 301/302/303/307/308 responses and proves the redirect target is never contacted.
+    "integrations/remote-gateway/src/local-connector.ts",
+    # That client's own test: it names the header only to prove the key is never
+    # sent anywhere but the loopback origin and never follows a redirect.
+    "integrations/remote-gateway/tests/local-connector.test.mjs",
 }
 _CLIENT_ROOTS = ("src", "plugin-src", "hermes-plugin", "integrations", "ide", "scripts",
                  "bin", "npm", "packages")

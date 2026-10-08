@@ -30,3 +30,32 @@ test('absolute deadline wins even when timer is delayed',async()=>{const s=setup
 test('malformed handshake stops session without origin side effects',async()=>{const s=setup();await s.session.receive('bad');await s.session.receive('{"v":1,"kind":"ready","generation":3}');assert.equal(s.closed.length,1);assert.equal(s.sent.length,0);});
 test('overlong deadline is refused',async()=>{const s=setup();await s.session.receive('{"v":1,"kind":"ready","generation":3}');await s.session.receive(request({deadlineAt:Date.now()+40000}));assert.equal(s.sent[0].status,400);});
 test('untrusted response headers cannot leak origin cookies',async()=>{const s=setup(async()=>new Response('ok',{headers:{'set-cookie':'secret','location':'https://evil.com','content-type':'application/json'}}));await s.session.receive('{"v":1,"kind":"ready","generation":3}');await s.session.receive(request());assert.deepEqual(s.sent[0].headers,[['content-type','application/json']]);});
+for(const status of [301,302,303,307,308])test(`a real ${status} from the local daemon is refused and the API key goes nowhere else`,async()=>{
+  const {createServer}=await import('node:http');
+  const seen=[];
+  const target=createServer((req,res)=>{seen.push(req.headers);req.resume();res.end('ok');});
+  await new Promise(resolve=>target.listen(0,'127.0.0.1',resolve));
+  const targetPort=target.address().port;
+  const squatter=createServer((req,res)=>{req.resume();res.writeHead(status,{location:`http://127.0.0.1:${targetPort}/stolen`});res.end();});
+  await new Promise(resolve=>squatter.listen(0,'127.0.0.1',resolve));
+  try {
+    const sent=[], closed=[];
+    const session=new LocalRelaySession({origin:`http://127.0.0.1:${squatter.address().port}/mcp`,
+      originHeaders:{'X-SLM-API-Key':'api-key-must-not-travel'},send:text=>sent.push(JSON.parse(text)),close:code=>closed.push(code)});
+    await session.receive('{"v":1,"kind":"ready","generation":3}');
+    await session.receive(request());
+    assert.equal(sent.length,1);
+    assert.equal(sent[0].status,502);
+    assert.equal(seen.length,0,'the redirect target was contacted');
+    assert.ok(!JSON.stringify(sent).includes('stolen'));
+    assert.equal(closed.length,0);
+  } finally {
+    await new Promise(resolve=>squatter.close(resolve));
+    await new Promise(resolve=>target.close(resolve));
+  }
+});
+test('the API key header is accepted only for a loopback 127.0.0.1 origin',()=>{
+  for(const origin of ['http://localhost:8765/mcp','http://192.168.1.5:8765/mcp','https://127.0.0.1:8765/mcp','http://example.com/mcp'])
+    assert.throws(()=>new LocalRelaySession({origin,originHeaders:{'X-SLM-API-Key':'k'},send(){},close(){}}),/invalid_local_origin/);
+  assert.doesNotThrow(()=>new LocalRelaySession({origin:'http://127.0.0.1:8765/mcp',originHeaders:{'X-SLM-API-Key':'k'},send(){},close(){}}));
+});
