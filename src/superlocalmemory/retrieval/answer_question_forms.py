@@ -2,36 +2,31 @@
 # Licensed under AGPL-3.0-or-later - see LICENSE file
 # Part of SuperLocalMemory V3 | https://qualixar.com | https://varunpratap.com
 
-"""Two question shapes the on-device answer check misread, and what fixes them.
+"""A permission question answered by a stated rule, which the model misreads.
 
-Measured on the pinned Laya weights (4.1.22): the check abstained on memories
-that plainly answer two kinds of question.
+Measured on the pinned Laya weights (4.1.22): asked "May the agent publish
+without approval?", the on-device answer check scored the memory "Never publish
+until the owner explicitly approves the release" at 0.08 and abstained. The
+model reads a yes/no question as needing a yes or a no, and a prohibition as
+neither. No threshold can fix that: a known negative scored 0.22, above it.
 
-* **Order** — "Which mobile platform was chosen first?" against "We decided to
-  ship on iOS first and Android one quarter later" scored 0.38. The same
-  question asked as "What is the order or sequence: ...?" scores 0.62 on that
-  memory and stays low on memories that state no order.
-* **Permission** — "Can we deploy X on a Friday?" against "Never deploy X on a
-  Friday" scored 0.23: the model reads a yes/no question as needing a yes or a
-  no, and a prohibition as neither. Asked without the generic subject ("Is it
-  allowed to deploy X on a Friday?") it scores 0.81.
+So, for a yes/no permission question whose subject is generic (we, I, anyone,
+the agent ...), an explicit rule also reads the memories: a memory settles the
+question when one of its sentences has a prohibition or permission cue that
+governs the asked action ("never publish", "must not be booked") AND carries
+every other content word of the question. That is a rule, not a probability:
+the verdict lists the memories it recognised (``rule_support``) and keeps the
+model's own numbers untouched.
 
-So for those shapes only, the check also asks the reworded question and keeps,
-per memory, the higher of the two probabilities. Every other question is asked
-exactly as before, with the same wording and the same threshold.
+Tried and rejected on data (4.1.22): also asking the model a reworded question
+("Is it allowed to ...?", "What is the order or sequence: ...?") fixed order
+and permission cases on the tuning set, but on a blind held-out set it added
+two false accepts (a rule about another product, a pair whose order was
+undecided) for one fix. The rule alone added none.
 
-One case no wording fixed: "May the agent publish without approval?" against
-"Never publish until the owner explicitly approves the release" (0.08). For a
-permission question whose subject is generic (we, I, anyone, the agent ...),
-an explicit rule recognises it: a sentence of the memory where a prohibition or
-permission cue governs the asked action, and which carries every other content
-word of the question. That is a rule, not a probability: the verdict lists the
-memories it recognised (``rule_support``) and keeps the model's own numbers.
-
-Never a lower threshold, and never applied to anything else: a known negative
-scored above the approval case, so lowering it would accept that too.
-Changing either part is a new ``FORMS_ID``; a verdict carrying either part
-names it in its calibration id.
+Every other question is judged exactly as before. Changing the rule is a new
+``FORMS_ID``; every verdict on a question the rule reads names it in its
+calibration id.
 """
 
 from __future__ import annotations
@@ -40,7 +35,7 @@ import re
 from collections.abc import Sequence
 
 #: Part of the calibration id of every verdict these forms touched.
-FORMS_ID = "qforms-v1"
+FORMS_ID = "permission-rule-v1"
 
 _GENERIC = (r"(?:we|i|you|they|anyone|anybody|someone|somebody|one|"
             r"the (?:agent|assistant|ai|bot|team|user))")
@@ -52,10 +47,6 @@ _ALLOWED_GENERIC = re.compile(
 _ALLOWED_IT = re.compile(
     r"^\s*is\s+it\s+(?:ok|okay|fine|allowed|permitted)\s+(?:for\s+" + _GENERIC + r"\s+)?to\s+"
     r"(?P<rest>[^?]+?)\s*\??\s*$", re.I)
-_ORDER = re.compile(
-    r"\b(?:first|second|third|last|initially|earlier|later|before|after|"
-    r"in what order|which order)\b", re.I)
-
 #: A memory longer than this is not read by the rule (the model still is).
 _MAX_RULE_CHARS = 600
 _MAX_QUESTION_CHARS = 300
@@ -98,27 +89,9 @@ def permission_action(question: str) -> str | None:
     return None
 
 
-def is_order_question(question: str) -> bool:
-    return (isinstance(question, str) and len(question) <= _MAX_QUESTION_CHARS
-            and _ORDER.search(question) is not None)
-
-
-def reworded(question: str) -> tuple[str, ...]:
-    """The extra wordings the model is asked, in a fixed order (empty for most)."""
-    if not isinstance(question, str):
-        return ()
-    body = _strip(question).rstrip("?").strip()
-    out: list[str] = []
-    action = permission_action(question)
-    if action:
-        out.append(f"Is it allowed to {action}?")
-    if is_order_question(question):
-        out.append(f"What is the order or sequence: {body}?")
-    return tuple(q for q in out if q != question)
-
-
 def applies(question: str) -> bool:
-    return bool(reworded(question)) or permission_action(question) is not None
+    """Whether the rule reads this question at all (else: model only, as before)."""
+    return permission_action(question) is not None
 
 
 def _words(text: str) -> list[str]:
@@ -161,10 +134,4 @@ def rule_support(question: str, memories: Sequence[str]) -> tuple[int, ...]:
     return tuple(i for i, m in enumerate(memories) if rule_supports(question, m))
 
 
-def merged(first: Sequence[float], second: Sequence[float]) -> tuple[float, ...]:
-    """Per memory, the higher probability of two wordings."""
-    return tuple(max(a, b) for a, b in zip(first, second, strict=True))
-
-
-__all__ = ["FORMS_ID", "applies", "is_order_question", "merged", "permission_action",
-           "reworded", "rule_support", "rule_supports"]
+__all__ = ["FORMS_ID", "applies", "permission_action", "rule_support", "rule_supports"]

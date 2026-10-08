@@ -1,16 +1,16 @@
 # Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar
 # Licensed under AGPL-3.0-or-later - see LICENSE file
 
-"""Order and permission questions the on-device answer check used to abstain on.
+"""A permission question the on-device answer check used to abstain on.
 
-LAYA-A1 ("Which mobile platform was chosen first?" against "We decided to ship
-on iOS first and Android one quarter later") and LAYA-A2 ("May the agent publish
-without approval?" against "Never publish until the owner explicitly approves the
-release") were false abstentions on the pinned weights. The fix is a reworded
-second question for those shapes only and an explicit rule for generic-subject
-permission questions — never a lower threshold. These tests pin both parts, that
-every other question is asked exactly as before, and that the verdict names the
-new calibration identity. A fake worker speaks the real protocol; no model loads.
+LAYA-A2 ("May the agent publish without approval?" against "Never publish until
+the owner explicitly approves the release") was a false abstention on the pinned
+weights. The fix is an explicit rule for generic-subject permission questions —
+never a lower threshold, never an invented probability. LAYA-A1 (an order
+question) is NOT fixed: a reworded second question fixed it on the tuning set
+but added false accepts on a blind held-out set, so it was not shipped; a test
+pins that order questions are judged exactly as before. A fake worker speaks the
+real protocol; no model loads.
 """
 
 from __future__ import annotations
@@ -37,8 +37,7 @@ A2_DOCS = ["Never publish until the owner explicitly approves the release.",
            "The team uses Rust.", "Tests run each Friday."]
 _SNAPSHOT_SHA = "20aed815fc6acde75733882e7ec0e3f28aeb9717"
 
-# Low for every original question; the order rewording lifts memories that say
-# "first"; a worker that breaks on the rewording only (mode "reword_fails").
+# Low probabilities for every question, as the real model gave on A1 and A2.
 _FAKE_WORKER = r'''
 import json, os, sys
 log = os.environ.get("FAKE_LAYA_LOG")
@@ -57,14 +56,10 @@ for raw in sys.stdin:
         continue
     q = req["query"]
     docs = req["documents"]
-    reworded = q.startswith("What is the order") or q.startswith("Is it allowed")
-    if reworded and mode == "reword_fails":
-        print(json.dumps({"ok": False, "error": "boom", "id": rid}), flush=True)
+    if mode == "malformed":
+        print(json.dumps({"ok": True, "probabilities": [7.0] * len(docs), "id": rid}), flush=True)
         continue
-    if q.startswith("What is the order"):
-        probs = [0.62 if "first" in d else 0.05 for d in docs]
-    else:
-        probs = [0.38 if "first" in d else (0.08 if "Never" in d else 0.02) for d in docs]
+    probs = [0.38 if "first" in d else (0.08 if "Never" in d else 0.02) for d in docs]
     print(json.dumps({"ok": True, "probabilities": probs, "id": rid}), flush=True)
 '''
 
@@ -95,18 +90,21 @@ def _queries(tmp_path: Path) -> list[str]:
             if json.loads(line).get("cmd") == "judge"]
 
 
-class TestWhichQuestionsAreReworded:
-    def test_the_two_regressions_get_their_rewording(self) -> None:
-        assert forms.reworded(A1_Q) == ("What is the order or sequence: " + A1_Q,)
-        assert forms.reworded(A2_Q) == ("Is it allowed to publish without approval?",)
+class TestWhichQuestionsTheRuleReads:
+    def test_a_generic_subject_permission_question_is_read(self) -> None:
+        assert forms.permission_action(A2_Q) == "publish without approval"
+        assert forms.permission_action("can anyone push straight to main") == \
+            "push straight to main"
+        assert forms.permission_action("Is it okay to restart the server?") == \
+            "restart the server"
 
     @pytest.mark.parametrize("question", [
-        "what port does the api listen on", "Who owns the billing dashboard?",
+        A1_Q, "what port does the api listen on", "Who owns the billing dashboard?",
         "May Rosa merge into the release branch?",  # a named subject: left to the model
         "", "x" * 400,
     ])
-    def test_every_other_question_is_asked_as_typed(self, question) -> None:
-        assert forms.reworded(question) == ()
+    def test_every_other_question_is_left_to_the_model(self, question) -> None:
+        assert forms.applies(question) is False
         assert forms.rule_support(question, A2_DOCS) == ()
 
 
@@ -130,18 +128,7 @@ class TestThePermissionRule:
         assert forms.rule_supports(q, "Juniper is great. Never deploy on a Friday.") is False
 
 
-class TestTheJudgeAsksBothWordingsAndKeepsTheHigher:
-    def test_a1_is_accepted_through_the_order_rewording(self, worker, tmp_path) -> None:
-        judge = _judge(worker, tmp_path)
-        try:
-            verdict = judge.judge(A1_Q, A1_DOCS)
-        finally:
-            judge.shutdown()
-        assert verdict.probabilities == (0.62, 0.05, 0.05)
-        assert verdict.insufficient is False
-        assert verdict.calibration_id == judge.calibration_id + "+" + forms.FORMS_ID
-        assert _queries(tmp_path)[-2:] == [A1_Q, "What is the order or sequence: " + A1_Q]
-
+class TestTheJudgeAppliesTheRule:
     def test_a2_is_accepted_by_the_rule_and_keeps_the_models_numbers(
             self, worker, tmp_path) -> None:
         judge = _judge(worker, tmp_path)
@@ -149,54 +136,58 @@ class TestTheJudgeAsksBothWordingsAndKeepsTheHigher:
             verdict = judge.judge(A2_Q, A2_DOCS)
         finally:
             judge.shutdown()
-        assert verdict.answer_confidence == pytest.approx(0.08)  # never invented
+        assert verdict.probabilities == (0.08, 0.02, 0.02)  # never invented
         assert verdict.answer_confidence < verdict.threshold == 0.6
         assert verdict.rule_support == (0,)
         assert verdict.insufficient is False
-        assert verdict.calibration_id.endswith("+" + forms.FORMS_ID)
+        assert verdict.calibration_id == judge.calibration_id + "+" + forms.FORMS_ID
+        assert _queries(tmp_path)[-1:] == [A2_Q]  # asked once, as typed
 
-    def test_a_plain_question_is_one_request_and_an_unchanged_verdict(
-            self, worker, tmp_path) -> None:
+    @pytest.mark.parametrize("question,docs", [
+        (A1_Q, A1_DOCS),  # order: not fixed, judged exactly as before
+        ("which team owns the billing dashboard", A2_DOCS[1:]),
+    ])
+    def test_every_other_question_is_one_request_and_an_unchanged_verdict(
+            self, worker, tmp_path, question, docs) -> None:
         judge = _judge(worker, tmp_path)
         try:
-            verdict = judge.judge("which team owns the billing dashboard", A2_DOCS[1:])
+            verdict = judge.judge(question, docs)
         finally:
             judge.shutdown()
-        assert _queries(tmp_path)[-1:] == ["which team owns the billing dashboard"]
-        assert len([q for q in _queries(tmp_path) if q != "warm-up"]) == 1
+        assert [q for q in _queries(tmp_path) if q != "warm-up"] == [question]
         assert verdict.calibration_id == judge.calibration_id
         assert verdict.rule_support == ()
         assert verdict.insufficient is True
 
-    def test_a_failed_rewording_costs_the_whole_verdict_never_half(
+    def test_a_malformed_answer_is_still_no_verdict_even_when_a_rule_matches(
             self, worker, tmp_path, monkeypatch) -> None:
-        monkeypatch.setenv("FAKE_LAYA_MODE", "reword_fails")
+        monkeypatch.setenv("FAKE_LAYA_MODE", "malformed")
         judge = _judge(worker, tmp_path)
         try:
-            outcome = judge.assess(A1_Q, A1_DOCS)
+            outcome = judge.assess(A2_Q, A2_DOCS)
         finally:
             judge.shutdown()
-        assert outcome.verdict is None
+        assert outcome.verdict is None  # the rule never answers without the model
 
 
 class TestTheVerdictTravelsIntact:
     def test_a_rule_supported_verdict_is_not_an_abstention(self) -> None:
-        verdict = SufficiencyVerdict((0.08, 0.06, 0.02), 0.6, "laya:x+qforms-v1",
+        verdict = SufficiencyVerdict((0.08, 0.06, 0.02), 0.6, "laya:x+permission-rule-v1",
                                      rule_support=(0,))
         response = RecallResponse(results=[RetrievalResult(
             fact=AtomicFact(content=A2_DOCS[0]), score=0.5, confidence=1.0)])
         finalize_score_contract(response, verdict)
         assert response.abstained is False
         assert response.answer_confidence == 0.08
-        assert response.calibration_id == "laya:x+qforms-v1"
+        assert response.calibration_id == "laya:x+permission-rule-v1"
 
     def test_one_memory_at_a_time_combines_to_the_same_verdict(self) -> None:
         from superlocalmemory.core.answer_check_deferred import _combine
 
-        parts = [SufficiencyVerdict((p,), 0.6, "laya:x+qforms-v1", rule_support=rs)
+        parts = [SufficiencyVerdict((p,), 0.6, "laya:x+permission-rule-v1", rule_support=rs)
                  for p, rs in ((0.08, (0,)), (0.06, ()), (0.02, ()))]
         combined = _combine(parts)
-        assert combined == SufficiencyVerdict((0.08, 0.06, 0.02), 0.6, "laya:x+qforms-v1",
+        assert combined == SufficiencyVerdict((0.08, 0.06, 0.02), 0.6, "laya:x+permission-rule-v1",
                                               rule_support=(0,))
         assert combined.insufficient is False
 
@@ -206,8 +197,9 @@ class TestTheVerdictTravelsIntact:
     not (Path(os.environ.get("SLM_TEST_LAYA_PYTHON", "/nonexistent")).exists()
          and Path(os.environ.get("SLM_TEST_LAYA_HF_HOME", "/nonexistent")).is_dir()),
     reason="set SLM_TEST_LAYA_PYTHON and SLM_TEST_LAYA_HF_HOME to a local Laya install")
-def test_a1_and_a2_on_the_pinned_weights(tmp_path, monkeypatch) -> None:
-    """The real model: both regressions accepted, the threshold still 0.6."""
+def test_a2_is_fixed_and_a1_unchanged_on_the_pinned_weights(tmp_path, monkeypatch) -> None:
+    """The real model: A2 accepted by the rule, the threshold still 0.6, and A1
+    judged exactly as before (still a false abstention: not fixed in 4.1.22)."""
     monkeypatch.setenv("SLM_DATA_DIR", str(tmp_path / "data"))
     hf_home = os.environ["SLM_TEST_LAYA_HF_HOME"]
     model = Path(hf_home) / "hub" / "models--aac6fef--laya-mlx" / "snapshots" / _SNAPSHOT_SHA
@@ -221,5 +213,6 @@ def test_a1_and_a2_on_the_pinned_weights(tmp_path, monkeypatch) -> None:
     finally:
         judge.shutdown()
     assert a1.threshold == a2.threshold == 0.6
-    assert a1.insufficient is False and a1.probabilities[0] >= 0.6
+    assert a1.probabilities[0] == pytest.approx(0.3753, abs=0.002) and a1.insufficient is True
+    assert a2.probabilities[0] == pytest.approx(0.0838, abs=0.002)
     assert a2.insufficient is False and a2.rule_support == (0,)
