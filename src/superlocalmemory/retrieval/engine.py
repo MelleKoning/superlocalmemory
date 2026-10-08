@@ -42,9 +42,11 @@ from superlocalmemory.retrieval.temporal_validity_filter import (
     admit_correction_fusion_results,
 )
 from superlocalmemory.retrieval.time_window import (
+    has_primary_evidence,
     in_window,
     infer_window_from_query,
     parse_window,
+    windowed_candidates,
 )
 from superlocalmemory.storage.models import (
     AtomicFact,
@@ -547,8 +549,8 @@ class RetrievalEngine:
         # infer one from natural-language scope in the query ("last week").
         # Safety: an EXPLICIT window is authoritative (honoured even if it empties
         # the set — the user asked for that scope), but an INFERRED window is
-        # additive and never makes recall worse — if it would empty the results,
-        # fall back to the unwindowed set.
+        # additive and never makes recall worse — if nothing inside it has
+        # primary evidence, fall back to the unwindowed set (time_window.py).
         _explicit_window = window is not None
         _window = window if _explicit_window else infer_window_from_query(query)
         if _window is not None and fused:
@@ -557,12 +559,11 @@ class RetrievalEngine:
                 etimes = self._db.get_fact_event_times(
                     [fr.fact_id for fr in fused], profile_id,
                 )
-                windowed = [
-                    fr for fr in fused
-                    if in_window(etimes.get(fr.fact_id), bounds)
-                ]
-                if windowed or _explicit_window:
-                    fused = windowed
+                fused = windowed_candidates(
+                    fused, lambda fid: in_window(etimes.get(fid), bounds),
+                    explicit=_explicit_window,
+                    min_semantic=getattr(self._config, "min_semantic_evidence", 0.60),
+                )
                 _em("time_window")
 
         # Facets (saved_by / about / kind): explicit, so hard filters -
@@ -776,14 +777,7 @@ class RetrievalEngine:
         """
         kept: list[FusionResult] = []
         for fr in final_top:
-            cs = fr.channel_scores or {}
-            # Primary channel evidence check
-            if (
-                cs.get("semantic", 0.0) >= min_semantic
-                or cs.get("bm25", 0.0) > 0.0
-                or cs.get("entity_graph", 0.0) > 0.0
-                or cs.get("temporal", 0.0) > 0.0
-            ):
+            if has_primary_evidence(fr.channel_scores, min_semantic):
                 kept.append(fr)
                 continue
             # Pinned fact bypass — always pass regardless of channel scores
