@@ -69,7 +69,12 @@ def arrays_in_child(db: Any, profile_id: str, dim: int) -> tuple[list[str], np.n
         logger.warning("vector index decode in a separate process failed (%s); "
                        "building in place", type(exc).__name__)
         return None
-    matrix = np.frombuffer(bytearray(raw), dtype=np.float32).reshape(len(ids), dim)
+    try:
+        matrix = np.frombuffer(bytearray(raw), dtype=np.float32).reshape(len(ids), dim)
+    except (TypeError, ValueError) as exc:
+        logger.warning("vector index decode in a separate process returned a matrix "
+                       "that does not fit (%s); building in place", type(exc).__name__)
+        return None
     return ids, matrix
 
 
