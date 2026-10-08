@@ -280,3 +280,13 @@ def test_bounded_loops_076_document_with_approval_node_is_accepted(
     })
     assert store.record(payload) is True
     assert store.get("alpha", payload["workspace_id"], "release-gate-1") == payload
+
+
+@pytest.mark.parametrize("gate_passed", [1, 0, 1.0, "true"])
+def test_a_gate_verdict_must_be_a_real_true_or_false(
+    store: ExternalEvidenceStore, gate_passed,
+) -> None:
+    payload = _evidence()
+    payload["nodes"] = [_node("probe", 1, gate_passed)]
+    with pytest.raises(ExternalEvidenceValidationError, match="node gate metadata"):
+        store.record(payload)

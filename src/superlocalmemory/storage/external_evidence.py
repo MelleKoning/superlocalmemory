@@ -255,7 +255,7 @@ def _validate(payload: dict[str, Any]) -> None:
         # (an approval node, a join, a failure before its gate) honestly reports
         # attempts 0 with no verdict. Only a verdict without an attempt is invalid.
         if (
-            node["gate_passed"] not in (True, False, None)
+            not (node["gate_passed"] is None or isinstance(node["gate_passed"], bool))
             or isinstance(node["attempts"], bool)
             or not isinstance(node["attempts"], int)
             or node["attempts"] < 0
