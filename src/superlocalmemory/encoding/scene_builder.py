@@ -234,7 +234,11 @@ class SceneBuilder:
             "SELECT ms.* FROM memory_scenes AS ms WHERE ms.profile_id = ? "
             "AND EXISTS (SELECT 1 FROM scene_fact_members AS live_member "
             "WHERE live_member.scene_id = ms.scene_id "
-            "AND live_member.profile_id = ms.profile_id) "
+            # Unary + keeps SQLite on the scene_id index. Without it the
+            # planner probed the (profile_id, ...) index and walked every
+            # membership row of the profile for each scene: 6.1 s per call on
+            # an 11.6k-scene store, 28 ms with it, same rows.
+            "AND +live_member.profile_id = ms.profile_id) "
             "ORDER BY ms.last_updated DESC LIMIT ?",
             (profile_id, _MAX_ASSIGNMENT_CANDIDATES),
         )
@@ -336,7 +340,8 @@ class SceneBuilder:
                     FROM memory_scenes AS ms
                     JOIN scene_fact_members AS member
                       ON member.scene_id = ms.scene_id
-                     AND member.profile_id = ms.profile_id
+                     -- unary +: look members up by scene_id (see above)
+                     AND +member.profile_id = ms.profile_id
                     JOIN atomic_facts AS af
                       ON af.fact_id = member.fact_id
                      AND af.profile_id = ms.profile_id
