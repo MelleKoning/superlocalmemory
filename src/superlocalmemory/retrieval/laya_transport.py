@@ -22,6 +22,10 @@ import json
 import os
 import selectors
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import subprocess
 
 #: A single reply is a few hundred bytes; this bounds a misbehaving worker.
 MAX_LINE_BYTES = 1_000_000
@@ -96,12 +100,45 @@ def cooldown_s(failures: int, *, base_s: float, max_s: float) -> float:
     return min(max_s, base_s * (2 ** (failures - 2)))
 
 
+def stop_process(proc: subprocess.Popen | None, *, graceful: bool,
+                 wait_s: float = 1.0, close: bool = True) -> None:
+    """Stop ``proc`` and, unless told not to, close both of its pipes. Never raises."""
+    if proc is None:
+        return
+    try:
+        if graceful and proc.stdin:
+            write_request(proc.stdin, {"cmd": "quit"})
+            proc.wait(timeout=2)
+        else:
+            proc.kill()
+            proc.wait(timeout=wait_s)
+    except Exception:
+        try:
+            proc.kill()
+            proc.wait(timeout=wait_s)
+        except Exception:
+            pass
+    if close:
+        close_pipes(proc)
+
+
+def close_pipes(proc: subprocess.Popen) -> None:
+    for stream in (proc.stdin, proc.stdout):
+        try:
+            if stream:
+                stream.close()
+        except Exception:
+            pass
+
+
 __all__ = [
     "KIND_PERMANENT",
     "KIND_TRANSIENT",
     "LineReader",
     "MAX_LINE_BYTES",
+    "close_pipes",
     "cooldown_s",
     "failure_kind",
+    "stop_process",
     "write_request",
 ]

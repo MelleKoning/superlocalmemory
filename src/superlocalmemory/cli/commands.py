@@ -1994,9 +1994,9 @@ def _answer_check_line(result: dict) -> str:
             f"(confidence {confidence:.2f}). Say you don't have it, or ask "
             "— don't present these as the answer."
         )
-    from superlocalmemory.retrieval.answerability import is_supported as _checked
-    if not result.get("abstained", False) and _checked(result):  # a checked answer only
-        return f"Answer check: likely answered (confidence {confidence:.2f})."
+    from superlocalmemory.core.answer_check_notice import answered_line, is_supported
+    if not result.get("abstained", False) and is_supported(result):  # a checked answer only
+        return answered_line(result.get, confidence)  # by the model, or by a stated rule
     return ""
 
 

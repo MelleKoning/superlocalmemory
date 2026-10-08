@@ -6,8 +6,8 @@
 
 First cue to match wins, in this priority (LLD §3.7):
 
-    correction > rule > decision > procedure > prospective > status > opinion
-    > episodic > the legacy kind of the fact's 4.1.18 type
+    correction > rule > decision > naming (semantic) > procedure > prospective
+    > status > opinion > episodic > the legacy kind of the fact's 4.1.18 type
 
 What the numbers say, so nobody trusts this more than it deserves: the
 research version scored 0.31 accuracy on 83 real, mostly long memories, 0.43
@@ -77,6 +77,13 @@ DECISION = re.compile(
     _I,
 )
 
+#: Naming a thing is a fact about it, not a plan for it (4.1.22: "Heron is the
+#: codename for the new mobile app" was suggested as prospective by the model).
+NAMING = re.compile(
+    r"\b(?:is|was) (?:the|our|its|their|an?) (?:\w+ )?(?:code ?name|codename|nickname|"
+    r"alias|acronym|abbreviation) (?:for|of)\b|\bstands for\b|\bis short for\b",
+    _I,
+)
 PROCEDURE_LIST = re.compile(r"^\s*(?:\d+[.)]|step \d+)\s+\S", _M)
 PROCEDURE = re.compile(
     r"(?:```|\$ \w|\b(?:how to|steps?:|to (?:install|run|deploy|release|build|configure|"
@@ -133,7 +140,8 @@ EPISODIC = re.compile(
     r"\b(?:yesterday|today|tonight|this morning|last (?:week|night|month|year|sprint)|"
     r"on (?:mon|tues|wednes|thurs|fri|satur|sun)day|"
     r"released|shipped|merged|deployed|happened|occurred|met with|attended|visited|"
-    r"broke|crashed|failed|passed|reached|launched|completed|finished|published|ran into|discovered|"
+    r"broke|crashed|failed|passed|reached|launched|completed|finished|published|ran into|"
+    r"discovered|"
     r"found that|went|did|saw|we (?:fixed|found|built|added|removed|ran|tested))\b",
     _I,
 )
@@ -143,6 +151,7 @@ _ORDER: tuple[tuple[MemoryKind, object], ...] = (
     (MemoryKind.CORRECTION, CORRECTION.search),
     (MemoryKind.RULE, RULE.search),
     (MemoryKind.DECISION, DECISION.search),
+    (MemoryKind.SEMANTIC, NAMING.search),
     (MemoryKind.PROCEDURE, lambda t: (len(PROCEDURE_LIST.findall(t)) >= 2
                                       or PROCEDURE.search(t) or PROCEDURE_SEQUENCE.search(t))),
     (MemoryKind.PROSPECTIVE, lambda t: (looks_prospective(t) or PROSPECTIVE.search(t)

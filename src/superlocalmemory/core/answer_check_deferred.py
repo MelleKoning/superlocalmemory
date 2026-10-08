@@ -136,7 +136,8 @@ def _combine(parts: list[Any]) -> Any:
     if len(same) != 1:
         return None  # the judge changed between memories: nothing coherent to keep
     return SufficiencyVerdict(tuple(p.probabilities[0] for p in parts), first.threshold,
-                              first.calibration_id, first.calibration_status, first.backend)
+                              first.calibration_id, first.calibration_status, first.backend,
+                              tuple(i for i, p in enumerate(parts) if p.rule_support))
 
 
 def _keep(memo: Any, key: str, parts: list[Any]) -> None:

@@ -268,10 +268,16 @@ def test_correction_needs_cue_and_verify_at_0_8() -> None:
     assert call["verify"] == [0], "only cue-fired facts are verified"
     assert out[0].kind is K.CORRECTION and out[0].source is KindSource.MODEL_LAYA
     assert out[1].kind is K.SEMANTIC
+    # Handoff §9 (4.1.22): "a low-quality model suggestion never replaces a
+    # strong rules cue". A correction cue whose verify check fails (below 0.8,
+    # or not asked) keeps the RULES suggestion - correction, source rules, a
+    # suggestion nobody has confirmed - not the model's own different choice.
     out, _ = run(0.79)
-    assert out[0].kind is K.SEMANTIC, "verify below 0.8 keeps the model's own choice"
+    assert out[0].kind is K.CORRECTION and out[0].source is KindSource.RULES
+    assert out[0].confidence is None, "a rules suggestion claims no confidence"
     out, _ = run(None)
-    assert out[0].kind is K.SEMANTIC
+    assert out[0].kind is K.CORRECTION and out[0].source is KindSource.RULES
+    assert out[1].kind is K.SEMANTIC and out[1].source is KindSource.MODEL_LAYA
     # The model itself can never say correction: the label is not offered.
     assert K.CORRECTION.value not in KINDS_V1.criteria
 
