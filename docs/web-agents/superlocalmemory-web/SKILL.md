@@ -17,6 +17,7 @@ How to use what comes back
 - Otherwise still read the memories before relying on them: results are the closest matches, not a promise that one answers the question.
 - When an answer rests on a memory, say so briefly and give its fact id, so the user can check it.
 - A newer memory about the same thing usually wins over an older one. When two memories disagree, show both and ask.
+- Report tool results exactly as the tool returned them. Never say a save or a recall worked unless a tool returned that result in this conversation; if you did not call the tool, or the call failed, say so.
 
 When to save (only if remember is available)
 - Save what the user will want next time: decisions, standing rules, preferences, project status, how-tos. One clear fact per call, in a full sentence that makes sense on its own.
