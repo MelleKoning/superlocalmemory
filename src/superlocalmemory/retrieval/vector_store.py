@@ -683,6 +683,9 @@ class VectorStore:
     def indexed_fact_ids(self, profile_id: str) -> set[str]:
         return vector_presence.indexed_fact_ids(self, profile_id)
 
+    def indexed_among(self, profile_id: str, fact_ids) -> set[str]:
+        return vector_presence.indexed_among(self, profile_id, fact_ids)
+
     def gc_orphaned_vectors(self, profile_id: str | None = None) -> int:
         """Physically remove vec0 rows not referenced by any fact-addressable
         mapping (neither embedding_metadata nor vector_row_map).

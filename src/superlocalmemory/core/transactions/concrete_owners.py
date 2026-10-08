@@ -426,7 +426,12 @@ class VectorOwner(_FactScopedOwner):
     def _fingerprints(self, context: OperationContext) -> dict[str, str]:
         if not context.fact_ids or not self._store_available():
             return {}
-        indexed = self._vector_store.indexed_fact_ids(context.profile_id)
+        # Only this operation's facts: the whole-profile read cost 2.4 s on a
+        # 22k-vector store, three times per save. Same answer for these ids.
+        if getattr(type(self._vector_store), "indexed_among", None) is not None:
+            indexed = self._vector_store.indexed_among(context.profile_id, context.fact_ids)
+        else:
+            indexed = self._vector_store.indexed_fact_ids(context.profile_id)
         candidates = [fid for fid in context.fact_ids if fid in indexed]
         if not candidates:
             return {}
