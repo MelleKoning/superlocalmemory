@@ -206,7 +206,39 @@ def promote(db: Any, conn: sqlite3.Connection, candidate: Candidate) -> str | No
     # Identical words already stored for another memory fold onto that fact:
     # the text stays findable there, and nothing is created here.
     mine = bool(owner) and str(dict(owner[0])["memory_id"]) == candidate.memory_id
-    return stored if mine else None
+    if not mine:
+        return None
+    _queue_enrichment(db, candidate, stored, content=content, metadata=metadata, source=source,
+                      actor=actor, scope=scope or "personal", shared=_ids(shared) if shared else [],
+                      session_id=session_id or "", session_date=session_date or "")
+    return stored
+
+
+def _queue_enrichment(db: Any, candidate: Candidate, fact_id: str, *, content: str,
+                      metadata: dict, source: str, actor: str, scope: str, shared: list[str],
+                      session_id: str, session_date: str) -> None:
+    """Queue the fact for enrichment exactly as a save queues its receipt.
+
+    A first-queryable fact is found by words only until the materializer gives
+    it its meaning vector, keyword tokens and graph links. One ingestion
+    operation per memory (stable key), in the queryable state, holding this
+    fact: the materializer promotes it in place, as for any save.
+    """
+    from superlocalmemory.core.ingestion_command import (
+        IngestionOperationRepository,
+        IngestionRequest,
+        IngestionState,
+    )
+
+    repository = IngestionOperationRepository(db)
+    operation, _ = repository.create_with_status(IngestionRequest(
+        content=content, profile_id=candidate.profile_id, source_type=source,
+        idempotency_key=f"own-fact-repair:{candidate.memory_id}", metadata=metadata,
+        scope=scope, shared_with=tuple(shared), trusted_actor_id=actor,
+        session_id=session_id, session_date=session_date))
+    if operation.state is IngestionState.RAW:
+        repository.transition(operation.operation_id, expected=IngestionState.RAW,
+                              target=IngestionState.QUERYABLE, queryable_fact_ids=(fact_id,))
 
 
 __all__ = ["Candidate", "HELD", "census", "classify", "promote"]

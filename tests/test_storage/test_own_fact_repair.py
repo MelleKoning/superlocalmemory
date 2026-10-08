@@ -84,6 +84,14 @@ def test_the_memory_gets_its_own_fact_back_and_is_found_by_its_words(engine) -> 
     [fact] = _facts(engine, memory_id)
     assert "channel 9" in fact.content
     assert fact.memory_kind == "rule" and fact.memory_kind_source == "caller"
+    # Queued for enrichment like a save, then found by its own words.
+    [op] = [dict(r) for r in engine._db.execute(
+        "SELECT operation_id, state, queryable_fact_ids_json FROM ingestion_operations "
+        "WHERE idempotency_key = ?", (f"own-fact-repair:{memory_id}",))]
+    assert op["state"] == "queryable" and json.loads(op["queryable_fact_ids_json"]) == [fact.fact_id]
+    done = build_engine_ingestion_command(engine).materialize(op["operation_id"])
+    assert done.state is IngestionState.COMPLETE
+    assert [f.fact_id for f in _facts(engine, memory_id)] == [fact.fact_id]
     found = {r.fact.memory_id for r in engine.recall("harbor relay channel 9", limit=10).results}
     assert memory_id in found
     assert _repair(engine)["done"].get("own_facts.restored") is None  # idempotent
