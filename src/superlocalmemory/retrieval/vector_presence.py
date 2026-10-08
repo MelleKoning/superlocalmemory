@@ -157,6 +157,38 @@ def count(store: VectorStore, profile_id: str | None = None) -> int:
         return 0
 
 
+def indexed_among(store: VectorStore, profile_id: str, fact_ids) -> set[str]:
+    """``indexed_fact_ids(profile) & set(fact_ids)``, reading only those ids.
+
+    The whole-profile read joins every metadata row to the vec0 table (2.4 s
+    on a 22k-vector store); callers that ask about a few facts of one save
+    were paying it several times per save.
+    """
+    wanted = list(dict.fromkeys(str(f) for f in fact_ids))
+    if not wanted or not store._available:
+        return set()
+    found: set[str] = set()
+    try:
+        with store._managed_connection() as conn:
+            for start in range(0, len(wanted), 500):
+                chunk = wanted[start:start + 500]
+                rows = conn.execute(
+                    "SELECT em.fact_id "
+                    "FROM embedding_metadata em "
+                    "JOIN fact_embeddings fe "
+                    "ON fe.rowid = em.vec_rowid "
+                    "AND fe.profile_id = ? "  # bound, as in indexed_fact_ids
+                    "WHERE em.profile_id = ? "
+                    f"AND em.fact_id IN ({','.join('?' * len(chunk))})",
+                    (profile_id, profile_id, *chunk),
+                ).fetchall()
+                found.update(str(row["fact_id"]) for row in rows)
+        return found
+    except Exception as exc:
+        logger.debug("indexed_among failed: %s", exc)
+        return set()
+
+
 def indexed_fact_ids(store: VectorStore, profile_id: str) -> set[str]:
     """Return fact IDs backed by both metadata and a vec0 payload."""
     if not store._available:

@@ -132,6 +132,16 @@ class QueryEmbedder:
         return getattr(embedder, "is_warm", None) is False
 
     def embed(self, query: str, wait_seconds: float) -> tuple[list[float] | None, str | None]:
+        """See ``_embed``. Afterwards the recall on this thread will not ask the
+        embedder again (the vector is cached for the question), so background
+        embeds may use it while the recall runs on (``recall_gate``)."""
+        try:
+            return self._embed(query, wait_seconds)
+        finally:
+            from superlocalmemory.core.recall_gate import mark_query_embedded
+            mark_query_embedded()
+
+    def _embed(self, query: str, wait_seconds: float) -> tuple[list[float] | None, str | None]:
         """Embed ``query``; ``wait_seconds`` bounds the wait only while the
         embedder is not ready yet. A ready embedder is waited for unbounded.
 

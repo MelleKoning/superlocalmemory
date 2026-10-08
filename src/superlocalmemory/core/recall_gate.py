@@ -20,6 +20,11 @@ from typing import Callable, Iterator
 
 _condition = threading.Condition(threading.Lock())
 _active = 0
+#: In-flight recalls that already hold their query embedding. Such a recall
+#: never asks the embedder again (the vector is cached for the question), so a
+#: background embed may use the embedder while the recall runs its channels,
+#: reranks and is judged. See ``wait_for_embedder_idle``.
+_embedded = 0
 _work_context = threading.local()
 
 
@@ -29,12 +34,36 @@ def begin_recall() -> None:
         _active += 1
 
 
-def end_recall() -> None:
-    global _active
+def end_recall(*, embedded: bool = False) -> None:
+    global _active, _embedded
     with _condition:
         _active = max(0, _active - 1)
-        if _active == 0:
+        if embedded:
+            _embedded = max(0, _embedded - 1)
+        if _active == 0 or _active == _embedded:
             _condition.notify_all()
+
+
+def _waiting_for_embedder() -> int:
+    """Recalls in flight that may still ask the embedder (caller holds the lock)."""
+    return max(0, _active - _embedded)
+
+
+def recalls_needing_embedder() -> int:
+    with _condition:
+        return _waiting_for_embedder()
+
+
+def mark_query_embedded() -> None:
+    """The recall running on this thread has its query embedding.
+
+    Called by retrieval once the query vector is in hand (or known not to be
+    needed). Only a recall counted through ``RecallHold`` can be marked; a
+    plain ``begin_recall`` keeps background embeds waiting until it ends.
+    """
+    hold = getattr(_work_context, "recall_hold", None)
+    if hold is not None:
+        hold._mark_embedded()
 
 
 def in_flight() -> int:
@@ -57,6 +86,7 @@ class RecallHold:
         self._lock = threading.Lock()
         self._holders = 1
         self._owner_gone = False
+        self._embedded = False
         begin_recall()
 
     def run(self, fn: Callable[..., object], *args: object) -> object:
@@ -65,10 +95,24 @@ class RecallHold:
             if self._owner_gone:
                 return None  # the recall already answered or was cancelled
             self._holders += 1
+        previous = getattr(_work_context, "recall_hold", None)
+        _work_context.recall_hold = self
         try:
             return fn(*args)
         finally:
+            _work_context.recall_hold = previous
             self._release()
+
+    def _mark_embedded(self) -> None:
+        global _embedded
+        with self._lock:
+            if self._embedded or self._holders == 0:
+                return
+            self._embedded = True
+            with _condition:
+                _embedded += 1
+                if _active == _embedded:
+                    _condition.notify_all()
 
     def leave(self) -> None:
         """The recall's coroutine is done; work still running keeps the count."""
@@ -82,8 +126,9 @@ class RecallHold:
         with self._lock:
             self._holders -= 1
             last = self._holders == 0
+            embedded = self._embedded
         if last:
-            end_recall()
+            end_recall(embedded=embedded)
 
 
 def yield_to_recalls(max_seconds: float = 30.0) -> None:
@@ -162,6 +207,24 @@ def idle_wait_deadline(deadline: float) -> Iterator[None]:
         yield
     finally:
         _work_context.idle_deadline = previous
+
+
+def wait_for_embedder_idle() -> None:
+    """Block background embedding while a recall may still need the embedder.
+
+    Narrower than ``wait_for_foreground_idle``: a recall that already has its
+    query vector does not hold the embedder back for the rest of its run. At
+    most the one background text being embedded can delay a recall that
+    arrives meanwhile, exactly as before (``EmbeddingService._request_lock``).
+    """
+    if not is_background_work():
+        return
+    deadline = getattr(_work_context, "idle_deadline", None)
+    with _condition:
+        while _waiting_for_embedder() > 0:
+            if deadline is not None and time.monotonic() >= deadline:
+                return
+            _condition.wait(timeout=0.1)
 
 
 def wait_for_foreground_idle() -> None:
