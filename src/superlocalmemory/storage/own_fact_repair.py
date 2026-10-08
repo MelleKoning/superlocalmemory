@@ -43,7 +43,8 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
-HELD = ("unproven", "erased", "withheld", "erasure_after_save", "changed", "refused")
+HELD = ("unproven", "erased", "withheld", "erasure_after_save", "changed", "refused",
+        "duplicate")
 
 
 @dataclass(frozen=True)
@@ -200,11 +201,31 @@ def classify(conn: sqlite3.Connection) -> tuple[list[Candidate], dict[str, int]]
     held = dict.fromkeys(HELD, 0)
     for row in _factless(conn):
         reason, candidate = _judge(conn, row)
-        if candidate is not None:
+        if candidate is not None and _words_already_a_fact(conn, candidate):
+            # Storing it would fold onto that fact (promote creates nothing), and its
+            # words are already found through the other memory: not repair work.
+            held["duplicate"] += 1
+        elif candidate is not None:
             found.append(candidate)
         else:
             held[reason] += 1
     return found, held
+
+
+def _words_already_a_fact(conn: sqlite3.Connection, candidate: Candidate) -> bool:
+    from superlocalmemory.core.ingest_gate import apply_ingest_gate
+
+    row = conn.execute("SELECT content FROM memories WHERE memory_id = ?",
+                       (candidate.memory_id,)).fetchone()
+    if row is None:
+        return False
+    gate = apply_ingest_gate(row[0])
+    if gate.rejected:
+        return False
+    return conn.execute(
+        "SELECT 1 FROM atomic_facts WHERE profile_id = ? AND content = ? AND memory_id != ? "
+        "LIMIT 1", (candidate.profile_id, gate.fact_content, candidate.memory_id)
+    ).fetchone() is not None
 
 
 def _meta(raw: Any) -> dict:

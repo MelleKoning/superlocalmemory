@@ -169,3 +169,23 @@ def test_a_save_folded_into_other_memories_is_repaired_without_a_log_row(engine)
         assert own.census(conn)["to_repair"] == 1
     _repair(engine)
     assert [f.content for f in _facts(engine, memory_id)] == ["The harbor relay uses channel 7."]
+
+
+def test_a_duplicate_save_is_held_not_counted_as_repair_work(engine) -> None:
+    """A memory saved with the same words as another memory's fact cannot get
+    its own fact: storing it folds onto the existing one. Counting it as work
+    left the dashboard asking for a repair the repair can never do (232 such
+    memories on a real store)."""
+    from superlocalmemory.core.ingest_gate import apply_ingest_gate
+
+    older = _older(engine)
+    words = "The harbor relay uses channel 9."
+    _broken(engine, "dup", words, older=older)
+    # Another memory's fact already carries exactly these words.
+    engine._db.execute("UPDATE atomic_facts SET content = ? WHERE fact_id = ?",
+                       (apply_ingest_gate(words).fact_content, older))
+    with engine._db.raw_connection() as conn:
+        census = own.census(conn)
+    assert census["to_repair"] == 0
+    assert census["held_duplicate"] == 1
+    assert _repair(engine)["done"].get("own_facts.not_repaired") is None
