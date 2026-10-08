@@ -31,7 +31,6 @@ from typing import Protocol, runtime_checkable
 
 from superlocalmemory.storage.write_lock import get_write_lock
 
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -84,6 +83,41 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_SYNC_LOG_DDL = (
+    "CREATE TABLE IF NOT EXISTS cross_platform_sync_log ("
+    " adapter_name TEXT NOT NULL,"
+    " profile_id TEXT NOT NULL,"
+    " target_path_sha256 TEXT NOT NULL,"
+    " target_basename TEXT NOT NULL,"
+    " last_sync_at TEXT NOT NULL,"
+    " bytes_written INTEGER NOT NULL,"
+    " content_sha256 TEXT NOT NULL,"
+    " success INTEGER NOT NULL,"
+    " error_msg TEXT,"
+    " PRIMARY KEY (adapter_name, target_path_sha256))"
+)
+
+
+def _connect_log(db_path: Path) -> sqlite3.Connection:
+    """Open memory.db for one sync-log statement, cheap to close.
+
+    Every adapter sync used to close its connection with a WAL checkpoint
+    (and, as the last connection, delete the WAL and its index) while holding
+    the shared write lock, so a user save queued behind a few adapter syncs
+    waited for several checkpoints and file deletions on a busy disk. Closing
+    without the checkpoint matches DatabaseManager._connect; checkpoints still
+    run through the automatic WAL checkpoint on commit.
+    """
+    from superlocalmemory.storage.database import _BUSY_TIMEOUT_MS
+
+    conn = sqlite3.connect(str(db_path), timeout=_BUSY_TIMEOUT_MS / 1000)
+    try:
+        conn.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, 1)  # type: ignore[attr-defined]
+    except (AttributeError, sqlite3.OperationalError):
+        pass  # Python < 3.12: database.py already warns once per process
+    return conn
+
+
 def _ensure_memory_log(db_path: Path) -> None:
     """Lazily create ``cross_platform_sync_log`` if a test-mode memory.db is
     fresh. Production code goes through the migration runner, but tests can
@@ -95,21 +129,9 @@ def _ensure_memory_log(db_path: Path) -> None:
     other in-process writers (DatabaseManager, VectorStore, etc.).
     """
     with get_write_lock(db_path):
-        conn = sqlite3.connect(str(db_path))
+        conn = _connect_log(db_path)
         try:
-            conn.executescript(
-                "CREATE TABLE IF NOT EXISTS cross_platform_sync_log ("
-                " adapter_name TEXT NOT NULL,"
-                " profile_id TEXT NOT NULL,"
-                " target_path_sha256 TEXT NOT NULL,"
-                " target_basename TEXT NOT NULL,"
-                " last_sync_at TEXT NOT NULL,"
-                " bytes_written INTEGER NOT NULL,"
-                " content_sha256 TEXT NOT NULL,"
-                " success INTEGER NOT NULL,"
-                " error_msg TEXT,"
-                " PRIMARY KEY (adapter_name, target_path_sha256));"
-            )
+            conn.execute(_SYNC_LOG_DDL)
             conn.commit()
         finally:
             conn.close()
@@ -168,11 +190,13 @@ def sync_log_record(
     # This ensures the INSERT/UPDATE below is serialised with all other in-process
     # writers (DatabaseManager, VectorStore, consolidation) via the single shared
     # RLock for memory.db, eliminating SQLITE_BUSY races at the WAL layer.
-    # _ensure_memory_log also acquires the same RLock (re-entrant — safe).
+    # One connection and one commit per record: the table check rides in the
+    # same transaction (a no-op once the table exists) instead of a second
+    # connection and commit inside the lock.
     with get_write_lock(db_path):
-        _ensure_memory_log(db_path)
-        conn = sqlite3.connect(str(db_path))
+        conn = _connect_log(db_path)
         try:
+            conn.execute(_SYNC_LOG_DDL)
             conn.execute(
                 "INSERT INTO cross_platform_sync_log ("
                 "adapter_name, profile_id, target_path_sha256, target_basename, "
