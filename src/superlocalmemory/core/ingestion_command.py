@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
 
+from superlocalmemory.core.ingestion_lease_owner import owner_token, release_dead_owner_leases
 from superlocalmemory.core.materialization_control import MaterializationDeferred
 from superlocalmemory.storage.database import DatabaseManager
 from superlocalmemory.storage.idempotency_identity import same_principal
@@ -648,14 +649,13 @@ class IngestionOperationRepository:
         ``list_materializable`` intentionally excludes operations at the retry
         cap.  If a worker dies while such an operation is still ``enriching``,
         it otherwise becomes a permanent phantom: no worker can reclaim it and
-        it never reaches a terminal state.  Queryable facts are already durable,
-        so reaping abandons only optional derivation work.
+        it never reaches a terminal state; queryable facts stay, only derivation is abandoned.
 
-        Each candidate is transitioned with a compare-and-swap update in its
-        own bounded transaction.  A dead-letter record is supplemental; an
-        older database without M031 is still terminalized safely.
+        Each candidate gets its own compare-and-swap transaction (dead-letter row optional,
+        M031). Leases of a process that has exited are released first (crash restart).
         """
         cutoff = time.time() if now is None else float(now)
+        release_dead_owner_leases(self.db, now=cutoff)
         batch_limit = max(1, min(int(limit), 500))
         candidates = self.db.execute(
             "SELECT operation_id, attempt_count, last_error, raw_content, "
@@ -778,7 +778,7 @@ class IngestionCommand:
         self._projector = project
         self._derivation_version = derivation_version
         self._lease_seconds = max(1.0, float(lease_seconds))
-        self._owner = f"ingestion-worker:{uuid.uuid4().hex}"
+        self._owner = owner_token()
 
     def _run_with_lease_heartbeat(
         self,
