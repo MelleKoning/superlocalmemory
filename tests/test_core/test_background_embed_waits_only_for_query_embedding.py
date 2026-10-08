@@ -142,3 +142,29 @@ def test_a_recalls_query_embedding_marks_it():
         assert out == [([0.1, 0.2], None)]
         assert recall_gate.recalls_needing_embedder() == 0
         assert recall_gate.in_flight() == 1
+
+
+def _one_pass_claims(step=None) -> bool:
+    from unittest.mock import patch
+
+    from superlocalmemory.server.unified_daemon import _materialize_ingestion_one_pass
+
+    class _Command:
+        class repository:  # noqa: N801 - mimics the attribute shape
+            @staticmethod
+            def list_materializable(**_k):
+                return []
+
+    with patch("superlocalmemory.core.engine_ingestion.build_engine_ingestion_command",
+               return_value=_Command()) as build, \
+            patch("superlocalmemory.server.unified_daemon._reconcile_pending_projections"):
+        _materialize_ingestion_one_pass(object())
+    return build.called
+
+
+def test_enrichment_pass_starts_once_the_recall_has_its_vector():
+    """Queued enrichment no longer waits for a moment with no recall at all."""
+    with _recall_in_flight() as step:
+        assert _one_pass_claims() is False  # question not embedded yet: yield
+        step(recall_gate.mark_query_embedded)
+        assert _one_pass_claims() is True
