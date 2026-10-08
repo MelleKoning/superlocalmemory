@@ -86,6 +86,8 @@ Captured from a real install in Mode A, with Laya running on the Mac and a store
 
 ![Saved views: a saved question that runs the same search your agent uses and shows the memory each result came from](docs/screenshots/dashboard/saved-views.png)
 
+![Connected apps: Web access is on, linked with GitHub for the default profile, renews automatically, with a free daily allowance and a button to add an app or turn access off](docs/screenshots/dashboard/connected-apps.png)
+
 ## Why SuperLocalMemory
 
 A vector store answers "what is similar". AI agent memory must also answer: is this still true, who may see it, can it be erased with proof, and does the agent actually have the answer?
