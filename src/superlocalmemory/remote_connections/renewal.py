@@ -22,3 +22,24 @@ def renewal_delay_s(expires_at_ms: int, now_ms: float) -> float:
     if now_ms >= due:
         return 0.0
     return min((due - now_ms) / 1000.0, RENEWAL_CHECK_S)
+
+
+#: Renewal starts with 15 days left, so under 7 days left means it has been
+#: failing for over a week: tell the owner before access actually stops.
+ENDING_SOON_MS = 7 * 24 * 3600 * 1000
+
+
+def access_state(expires_at_ms: int, now_ms: float, transport_state: str | None) -> str:
+    """Owner-facing Web access status for a completed connection.
+
+    One of renews_automatically, ending_soon, ended, sign_in_required. A lapsed
+    or removed sign-in outranks the expiry, because only signing in again helps.
+    """
+    if transport_state == "authorization_required":
+        return "sign_in_required"
+    remaining = expires_at_ms - now_ms
+    if remaining <= 0:
+        return "ended"
+    if remaining <= ENDING_SOON_MS:
+        return "ending_soon"
+    return "renews_automatically"

@@ -62,6 +62,30 @@
   }
   function operationKey() { var bytes = new Uint8Array(16); window.crypto.getRandomValues(bytes); return Array.from(bytes, function (x) { return x.toString(16).padStart(2, '0'); }).join(''); }
 
+  // Web access status for a connected computer. The server reports one of four
+  // plain states; anything else (older server, odd value) is ignored, never guessed.
+  var ACCESS_RANK = { sign_in_required: 4, ended: 3, ending_soon: 2, renews_automatically: 1 };
+  function accessOf(connections) {
+    var worst = null;
+    connections.forEach(function (c) {
+      if (!c || c.state === 'cancelled' || typeof c.access_state !== 'string' || !Object.hasOwn(ACCESS_RANK, c.access_state)) return;
+      if (!worst || ACCESS_RANK[c.access_state] > ACCESS_RANK[worst.access_state]) worst = c;
+    });
+    return worst;
+  }
+  function accessMessage(connection) {
+    if (connection.access_state === 'ending_soon') {
+      var when = '';
+      if (typeof connection.access_expires_at_ms === 'number' && isFinite(connection.access_expires_at_ms) && connection.access_expires_at_ms > 0) {
+        try { when = new Date(connection.access_expires_at_ms).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }); } catch (_) { when = ''; }
+      }
+      return 'Web access ends ' + (when ? 'on ' + when : 'soon') + ' unless this computer reconnects. It normally renews by itself; check that this computer is online.';
+    }
+    if (connection.access_state === 'ended') return 'Web access has ended. Turn it on again to reconnect your apps.';
+    if (connection.access_state === 'sign_in_required') return 'Sign in again to keep Web access working.';
+    return 'Renews automatically.';
+  }
+
   window.odCreateAiConnectionsCard = function () {
     var ui = window.odAppsUi; var h = ui.h;
     var card = h('div', { id: 'od-ai-connections', className: 'apps-stack' });
@@ -73,6 +97,7 @@
     var linkedValue = h('dd', { className: 'apps-fact-value', text: 'Not linked yet' });
     var profileValue = h('dd', { className: 'apps-fact-value', text: '—' });
     var status = h('p', { className: 'apps-status', role: 'status', 'aria-live': 'polite', text: 'Checking whether internet access is available…' });
+    var accessLine = h('p', { className: 'apps-access', role: 'status', 'aria-live': 'polite', 'data-access-line': '' }); accessLine.hidden = true;
     var list = h('ul', { className: 'apps-conn-rows', 'aria-label': 'Connections on this computer' });
     var refresh = h('button', { type: 'button', className: 'btn ghost sm' }, [ui.icon('refresh', 15), h('span', { text: 'Refresh status' })]);
     var computerPanel = h('div', { className: 'apps-panel apps-computer' }, [
@@ -89,6 +114,7 @@
         h('div', { className: 'apps-fact' }, [h('dt', { text: 'Memory profile' }), profileValue])
       ]),
       status,
+      accessLine,
       list,
       h('div', { className: 'apps-computer-foot' }, [refresh])
     ]);
@@ -265,7 +291,7 @@
       return !!connection && connection.verified === true && CONNECTION_ID.test(connection.connection_id) && (connection.state === 'connected' || connection.state === 'ready_for_client' && connection.mcp_url === MCP_URL);
     }
     function describe(connection, ready, active, cancelled) {
-      return connection.sign_in_state === 'expired' ? 'Sign-in expired. Restart it to get a fresh link.' : ready ? 'On. Apps you approve can reach your memory while this computer is online.' : active ? 'On' : cancelled ? (connection.cleanup_pending ? 'Cancelled. Cleaning up on the connection service…' : 'Cancelled') : connection.state === 'pending' ? connection.transport_state === 'authorization_required' ? 'Needs a new sign-in. Cancel this setup and link again.' : connection.transport_state ? 'Checking the connection from this computer' : 'Waiting for GitHub sign-in' : 'Not connected';
+      return connection.sign_in_state === 'expired' ? 'Sign-in expired. Restart it to get a fresh link.' : connection.access_state === 'ended' ? 'Ended' : ready ? 'On. Apps you approve can reach your memory while this computer is online.' : active ? 'On' : cancelled ? (connection.cleanup_pending ? 'Cancelled. Cleaning up on the connection service…' : 'Cancelled') : connection.state === 'pending' ? connection.transport_state === 'authorization_required' ? 'Needs a new sign-in. Use Restart sign-in to continue.' : connection.transport_state ? 'Checking the connection from this computer' : 'Waiting for GitHub sign-in' : 'Not connected';
     }
     function buildInstructions(connection) {
       var steps = h('ol', { className: 'apps-instructions-steps' }, instructionSteps(connection.host).map(function (line) { return h('li', { text: line }); }));
@@ -329,7 +355,15 @@
         else if (!unavailable && step === 2) status.textContent = 'GitHub sign-in is done. Checking the connection from this computer…';
         else if (!unavailable && currentConnections.some(function (c) { return c && c.sign_in_state === 'expired'; })) status.textContent = 'A sign-in link expired. Use Restart sign-in to continue with the same permissions.';
         else if (!unavailable && step === 1) status.textContent = 'Waiting for GitHub sign-in. Finish the page that opened, or retry the same request below.';
+        var access = unavailable ? null : accessOf(currentConnections);
+        var accessKind = access ? access.access_state : '';
+        accessLine.textContent = access ? accessMessage(access) : '';
+        accessLine.hidden = !access;
+        accessLine.className = 'apps-access' + (access && accessKind !== 'renews_automatically' ? ' is-warn' : '');
+        if (accessKind === 'ended' || accessKind === 'sign_in_required') status.textContent = 'Web access is not working right now.';
         if (unavailable) setPill(metadata ? 'off' : 'warn', metadata ? 'Off' : 'Needs attention');
+        else if (accessKind === 'ended' || accessKind === 'sign_in_required') setPill('warn', 'Needs attention');
+        else if (accessKind === 'ending_soon' && live.length) setPill('warn', 'Ending soon');
         else if (live.length) setPill('ok', 'Ready');
         else if (needsAttention) setPill('warn', 'Needs attention');
         else if (pendingConnections.length) setPill('work', 'Connecting');
@@ -453,7 +487,7 @@
         }
         if (appsList) appsList.odSetConnections(unavailable ? [] : live.map(function (c) { return c.connection_id; }), unavailable ? '' : metadata.current_profile);
         if (metadata && Array.isArray(metadata.connections) && metadata.connections.some(function (connection) { return connection && connection.state === 'pending'; })) schedulePoll(1500);
-      }).catch(function () { if (attempt && attempt.acknowledged) schedulePoll(10000); metadata = null; unavailable = true; controls(); setPill('warn', 'Needs attention'); status.textContent = 'Could not check your connections. Use Refresh status to try again.'; if (appsList) appsList.odSetUnavailable(); }).finally(function () { loading = false; refresh.disabled = false; if (refreshRequested && !disposed) { refreshRequested = false; load(); } });
+      }).catch(function () { if (attempt && attempt.acknowledged) schedulePoll(10000); metadata = null; unavailable = true; controls(); setPill('warn', 'Needs attention'); status.textContent = 'Could not check your connections. Use Refresh status to try again.'; accessLine.textContent = ''; accessLine.hidden = true; if (appsList) appsList.odSetUnavailable(); }).finally(function () { loading = false; refresh.disabled = false; if (refreshRequested && !disposed) { refreshRequested = false; load(); } });
     }
     refresh.addEventListener('click', function () { if (!busy) load(); });
     form.addEventListener('submit', function (event) {

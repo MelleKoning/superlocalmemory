@@ -111,6 +111,9 @@
 .apps-fact-value { margin-top: 4px; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
 .apps-fact-value.is-ok { color: var(--ok-text); }
 .apps-status { padding: 16px 24px; font-size: 13.5px; color: var(--fg-2); }
+.apps-access { margin: -8px 0 0; padding: 0 24px 16px; font-size: 13.5px; color: var(--fg-2); }
+.apps-access.is-warn { color: var(--warn-text); }
+.apps-access[hidden] { display: none; }
 .apps-conn-rows { border-top: 1px solid var(--border); }
 .apps-conn-row, .apps-row { display: flex; align-items: center; gap: 16px; padding: 16px 24px; border-top: 1px solid var(--border); }
 .apps-conn-rows > .apps-conn-row:first-child, .apps-rows > .apps-row:first-child { border-top: 0; }

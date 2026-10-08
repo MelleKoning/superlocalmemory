@@ -23,6 +23,7 @@ from superlocalmemory.remote_connections.renewal import (
     RENEWAL_CHECK_S,
     RENEWAL_RETRY_S,
     RENEWAL_WINDOW_MS,
+    access_state,
     renewal_delay_s,
 )
 from superlocalmemory.remote_connections.service import RemoteConnectionService
@@ -534,6 +535,7 @@ class ManagedConnectionService(RemoteConnectionService):
         result = super().status(owner, profile)
         for connection in result["connections"]:
             identifier = connection["connection_id"]
+            was_pending = connection["state"] == "pending"
             if connection["state"] == "pending" and identifier in self.runtime._verified:
                 connection.update(
                     state="ready_for_client",
@@ -543,12 +545,19 @@ class ManagedConnectionService(RemoteConnectionService):
                 )
             elif connection["state"] == "pending" and identifier in self.runtime._states:
                 connection["transport_state"] = self.runtime._states[identifier]
-            if connection["state"] == "pending":
+            if was_pending:
                 row = self.runtime.store.by_connection(identifier, for_cleanup=True)
                 if row and not row.completed:
                     connection["authorization_expires_at_ms"] = row.expires_at_ms
                     connection["sign_in_state"] = (
                         "expired" if row.expires_at_ms <= time.time() * 1000 else "required"
+                    )
+                elif row:
+                    connection["access_expires_at_ms"] = row.expires_at_ms
+                    connection["access_state"] = access_state(
+                        row.expires_at_ms,
+                        time.time() * 1000,
+                        self.runtime._states.get(identifier),
                     )
         return result
 
