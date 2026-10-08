@@ -210,6 +210,13 @@ def _backup_via_sqlite_api(src: Path, dest: Path) -> None:
         # writer is active at this point).
         src_conn.backup(dst_conn, pages=-1)
         dst_conn.commit()
+    except Exception:
+        # A damaged source fails here; never leave an empty staging file (#153).
+        dst_conn.close()
+        for leftover in (staging, staging.with_name(staging.name + "-wal"),
+                         staging.with_name(staging.name + "-shm")):
+            leftover.unlink(missing_ok=True)
+        raise
     finally:
         src_conn.close()
         dst_conn.close()
