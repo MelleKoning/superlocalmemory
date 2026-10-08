@@ -437,7 +437,8 @@ describe('Pane separation', () => {
     const { dom, apps } = await bootPanes();
     assert.ok(apps.querySelector('#od-ai-connections'));
     assert.equal(apps.querySelector('h2').textContent, 'Connected apps');
-    assert.match(apps.textContent, /Free during beta/);
+    assert.match(apps.textContent, /Free daily allowance/);
+    assert.doesNotMatch(apps.textContent, /beta/i);
     for (const trust of ['Your memory stays on this computer', 'You approve every app', 'Read-only unless you allow saving']) {
       assert.ok(apps.textContent.includes(trust), trust);
     }

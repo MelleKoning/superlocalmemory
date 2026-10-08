@@ -24,7 +24,7 @@
     var h = ui.h;
     var titleRow = h('div', { className: 'apps-title-row' }, [
       h('h2', { className: 'apps-title', id: 'apps-page-title', text: 'Connected apps' }),
-      h('span', { className: 'badge violet', text: 'Free during beta' })
+      h('span', { className: 'badge violet', text: 'Free daily allowance' })
     ]);
     var trust = h('ul', { className: 'apps-trust', 'aria-label': 'How your memory is protected' });
     TRUST.forEach(function (item) {
