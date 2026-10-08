@@ -203,13 +203,19 @@ class TestKillOrphan:
         # Create a SIGTERM-ignoring subprocess
         script = tmp_path / "stubborn.py"
         script.write_text(
-            "import signal, time\n"
+            "import signal, sys, time\n"
             "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "sys.stdout.write('ready\\n'); sys.stdout.flush()\n"
             "time.sleep(300)\n",
             encoding="utf-8",
         )
-        proc = subprocess.Popen([sys.executable, str(script)])
-        time.sleep(0.5)  # Let it start and register handler
+        proc = subprocess.Popen([sys.executable, str(script)],
+                                stdout=subprocess.PIPE, text=True)
+        # Wait until SIGTERM is really ignored. A fixed sleep lost the race on
+        # a loaded machine: SIGTERM arrived before the handler and killed it.
+        ready = proc.stdout.readline()
+        proc.stdout.close()
+        assert ready.strip() == "ready"
 
         try:
             result = kill_orphan(proc.pid, graceful_timeout_seconds=1.0)
