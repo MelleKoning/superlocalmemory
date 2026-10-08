@@ -335,6 +335,23 @@ def propose_on_connection(
     return _get_case(conn, case_id)
 
 
+def open_case_id(
+    conn: sqlite3.Connection, profile_id: str, predecessor_fact_id: str,
+) -> str | None:
+    """Return the id of the proposed or applied case for a memory, if any.
+
+    The ledger keeps at most one such case per memory and profile (the partial
+    unique index ``uq_correction_cases_active_predecessor``), so this is the
+    question a writer asks before proposing another.
+    """
+    row = conn.execute(
+        "SELECT case_id FROM correction_cases WHERE profile_id=? "
+        "AND predecessor_fact_id=? AND status IN ('proposed', 'applied') LIMIT 1",
+        (profile_id, predecessor_fact_id),
+    ).fetchone()
+    return None if row is None else str(row[0])
+
+
 def transition_on_connection(
     conn: sqlite3.Connection,
     *,

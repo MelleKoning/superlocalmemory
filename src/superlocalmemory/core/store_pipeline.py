@@ -79,6 +79,7 @@ def _record_correction_candidate(
     from superlocalmemory.storage.correction_cases import (
         CorrectionActor,
         CorrectionCaseError,
+        open_case_id,
         propose_on_connection,
     )
 
@@ -103,6 +104,19 @@ def _record_correction_candidate(
     )
     try:
         with db.raw_connection() as conn:
+            # The ledger holds one open case per memory. A candidate for a
+            # memory that already has one (another fact of this save, or an
+            # earlier save, suspected the same older memory) leaves it as it
+            # is: it may be under review or already decided, and cases are
+            # history that nothing replaces. Checked inside this transaction,
+            # so the check and the insert cannot race.
+            open_id = open_case_id(conn, profile_id, predecessor_fact_id)
+            if open_id is not None and open_id != case_id:
+                logger.debug(
+                    "Correction candidate for %s skipped: %s already has open case %s",
+                    successor_fact_id, predecessor_fact_id, open_id,
+                )
+                return
             propose_on_connection(
                 conn,
                 case_id=case_id,
