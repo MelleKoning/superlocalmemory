@@ -140,7 +140,8 @@ EPISODIC = re.compile(
     r"\b(?:yesterday|today|tonight|this morning|last (?:week|night|month|year|sprint)|"
     r"on (?:mon|tues|wednes|thurs|fri|satur|sun)day|"
     r"released|shipped|merged|deployed|happened|occurred|met with|attended|visited|"
-    r"broke|crashed|failed|passed|reached|launched|completed|finished|published|ran into|discovered|"
+    r"broke|crashed|failed|passed|reached|launched|completed|finished|published|ran into|"
+    r"discovered|"
     r"found that|went|did|saw|we (?:fixed|found|built|added|removed|ran|tested))\b",
     _I,
 )
