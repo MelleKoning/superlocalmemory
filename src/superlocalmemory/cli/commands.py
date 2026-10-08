@@ -2929,6 +2929,8 @@ _COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("view", "Saved views: named recall queries you can re-run"),
         ("kinds", "Memory kinds: status, settings, classify (undoable)"),
         ("embedder", "Switch the embedding model in the background"),
+        ("models", "Installed Ollama models, recommendations, hosted catalogue"),
+        ("corrections", "Corrections your own delete, replace or edit closed"),
     ]),
     ("Privacy & compliance", [
         # gdpr shipped in 4.0.6 but was never listed here, so `slm help` did not
