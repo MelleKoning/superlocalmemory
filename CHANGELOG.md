@@ -5,6 +5,52 @@ All notable changes to SuperLocalMemory will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.24] — Connecting ChatGPT, Grok Bot, Muse and dots works the first time
+
+### Added
+
+- **One setup prompt for bots and web apps.** Muse, Grok Bot, ChatGPT and
+  ChatGPT dots cannot be connected by a button alone: the connection gives
+  them the tools, not the judgment to use them. Paste
+  [the setup prompt](docs/web-agents/setup-prompt.md) into a chat with the app
+  once it is connected. It asks the app to keep the SuperLocalMemory skill
+  permanently, then tests saving and recall, showing the raw tool output at
+  each step. A test keeps the skill in it identical to the other copies.
+- **Step-by-step guides for each app** in
+  [Connect each app](docs/remote-access/hosts.md): ChatGPT (custom MCP server,
+  base scopes, a removed plugin's name stays taken), ChatGPT dots, Grok Bot,
+  Composio and Muse, with what to do when something goes wrong.
+
+### Changed
+
+- The instructions for web agents now say to report tool results as the tool
+  returned them, and never to say a save or recall worked unless a tool
+  returned that result.
+- The README opens with one centred block: name, tagline, badges, links and
+  a picture of the answer check.
+- The framework adapter READMEs say which adapters are on PyPI and how to
+  install the others, instead of an old version label.
+
+### Fixed
+
+- **Web apps were offered reading only.** The memory server advertised only
+  the read permission, so ChatGPT, Grok Bot and other apps never asked to
+  save, and the approval page could not offer it. The server now advertises
+  reading, saving and session tools; saving and session tools stay unticked on
+  the approval page until you tick them. ChatGPT keeps the permissions it
+  discovered when a plugin was created: if yours can only read, remove the
+  plugin and create it again (the guide shows how). This was fixed on the
+  connection gateway on 8 October, so it works with every SLM version.
+- **"This sign-in session is no longer valid" after a sign-in that worked.**
+  Going back to, refreshing or resubmitting the approval page after it
+  finished now says the sign-in already finished and that you can close the
+  page.
+- **Connected apps listed an app's old approval next to its new one.** When
+  an app connects again, the older approval is now marked "Replaced by a newer
+  approval" under the current one, with **Remove access**. Nothing is removed
+  for you; the older approval keeps working until you remove it.
+- The Hermes plugin manifest carries the release version.
+
 ## [4.1.23] — Your web apps and bots use the same memory, and it stays on your computer
 
 ### Added
