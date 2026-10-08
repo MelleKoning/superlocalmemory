@@ -110,3 +110,12 @@ test('an owner sign-in that keeps refreshing never expires, and one left idle fo
  for(const day of [25,50,75]){at(start+day*DAY);expect((await f.refreshOwner()).status).toBe(200);}
  at(start+(75+31)*DAY);expect((await f.refreshOwner()).status).toBe(400);
 });
+
+test('a laptop that was off past its credential expiry renews on return without signing in again',async()=>{
+ const {f,first}=await provisioned();const start=Date.now();
+ at(start+25*DAY);expect((await f.refreshOwner()).status).toBe(200);
+ await later(f,start+35*DAY);
+ const renewed=await f.ownerCall('/owner/renew',{expected_generation:first.generation});expect(renewed.status).toBe(200);
+ const next=await renewed.json() as Delivery;expect(next.generation).toBe(first.generation+1);expect(next.expires_at_ms).toBe(start+35*DAY+DEVICE_CREDENTIAL_TTL_MS);
+ vi.useRealTimers();expect(await relayAccepts(f.connectionId,next.device_token)).toBe(101);
+});
