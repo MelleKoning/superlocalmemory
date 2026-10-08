@@ -88,3 +88,52 @@ def test_unavailable_secure_backend_affects_remote_only(tmp_path, monkeypatch):
     from types import SimpleNamespace
     monkeypatch.setitem(sys.modules,"keyring",SimpleNamespace(get_keyring=lambda: object()))
     with pytest.raises(CredentialError,match="secure_keyring_unavailable"): CredentialVault(tmp_path/"private")
+
+
+def test_concurrent_readers_in_one_process_wait_their_turn(tmp_path):
+    """The connector and its renewal scheduler read the vault at the same moment
+    when a link starts. Each makes its own vault object; both must succeed."""
+    from concurrent.futures import ThreadPoolExecutor
+    backend = Backend()
+    CredentialVault(tmp_path, backend=backend, clock=lambda: 1000).save(credential())
+    held = credential()
+    identity = (held.installation_id, held.owner, held.profile, held.connection_id)
+
+    def read(_):
+        return CredentialVault(tmp_path, backend=backend, clock=lambda: 1000).load(*identity)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(read, range(200)))
+    assert all(r == held for r in results)
+
+
+def test_a_vault_held_by_another_process_is_reported_busy(tmp_path):
+    """Another process holding the lock is a temporary condition, reported as such."""
+    import multiprocessing
+
+    from superlocalmemory.core.file_lock import exclusive_lock
+    from superlocalmemory.remote_connections.credentials import CredentialError
+    store = CredentialVault(tmp_path, backend=Backend(), clock=lambda: 1000)
+    held = credential()
+    ready, release = multiprocessing.Event(), multiprocessing.Event()
+    holder = multiprocessing.get_context("spawn").Process(
+        target=_hold_lock, args=(str(tmp_path / "credential.lock"), ready, release))
+    holder.start()
+    try:
+        assert ready.wait(10)
+        with pytest.raises(CredentialError, match="credential_store_busy"):
+            store.load(held.installation_id, held.owner, held.profile, held.connection_id)
+    finally:
+        release.set()
+        holder.join(10)
+    assert exclusive_lock  # imported for the child's use
+
+
+def _hold_lock(path, ready, release):
+    from pathlib import Path
+
+    from superlocalmemory.core.file_lock import exclusive_lock
+
+    with exclusive_lock(Path(path)):
+        ready.set()
+        release.wait(10)

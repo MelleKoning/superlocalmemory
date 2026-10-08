@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
@@ -98,6 +99,20 @@ def _native_backend() -> SecureBackend:
         raise CredentialError("secure_keyring_unavailable") from None
 
 
+#: Every vault object for one store shares this turn, so a reader and a writer in
+#: the same daemon wait for each other instead of failing on the file lock.
+#: Vault operations are single keychain calls; the bound only guards a hung backend.
+_TURN_TIMEOUT_S = 10.0
+_turns: dict[str, threading.Lock] = {}
+_turns_guard = threading.Lock()
+
+
+def _process_turn(lock: Path) -> threading.Lock:
+    key = str(lock.resolve())
+    with _turns_guard:
+        return _turns.setdefault(key, threading.Lock())
+
+
 class CredentialVault:
     """Cross-process fenced keychain writes. Injected backends are test adapters.
 
@@ -136,13 +151,28 @@ class CredentialVault:
 
     @contextmanager
     def _locked(self):
-        from superlocalmemory.core.file_lock import exclusive_lock
+        """Threads of this process take turns; another process holding the store
+        is reported as busy, a temporary condition the caller may retry."""
+        from superlocalmemory.core.file_lock import LockHeldError, exclusive_lock
 
         lock = self.root / "credential.lock"
         if lock.is_symlink():
             raise CredentialError("unsafe_credential_path")
-        with exclusive_lock(lock):
-            yield
+        turn = _process_turn(lock)
+        if not turn.acquire(timeout=_TURN_TIMEOUT_S):
+            raise CredentialError("credential_store_busy")
+        try:
+            try:
+                held = exclusive_lock(lock)
+                held.__enter__()
+            except LockHeldError:
+                raise CredentialError("credential_store_busy") from None
+            try:
+                yield
+            finally:
+                held.__exit__(None, None, None)
+        finally:
+            turn.release()
 
     def _get(self, key: str) -> dict | None:
         try:

@@ -132,3 +132,31 @@ async def test_connection_failure_logs_error_class_only(harness,caplog):
     text="\n".join(record.getMessage() for record in caplog.records)
     assert "remote_companion_connection_failed error=RuntimeError" in text
     assert "SECRET" not in text
+
+@pytest.mark.asyncio
+async def test_a_busy_credential_store_is_retried_not_treated_as_misconfiguration(harness):
+    from superlocalmemory.remote_connections.credentials import CredentialError
+    states,calls,socket,load,exchange,dial=harness
+    attempts=[]
+    async def busy_then_ready():
+        attempts.append(1)
+        if len(attempts)<3:
+            raise CredentialError("credential_store_busy")
+        return credential()
+    companion=Companion(enabled=True,load_credential=busy_then_ready,exchange=exchange,dial=dial,on_state=states.append,retry_ms=5)
+    await companion.start()
+    await wait_until(lambda:"transport_ready" in states)
+    await companion.stop()
+    assert "configuration_error" not in states and len(attempts)==3
+
+@pytest.mark.asyncio
+async def test_a_broken_credential_is_still_a_configuration_error(harness):
+    from superlocalmemory.remote_connections.credentials import CredentialError
+    states,calls,socket,load,exchange,dial=harness
+    async def broken():
+        raise CredentialError("invalid_connector_credential")
+    companion=Companion(enabled=True,load_credential=broken,exchange=exchange,dial=dial,on_state=states.append,retry_ms=5)
+    await companion.start()
+    await wait_until(lambda:"configuration_error" in states)
+    await companion.stop()
+    assert calls==[]

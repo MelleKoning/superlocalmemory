@@ -40,6 +40,13 @@ def _dial(endpoint: str, token: str, device_key: str = ""):
     )
 
 
+def _store_busy(error: Exception) -> bool:
+    """A temporarily busy credential store, as opposed to a broken credential."""
+    from superlocalmemory.remote_connections.credentials import CredentialError
+
+    return isinstance(error, CredentialError) and error.args[:1] == ("credential_store_busy",)
+
+
 class Companion:
     def __init__(
         self,
@@ -119,9 +126,15 @@ class Companion:
                         raise ValueError("device_key_required")
                 except asyncio.CancelledError:
                     raise
-                except Exception:
-                    self._publish("configuration_error")
-                    return
+                except Exception as error:
+                    if not _store_busy(error):
+                        self._publish("configuration_error")
+                        return
+                    # Another process briefly holds the credential store: retry.
+                    self._publish("reconnecting")
+                    await asyncio.sleep(min(60000, self._retry * 2 ** min(failures, 6)) / 1000)
+                    failures += 1
+                    continue
                 self._publish("connecting")
                 try:
                     reason = await self._connection(credential, epoch)
