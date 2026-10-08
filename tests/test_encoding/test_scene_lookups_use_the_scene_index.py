@@ -11,6 +11,7 @@ a core while recalls ran), 28 ms when the lookup goes by scene_id. Same rows.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -28,16 +29,17 @@ def _store(tmp_path: Path) -> DatabaseManager:
     conn.commit()
     conn.close()
     db = DatabaseManager(path)
-    db.execute("INSERT OR IGNORE INTO memories (memory_id, profile_id, content) VALUES ('m1', ?, 'x')",
+    db.execute("INSERT OR IGNORE INTO memories (memory_id, profile_id, content) "
+               "VALUES ('m1', ?, 'x')",
                (_PROFILE,))
     for i in range(12):
         db.execute("INSERT INTO atomic_facts (fact_id, memory_id, profile_id, content, embedding) "
                    "VALUES (?, 'm1', ?, ?, ?)", (f"f{i}", _PROFILE, f"fact {i}", "[0.1, 0.2]"))
     for s in range(4):
         members = [f"f{s * 3 + k}" for k in range(3)]
-        db.execute("INSERT INTO memory_scenes (scene_id, profile_id, theme, fact_ids_json, last_updated) "
-                   "VALUES (?, ?, ?, ?, ?)",
-                   (f"s{s}", _PROFILE, f"theme {s}", str(members).replace("'", '"'), f"2026-01-0{s + 1}"))
+        db.execute("INSERT INTO memory_scenes (scene_id, profile_id, theme, fact_ids_json, "
+                   "last_updated) VALUES (?, ?, ?, ?, ?)",
+                   (f"s{s}", _PROFILE, f"theme {s}", json.dumps(members), f"2026-01-0{s + 1}"))
     return db
 
 
@@ -74,7 +76,8 @@ def test_recent_scene_candidates_probe_members_by_scene(tmp_path: Path) -> None:
 def test_live_scene_anchors_probe_members_by_scene(tmp_path: Path) -> None:
     db = _store(tmp_path)
     builder = SceneBuilder(db)
-    queries = _captured_sql(db, lambda: builder._load_live_scene_embeddings(_PROFILE, ("s0", "s1", "s2", "s3")))
+    every_scene = ("s0", "s1", "s2", "s3")
+    queries = _captured_sql(db, lambda: builder._load_live_scene_embeddings(_PROFILE, every_scene))
     assert queries
     steps = _member_lookups(db, *queries[0])
     assert steps and all("(scene_id=?)" in step for step in steps), steps

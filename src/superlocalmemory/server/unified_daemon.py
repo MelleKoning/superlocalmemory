@@ -1006,7 +1006,8 @@ def _hot_reconfigure_engine(application, new_config, *, mode_change: bool) -> No
 # ---------------------------------------------------------------------------
 
 from superlocalmemory.core.recall_gate import (
-    in_flight as _recalls_in_flight, recalls_needing_embedder as _recalls_needing_embedder,
+    in_flight as _recalls_in_flight,
+    recalls_needing_embedder as _recalls_needing_embedder,
 )
 
 # v3.4.38: Module-level engine reference for the pending materializer.
@@ -6529,9 +6530,8 @@ def _materialize_ingestion_one_pass(
             "Materializer terminalized %d exhausted ingestion operation(s)",
             len(reaped),
         )
-    # Yield before claiming while a recall may still need the embedder (its
-    # question not yet embedded). Later steps yield to recall on their own:
-    # embeds per text (embedder gate), the local judge for the whole recall.
+    # Yield while a recall may still need the embedder (question not embedded yet);
+    # later steps yield on their own: embeds per text, the local judge per recall.
     if _recalls_needing_embedder() > 0:
         return 0, 0
 

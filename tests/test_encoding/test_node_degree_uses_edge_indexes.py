@@ -30,7 +30,8 @@ def _store(tmp_path: Path) -> DatabaseManager:
         ("e4", "default", "b", "c"), ("e5", "other", "a", "b"), ("e6", "default", "a", "d"),
     ]
     for edge_id, profile, src, tgt in edges:
-        db.execute("INSERT INTO graph_edges (edge_id, profile_id, source_id, target_id, edge_type, weight) "
+        db.execute("INSERT INTO graph_edges "
+                   "(edge_id, profile_id, source_id, target_id, edge_type, weight) "
                    "VALUES (?, ?, ?, ?, 'entity', 1.0)", (edge_id, profile, src, tgt))
     return db
 
@@ -100,5 +101,6 @@ def test_a_facts_edges_are_written_on_one_connection(tmp_path: Path) -> None:
     assert len(edges) >= 6
     assert len(opened) == 1, f"{len(opened)} connections for {len(edges)} edges"
     stored = {(dict(r)["source_id"], dict(r)["target_id"]) for r in db.execute(
-        "SELECT source_id, target_id FROM graph_edges WHERE source_id = 'n' AND edge_type = 'entity'")}
+        "SELECT source_id, target_id FROM graph_edges "
+        "WHERE source_id = 'n' AND edge_type = 'entity'")}
     assert stored == {("n", f"o{i}") for i in range(6)}
