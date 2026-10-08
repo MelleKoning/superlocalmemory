@@ -890,6 +890,47 @@ The MCP equivalents are `slm_loop_run`, `slm_loop_history`, and `slm_loop_show`.
 
 ---
 
+## Embedding models and store health
+
+### `slm embedder switch|status|cancel|rollback|forget-previous`
+
+Change the embedding model without stopping SLM. A switch re-indexes every memory
+in the background inside the running service; recall and remember keep using the
+current model until the new one is ready, then both change in one step. The
+previous vectors are kept until the next switch, so `rollback` can return to them;
+`forget-previous` frees them. A hosted model's key is set in the dashboard or
+config, never on the command line.
+
+```bash
+slm embedder switch nomic-ai/nomic-embed-text-v1.5
+slm embedder switch text-embedding-3-small --provider openai --dimension 1536
+slm embedder status
+slm embedder rollback
+```
+
+### `slm models [--json]`
+
+Lists the Ollama models installed on this computer, the local models recommended
+for its memory, and the hosted catalogue, using the same catalogue as the setup
+wizard and the dashboard.
+
+### `slm db integrity [--pages] [--json]`
+
+Reports the store's health. `--pages` also checks every page (slow).
+
+### `slm db repair [--apply] [--undo RUN_ID] --root ROOT`
+
+Without `--apply`, previews what it would fix: leftover rows, erased words that
+remain in an index, deletes that never finished, and memories whose searchable
+fact was removed. `--apply` makes those changes with receipts; `--undo RUN_ID`
+puts back what a run changed. A repair never brings back anything that was
+erased, deleted or withheld.
+
+```bash
+slm db repair --root ~/.superlocalmemory            # preview
+slm db repair --root ~/.superlocalmemory --apply
+```
+
 ## Database Maintenance
 
 ### `slm db migrate [status|--dry-run]`
