@@ -356,23 +356,30 @@ class Repair:
         conn = self._connect()
         try:
             # Held-back memories are reported by plan() (before/after), not as work done.
+            # promote() re-checks every exclusion inside its own write transaction.
             found, _held = own.classify(conn)
             db = DatabaseManager(self.db_path)
             for item in found:
                 if self.limits.max_seconds is not None and (
                         time.monotonic() - stats.started) > self.limits.max_seconds:
                     raise _OutOfTime
-                with db.transaction():
-                    fact_id = own.promote(db, conn, item)
+                try:
+                    fact_id = own.promote(db, None, item)
+                except Exception as exc:  # noqa: BLE001 — one memory never stops the rest
+                    logger.warning("own-fact repair failed for one memory: %s", type(exc).__name__)
+                    with self._held(stats, conn):
+                        receipts.receipt(conn, stats.run_id, "own_fact_failed",
+                                         f"memories:{item.memory_id}", "the repair raised",
+                                         {"facts": 0},
+                                         {"error": f"{type(exc).__name__}: {exc}"[:200]},
+                                         undoable=False)
+                    stats.add("own_facts.failed", 1)
+                    continue
                 if fact_id is None:
                     stats.add("own_facts.not_repaired", 1)
                     continue
                 with self._held(stats, conn):
-                    # Undo hides the fact again (archived): the row stays, as with
-                    # every other repair, and the memory is back to no visible fact.
-                    receipts.keep_row(conn, stats.run_id, "atomic_facts", json.dumps({
-                        "key": ["fact_id", fact_id], "written": {"archive_status": "live"},
-                        "old": {"archive_status": "archived"}}), kind="update")
+                    self._own_fact_undo(conn, stats.run_id, item.memory_id)
                     receipts.receipt(conn, stats.run_id, "restore_own_fact",
                                      f"memories:{item.memory_id}",
                                      "enrichment removed this memory's only searchable fact",
@@ -381,6 +388,25 @@ class Repair:
                 stats.add("own_facts.restored", 1)
         finally:
             conn.close()
+
+    @staticmethod
+    def _own_fact_undo(conn: sqlite3.Connection, run_id: str, memory_id: str) -> None:
+        """Undo puts the memory back as it was (no visible fact): it archives
+        EVERY live fact of the memory — the restored one and any enrichment
+        derived from it since — and takes the queued enrichment off the queue."""
+        from superlocalmemory.core.ingestion_command import _NEVER_RETRY_AT
+
+        receipts.keep_row(conn, run_id, "atomic_facts", json.dumps({
+            "key": ["memory_id", memory_id], "written": {"archive_status": "live"},
+            "old": {"archive_status": "archived"}}), kind="update")
+        op = conn.execute("SELECT operation_id FROM ingestion_operations WHERE idempotency_key = ?",
+                          (f"own-fact-repair:{memory_id}",)).fetchone()
+        if op is not None:
+            receipts.keep_row(conn, run_id, "ingestion_operations", json.dumps({
+                "key": ["operation_id", op[0]],
+                "written": {"state": "queryable", "next_retry_at": 0},
+                "old": {"state": "failed", "next_retry_at": _NEVER_RETRY_AT,
+                        "last_error": "own-fact repair undone"}}), kind="update")
 
     # -- public -----------------------------------------------------------
 

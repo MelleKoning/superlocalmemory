@@ -5,16 +5,19 @@
 A save is enriched under a lease (900 s, renewed every 30 s while work runs).
 When the service is killed mid-enrichment the lease outlives its owner, and
 the restarted service had to wait out the whole 900 s before it could finish
-that save. The owner token now names the machine, the process id and the
-process's start time, so a lease whose owner is provably gone is released at
-once. Anything uncertain — an older token, another machine, a live process,
-a start time that cannot be read — keeps its lease and expires as before.
+that save. The owner token now names the machine (host name, boot and
+process namespace), the process id and the process's start time, so a lease
+whose owner is provably gone is released at once. Anything uncertain — an
+older token, another machine or namespace, a live process, a start time that
+cannot be read — keeps its lease and expires as before.
 
-Token: ``ingestion-worker:<host>:<pid>@<start>:<random>``.
+Token: ``ingestion-worker:<host>:<pid>@<start>:<random>``; ``<host>`` is "unknown" when
+the boot/namespace cannot be read, and such a lease is never released early.
 """
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import logging
 import os
@@ -37,9 +40,34 @@ class Owner:
     started: float
 
 
-def host_tag() -> str:
-    """A short, stable tag for this machine (never the host name itself)."""
-    return hashlib.sha256(socket.gethostname().encode("utf-8", "replace")).hexdigest()[:10]
+def _namespace_id() -> str | None:
+    """This boot and process namespace, or None when it cannot be told.
+
+    The host name alone is not enough: containers that share a host name and a
+    store volume have separate process-id spaces, so a pid seen from one says
+    nothing about the other. Linux: kernel boot id + pid-namespace inode.
+    Elsewhere (no pid namespaces): the boot time.
+    """
+    try:
+        if os.path.exists("/proc/self/ns/pid"):
+            with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as fh:
+                boot = fh.read().strip()
+            return f"{boot}/{os.stat('/proc/self/ns/pid').st_ino}"
+        import psutil
+
+        return f"boot-{int(psutil.boot_time())}"
+    except Exception:  # noqa: BLE001 — unknown identity: never release anyone's lease
+        return None
+
+
+@functools.lru_cache(maxsize=1)
+def host_tag() -> str | None:
+    """A short tag for this machine + boot + pid namespace (never the host name itself)."""
+    namespace = _namespace_id()
+    if namespace is None:
+        return None
+    raw = f"{socket.gethostname()}\0{namespace}".encode("utf-8", "replace")
+    return hashlib.sha256(raw).hexdigest()[:10]
 
 
 def _start_time(pid: int) -> float | None:
@@ -55,7 +83,7 @@ def owner_token() -> str:
     pid = os.getpid()
     started = _start_time(pid)
     stamp = f"{started:.3f}" if started is not None else "unknown"
-    return f"{PREFIX}{host_tag()}:{pid}@{stamp}:{uuid.uuid4().hex}"
+    return f"{PREFIX}{host_tag() or 'unknown'}:{pid}@{stamp}:{uuid.uuid4().hex}"
 
 
 def parse_owner(token: str) -> Owner | None:
@@ -76,8 +104,9 @@ def owner_is_dead(token: str) -> bool:
     from superlocalmemory.core.platform_utils import is_pid_alive
 
     owner = parse_owner(token)
-    if owner is None or owner.host != host_tag() or owner.pid <= 0:
-        return False
+    here = host_tag()
+    if owner is None or here is None or owner.host != here or owner.pid <= 0:
+        return False  # cannot prove it is gone: treat as alive
     if not is_pid_alive(owner.pid):
         return True
     started = _start_time(owner.pid)
