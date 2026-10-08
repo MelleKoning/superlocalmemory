@@ -235,3 +235,52 @@ def test_a2_is_fixed_and_a1_unchanged_on_the_pinned_weights(tmp_path, monkeypatc
     assert a1.probabilities[0] == pytest.approx(0.3753, abs=0.002) and a1.insufficient is True
     assert a2.probabilities[0] == pytest.approx(0.0838, abs=0.002)
     assert a2.insufficient is False and a2.rule_support == (0,)
+
+
+class TestARuleAboutSomethingElseIsNotTheAnswer:
+    """A rule whose action has its own object answers only a question about that object
+    (Muse audit 2026-10-08, D1): "Never publish Atlas without approval" governs Atlas,
+    not whatever "the agent" may publish."""
+
+    @pytest.mark.parametrize("memory", [
+        "Never publish Atlas without approval.",
+        "Never publish the billing dashboard without approval.",
+        "Do not publish release notes without approval.",
+    ])
+    def test_a_rule_about_a_named_thing_does_not_answer_the_general_question(self, memory) -> None:
+        assert forms.rule_supports(A2_Q, memory) is False
+
+    @pytest.mark.parametrize("memory", [
+        "Never publish until the owner explicitly approves the release.",
+        "Never publish anything without approval.",
+        "Do not publish without the owner's approval.",
+    ])
+    def test_a_rule_about_the_asked_action_itself_still_answers(self, memory) -> None:
+        assert forms.rule_supports(A2_Q, memory) is True
+
+    def test_the_named_thing_answers_when_the_question_names_it(self) -> None:
+        q = "May the agent publish Atlas without approval?"
+        assert forms.rule_supports(q, "Never publish Atlas without approval.") is True
+
+
+def test_a_passive_rule_has_no_object_to_narrow_it() -> None:
+    q = "Can we delete the Vault9 audit logs?"
+    assert forms.rule_supports(q, "Vault9 audit logs must never be deleted, archived only.") is True
+
+
+def test_one_memory_at_a_time_keeps_a_mix_of_rule_and_model_verdicts() -> None:
+    """Muse audit 2026-10-08, D3: a rule-settled part carries the suffixed id and a
+    model-only part the base id; combining them must not drop the verdict."""
+    from superlocalmemory.core.answer_check_deferred import _combine
+    from superlocalmemory.retrieval.sufficiency import SufficiencyVerdict
+
+    base = "laya:test@x:sufficiency-v1:top3"
+    ruled = SufficiencyVerdict((0.08,), 0.6, forms.calibration_id_for(base, (0,)),
+                               "calibrated", "laya", (0,))
+    plain = SufficiencyVerdict((0.06,), 0.6, base, "calibrated", "laya", ())
+    combined = _combine([ruled, plain])
+    assert combined is not None
+    assert combined.rule_support == (0,)
+    assert combined.calibration_id == forms.calibration_id_for(base, (0,))
+    assert combined.probabilities == (0.08, 0.06)
+    assert _combine([plain, plain]).calibration_id == base

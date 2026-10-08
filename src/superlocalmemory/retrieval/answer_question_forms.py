@@ -143,13 +143,45 @@ def rule_supports(question: str, memory: str) -> bool:
         return False
     verb, rest = _stem(words[0]), {_stem(w) for w in words[1:]}
     governed = re.compile(_CUE + r"\s+(?:\w+\s+){0,2}?" + re.escape(verb) + r"\w*", re.I)
+    asked = rest | {verb}
     for sentence in _SENTENCE.findall(memory):
-        if _is_question(sentence) or not governed.search(sentence):
+        found = None if _is_question(sentence) else governed.search(sentence)
+        if found is None:
             continue
         stems = {_stem(w) for w in _words(sentence)}
-        if rest <= stems:
+        if rest <= stems and _object_stems(found.group(0), sentence[found.end():]) <= asked:
             return True
     return False
+
+
+#: Words that open what follows the action without naming what it acts on.
+_OBJECT_END = _STOP | frozenset((
+    "until unless before after when whenever while except during because since till once "
+    "again first anything something everything nothing anyone anybody everyone").split())
+_OBJECT_LEAD = frozenset("the a an any this that these those our your their my".split())
+_OBJECT_MAX = 4
+
+
+def _object_stems(governing: str, tail: str) -> set[str]:
+    """Stems of what the governed action acts on ("publish Atlas ..." -> {"atlas"}).
+
+    The words right after the action, skipping a leading article, up to the first
+    punctuation or word that starts a condition or a prepositional phrase. A rule
+    about one thing ("Never publish Atlas without approval") answers only a
+    question about that thing; "Never publish until the owner approves" acts on
+    the action itself. A passive action ("must never be deleted") has no object.
+    """
+    if re.search(r"\bbe(?:en)?\b", governing, re.I):
+        return set()
+    words = _words(re.split(r"[,;:(\[]", tail, maxsplit=1)[0])
+    while words and words[0] in _OBJECT_LEAD:
+        words = words[1:]
+    out: set[str] = set()
+    for word in words[:_OBJECT_MAX]:
+        if word in _OBJECT_END:
+            break
+        out.add(_stem(word))
+    return out
 
 
 def rule_support(question: str, memories: Sequence[str]) -> tuple[int, ...]:
@@ -164,10 +196,17 @@ def calibration_id_for(base_id: str, support: Sequence[int]) -> str:
     return base_id + RULE_SUFFIX if support else base_id
 
 
+def base_calibration_id(calibration_id: str) -> str:
+    """The judge's own id, with the rule's suffix (if any) set aside."""
+    if settled_by_rule(calibration_id):
+        return calibration_id[: -len(RULE_SUFFIX)]
+    return calibration_id
+
+
 def settled_by_rule(calibration_id: object) -> bool:
     """Whether a verdict (by its calibration id, on any surface) was settled by the rule."""
     return isinstance(calibration_id, str) and calibration_id.endswith(RULE_SUFFIX)
 
 
-__all__ = ["FORMS_ID", "RULE_SUFFIX", "applies", "calibration_id_for", "permission_action",
-           "rule_support", "rule_supports", "settled_by_rule"]
+__all__ = ["FORMS_ID", "RULE_SUFFIX", "applies", "base_calibration_id", "calibration_id_for",
+           "permission_action", "rule_support", "rule_supports", "settled_by_rule"]

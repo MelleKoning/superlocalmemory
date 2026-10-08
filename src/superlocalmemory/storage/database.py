@@ -50,7 +50,7 @@ from superlocalmemory.storage.write_lock import get_write_lock
 from superlocalmemory.storage.read_connection import read_only_snapshot
 from superlocalmemory.storage import projection_outbox
 from superlocalmemory.storage.memory_kinds import KIND_COLUMNS
-from superlocalmemory.storage.correction_cases import CALLER_REPLACEMENT_REASON
+from superlocalmemory.storage.correction_cases import SAVED_SUCCESSOR_PARAMS, SAVED_SUCCESSOR_SQL
 from superlocalmemory.storage import store_signature
 
 logger = logging.getLogger(__name__)
@@ -2840,16 +2840,16 @@ class DatabaseManager:
         for start in range(0, len(fact_ids), 900):
             batch = fact_ids[start:start + 900]
             placeholders = ",".join("?" for _ in batch)
-            # A caller's replacement never withholds the memory the caller
-            # saved: undoing it restores the old fact, nothing more.
+            # Neither a caller's replacement nor a save-path guess ever
+            # withholds the memory the caller saved (correction_cases.py).
             rows = self.execute(
                 "SELECT c.successor_fact_id FROM correction_cases c "
                 "JOIN atomic_facts f ON f.fact_id=c.successor_fact_id "
                 f"WHERE c.successor_fact_id IN ({placeholders}) AND {scope_where} "
                 "AND c.profile_id=f.profile_id "
                 "AND c.status IN ('proposed', 'rejected', 'rolled_back') "
-                "AND c.reason_code != ?",
-                (*batch, *scope_params, CALLER_REPLACEMENT_REASON),
+                "AND " + SAVED_SUCCESSOR_SQL.format(alias="c"),
+                (*batch, *scope_params, *SAVED_SUCCESSOR_PARAMS),
             )
             inadmissible.update(str(row["successor_fact_id"]) for row in rows)
         return inadmissible
@@ -2914,14 +2914,14 @@ class DatabaseManager:
                         f"WHERE c.successor_fact_id IN ({placeholders}) AND {scope_where} "
                         "AND c.profile_id=f.profile_id "
                         "AND c.status IN ('proposed', 'rejected', 'rolled_back') "
-                        # A caller's replacement never withholds the memory
-                        # the caller saved (see get_nonapplied_...).
-                        "AND c.reason_code != ?"
+                        # Never the memory the caller saved (see
+                        # get_nonapplied_correction_successor_ids).
+                        "AND " + SAVED_SUCCESSOR_SQL.format(alias="c")
                     )
                     rows = conn.execute(
                         f"{temporal_sql} UNION {correction_sql}",
                         (*temporal_params, *batch, *scope_params,
-                         CALLER_REPLACEMENT_REASON),
+                         *SAVED_SUCCESSOR_PARAMS),
                     ).fetchall()
                 inadmissible.update(str(row["fact_id"]) for row in rows)
         return inadmissible

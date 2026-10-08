@@ -8,7 +8,7 @@ Varun: people running Ollama locally can pull a more powerful model than the
 old hardcoded default, but only if they know it exists and that it fits their
 machine. This is a read-only report over the same catalogue and ranking the
 setup wizard and the dashboard use (``core.model_catalog``), so the three
-surfaces never disagree. No network call of its own: Ollama's installed
+surfaces never disagree. It adds no request of its own: Ollama's installed
 models are read through ``cli.setup_wizard._ollama_installed_models`` (the
 one reviewed ``GET /api/tags`` call already covered by the outbound gate).
 """

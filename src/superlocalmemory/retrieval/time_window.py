@@ -24,13 +24,17 @@ License: AGPL-3.0-or-later
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 __all__ = [
     "parse_timestamp",
     "parse_window",
     "in_window",
     "infer_window_from_query",
+    "has_primary_evidence",
+    "windowed_candidates",
 ]
 
 _REL = re.compile(r"^\s*(\d+)\s*([hdwmy])\s*$", re.IGNORECASE)
@@ -193,3 +197,40 @@ def in_window(
         return False
     start, end = bounds
     return start <= dt <= end
+
+
+def has_primary_evidence(channel_scores: Mapping[str, float] | None,
+                         min_semantic: float) -> bool:
+    """The evidence floor's test (``RetrievalEngine._apply_evidence_floor``):
+    meaning at or above ``min_semantic``, or any keyword, entity or time
+    evidence. Associative channels (Hopfield, spreading activation) do not count.
+    """
+    cs = channel_scores or {}
+    return (
+        cs.get("semantic", 0.0) >= min_semantic
+        or cs.get("bm25", 0.0) > 0.0
+        or cs.get("entity_graph", 0.0) > 0.0
+        or cs.get("temporal", 0.0) > 0.0
+    )
+
+
+def windowed_candidates(fused: Sequence[Any], inside: Callable[[str], bool], *,
+                        explicit: bool, min_semantic: float) -> list[Any]:
+    """The candidates a time window keeps.
+
+    An explicit window is the caller's instruction and is honoured even when it
+    keeps nothing. A window inferred from the question's wording ("recently",
+    "last week") must never make recall worse: it narrows only when some
+    candidate inside it has primary evidence. Otherwise every candidate stays.
+    Without that, a question carrying such a word about an older memory kept
+    only unrelated recent facts, which the evidence floor then removed, and
+    recall answered with nothing (measured: 36 questions made of a stored
+    memory's own words, on a copy of a 22k-fact store).
+    """
+    kept = [fr for fr in fused if inside(fr.fact_id)]
+    if explicit:
+        return kept
+    if any(has_primary_evidence(getattr(fr, "channel_scores", None), min_semantic)
+           for fr in kept):
+        return kept
+    return list(fused)

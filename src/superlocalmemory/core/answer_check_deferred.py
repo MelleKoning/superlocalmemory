@@ -127,17 +127,23 @@ def _single(outcome: Any) -> Any:
 
 def _combine(parts: list[Any]) -> Any:
     """One verdict over every memory, exactly as one request would have given it."""
+    from superlocalmemory.retrieval import answer_question_forms as forms
     from superlocalmemory.retrieval.sufficiency import SufficiencyVerdict
 
     if not parts or any(p is None for p in parts):
         return None
     first = parts[0]
-    same = {(p.threshold, p.calibration_id, p.calibration_status, p.backend) for p in parts}
+    # A part the permission rule settled carries the rule's suffix; the judge is
+    # the same one when the ids agree once that suffix is set aside.
+    same = {(p.threshold, forms.base_calibration_id(p.calibration_id),
+             p.calibration_status, p.backend) for p in parts}
     if len(same) != 1:
         return None  # the judge changed between memories: nothing coherent to keep
-    return SufficiencyVerdict(tuple(p.probabilities[0] for p in parts), first.threshold,
-                              first.calibration_id, first.calibration_status, first.backend,
-                              tuple(i for i, p in enumerate(parts) if p.rule_support))
+    support = tuple(i for i, p in enumerate(parts) if p.rule_support)
+    return SufficiencyVerdict(
+        tuple(p.probabilities[0] for p in parts), first.threshold,
+        forms.calibration_id_for(forms.base_calibration_id(first.calibration_id), support),
+        first.calibration_status, first.backend, support)
 
 
 def _keep(memo: Any, key: str, parts: list[Any]) -> None:
