@@ -9,11 +9,11 @@
 
 Claude Code, Codex, Cursor and other MCP clients forget what they learned when a session ends. SuperLocalMemory (SLM) gives them one long-term memory that lives on your machine: it learns from use, enforces who may read and erase what, coordinates many agents, and says "I don't have that" instead of guessing.
 
-**Every recall is checked before your agent uses it.** A judge decides whether the memories found actually answer the question: **Laya** runs fully on your Mac, and **Jev** runs online on Windows, Linux and macOS. When they don't answer it, SLM says so instead of handing over a confident wrong answer: a hallucination guard for retrieval ([answer check](#answer-check-laya-and-jev)).
+**Recall can be checked before your agent uses it.** With the answer check on, a judge decides whether the memories found actually answer the question: **Laya** runs fully on your Mac, and **Jev** runs online on Windows, Linux and macOS. When they don't answer it, recall marks the results `abstained`, so your agent can say "I don't have that" instead of handing over a confident wrong answer: a hallucination guard for retrieval ([answer check](#answer-check-laya-and-jev)).
 
-**Your bots and web apps can use the same memory.** Local agents connect over MCP, including the Grok Bot plugin on a shared bot computer. ChatGPT, Claude on the web, Muse, Composio and other web MCP clients can reach it through optional [Web access](#web-apps-and-bots-web-access): you sign in once, choose whether each app may only read or also save, and remove any app at once.
+**Your bots and web apps can use the same memory.** Local agents connect over MCP, including the Grok Bot plugin on a shared bot computer. ChatGPT, Claude on the web, Muse, Composio and other web MCP clients can reach it through optional [Web access](#web-apps-and-bots-web-access): you sign in with GitHub for each app, choose whether it may only read or also save, and remove any app at once.
 
-In Mode A, core remember and recall make no model-provider call. Anything that sends data out is a choice you make, and the docs say exactly what goes.
+In Mode A, core remember and recall make no model-provider call unless you turn on the online answer check (Jev). Anything that sends data out is a choice you make, and the docs say exactly what goes.
 
 [![PyPI](https://img.shields.io/pypi/v/superlocalmemory)](https://pypi.org/project/superlocalmemory/)
 [![npm](https://img.shields.io/npm/v/superlocalmemory)](https://www.npmjs.com/package/superlocalmemory)
@@ -86,21 +86,21 @@ Captured from a real install in Mode A, with Laya running on the Mac and a store
 
 ![Saved views: a saved question that runs the same search your agent uses and shows the memory each result came from](docs/screenshots/dashboard/saved-views.png)
 
-## Why SuperLocalMemory: the moats
+## Why SuperLocalMemory
 
 A vector store answers "what is similar". AI agent memory must also answer: is this still true, who may see it, can it be erased with proof, and does the agent actually have the answer?
 
-**1. Governed memory, not a vector store.** Roles per workspace, personal / shared / global scopes with default-deny cross-profile recall, GDPR erasure with HMAC-verifiable receipts, retention rules and a hash-chained audit log. The [V4 paper](https://arxiv.org/abs/2608.08253) measures what the governed write path costs. Code: `src/superlocalmemory/access/`, `compliance/`.
+**1. Governed memory, not a vector store.** Roles per workspace, personal / shared / global scopes with default-deny cross-profile recall, GDPR erasure with HMAC-verifiable receipts, retention rules and a hash-chained audit log. The [governed-memory paper](https://arxiv.org/abs/2608.08253) measures what the governed write path costs. Code: `src/superlocalmemory/access/`, `compliance/`.
 
-**2. A zero-LLM core built on published math.** Five retrieval channels, fusion and the learned ranker run without a language model; V3 scored 60.4% on LoCoMo with no LLM anywhere ([benchmarks](#benchmarks-v3)). Fisher-information scoring, sheaf contradiction detection and Langevin lifecycle dynamics added 12.7 points ([V3 paper](https://arxiv.org/abs/2603.14588)).
+**2. A zero-LLM core built on published math.** Five retrieval channels, fusion and the learned ranker run without a language model; the published architecture scored 60.4% on LoCoMo with no LLM anywhere ([benchmarks](#benchmarks)). Fisher-information scoring, sheaf contradiction detection and Langevin lifecycle dynamics added 12.7 points ([architecture paper](https://arxiv.org/abs/2603.14588)).
 
 **3. It says "I don't have that."** The [answer check](docs/answer-check.md) decides whether the top results answer the question, on your Mac (Laya) or online (Jev), and recall reports `abstained` instead of a confident wrong answer.
 
 **4. Memory that learns, and cannot quietly get worse.** A Thompson-sampling bandit tunes channel weights and a LightGBM ranker learns from reported outcomes. A retrained ranker is promoted only after a shadow A/B test on live recalls, and rolled back automatically if NDCG@10 drops 2% or more. Code: `learning/shadow_test.py`, `learning/model_rollback.py`.
 
-**5. Memory with a sense of time.** Every fact records when it happened and when SLM learned it. Ask what was true last month (`--valid-at`) or what SLM knew before a date (`--known-as-of`). Unused memories fade and lose vector precision ([V3.3 paper](https://arxiv.org/abs/2604.04514)).
+**5. Memory with a sense of time.** Every fact records when it happened and when SLM learned it. Ask what was true last month (`--valid-at`) or what SLM knew before a date (`--known-as-of`). Unused memories fade and lose vector precision ([lifecycle paper](https://arxiv.org/abs/2604.04514)).
 
-**6. Many agents, one coordinated memory.** Every write records its agent, with Bayesian trust scores against poisoning ([V2 paper](https://arxiv.org/abs/2603.02240)). SLM-Mesh gives parallel sessions messages, locks and shared state.
+**6. Many agents, one coordinated memory.** Every write records its agent, with Bayesian trust scores against poisoning ([trust paper](https://arxiv.org/abs/2603.02240)). SLM-Mesh gives parallel sessions messages, locks and shared state.
 
 **7. "Done" means a gate passed.** Bounded loops repeat a task until an independent check (tests, a schema, a linter) passes, never on the agent's word, and store every lap as auditable memory.
 
@@ -168,12 +168,12 @@ with it.
 
 ### Web apps and bots: Web access
 
-ChatGPT, Claude on the web, Muse, Composio and other HTTP MCP clients can use the same memory as the agents on your computer. Open the dashboard, turn on **Web access** under **Connected apps**, pick the profile to share, and add an app. The app signs in with OAuth. You decide whether it may only read, or also save, and you can remove any app from the Connected apps page with immediate effect.
+ChatGPT, Claude on the web, Muse, Composio and other HTTP MCP clients can use the same memory as the agents on your computer. Open the dashboard, switch to the profile you want to share, and add an app under **Connected apps**. The app signs in with OAuth. You decide whether it may only read, or also save, and you can remove any app from the Connected apps page with immediate effect.
 
 Your laptop keeps an outbound connection to SLM's connection gateway. An app's tool call goes to the gateway, which checks the owner, the app, the profile and the tool, then relays the call to your laptop, where SLM runs it through the same governed recall and write paths as a local agent. There is no port to open, no tunnel and no Cloudflare account to set up.
 
 - The memory database stays on your laptop. Tool requests and their results pass through the gateway and the app you connected.
-- The laptop must be online. While it sleeps, apps are told at once that it is unavailable instead of waiting.
+- The laptop must be online. Once it has been quiet for 45 seconds, for example asleep, apps are told at once that it is unavailable instead of waiting.
 - Access renews itself. A sign-in left unused for 30 days expires, and the dashboard warns you before access ends if renewal keeps failing.
 - Each connection has a free daily allowance of tool calls.
 - SLM itself stays free and works fully without Web access.
@@ -321,11 +321,11 @@ What leaves your machine, and when:
 
 Model downloads send no memory content. Credentials in memory text are redacted on every outbound path. Outbound requests never follow redirects, and forwarded-for headers count only from a proxy you name. See [Security policy](SECURITY.md) and [encryption at rest](docs/SECURITY-encryption-at-rest.md).
 
-## Benchmarks (V3)
+## Benchmarks
 
-These numbers come from the published **V3** architecture paper, which V4 still runs. They are not a fresh V4 package run.
+These numbers come from the published architecture paper ([arXiv:2603.14588](https://arxiv.org/abs/2603.14588)), whose retrieval core SLM still runs. They are not a fresh run of the current package.
 
-| V3 configuration | LoCoMo | Scope |
+| Configuration (architecture paper) | LoCoMo | Scope |
 |---|---:|---|
 | Mode A, retrieval + GPT-4.1-mini answers | 74.8% | 10 conversations, 1,276 questions |
 | Mode A, raw (no LLM anywhere) | 60.4% | 10 conversations, 1,276 questions |
@@ -337,12 +337,12 @@ Method, category breakdown and ablations: [docs/benchmarks.md](docs/benchmarks.m
 
 Four arXiv preprints by Varun Pratap Bhardwaj describe SLM, newest first:
 
-1. **V4 (2026):** [SuperLocalMemory 4.0: The Governed Memory Operating System for AI Agents](https://arxiv.org/abs/2608.08253), with Garima Singh and Arun Pratap Bhardwaj. arXiv:2608.08253. Multi-scope isolation, role-based access, verified erasure, hash-chained audit and bi-temporal recall, with their measured cost.
-2. **V3.3 (2026):** [SuperLocalMemory V3.3: The Living Brain](https://arxiv.org/abs/2604.04514), arXiv:2604.04514. Biologically inspired forgetting, cognitive quantization, multi-channel retrieval without an LLM.
-3. **V3 (2026):** [SuperLocalMemory V3: Information-Geometric Foundations for Zero-LLM Enterprise Agent Memory](https://arxiv.org/abs/2603.14588), arXiv:2603.14588. Fisher-information retrieval, Langevin lifecycle, sheaf contradiction detection; the LoCoMo results above.
-4. **V2 (2026):** [SuperLocalMemory: Privacy-Preserving Multi-Agent Memory with Bayesian Trust Defense Against Memory Poisoning](https://arxiv.org/abs/2603.02240), arXiv:2603.02240.
+1. **Governed memory (2026):** [SuperLocalMemory 4.0: The Governed Memory Operating System for AI Agents](https://arxiv.org/abs/2608.08253), with Garima Singh and Arun Pratap Bhardwaj. arXiv:2608.08253. Multi-scope isolation, role-based access, verified erasure, hash-chained audit and bi-temporal recall, with their measured cost.
+2. **Lifecycle and forgetting (2026):** [SuperLocalMemory V3.3: The Living Brain](https://arxiv.org/abs/2604.04514), arXiv:2604.04514. Biologically inspired forgetting, cognitive quantization, multi-channel retrieval without an LLM.
+3. **Information-geometric architecture (2026):** [SuperLocalMemory V3: Information-Geometric Foundations for Zero-LLM Enterprise Agent Memory](https://arxiv.org/abs/2603.14588), arXiv:2603.14588. Fisher-information retrieval, Langevin lifecycle, sheaf contradiction detection; the LoCoMo results above.
+4. **Trust and multi-agent memory (2026):** [SuperLocalMemory: Privacy-Preserving Multi-Agent Memory with Bayesian Trust Defense Against Memory Poisoning](https://arxiv.org/abs/2603.02240), arXiv:2603.02240.
 
-Cite the V4 paper with [CITATION.cff](CITATION.cff) or GitHub's "Cite this repository" button:
+Cite the governed-memory paper with [CITATION.cff](CITATION.cff) or GitHub's "Cite this repository" button:
 
 ```bibtex
 @article{bhardwaj2026superlocalmemory,
@@ -355,7 +355,7 @@ Cite the V4 paper with [CITATION.cff](CITATION.cff) or GitHub's "Cite this repos
 
 ## Documentation
 
-**Start:** [Getting started](docs/getting-started.md) · [IDE setup](docs/ide-setup.md) · [Linux install](docs/install-linux.md) · [Quick proof](docs/QUICK_PROOF.md) · [Migrating from V2](docs/migration-from-v2.md)
+**Start:** [Getting started](docs/getting-started.md) · [IDE setup](docs/ide-setup.md) · [Linux install](docs/install-linux.md) · [Quick proof](docs/QUICK_PROOF.md) · [Migrating an old store](docs/migration-from-v2.md)
 
 **Use:** [Recall](docs/recall.md) · [Memory kinds](docs/memory-kinds.md) · [Answer check](docs/answer-check.md) · [Auto-memory](docs/auto-memory.md) · [Universal agent rules](plugin-src/rules/AGENTS.md) · [Web agent instructions](docs/web-agents/README.md) · [Shared memory](docs/shared-memory.md) · [Optimize](docs/optimize-overview.md)
 

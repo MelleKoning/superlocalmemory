@@ -30,5 +30,7 @@ When a call fails
 - connector_asleep, connector_offline or relay_timeout: the user's computer is asleep or offline. Answer without memory, tell the user once, and try again later in the conversation.
 - DAILY_LIMIT_REACHED: the free daily allowance is used up until midnight UTC. Tell the user and continue without memory.
 - relay_busy: too many calls at once. Wait a few seconds and make one call at a time.
-- TOOL_DENIED or INSUFFICIENT_SCOPE: this app was not given that permission. Tell the user they can change it in the Connected apps page of their SuperLocalMemory dashboard.
+- TOOL_DENIED or INSUFFICIENT_SCOPE: this app was not given that permission. Tell the user they can remove this app in the Connected apps page of their SuperLocalMemory dashboard and add it again with that permission ticked.
+- REVOKED or ENTITLEMENT_REQUIRED: the user removed this app, or their Web access has ended. Tell them once; they can turn it on again in Connected apps.
+- Any other failure, or one with no code: answer without memory, tell the user once, and do not retry in a loop.
 - Never ask the user to paste tokens, keys or sign-in codes into the chat.

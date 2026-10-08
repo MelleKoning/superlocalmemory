@@ -78,7 +78,8 @@ affected.
 | `DAILY_LIMIT_REACHED` (HTTP 429) | The free daily allowance is used up | Resets at midnight UTC (`Retry-After` says when) |
 | `TOOL_DENIED`, `INSUFFICIENT_SCOPE` | The app was not given that permission | Remove its access and add it again with the permission ticked |
 | `CORRECTION_DENIED`, `SHARING_DENIED`, `PROFILE_DENIED` | The app tried something only this computer may do | Do it locally |
-| `connection_revoked` | The owner removed the app | Add it again if wanted |
+| `REVOKED` | The owner removed the app | Add it again if wanted |
+| `ENTITLEMENT_REQUIRED` | Web access has ended | Turn it on again in **Connected apps** |
 
 To check from this computer, call `get_status` and run `slm status`; the
 **Connected apps** page shows each connection's state and access date.
