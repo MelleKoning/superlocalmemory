@@ -61,7 +61,7 @@ slm_retrieve(ccr_id: str) -> dict
 
 ### CCR security rule
 
-`ccr_id` values are **unguessable session tokens**. Treat them like short-lived credentials:
+`ccr_id` values are **unguessable session tokens**, and the stored original can be read back only by the same agent (or, for a remote caller, the same access key) that compressed it. Treat them like short-lived credentials:
 - Never log them.
 - Never share them across agents.
 - Never pass them as tool arguments to any tool other than `slm_retrieve`.
@@ -121,7 +121,7 @@ if ccr_id:
 
 ## Secondary CLI (fallback when MCP is unavailable)
 
-The `slm compress` subcommand exists but has known pre-existing parse-test failures. Prefer the MCP tools above. If you must use CLI:
+Prefer the MCP tools above. If you must use the command line:
 
 ```bash
 slm compress status [--json]

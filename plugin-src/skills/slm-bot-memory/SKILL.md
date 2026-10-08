@@ -30,6 +30,11 @@ regardless.
 | `SLM_DATA_DIR` (profile root) | **Which database file** the daemon opens | **Yes.** Two bots pointed at different `SLM_DATA_DIR` values have fully separate, independent memory stores — nothing is shared unless you explicitly configure sharing. |
 | `scope` (`personal` / `shared` / `global`, see `slm-scope`) | **Visibility inside one store**, between profiles that share that store | Only the way you set it. `personal` (the default) stays within the writing profile; `shared`/`global` are explicit, user-initiated opt-ins. |
 
+A memory profile (the namespace `profile_id` and `switch_profile` select) is not
+a fourth kind of isolation between bots. Any local caller that can name a profile
+can read it, and `switch_profile` moves the active profile for every bot on the
+computer. Treat profiles as organisation, not privacy.
+
 The practical rule: **`SLM_AGENT_ID` tells you who wrote something; `SLM_DATA_DIR`
 and `scope` decide who can read it.** If two bots on the same Grok Bot computer
 use the same `SLM_DATA_DIR` (the common case — it is a shared filesystem, and
@@ -40,9 +45,9 @@ different `SLM_AGENT_ID` values does not change that — it only changes whose
 name shows up on the memory.
 
 If you need one bot's memories genuinely unreachable from another, that bot
-needs its **own `SLM_DATA_DIR`** (or its own profile within a store that has
-governance/roles configured — see `slm-governance`), not just its own
-`SLM_AGENT_ID`.
+needs its **own `SLM_DATA_DIR`** (or a store where company mode with roles is
+configured — see `slm-governance`), not just its own `SLM_AGENT_ID` or its own
+profile.
 
 ---
 
@@ -55,8 +60,9 @@ Use all three dimensions together, each for what it is good at:
    `get_memory_summary` or the stored facts later can tell which bot said
    what. Set it to something stable and specific: `grok_bot_support`,
    `grok_bot_release_notes`, not a generic `bot`.
-2. **`profile_id`** / `SLM_DATA_DIR` — the real isolation boundary. One
-   store per bot that genuinely needs privacy from the others.
+2. **`SLM_DATA_DIR`** — the real isolation boundary. One store per bot that
+   genuinely needs privacy from the others. A `profile_id` inside a shared store
+   groups memories but does not hide them.
 3. **`scope`** (see `slm-scope`) — inside a store two or more bots
    legitimately share, keep writes `personal` by default and only promote to
    `shared`/`global` when a fact is meant for every bot on that store.
@@ -79,9 +85,10 @@ recall(
 ```
 
 Recall is not filtered by `agent_id` automatically — it is attribution on the
-written record, not a query filter. If you need "only what this bot wrote",
-say so in the query text or check the `saved_by`/attribution field on the
-results, the same way you would read any shared log.
+written record. If you need "only what this bot wrote", pass
+`saved_by="grok_bot_support"` to `recall` (or `--saved-by` on `slm recall`),
+which keeps only memories saved by that agent id. It filters; it does not
+protect, because another bot can leave it out.
 
 ---
 
@@ -115,8 +122,8 @@ user before storing anything derived from it.
 ## Checklist for a new bot on an existing shared host
 
 1. Confirm `SLM_DATA_DIR` — is this bot meant to share the existing store, or
-   does it need its own? (`slm status` or `session_init` shows the active
-   store's identity.)
+   does it need its own? (`slm status --json` on the computer shows `data.base_dir`
+   and `data.db_path`.)
 2. Set a specific `SLM_AGENT_ID` for this bot before the first `remember`.
 3. Read `slm-scope` before writing anything with `scope="shared"` or
    `scope="global"` — those are machine-wide, not just cross-bot.
@@ -130,7 +137,7 @@ user before storing anything derived from it.
 - `slm-getting-started-bot` — first-session setup for a headless bot host
 - `slm-scope` — the personal/shared/global visibility model this skill
   namespaces on top of
-- `slm-profile` — switching the active workspace/tool-tier within one store
+- `slm-profile` — memory profiles versus tool sets, and what switching does
 - `slm-governance` — role-based access when a store has multiple human/bot
   members and real access control, not just convention
 

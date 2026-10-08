@@ -1,6 +1,6 @@
 ---
 name: slm-mesh
-description: Cross-session peer coordination via the SLM mesh network. Lets multiple AI agent sessions on the same machine discover each other, send messages, share lightweight state, and lock files to avoid conflicts. Requires full, power, or mesh MCP profile. All 8 tools are MCP-only — there is no CLI fallback.
+description: Cross-session peer coordination via the SLM mesh network. Lets multiple AI agent sessions on the same machine discover each other, send messages, share lightweight state, and lock files to avoid conflicts. Available in the default tool set and in the full, power and mesh MCP profiles. Only `slm mesh status` and `slm mesh peers` exist on the command line; the other tools are MCP-only.
 when_to_use: |
   - Multiple agent sessions running simultaneously on the same machine
   - "Announce what I'm working on to other sessions"
@@ -19,17 +19,21 @@ each other and coordinate in real time — without writing to the persistent
 memory store. Mesh messages are transient (48-hour TTL); they complement memory
 (which is durable) rather than replacing it.
 
-Mesh is local-only: it uses the SLM daemon as a local broker. No data leaves
-the machine.
+By default the mesh is local: the SLM daemon on this machine is the broker and
+nothing leaves it. Two machines can be joined only if the user sets
+`SLM_MESH_PEER_URL` and `SLM_MESH_SHARED_SECRET` for their daemons; then peers and
+messages cross to the other machine. Do not configure that yourself.
 
 ---
 
 ## Profile requirement
 
-Mesh tools are available in the `full`, `power`, and `mesh` MCP profiles.
-Confirm the active profile with `slm status` before calling mesh tools. If the
-tools are not available, switch to `full` profile with `switch_profile("full")`
-(requires `code` or higher active profile). See `slm-profile`.
+Mesh tools are registered in the `full`, `power` and `mesh` MCP tool sets and in
+the default set that applies when the host configures none. They are not in
+`core` or `code`. The tool set is fixed when the MCP server starts, and
+`switch_profile` cannot change it (it changes the active memory profile). If the
+tools are missing, check `SLM_MCP_PROFILE` in the host's MCP config and ask the
+user before changing it. See `slm-profile`.
 
 ---
 
@@ -209,8 +213,9 @@ mesh_status() -> dict
 Returns broker uptime, peer count, and connection health. Use at session start
 to confirm the mesh is available before relying on coordination.
 
-Response includes: `broker_up`, `peer_count`, `uptime_seconds`, `my_peer_id`,
-`heartbeat_active`.
+Response includes: `broker_up`, `peer_count` (active peers, with
+`remote_peer_count`, `local_session_count` and stale counts alongside),
+`uptime_s`, `my_peer_id`, `heartbeat_active`.
 
 ---
 
@@ -259,7 +264,7 @@ All 8 mesh tools return structured errors — they never raise exceptions.
 
 | Error | Cause | Action |
 |-------|-------|--------|
-| `broker_up: false` from `mesh_status` | Daemon not running or mesh not configured | Run `slm status` to check daemon health |
+| `broker_up: false` from `mesh_status` | Daemon not running or mesh not configured | Run `slm mesh status` (prints the broker's answer) or `slm status` to check daemon health |
 | `ok: false` from `mesh_send` with circuit-breaker message | Repeated daemon unreachability | Daemon unreachable; stop sending until broker is up |
 | `ok: false` from `mesh_lock` | Lock operation failed | Check `file_path` is absolute; retry once |
 | Empty `peers` from `mesh_peers` | No other sessions registered | You're the only active session |
@@ -272,7 +277,7 @@ mesh availability.
 
 ## Related skills
 
-- `slm-profile` — activate full/power/mesh profile to access mesh tools
+- `slm-profile` — which tool sets include the mesh tools
 - `slm-scope` — for durable cross-profile sharing (complement to transient mesh state)
 - `slm-remember` — persist coordination decisions that should survive session end
 - `slm-governance` — enterprise governance of mesh (who can send/receive)

@@ -1,236 +1,208 @@
 ---
 name: slm-governance
-description: Enterprise compliance and governed workspace behavior for SuperLocalMemory. Covers role-based access (admin/member/viewer), retention policies, audit trail, GDPR data export/erase, and how agents must behave when operating under workspace governance. Requires power MCP profile for audit/retention tools. Agents must never bypass governance controls.
+description: Governed-workspace behavior for SuperLocalMemory. Covers roles (admin/member/viewer) and company mode, retention and lifecycle settings, the audit trail, GDPR export and erasure, and how agents must behave when operating under workspace governance. The audit and retention tools need the power MCP profile. Agents must never bypass governance controls.
 when_to_use: |
   - "What can I do in this workspace?" (role check)
-  - "Set a 90-day retention policy on this memory"
+  - "Move cold memories to archive after 60 days"
   - "Show the audit trail for recent memory operations"
   - "Export my data for GDPR compliance"
-  - "Delete all memories for user X (right to erasure)"
-  - "Configure require-login for this workspace"
+  - "Delete all memories about user X (right to erasure)"
+  - "Turn on require-login for this workspace"
   - Enterprise deployment with multi-team shared SLM
   - Compliance, audit, or data governance task
-allowed-tools: audit_trail, set_retention_policy, get_retention_stats, get_lifecycle_status, recall, search, remember, Bash
+allowed-tools: audit_trail, set_retention_policy, get_retention_stats, get_lifecycle_status, compact_memories, consistency_check, recall, search, remember, Bash
 ---
 
-# slm-governance — Enterprise Compliance and Governed Workspace Behavior
+# slm-governance — Governed Workspace Behavior
 
-SuperLocalMemory supports enterprise deployments with role-based access control,
-retention policies, audit logging, and GDPR compliance tooling. This skill
-documents how agents must behave when operating in a governed workspace and how
-to use the governance MCP tools (available in the `power` profile).
+SuperLocalMemory can run with named users and roles per workspace (company
+mode), keeps a compliance audit trail, applies a retention lifecycle, and ships
+GDPR export and erasure commands. This skill documents how an agent must behave
+in a governed workspace and what the governance tools really do. The MCP audit
+and retention tools are in the `power` tool set (see `slm-profile`).
 
 ---
 
 ## Role model
 
-Governed workspaces have three roles:
+By default SLM is single-user: whoever runs it is the owner and nothing asks for
+a login. Company mode adds named users, each with one role per workspace
+(profile). A role in one workspace grants nothing in another.
 
-| Role | Read | Write personal | Write shared/global | Admin operations |
-|------|------|---------------|---------------------|-----------------|
-| `viewer` | Yes | No | No | No |
-| `member` | Yes | Yes | Yes (within access list) | No |
-| `admin` | Yes | Yes | Yes (unrestricted) | Yes |
+| Role | Read | Write | Share (`shared`/`global` writes) | Delete | Manage users and settings |
+|------|------|-------|-------|--------|-----------------|
+| `viewer` | Yes | No | No | No | No |
+| `member` | Yes | Yes | Yes | No | No |
+| `admin` | Yes | Yes | Yes | Yes | Yes |
 
 **Agent behavior by role:**
 
-- **Viewer**: Only call `recall`, `search`, `fetch`, `list_recent`. Never call
-  `remember`, `update_memory`, `forget`, or any write tool. If a write is
-  attempted, fail gracefully: "This workspace is read-only in viewer mode."
-- **Member**: May write personal facts and shared facts with permitted profiles.
-  May NOT write `scope="global"` facts without explicit admin authorization.
-  May NOT call `set_retention_policy`, `audit_trail`, or `compact_memories`.
-- **Admin**: Full access including governance tools in the `power` profile.
+- **Viewer**: Only call `recall`, `search`, `fetch`, `list_recent` and other
+  reads. Never call `remember`, `update_memory`, `delete_memory` or any write
+  tool. If a write is refused, say so: "This workspace is read-only for my role."
+- **Member**: May write memories, including `scope="shared"` and `scope="global"`
+  when the user explicitly asks for them. May not delete memories or change
+  users, roles or settings.
+- **Admin**: Everything above plus deletion and user administration.
 
-An agent operating in a governed workspace must check its role before any write
-operation. Role information is visible in workspace configuration or via
-`slm status --json` (the `role` field, if present).
-
----
-
-## Retention policies
-
-Retention policies control how long facts are stored before they become eligible
-for decay. Available in the `power` MCP profile.
-
-### Set a retention policy
-
-```
-set_retention_policy(
-  profile_id: str = "",   # "" = active profile
-  days: int = 90,         # facts older than this become decay-eligible
-  zone: str = "default",  # retention zone name
-)
-```
-
-Retention zones let you apply different policies to different fact categories:
-
-```
-# Standard facts: 90-day retention
-set_retention_policy(profile_id="", days=90, zone="default")
-
-# Security findings: 365-day retention (compliance requirement)
-set_retention_policy(profile_id="", days=365, zone="security")
-```
-
-Tag your facts with the zone name to route them to the right policy:
-```
-remember(content="Critical auth bypass in v2.1", tags="security,cve,finding", ...)
-```
-
-### Check retention statistics
-
-```
-get_retention_stats()
-```
-
-Returns zone distribution, average fact age, and decay-eligible counts. Use this
-to verify policies are working as expected.
-
-### Check lifecycle status
-
-```
-get_lifecycle_status()
-```
-
-Reports the state of the retention and decay subsystem — whether decay cycles are
-running, when the next cycle runs, and any backlog.
-
----
-
-## Audit trail
-
-`audit_trail` is available in the `power` profile. It returns a structured log of
-recent memory operations (writes, reads, profile switches, policy changes).
-
-```
-audit_trail(
-  limit: int = 50,          # number of entries to return
-  operation: str = "",      # filter by operation type (e.g. "remember", "forget")
-  profile_id: str = "",     # filter by profile; "" = active profile
-)
-```
-
-Use this for:
-- Compliance reviews ("what data was written in the last 30 days?")
-- Investigating unexpected memory changes
-- Generating audit reports for data controllers
-
-The audit trail covers MCP and CLI operations. It does not record the content of
-facts by default — only operation type, timestamp, agent ID, and fact ID.
-
----
-
-## GDPR compliance
-
-### Data export
-
-SLM does not have a dedicated MCP export tool. For GDPR data subject access
-requests, use the CLI:
-
-```bash
-# Export all memories in a profile to JSON
-slm status --json     # confirm active profile
-slm list --limit 9999 --json > export.json
-```
-
-For a complete export including entity graph data, run:
-```bash
-slm status --json
-```
-
-Contact your workspace admin to arrange a full database-level export if the CLI
-output is insufficient for compliance purposes.
-
-### Right to erasure
-
-To erase all memories for a subject or project:
-
-```bash
-# Step 1: preview what will be deleted (ALWAYS do this first)
-slm forget "<subject or project name>" --dry-run --json
-
-# Step 2: review the preview, then execute
-slm forget "<subject or project name>" --yes --json
-```
-
-For targeted deletion by fact ID:
-```bash
-slm delete <fact_id> --yes --json
-```
-
-For data reconstruction prevention: after erasure, confirm the fact is gone by
-running `slm recall "<content>"`. A successful erasure returns no results. Never
-attempt to re-derive erased content from other stored facts.
+No MCP tool or `slm` command reports your role (only a signed-in dashboard session can ask the daemon, at `GET /api/rbac/whoami`). Do not guess it: attempt
+what the user asked and treat a permission refusal as final. Setting up users,
+roles and "Require login" is done in the dashboard under **Settings → Access**;
+there is no `slm user` or `slm role` command. The machine operator keeps user
+administration in every mode so a mistake cannot lock everyone out.
 
 ---
 
 ## require-login
 
-When `require_login` is enabled in workspace configuration, agents must
-authenticate before any memory operation. SLM handles authentication at the
-daemon level — agents do not need to pass credentials in tool calls. If an
-agent receives an authentication error from any MCP tool, it must:
+When login is required, every operation on memories needs a signed-in user,
+including the connection your assistant uses. SLM handles this at the daemon
+level; agents do not pass credentials in tool calls. If a tool call returns an
+authentication or permission error, you must:
 
 1. Stop the current operation immediately.
-2. Report the authentication requirement to the user.
-3. Never cache, retry, or work around the authentication block.
+2. Report the requirement to the user.
+3. Never cache, retry, or work around the block.
+
+In this mode, `include_global=True` and `include_shared=True` on `recall` are
+quietly turned off while the recall policy forbids cross-profile reads (the
+default), so an opt-in recall can come back with only personal facts. Do not try
+to work around it. See `slm-scope`.
+
+---
+
+## Retention and lifecycle
+
+Every memory moves through lifecycle states as it goes unused: active, warm, cold,
+archived. Two tools set and inspect that, and a third runs the forgetting cycle.
+They need the `power` tool set.
+
+### Set the thresholds
+
+```
+set_retention_policy(
+  cold_after_days: int = 30,      # days of inactivity before a memory goes cold
+  archive_after_days: int = 90,   # days before it is archived
+)
+```
+
+It sets two thresholds and returns them. There is no `profile_id` argument and
+there are no named retention zones or per-tag policies; tagging a memory does not
+route it to a different policy.
+
+### Look at the state
+
+```
+get_retention_stats(profile_id="")
+get_lifecycle_status(limit=50, profile_id="")
+```
+
+`get_retention_stats` reports, from the retention table, the count and average
+retention score per Ebbinghaus zone (`active`, `warm`, `cold`, `archive`,
+`forgotten`) and the totals. `get_lifecycle_status` counts the active, warm, cold
+and archived state of up to `limit` memories and returns up to ten short
+samples of each. Neither says when the next cycle runs.
+
+### Apply it
+
+```
+forget(dry_run=True)          # preview the decay cycle for the active profile
+compact_memories(dry_run=True) # preview lifecycle-state transitions
+```
+
+The MCP `forget` tool is not a delete: it recomputes retention scores and moves
+memories between zones. `compact_memories` moves memories whose lifecycle state
+has become due (for example cold to archived); it does not merge duplicates. Both
+default to a dry run. Run the preview first, show it to the user, and only then
+pass `dry_run=False`. Do not run either without the user's say-so.
+
+---
+
+## Audit trail
+
+```
+audit_trail(limit: int = 50)
+```
+
+Returns the newest `limit` rows of the compliance audit for the active profile,
+as `{"success", "entries", "count"}`. Each entry has `audit_id`, `profile_id`,
+`action`, `target_type`, `target_id`, `details` and `timestamp`. There are no
+filter arguments. Entries are compliance actions (store, retrieve, delete, export
+and the like).
+
+Use it for compliance reviews, for investigating an unexpected change, and for
+audit reports to a data controller.
+
+---
+
+## GDPR
+
+```bash
+slm gdpr status [--profile P] [--json]            # posture: receipts, audit counts, known gaps; read-only
+slm gdpr export --profile P [--output FILE] [--json]   # Art. 15/20 access and portability
+slm gdpr erase --profile P --dry-run [--json]     # preview an erasure
+slm gdpr erase --profile P --yes [--json]         # Art. 17 erasure, IRREVERSIBLE
+slm gdpr verify --receipt-id ID [--profile P]     # check an erasure receipt (exit 0 ok, 1 tampered, 2 not found)
+```
+
+`slm gdpr erase` erases a **profile**. It refuses to run without both `--profile`
+and `--yes`, and without them it only previews. It is the only irreversible
+operation here, so confirm the subject, the profile and the authority to erase
+with the user before running it. `slm gdpr status` lists the known gaps (for
+example backups and the code graph) rather than claiming completeness.
+
+To remove individual memories rather than a whole profile, use the deletion
+commands from `slm-remember`:
+
+```bash
+slm forget "<subject or project name>" --dry-run --json   # ALWAYS first
+slm forget "<subject or project name>" --yes --json
+slm delete <fact_id> --yes --json
+```
+
+Memories that belong to a reviewed correction cannot be deleted this way; the
+refusal names the case. After an erasure, confirm with `slm recall "<content>"`
+that nothing comes back, and never try to re-derive erased content from other
+stored facts.
 
 ---
 
 ## Scope enforcement in governed workspaces
 
-In a governed workspace, scope restrictions are enforced server-side:
-- **Viewers** cannot write any fact regardless of `scope` parameter.
-- **Members** cannot write `scope="global"` unless their access list includes
-  the global scope — attempts return a permission error.
-- **Admins** can write any scope.
-
-Agents must not attempt to work around scope restrictions by splitting a global
-fact into multiple shared facts to accumulate equivalent visibility.
+- **Viewers** cannot write anything, whatever the `scope` argument.
+- **Members and admins** can write `shared` and `global` facts; writing either
+  scope needs the share permission, which both roles hold.
+- Agents must not split a `global` fact into several `shared` facts, or otherwise
+  accumulate visibility the user did not ask for.
 
 ---
 
-## Compact memories (admin-only)
-
-`compact_memories` deduplicates and consolidates stored memories. This is an
-admin operation — it can change fact IDs and remove content.
+## Integrity checks
 
 ```
-compact_memories(
-  profile_id: str = "",   # "" = active profile
-  dry_run: bool = True,   # ALWAYS true first — inspect before running
-)
+consistency_check(limit: int = 100)
 ```
 
-Always run with `dry_run=True` first and review the impact report. Never run
-compaction without admin authorization.
-
----
-
-## Consistency check (admin-only)
-
-```
-consistency_check(profile_id: str = "")
-```
-
-Verifies data integrity of the memory store — checks for orphaned entities,
-broken references, and index-database mismatches. Use after migrations or
-unexpected shutdowns. Returns a structured report.
+Runs a sheaf-consistency check over up to `limit` memories and returns pairs of
+facts that contradict each other, with a severity (`fact_a`, `fact_b`,
+`severity`, `content_a`), plus `facts_checked`, `facts_errored` and
+`total_contradictions`. If the checker is disabled it says so in `note`. For the
+health of the store itself (orphan rows, erased words left behind, unfinished
+deletes) use `slm db integrity` and `slm db repair`; see `slm-status`.
 
 ---
 
 ## Agent checklist for governed workspaces
 
 Before each write operation:
-- [ ] Confirm my role allows writes (viewer → skip; member/admin → proceed)
-- [ ] Confirm scope is appropriate for my role (member → no global)
-- [ ] Set correct tags including zone name if retention policy applies
-- [ ] Pass `session_id` for full audit attribution
+- [ ] The user asked for it, and a refusal from the workspace is respected
+- [ ] Scope is `personal` unless the user explicitly asked to share
+- [ ] Pass `session_id` so the write is attributed
 
-Before running any destructive operation (`forget`, `compact_memories`):
-- [ ] Admin authorization confirmed
-- [ ] Ran with `dry_run=True` and reviewed output
+Before running any destructive or state-changing operation (`forget`,
+`compact_memories`, `slm forget --yes`, `slm gdpr erase --yes`):
+- [ ] The user authorized it in this conversation
+- [ ] Ran the dry run or preview and showed it to the user
 - [ ] GDPR: confirmed the subject or controller authorized the erasure
 
 ---
@@ -238,10 +210,11 @@ Before running any destructive operation (`forget`, `compact_memories`):
 ## Related skills
 
 - `slm-scope` — scope model details (personal/shared/global)
-- `slm-profile` — workspace isolation and profile switching
-- `slm-remember` — fact storage reference (includes scope parameters)
+- `slm-profile` — memory profiles and tool sets
+- `slm-remember` — fact storage, corrections and deletion
 - `slm-recall` — retrieval reference (includes scope read flags)
-- `slm-mesh` — mesh tools (full/power profiles)
+- `slm-mesh` — mesh tools
+- To use this memory from a web assistant or another computer, see the slm-web-access skill.
 
 ---
 

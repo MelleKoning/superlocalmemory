@@ -68,6 +68,10 @@ REAL_SKILLS: frozenset[str] = frozenset(
         "slm-list-recent",
         "slm-show-patterns",
         "slm-switch-profile",
+        # Skills the rules and fragment now point at (shipped in plugin-src/skills/).
+        "slm-bot-memory",
+        "slm-getting-started-bot",
+        "slm-web-access",
     }
 )
 
@@ -77,6 +81,7 @@ ADVISOR_NAMES: frozenset[str] = frozenset(
         "slm-memory-advisor",
         "slm-optimize-advisor",
         "slm-governance-advisor",
+        "slm-loop-runner",
     }
 )
 
@@ -95,6 +100,8 @@ CLI_FIRST_VERBS: frozenset[str] = frozenset(
         "cache",
         "compress",
         "loop",   # slm loop demo|history|show — bounded loops (v3.8.0)
+        "update",  # slm update <fact_id> <content> — proposes a reviewed correction
+        "gdpr",    # slm gdpr status|export|erase|verify — subject-rights CLI
     }
 )
 
