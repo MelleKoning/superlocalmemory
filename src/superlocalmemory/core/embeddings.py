@@ -733,32 +733,22 @@ class EmbeddingService:
         min_available_gb = float(os.environ.get("SLM_MIN_AVAILABLE_MEMORY_GB", "2.0"))
         try:
             if sys.platform == "darwin":
-                # macOS: use vm_stat to get free + inactive pages
-                import subprocess as _sp
-                result = _sp.run(["vm_stat"], capture_output=True, text=True, timeout=5)
-                if result.returncode == 0:
-                    lines = result.stdout.split("\n")
-                    page_size = 16384  # default on Apple Silicon
-                    free_pages = 0
-                    for line in lines:
-                        if "page size of" in line:
-                            try:
-                                page_size = int(line.split()[-2])
-                            except (ValueError, IndexError):
-                                pass
-                        if "Pages free" in line or "Pages inactive" in line:
-                            try:
-                                free_pages += int(line.split()[-1].rstrip("."))
-                            except (ValueError, IndexError):
-                                pass
-                    available_gb = (free_pages * page_size) / (1024 ** 3)
-                    if available_gb < min_available_gb:
-                        logger.warning(
-                            "Low memory (%.1f GB available, need %.1f GB) — "
-                            "deferring embedding worker spawn",
-                            available_gb, min_available_gb,
-                        )
-                        return False
+                # macOS: free + inactive pages, the same two counters vm_stat
+                # prints, read in-process. This runs after every embed while
+                # the request lock is held, recall's query embedding included;
+                # starting a vm_stat process from a large multi-threaded daemon
+                # cost 15 ms idle and seconds under load on that path.
+                import psutil
+
+                vm = psutil.virtual_memory()
+                available_gb = (vm.free + vm.inactive) / (1024 ** 3)
+                if available_gb < min_available_gb:
+                    logger.warning(
+                        "Low memory (%.1f GB available, need %.1f GB) — "
+                        "deferring embedding worker spawn",
+                        available_gb, min_available_gb,
+                    )
+                    return False
             else:
                 # Linux/other: use /proc/meminfo or psutil
                 try:
