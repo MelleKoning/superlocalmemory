@@ -34,6 +34,14 @@ from superlocalmemory.storage.migrations import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _fresh_host_tag():
+    clear = getattr(owners.host_tag, "cache_clear", lambda: None)
+    clear()
+    yield
+    clear()
+
+
 @pytest.fixture
 def repository(tmp_path) -> IngestionOperationRepository:
     db = DatabaseManager(tmp_path / "memory.db")
@@ -109,3 +117,25 @@ def test_every_worker_writes_an_identifiable_owner(repository) -> None:
                                materialize=lambda *a, **k: None)
     assert owners.owner_is_dead(command._owner) is False
     assert owners.parse_owner(command._owner) is not None
+
+
+def test_a_same_named_host_in_another_pid_namespace_never_steals_a_live_lease(monkeypatch) -> None:
+    """Muse C1: two containers with the same host name and separate process
+    namespaces share one store. A pid in the other namespace says nothing about
+    the owner, so its lease is never released."""
+    monkeypatch.setattr(owners, "_namespace_id", lambda: "boot-1/pidns-111", raising=False)
+    owners.host_tag.cache_clear() if hasattr(owners.host_tag, "cache_clear") else None
+    token = owners.owner_token()                  # written in container A
+    monkeypatch.setattr(owners, "_namespace_id", lambda: "boot-1/pidns-222", raising=False)
+    owners.host_tag.cache_clear() if hasattr(owners.host_tag, "cache_clear") else None
+    monkeypatch.setattr("superlocalmemory.core.platform_utils.is_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(owners, "_start_time", lambda _pid: 1.0)   # an unrelated process
+    assert owners.owner_is_dead(token) is False, "a live lease in another namespace was released"
+
+
+def test_an_unknown_machine_identity_never_releases(monkeypatch) -> None:
+    monkeypatch.setattr(owners, "_namespace_id", lambda: None, raising=False)
+    owners.host_tag.cache_clear() if hasattr(owners.host_tag, "cache_clear") else None
+    token = owners.owner_token()
+    monkeypatch.setattr("superlocalmemory.core.platform_utils.is_pid_alive", lambda _pid: False)
+    assert owners.owner_is_dead(token) is False
