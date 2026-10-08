@@ -2,7 +2,7 @@
 
 Google ADK [`BaseMemoryService`](https://google.github.io/adk-docs/) backed by
 the local data root of
-[SuperLocalMemory V4.0.0](https://github.com/qualixar/superlocalmemory).
+[SuperLocalMemory](https://github.com/qualixar/superlocalmemory).
 
 Give a Google ADK agent durable session memory stored in your local SLM data
 root and visible through every other SLM surface (CLI, MCP, dashboard).
@@ -12,21 +12,17 @@ backup, and downloads have separate network behavior).
 ## Prerequisites
 
 - Python >=3.12,<3.15 (3.12, 3.13, 3.14)
-- [SuperLocalMemory V4.0.0](https://github.com/qualixar/superlocalmemory) installed in the same environment
+- [SuperLocalMemory](https://github.com/qualixar/superlocalmemory) installed in the same environment
 - `google-adk >= 2.5.0`
-- Supported platforms: Apple Silicon macOS, 64-bit Windows, 64-bit Linux — Intel Mac and 32-bit Windows (Win32) are outside the V4.0.0 support contract (`cryptography==50.0.0` has no wheel for those architectures).
+- Supported platforms: Apple Silicon macOS, 64-bit Windows, 64-bit Linux — Intel Mac and 32-bit Windows (Win32) are outside the SuperLocalMemory support contract (`cryptography==50.0.0` has no wheel for those architectures).
 
 ## Installation
 
-```bash
-pip install google-adk-superlocalmemory
-```
-
-Or from source:
+`google-adk-superlocalmemory` is not on PyPI yet, so `pip install google-adk-superlocalmemory` does not work. Install it from a clone of the repository:
 
 ```bash
-cd ide/integrations/google-adk
-pip install -e .
+git clone https://github.com/qualixar/superlocalmemory
+pip install ./superlocalmemory/ide/integrations/google-adk
 ```
 
 ## Quick start
@@ -80,6 +76,6 @@ AGPL-3.0 — see [LICENSE](../../../LICENSE).
 
 ## Links
 
-- [SuperLocalMemory V4.0.0](https://github.com/qualixar/superlocalmemory)
+- [SuperLocalMemory](https://github.com/qualixar/superlocalmemory)
 - [Documentation](https://superlocalmemory.com/)
 - [Google ADK](https://google.github.io/adk-docs/)

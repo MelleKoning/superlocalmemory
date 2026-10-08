@@ -289,6 +289,15 @@ def _plan(version: str):
          lambda: _sub_glob("plugin-src/**/*.md",
                            r"SuperLocalMemory v([0-9]+\.[0-9]+\.[0-9]+)",
                            "SuperLocalMemory v{v}", version)),
+        # The Hermes plugin manifest source. scripts/build-hermes-plugin.mjs
+        # re-stamps the built hermes-plugin/plugin.yaml from pyproject.toml, so
+        # the built copy is always current; this source copy sat at 4.1.18 and
+        # showed a stale label to anyone reading plugin-src.
+        ("plugin-src/hermes/plugin.yaml",
+         lambda: _read("plugin-src/hermes/plugin.yaml", r"^version:\s*(\S+)\s*$"),
+         lambda: _sub_regex("plugin-src/hermes/plugin.yaml",
+                            r"^version:\s*(\S+)\s*$",
+                            "version: {v}", version)),
         # README.md no longer carries a release stamp (no title version, no
         # summary version, no badge), so it is not a source. Listing a source
         # that does not exist made --check red on every tree and made a real

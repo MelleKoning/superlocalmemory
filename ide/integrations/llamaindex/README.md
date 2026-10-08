@@ -1,12 +1,12 @@
-# LlamaIndex Chat Store — SuperLocalMemory V4.0.0
+# LlamaIndex Chat Store — SuperLocalMemory
 
-A LlamaIndex `BaseChatStore` integration for [SuperLocalMemory V4.0.0](https://github.com/qualixar/superlocalmemory).
+A LlamaIndex `BaseChatStore` integration for [SuperLocalMemory](https://github.com/qualixar/superlocalmemory).
 
 ## Prerequisites
 
 - Python >=3.12,<3.15 (3.12, 3.13, 3.14)
-- [SuperLocalMemory V4.0.0](https://github.com/qualixar/superlocalmemory) installed in the same Python virtual environment
-- Supported platforms: Apple Silicon macOS, 64-bit Windows, 64-bit Linux — Intel Mac and 32-bit Windows (Win32) are outside the V4.0.0 support contract (`cryptography==50.0.0` has no wheel for those architectures).
+- [SuperLocalMemory](https://github.com/qualixar/superlocalmemory) installed in the same Python virtual environment
+- Supported platforms: Apple Silicon macOS, 64-bit Windows, 64-bit Linux — Intel Mac and 32-bit Windows (Win32) are outside the SuperLocalMemory support contract (`cryptography==50.0.0` has no wheel for those architectures).
 
 ```bash
 python -m pip install superlocalmemory
@@ -16,6 +16,13 @@ python -m pip install superlocalmemory
 
 ```bash
 pip install llama-index-storage-chat-store-superlocalmemory
+```
+
+Or from a clone of the repository:
+
+```bash
+git clone https://github.com/qualixar/superlocalmemory
+pip install ./superlocalmemory/ide/integrations/llamaindex
 ```
 
 ## Quick Start
@@ -61,7 +68,7 @@ chat_store.delete_messages("session-1")
 
 ## How It Works
 
-Each chat message is submitted through SuperLocalMemory V4.0.0's canonical ingestion
+Each chat message is submitted through SuperLocalMemory's canonical ingestion
 contract. The exact serialized payload remains available for chat-store round trips:
 - **Content**: JSON-serialized `{role, content, additional_kwargs}`
 - **Session**: `llamaindex:<sha256(session_key)>` for bounded, injection-safe isolation
@@ -78,6 +85,6 @@ chat_store = SuperLocalMemoryChatStore(db_path="/path/to/custom/memory.db")
 
 ## Links
 
-- [SuperLocalMemory V4.0.0](https://github.com/qualixar/superlocalmemory)
+- [SuperLocalMemory](https://github.com/qualixar/superlocalmemory)
 - [LlamaIndex Documentation](https://docs.llamaindex.ai/)
 - [LlamaIndex Chat Stores Guide](https://docs.llamaindex.ai/en/stable/module_guides/storing/chat_stores/)
