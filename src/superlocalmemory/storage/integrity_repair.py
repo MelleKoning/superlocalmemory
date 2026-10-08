@@ -106,8 +106,12 @@ class Repair:
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=30, isolation_level=None)
-        conn.execute("PRAGMA busy_timeout=30000")
-        conn.execute("PRAGMA foreign_keys=ON")
+        try:
+            conn.execute("PRAGMA busy_timeout=30000")
+            conn.execute("PRAGMA foreign_keys=ON")
+        except BaseException:
+            conn.close()  # a failed setup must not leave the file open
+            raise
         return conn
 
     @contextmanager

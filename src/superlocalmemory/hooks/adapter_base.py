@@ -115,6 +115,9 @@ def _connect_log(db_path: Path) -> sqlite3.Connection:
         conn.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, 1)  # type: ignore[attr-defined]
     except (AttributeError, sqlite3.OperationalError):
         pass  # Python < 3.12: database.py already warns once per process
+    except BaseException:
+        conn.close()  # any other setup failure must not leave the file open
+        raise
     return conn
 
 
