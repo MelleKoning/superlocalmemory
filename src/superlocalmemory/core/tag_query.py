@@ -2,7 +2,7 @@
 # Licensed under AGPL-3.0-or-later - see LICENSE file
 # Part of SuperLocalMemory V3 | https://qualixar.com | https://varunpratap.com
 
-"""Exact tag filtering for ``search`` and ``list_recent`` (4.1.22 G05).
+"""Exact tag filtering for ``search`` and ``list_recent`` (4.1.22).
 
 Recall filters tags inside retrieval (``retrieval.facets`` plus the
 search-inside supplement in ``retrieval.tag_search``). The two display paths,

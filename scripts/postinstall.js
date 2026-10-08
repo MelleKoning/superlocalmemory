@@ -21,7 +21,7 @@ const MIN_PYTHON = Object.freeze([3, 12]);
 const MAX_PYTHON_EXCLUSIVE = Object.freeze([3, 15]);
 const INSTALL_TIMEOUT_MS = 15 * 60 * 1000;
 
-// GB4: the official CPU-only wheel index (https://pytorch.org/get-started/locally/,
+// The official CPU-only wheel index (https://pytorch.org/get-started/locally/,
 // fetched 2026-10-06). PyPI's plain `torch` wheel is CPU-only on macOS/Windows but
 // a CUDA build on Linux (torch + triton + ~18 nvidia-* packages, ~2.6 GiB) even
 // with no GPU present to use it.
@@ -134,7 +134,7 @@ function hasNvidiaGpu(platform = os.platform()) {
 }
 
 /**
- * GB4 — should this install pre-fetch the CPU-only torch wheel before the
+ * Should this install pre-fetch the CPU-only torch wheel before the
  * main package? Mirrors plugin-src/scripts/torch-cpu-resolve.sh's
  * `torch_cpu_should_force` (same questions, same answers, separate runtime).
  * False covers: not Linux, a GPU is visible, or the user already steered pip
@@ -317,7 +317,7 @@ function main(argv = process.argv.slice(2)) {
 
   const runtimePython = runtimePythonPath(packageRoot);
 
-  // GB4: pre-install the pinned CPU-only torch wheel so the main install
+  // Pre-install the pinned CPU-only torch wheel so the main install
   // below finds it already satisfied and never resolves the CUDA build.
   // Best-effort: a failure here just means this run keeps the default
   // resolution (and therefore the CUDA wheels on Linux) — it must never be

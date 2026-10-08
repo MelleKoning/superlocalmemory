@@ -38,7 +38,7 @@ WHY MEMBERSHIP IS NOT CACHED (unlike ``kind_scope.KindMembership``)
 Tags live on ``memories.metadata_json``, a table ``storage.fact_search_changes``
 does not watch — only ``atomic_facts`` column changes are logged. Extending
 that trigger-based log to a second table, for one filter, was judged not
-worth the risk in this lane (4.1.22 G05; no schema migration ships with this
+worth the risk in this lane (4.1.22; no schema migration ships with this
 gap either — see ``core.tag_identity``). Membership is instead read fresh on
 every call that needs it. Measured on the real M5 store, read-only: a full
 scan of the default profile's 12,775 tagged facts takes ~75 ms warm and

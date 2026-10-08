@@ -120,7 +120,7 @@ def test_every_worker_writes_an_identifiable_owner(repository) -> None:
 
 
 def test_a_same_named_host_in_another_pid_namespace_never_steals_a_live_lease(monkeypatch) -> None:
-    """Muse C1: two containers with the same host name and separate process
+    """Two containers with the same host name and separate process
     namespaces share one store. A pid in the other namespace says nothing about
     the owner, so its lease is never released."""
     monkeypatch.setattr(owners, "_namespace_id", lambda: "boot-1/pidns-111", raising=False)

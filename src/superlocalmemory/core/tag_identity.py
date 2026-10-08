@@ -4,7 +4,7 @@
 
 """What a tag label names - the one rule every tag comparison uses.
 
-4.1.22 (G05): tags live exactly where 4.1.21 left them,
+4.1.22: tags live exactly where 4.1.21 left them,
 ``memories.metadata_json -> '$.tags'`` - no schema migration ships with this
 (a new ``memory.db`` migration forces a full safety copy, ~2 GB on a real
 store, at upgrade). What changes is that a label is now matched by its

@@ -1,4 +1,4 @@
-"""`slm doctor` host diagnostics (G08, 4.1.22) — local files only, fake HOME.
+"""`slm doctor` host diagnostics (4.1.22) — local files only, fake HOME.
 
 Three findings were wrong on a real machine:
 * "no editor plugin detected" with both plugins installed: marketplace

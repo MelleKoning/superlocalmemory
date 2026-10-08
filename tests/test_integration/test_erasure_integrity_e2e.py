@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar
 # Licensed under AGPL-3.0-or-later - see LICENSE file
-"""Erasure and refusal through a REAL daemon on a synthetic store (4.1.22 G07).
+"""Erasure and refusal through a REAL daemon on a synthetic store (4.1.22).
 
 * A fully erased memory leaves its words nowhere: not in any table of any SLM
   database in the data root (ingestion journal, entity summaries, event
@@ -205,8 +205,8 @@ def _protected_count(daemon: RealDaemon, facts: list[str]) -> int:
 
 #: A memory whose facts are extracted from a full sentence usually proposes a
 #: correction of itself (machine consolidation between its own facts), and a
-#: fact named by any correction case can never be deleted (reported by G07 for
-#: Varun's decision). Erasure is proven on the first memory that did not; the
+#: fact named by any correction case can never be deleted. Erasure is proven
+#: on the first memory that did not; the
 #: later phrasings are noun phrases, which extract to one fact.
 PHRASINGS = (
     "{m} Haverlin audits the {p} depot on 3 March 2026 with the synthetic ledger.",

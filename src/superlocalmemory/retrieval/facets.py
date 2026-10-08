@@ -25,7 +25,7 @@ never filters; it only ranks that project's memories higher. Reads only;
 ``matching_fact_ids`` never raises (a failure keeps nothing rather than
 everything).
 
-``tags`` (4.1.22 G05): exact label matching, composed with every other facet
+``tags`` (4.1.22): exact label matching, composed with every other facet
 as AND. A label's identity is ``core.tag_identity.tag_key`` - Unicode NFC,
 trimmed, internal whitespace collapsed, casefolded, punctuation kept - never
 a raw string compare, so "Token-Optimization" and "token-optimization " are
@@ -102,7 +102,7 @@ class Facets:
     kind: str | None = None
     #: 4.1.21 (#150): rank this project's memories higher; never a filter.
     prefer_project: str | None = None
-    #: 4.1.22 (G05): exact DISPLAY labels asked for, de-duplicated by
+    #: 4.1.22: exact DISPLAY labels asked for, de-duplicated by
     #: ``core.tag_identity.tag_key`` — never the raw caller input verbatim.
     #: Empty means no tag filter.
     tags: tuple[str, ...] = ()

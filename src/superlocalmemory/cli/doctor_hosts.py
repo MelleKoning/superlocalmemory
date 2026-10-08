@@ -4,7 +4,7 @@
 
 """Host-side diagnostics for ``slm doctor``: editor plugins and install method.
 
-Two findings were wrong before 4.1.22 (handoff §13):
+Two findings were wrong before 4.1.22:
 
 * "no editor plugin detected" on a machine with both plugins installed. The
   probe looked two directory levels deep, but Claude Code keeps marketplace

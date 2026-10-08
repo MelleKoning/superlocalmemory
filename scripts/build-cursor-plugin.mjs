@@ -37,7 +37,7 @@ export const CURSOR_SERVER_ENV = Object.freeze({
   // know the option ignores it instead of refusing to start.
   UV_TORCH_BACKEND: 'cpu',
   TOKENIZERS_PARALLELISM: 'false',
-  // GB5 lite bot-host profile: the box is shared by every bot on it with
+  // Lite bot-host profile: the box is shared by every bot on it with
   // 1.8-3.5 GiB free RAM, and the cross-encoder reranker subprocess alone
   // measured ~200 MB resident once warm (plus its own PyTorch import). Turn
   // it off here — opt-in via env, nowhere else — so recall still works (BM25
@@ -63,7 +63,7 @@ const DESCRIPTION =
   + 'and a cache for large tool outputs.';
 
 /**
- * GB7 — the 4-6 skills visible to Grok Bot / Cursor, independent of the full
+ * The 4-6 skills visible to Grok Bot / Cursor, independent of the full
  * ~12-skill set every other host gets (plugin/skills/). Chosen to match what
  * this manifest's `SLM_MCP_PROFILE=core` (18 tools) can actually do, plus the
  * two skills written specifically for a headless, hook-less bot host:
@@ -133,7 +133,7 @@ export function renderCursorPluginJson(manifest) {
     mcpServers: './mcp.cursor.json',
     name: manifest.pluginName,
     repository: manifest.repository,
-    // GB7: a curated 4-6, not the full set every other host gets — see
+    // A curated 4-6, not the full set every other host gets — see
     // CURSOR_SKILLS. A manifest field replaces folder discovery, so this
     // points Cursor at cursor-skills/ instead of the full skills/ directory.
     skills: './cursor-skills/',

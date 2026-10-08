@@ -1160,7 +1160,7 @@ def _completeness_of(response: RecallResponse) -> dict:
         # #150: a project filter that fell back to unfiltered results must
         # still say so after a rebuild.
         "project_scope": getattr(response, "project_scope", None),
-        # 4.1.22 (G05): a tag filter's note/reason must survive a rebuild too.
+        # 4.1.22: a tag filter's note/reason must survive a rebuild too.
         "tag_scope": getattr(response, "tag_scope", None),
     }
 
@@ -1494,7 +1494,7 @@ def run_recall(
                               if getattr(r, "fact", None) is not None]
         response.results = source_fidelity_flags.flag_unverified(kind_aware.apply_for_recall(
             response.results, query, profile_id, getattr(config, "retrieval", None),
-            engine=retrieval_engine, db=db), db, profile_id)  # G03: unverified source
+            engine=retrieval_engine, db=db), db, profile_id)  # unverified source
         _resettle_shown_after_bias(play_sink, profile_id, response.results,
                                    _shown_before_kind)
     _mark("learning+ranking")

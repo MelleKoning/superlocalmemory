@@ -161,7 +161,7 @@ def list_recent_facts(
     CLI, HTTP) should, rather than returning a short answer with no sign it
     might be incomplete.
 
-    ``tag_filter`` (4.1.22 G05): only memories carrying the tags, found by
+    ``tag_filter`` (4.1.22): only memories carrying the tags, found by
     membership first (``core.tag_query``), so a rare tag is never crowded
     out; ``kind`` then filters inside that set.
     """

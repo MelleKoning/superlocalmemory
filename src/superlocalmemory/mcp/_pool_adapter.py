@@ -120,7 +120,7 @@ def pool_recall(query: str, limit: int = 10, **kwargs: Any) -> PoolRecallRespons
     for _name in ("project", "prefer_project", "profile_id"):
         if (kwargs.get(_name) or "").strip():
             _recall_kwargs[_name] = kwargs[_name].strip()
-    # 4.1.22 (G05): forwarded only when set, same as the other facets. A
+    # 4.1.22: forwarded only when set, same as the other facets. A
     # string or a list are both accepted here and downstream (the daemon
     # proxy / HTTP route parse either the same way).
     _tags = kwargs.get("tags")

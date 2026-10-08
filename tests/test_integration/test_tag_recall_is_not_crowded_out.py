@@ -3,7 +3,7 @@
 
 """A tag-filtered recall finds the memory behind many closer, untagged ones.
 
-Mirrors ``test_kind_recall_is_not_crowded_out.py`` for ``tags`` (4.1.22 G05):
+Mirrors ``test_kind_recall_is_not_crowded_out.py`` for ``tags`` (4.1.22):
 fusion takes each channel's top candidates, so when enough OTHER memories
 match a question's words better, the one memory carrying the asked-for tag
 never became a candidate at all, and a filter applied only after fusion comes

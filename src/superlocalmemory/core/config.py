@@ -513,7 +513,7 @@ class RetrievalConfig:
         """Whether the cross-encoder reranker should run right now.
 
         `use_cross_encoder` is the user's persisted choice (config.json,
-        ``slm reconfigure``). GB5: ``SLM_RERANKER_ENABLED`` is a process-only
+        ``slm reconfigure``). ``SLM_RERANKER_ENABLED`` is a process-only
         override for RAM-constrained shared hosts (the Cursor/Grok "lite" bot
         profile) — read here, at the point of use, rather than written into
         this field, so it can never leak into config.json through a later

@@ -1,4 +1,4 @@
-"""GB6 (4.1.22): only the default data root's daemon may take legacy port 8767.
+"""4.1.22: only the default data root's daemon may take legacy port 8767.
 
 Pre-descriptor clients dial 8767 and know nothing about data roots. Before
 4.1.22 any daemon took it unless SLM_DISABLE_LEGACY_PORT=1, so a second data

@@ -226,7 +226,7 @@ def test_requests_on_the_listener_are_seen_as_https(limits) -> None:
 
 
 def test_pipelined_requests_are_answered_and_the_counts_come_back(limits, monkeypatch) -> None:
-    """Muse 4.1.21 M2: requests sent together right after the handshake are all
+    """Requests sent together right after the handshake are all
     answered, and under the lowest limits a closed connection frees its place
     (handshaking -> open -> gone is counted once each way)."""
     monkeypatch.setattr(remote_conn_guard, "MAX_WAITING_CONNECTIONS", 1)

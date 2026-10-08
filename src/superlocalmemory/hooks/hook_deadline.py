@@ -9,7 +9,7 @@ throws its output away. Before 4.1.22 ``slm hook codex-start`` blocked in
 ``readline()`` on an ``slm mcp`` child, only checked its own deadline between
 lines, and then ran a second child for up to 10 s: the internal deadline was
 not enforceable, so the host's 15 s limit could fire first and the session
-started with no SLM context and no explanation (handoff §13).
+started with no SLM context and no explanation.
 
 The pieces here keep a hook inside its budget on every path:
 

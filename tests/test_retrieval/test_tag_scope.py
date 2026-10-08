@@ -2,7 +2,7 @@
 # Licensed under AGPL-3.0-or-later - see LICENSE file
 # Part of SuperLocalMemory V3 | https://qualixar.com | https://varunpratap.com
 
-"""What a recall's ``tags`` filter did, in words (4.1.22 G05)."""
+"""What a recall's ``tags`` filter did, in words (4.1.22)."""
 
 from __future__ import annotations
 

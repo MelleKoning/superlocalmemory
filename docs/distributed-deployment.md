@@ -478,7 +478,7 @@ have the `mesh_*` MCP tools and the dashboard **Mesh Peers** tab.
 | `SLM_MIN_AVAILABLE_MEMORY_GB` | Minimum free system RAM before SLM defers heavy operations | `1.0` |
 | `SLM_TRIGRAM_BOOTSTRAP_RAM_MB` | Max RAM for trigram index bootstrap | `512` |
 
-**GB5 lite bot-host profile** (a shared, RAM-constrained box — e.g. the Cursor/Grok Bot
+**Lite bot-host profile** (a shared, RAM-constrained box — e.g. the Cursor/Grok Bot
 plugin's `mcp.cursor.json`, which sets these by default): `SLM_RERANKER_ENABLED=false`,
 `SLM_RERANKER_IDLE_TIMEOUT=120`, `SLM_MAX_EMBEDDING_WORKERS=1`. Measured on macOS (daemon +
 workers, warm, after one remember and one recall on a fresh store): default profile (reranker

@@ -61,7 +61,7 @@ const NEW_SKILLS = [
   'slm-remember',
   'slm-session',
   'slm-status',
-  // GB7: cursorPlan() requires every CURSOR_SKILLS name to exist in the
+  // cursorPlan() requires every CURSOR_SKILLS name to exist in the
   // rendered skills plan (fails loudly otherwise, like the missing-logo
   // check) — these three are the curated-set members not already above.
   'slm-bot-memory',
@@ -269,7 +269,7 @@ describe('buildPlan', () => {
     const plan = buildPlan(tmp, manifest);
 
     // One SKILL.md per fixture skill, in plugin/skills/ specifically — NOT
-    // plugin/cursor-skills/, the GB7 curated subset, which also ends in
+    // plugin/cursor-skills/, the curated subset, which also ends in
     // "SKILL.md" and would otherwise double-count here.
     const skillsDir = `plugin${path.sep}skills${path.sep}`;
     const skillFiles = [...plan.keys()].filter(
@@ -309,7 +309,7 @@ describe('buildPlan', () => {
     assert.equal(banners.length, 1, 'exactly 1 _GENERATED.md banner in plugin root');
   });
 
-  test('GB4: requirements-cpu-torch.txt propagates into plugin/ when present in plugin-src/', async () => {
+  test('requirements-cpu-torch.txt propagates into plugin/ when present in plugin-src/', async () => {
     const { buildPlan } = await getModule();
     const tmp = makeTmp();
     const manifest = setupFixture(tmp);
@@ -321,7 +321,7 @@ describe('buildPlan', () => {
     assert.equal(plan.get(pinFiles[0]), 'torch==2.13.0\n');
   });
 
-  test('GB4: build does not fail when requirements-cpu-torch.txt is absent (optional rootFile)', async () => {
+  test('build does not fail when requirements-cpu-torch.txt is absent (optional rootFile)', async () => {
     const { buildPlan } = await getModule();
     const tmp = makeTmp();
     const manifest = setupFixture(tmp); // no requirements-cpu-torch.txt written
