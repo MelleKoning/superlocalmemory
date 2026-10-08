@@ -10,18 +10,17 @@ python -m pip install --upgrade superlocalmemory==4.1.23
 slm doctor
 ```
 
-Then download the reviewed, immutable plugin pack from the `v4.1.23` GitHub
-release. Hermes packs pin each monorepo plugin with its repository, subdirectory,
-and exact 40-character commit SHA; the pack cannot grant capabilities or MCP
-access on your behalf:
+Then install the plugin from this repository:
 
 ```bash
-curl -LO https://github.com/qualixar/superlocalmemory/releases/download/v4.1.23/qualixar-agent-reliability-hermes-pack.yaml
-hermes plugins pack show qualixar-agent-reliability-hermes-pack.yaml
-hermes plugins pack install qualixar-agent-reliability-hermes-pack.yaml
+hermes plugins install 'https://github.com/qualixar/superlocalmemory.git#hermes-plugin'
 ```
 
-The plugin registers 14 namespaced skills, four on-demand Hermes child-agent
+To pin an exact release, add `--ref` with that release's 40-character commit.
+Hermes asks before it enables the plugin (`--no-enable` installs it disabled);
+the plugin cannot grant itself capabilities or MCP access.
+
+The plugin registers 15 namespaced skills, four on-demand Hermes child-agent
 roles, `/slm <command>`, and `/slm-<command>` aliases for the public SLM CLI.
 It calls only the configured `superlocalmemory` MCP server. Grant that server
 to this plugin when Hermes asks; no wildcard MCP grant is needed.
@@ -32,9 +31,9 @@ only by setting `plugins.entries.superlocalmemory.settings.capture_turns: true`
 in your Hermes configuration (Hermes reads plugin settings from the `settings`
 block of the plugin's entry).
 
-The pack installs the two additive native plugins independently. The bridge
-remains inactive unless both products are installed and their individual MCP
-grants are approved.
+If you also install the Bounded Loops Hermes plugin, the two stay independent. The
+bridge between them remains inactive unless both products are installed and their
+individual MCP grants are approved.
 
 `bounded-loops.dev/slm-bridge/v1` remains observation-only. Bridge v2 learns
 only validated execution-reliability signals from eligible terminal receipts;

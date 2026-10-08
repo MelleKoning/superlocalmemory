@@ -4,15 +4,19 @@ Empowers GitHub Copilot (VS Code, Visual Studio, JetBrains, Eclipse, CLI) with S
 
 ## Install (non-destructive)
 
+From your project root:
+
 ```
-slm connect copilot
+slm connect vscode-copilot --here
 ```
 
-Merges into your existing project without overwriting:
+This merges, without overwriting what is there:
 - `.vscode/mcp.json` — the SLM MCP server (GA on every Copilot IDE; the reliable baseline).
 - `.github/copilot-instructions.md` — SLM agent rules (merged inside `<!-- SLM-START -->`/`<!-- SLM-END -->`).
+
+Then copy the add-ons from this folder's `.github/` into your project's `.github/` (the npm package carries this folder at `$(npm root -g)/superlocalmemory/copilot-plugin/`); keep any files of your own:
 - `.github/prompts/*.prompt.md` — 15 slash-command skills: slm-bot-memory · slm-cache · slm-compress · slm-getting-started-bot · slm-governance · slm-graph · slm-loop · slm-mesh · slm-profile · slm-recall · slm-remember · slm-scope · slm-session · slm-status · slm-web-access.
-- `.github/agents/*.agent.md` — memory / optimize / governance advisors.
+- `.github/agents/*.agent.md` — memory, optimize and governance advisors and the loop runner.
 - `.github/hooks/slm-hooks.json` — session lifecycle (stable on Copilot CLI + cloud agent; Preview in VS Code).
 
 ## Surface support

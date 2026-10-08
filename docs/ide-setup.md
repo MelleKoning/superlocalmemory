@@ -4,6 +4,9 @@
 
 Connect SuperLocalMemory to your AI coding tool. Once connected, memories are captured and recalled automatically.
 
+For the full plugins (skills, sub-agents, hooks) on Claude Code, Codex, VS Code /
+Copilot, Grok Bot, Hermes and Antigravity, see [Editor and agent plugins](plugins.md).
+
 ---
 
 ## Transport Options (v3.6.7+)

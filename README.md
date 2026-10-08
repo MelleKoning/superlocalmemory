@@ -114,7 +114,7 @@ SLM is part of Qualixar's AI Reliability Engineering work: agent memory that is 
 
 | Surface | What you get | Docs |
 |---|---|---|
-| Editor plugins | Claude Code, Codex, VS Code / Copilot, Antigravity, Hermes. Each ships 15 skills, 4 sub-agents and session hooks | [IDE setup](docs/ide-setup.md), [Hermes](docs/hermes.md) |
+| Editor plugins | Claude Code, Codex, VS Code / Copilot, Antigravity, Hermes. Each ships 15 skills, 4 sub-agents and session hooks; the npm package carries every plugin folder | [Plugins](docs/plugins.md), [IDE setup](docs/ide-setup.md), [Hermes](docs/hermes.md) |
 | Any other agent | The universal agent rules: one file that teaches any agent when to recall, what to save and how to keep memory clean. Paste it into `AGENTS.md`, `CLAUDE.md`, `.cursorrules` or the agent's system prompt | [Universal agent rules](plugin-src/rules/AGENTS.md) |
 | `slm connect <ide>` | Writes the MCP config for 12 IDEs, including Cursor, Windsurf, Zed, JetBrains, Gemini CLI and Claude Desktop | [IDE setup](docs/ide-setup.md) |
 | MCP | stdio (`slm mcp`) or HTTP at `http://127.0.0.1:8765/mcp/`; profiles from 8 to 103 tools | [MCP tools](docs/mcp-tools.md) |
@@ -357,7 +357,7 @@ Cite the governed-memory paper with [CITATION.cff](CITATION.cff) or GitHub's "Ci
 
 ## Documentation
 
-**Start:** [Getting started](docs/getting-started.md) · [IDE setup](docs/ide-setup.md) · [Linux install](docs/install-linux.md) · [Quick proof](docs/QUICK_PROOF.md) · [Migrating an old store](docs/migration-from-v2.md)
+**Start:** [Getting started](docs/getting-started.md) · [IDE setup](docs/ide-setup.md) · [Plugins](docs/plugins.md) · [Linux install](docs/install-linux.md) · [Quick proof](docs/QUICK_PROOF.md) · [Migrating an old store](docs/migration-from-v2.md)
 
 **Use:** [Recall](docs/recall.md) · [Memory kinds](docs/memory-kinds.md) · [Answer check](docs/answer-check.md) · [Auto-memory](docs/auto-memory.md) · [Universal agent rules](plugin-src/rules/AGENTS.md) · [Web agent instructions](docs/web-agents/README.md) · [Shared memory](docs/shared-memory.md) · [Optimize](docs/optimize-overview.md)
 

@@ -162,12 +162,16 @@ for (const fname of readdirSync(SRC_SCRIPTS).sort()) {
     'Empowers GitHub Copilot (VS Code, Visual Studio, JetBrains, Eclipse, CLI) with SuperLocalMemory ' +
     'as its long-term brain — at parity with the Claude and Codex plugins.\n\n' +
     '## Install (non-destructive)\n\n' +
-    '```\nslm connect copilot\n```\n\n' +
-    'Merges into your existing project without overwriting:\n' +
+    'From your project root:\n\n' +
+    '```\nslm connect vscode-copilot --here\n```\n\n' +
+    'This merges, without overwriting what is there:\n' +
     '- `.vscode/mcp.json` — the SLM MCP server (GA on every Copilot IDE; the reliable baseline).\n' +
-    '- `.github/copilot-instructions.md` — SLM agent rules (merged inside `<!-- SLM-START -->`/`<!-- SLM-END -->`).\n' +
+    '- `.github/copilot-instructions.md` — SLM agent rules (merged inside `<!-- SLM-START -->`/`<!-- SLM-END -->`).\n\n' +
+    'Then copy the add-ons from this folder\'s `.github/` into your project\'s `.github/` ' +
+    '(the npm package carries this folder at `$(npm root -g)/superlocalmemory/copilot-plugin/`); ' +
+    'keep any files of your own:\n' +
     '- `.github/prompts/*.prompt.md` — ' + manifest.skills.length + ' slash-command skills: ' + skillNames + '.\n' +
-    '- `.github/agents/*.agent.md` — memory / optimize / governance advisors.\n' +
+    '- `.github/agents/*.agent.md` — memory, optimize and governance advisors and the loop runner.\n' +
     '- `.github/hooks/slm-hooks.json` — session lifecycle (stable on Copilot CLI + cloud agent; Preview in VS Code).\n\n' +
     '## Surface support\n\n' +
     'MCP works on every Copilot IDE at GA. Prompts, agents, and hooks are additive and degrade gracefully ' +
