@@ -43,6 +43,7 @@ from typing import Protocol, runtime_checkable
 
 from superlocalmemory.core import recall_gate
 from superlocalmemory.encoding.memory_kind_recipe import KindAnswer, KindRecipe
+from superlocalmemory.retrieval import answer_question_forms as question_forms
 from superlocalmemory.retrieval import laya_kinds
 from superlocalmemory.retrieval.answer_check_status import (
     DETAIL_REUSED,
@@ -72,6 +73,8 @@ from superlocalmemory.retrieval.laya_transport import (
     failure_kind,
     write_request,
 )
+from superlocalmemory.retrieval.laya_transport import close_pipes as _close_pipes
+from superlocalmemory.retrieval.laya_transport import stop_process as _stop_process
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +134,9 @@ class SufficiencyVerdict:
     calibration_id: str
     calibration_status: str = CALIBRATION_STATUS
     backend: str = "laya"
+    #: Memories an explicit rule recognised as answering (answer_question_forms):
+    #: sufficient whatever the model's own numbers, which are kept as they were.
+    rule_support: tuple[int, ...] = ()
 
     @property
     def answer_confidence(self) -> float:
@@ -138,7 +144,7 @@ class SufficiencyVerdict:
 
     @property
     def insufficient(self) -> bool:
-        return self.answer_confidence < self.threshold
+        return self.answer_confidence < self.threshold and not self.rule_support
 
 
 @runtime_checkable
@@ -243,6 +249,7 @@ def _take_slot():
     """
     try:
         import fcntl
+
         from superlocalmemory.infra.data_root import state_path
         path = state_path(".laya-judge.lock")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -526,24 +533,39 @@ class LayaSufficiencyJudge:
             return JudgeOutcome(None, STATUS_UNAVAILABLE)
         if not self._drain_stale(proc, deadline):
             return JudgeOutcome(None, STATUS_BUSY if self._ready else STATUS_UNAVAILABLE)
-        if seconds_left(deadline) < self._min_ask_s:
-            return JudgeOutcome(None, STATUS_BUSY)
+        answers: list[tuple[float, ...]] = []
+        # The question as typed, then any rewording of its shape: all or nothing.
+        for asked in (query, *question_forms.reworded(query)):
+            if seconds_left(deadline) < self._min_ask_s:
+                return JudgeOutcome(None, STATUS_BUSY)
+            got = self._probabilities(proc, asked, rendered, deadline)
+            if got is None:
+                return JudgeOutcome(None, STATUS_UNAVAILABLE)
+            answers.append(got)
+        probabilities = answers[0]
+        for more in answers[1:]:
+            probabilities = question_forms.merged(probabilities, more)
+        self._failures = 0
+        forms_used = question_forms.applies(query)
+        return JudgeOutcome(SufficiencyVerdict(
+            probabilities, self.threshold,
+            self.calibration_id + ("+" + question_forms.FORMS_ID if forms_used else ""),
+            self.calibration_status, self.backend,
+            question_forms.rule_support(query, rendered)), STATUS_JUDGED)
+
+    def _probabilities(self, proc: subprocess.Popen, query: str, rendered: list[str],
+                       deadline: float) -> tuple[float, ...] | None:
         resp = self._exchange(proc, {"cmd": "judge", "query": query, "documents": rendered,
                                      "question": self._recipe.question}, deadline)
         if resp is None:
             logger.info("Laya sufficiency judge did not answer in time; "
                         "this recall is reported unjudged")
-            return JudgeOutcome(None, STATUS_UNAVAILABLE)
-        if not resp.get("ok"):
-            return JudgeOutcome(None, STATUS_UNAVAILABLE)
-        probabilities = _valid_probabilities(resp.get("probabilities"), len(rendered))
-        if probabilities is None:
+            return None
+        probabilities = (_valid_probabilities(resp.get("probabilities"), len(rendered))
+                         if resp.get("ok") else None)
+        if probabilities is None and resp.get("ok"):
             logger.warning("Laya sufficiency judge returned a malformed answer; ignoring it")
-            return JudgeOutcome(None, STATUS_UNAVAILABLE)
-        self._failures = 0
-        return JudgeOutcome(SufficiencyVerdict(probabilities, self.threshold,
-                                               self.calibration_id, self.calibration_status,
-                                               self.backend), STATUS_JUDGED)
+        return probabilities
 
     # -- memory typing (background only) ------------------------------------
 
@@ -767,34 +789,3 @@ class LayaSufficiencyJudge:
 
 class _SpawnFailed(RuntimeError):
     """The configured interpreter could not be started at all."""
-
-
-def _stop_process(proc: subprocess.Popen | None, *, graceful: bool,
-                  wait_s: float = 1.0, close: bool = True) -> None:
-    """Stop ``proc`` and, unless told not to, close both of its pipes. Never raises."""
-    if proc is None:
-        return
-    try:
-        if graceful and proc.stdin:
-            write_request(proc.stdin, {"cmd": "quit"})
-            proc.wait(timeout=2)
-        else:
-            proc.kill()
-            proc.wait(timeout=wait_s)
-    except Exception:
-        try:
-            proc.kill()
-            proc.wait(timeout=wait_s)
-        except Exception:
-            pass
-    if close:
-        _close_pipes(proc)
-
-
-def _close_pipes(proc: subprocess.Popen) -> None:
-    for stream in (proc.stdin, proc.stdout):
-        try:
-            if stream:
-                stream.close()
-        except Exception:
-            pass
