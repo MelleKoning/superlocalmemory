@@ -1,13 +1,27 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/branding/slm-wordmark-dark.svg">
-    <img src="assets/branding/slm-wordmark-light.svg" alt="SuperLocalMemory: local-first memory for AI agents" width="360">
-  </picture>
-</p>
+<div align="center">
 
-# SuperLocalMemory: governed, local-first memory for AI agents
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/branding/slm-wordmark-dark.svg">
+  <img src="assets/branding/slm-wordmark-light.svg" alt="SuperLocalMemory" width="380">
+</picture>
 
-Claude Code, Codex, Cursor and other MCP clients forget what they learned when a session ends. SuperLocalMemory (SLM) gives them one long-term memory that lives on your machine: it learns from use, enforces who may read and erase what, coordinates many agents, and says "I don't have that" instead of guessing.
+### Long-term memory for your AI agents. On your computer, governed, and honest when it doesn't know.
+
+Claude Code, Codex, Cursor, ChatGPT, Grok Bot and other MCP clients share one memory that lives on your machine. It learns from use, controls who may read and erase what, and says "I don't have that" instead of guessing.
+
+[![PyPI](https://img.shields.io/pypi/v/superlocalmemory)](https://pypi.org/project/superlocalmemory/)
+[![npm](https://img.shields.io/npm/v/superlocalmemory)](https://www.npmjs.com/package/superlocalmemory)
+[![PyPI downloads](https://img.shields.io/pepy/dt/superlocalmemory?label=PyPI%20downloads)](https://pepy.tech/project/superlocalmemory)
+[![npm downloads](https://img.shields.io/npm/dt/superlocalmemory?label=npm%20downloads)](https://www.npmjs.com/package/superlocalmemory)
+[![GitHub stars](https://img.shields.io/github/stars/qualixar/superlocalmemory?style=flat&logo=github)](https://github.com/qualixar/superlocalmemory/stargazers)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+[![Research: 4 arXiv papers](https://img.shields.io/badge/arXiv-4_papers-b31b1b)](#research)
+
+**[Install](https://www.superlocalmemory.com/install)** · **[Product walkthrough](https://www.superlocalmemory.com/demo)** · **[Demo video](https://www.youtube.com/watch?v=PMWW_ypsL60)** · **[CLI proof](docs/QUICK_PROOF.md)** · **[Docs](#documentation)** · **[Release notes](CHANGELOG.md)**
+
+<img src="docs/screenshots/dashboard/answer-check-dont-have-that.png" alt="Answer check in the dashboard: for &quot;How much did the Kestrel pilot cost?&quot; no memory answers it, so SLM says &quot;I don't have that&quot; instead of guessing" width="820">
+
+</div>
 
 **Recall can be checked before your agent uses it.** With the answer check on, a judge decides whether the memories found actually answer the question: **Laya** runs fully on your Mac, and **Jev** runs online on Windows, Linux and macOS. When they don't answer it, recall marks the results `abstained`, so your agent can say "I don't have that" instead of handing over a confident wrong answer: a hallucination guard for retrieval ([answer check](#answer-check-laya-and-jev)).
 
@@ -15,20 +29,6 @@ Claude Code, Codex, Cursor and other MCP clients forget what they learned when a
 
 In Mode A, core remember and recall make no model-provider call unless you turn on the online answer check (Jev). Anything that sends data out is a choice you make, and the docs say exactly what goes.
 
-[![PyPI](https://img.shields.io/pypi/v/superlocalmemory)](https://pypi.org/project/superlocalmemory/)
-[![npm](https://img.shields.io/npm/v/superlocalmemory)](https://www.npmjs.com/package/superlocalmemory)
-[![PyPI downloads](https://img.shields.io/pepy/dt/superlocalmemory?label=PyPI%20downloads)](https://pepy.tech/project/superlocalmemory)
-[![npm downloads](https://img.shields.io/npm/dt/superlocalmemory?label=npm%20downloads)](https://www.npmjs.com/package/superlocalmemory)
-[![GitHub stars](https://img.shields.io/github/stars/qualixar/superlocalmemory?style=flat&logo=github)](https://github.com/qualixar/superlocalmemory/stargazers)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](pyproject.toml)
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
-[![Answer check: Jev · Laya](https://img.shields.io/badge/answer_check-Jev_%C2%B7_Laya-f97316)](#answer-check-laya-and-jev)
-[![arXiv V4](https://img.shields.io/badge/arXiv-2608.08253-b31b1b)](https://arxiv.org/abs/2608.08253)
-[![arXiv V3.3](https://img.shields.io/badge/arXiv-2604.04514-b31b1b)](https://arxiv.org/abs/2604.04514)
-[![arXiv V3](https://img.shields.io/badge/arXiv-2603.14588-b31b1b)](https://arxiv.org/abs/2603.14588)
-[![arXiv V2](https://img.shields.io/badge/arXiv-2603.02240-b31b1b)](https://arxiv.org/abs/2603.02240)
-
-**[Install](https://www.superlocalmemory.com/install)** · **[Product walkthrough](https://www.superlocalmemory.com/demo)** · **[Demo video](https://www.youtube.com/watch?v=PMWW_ypsL60)** · **[CLI proof](docs/QUICK_PROOF.md)** · **[Release notes](CHANGELOG.md)**
 
 ```bash
 npm install -g superlocalmemory   # primary route (Node 18+, Python 3.12+); or: pipx install superlocalmemory
@@ -74,17 +74,15 @@ Five minutes: install, setup, recall, cache and compression.
 
 ### The dashboard
 
-Captured from a real install in Mode A, with Laya running on the Mac and a store of fictional project memories. Nothing is mocked: each verdict, score and timing is what SLM returned.
+The picture at the top and these are captured from a real install in Mode A, with Laya running on the Mac and a store of fictional project memories. Nothing is mocked: each verdict, score and timing is what SLM returned.
 
-| Memories that answer the question | Memories that do not: "I don't have that" |
+| Memories that answer the question | Recall Lab: why each memory was chosen |
 |---|---|
-| ![Answer Check: Laya judges that the memories answer "When is Project Kestrel going live?" with confidence 0.85, in 1.4 s of the 3 s limit](docs/screenshots/dashboard/answer-check-answered.png) | ![Answer Check: for "How much did the Kestrel pilot cost?" Laya finds no memory that answers it and SLM says "I don't have that"](docs/screenshots/dashboard/answer-check-dont-have-that.png) |
+| ![Answer Check: Laya judges that the memories answer "When is Project Kestrel going live?" with confidence 0.85, in 1.4 s of the 3 s limit](docs/screenshots/dashboard/answer-check-answered.png) | ![Recall Lab: per-channel scores for "what did we decide about the database"](docs/screenshots/dashboard/recall-lab.png) |
 
-| Recall Lab: why each memory was chosen | Every memory with its kind and project |
+| Every memory with its kind and project | Saved views |
 |---|---|
-| ![Recall Lab: per-channel scores for "what did we decide about the database"](docs/screenshots/dashboard/recall-lab.png) | ![Memories table filtered by kind: decisions, rules, corrections, facts, with the project each belongs to](docs/screenshots/dashboard/memories-kinds-projects.png) |
-
-![Saved views: a saved question that runs the same search your agent uses and shows the memory each result came from](docs/screenshots/dashboard/saved-views.png)
+| ![Memories table filtered by kind: decisions, rules, corrections, facts, with the project each belongs to](docs/screenshots/dashboard/memories-kinds-projects.png) | ![Saved views: a saved question that runs the same search your agent uses and shows the memory each result came from](docs/screenshots/dashboard/saved-views.png) |
 
 ![Connected apps: Web access is on, linked with GitHub for the default profile, renews automatically, with a free daily allowance and a button to add an app or turn access off](docs/screenshots/dashboard/connected-apps.png)
 
