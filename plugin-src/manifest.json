@@ -66,6 +66,10 @@
     {
       "name": "slm-status",
       "hasReadme": false
+    },
+    {
+      "name": "slm-web-access",
+      "hasReadme": false
     }
   ],
   "targets": {

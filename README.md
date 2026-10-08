@@ -112,13 +112,14 @@ SLM is part of Qualixar's AI Reliability Engineering work: agent memory that is 
 
 | Surface | What you get | Docs |
 |---|---|---|
-| Editor plugins | Claude Code, Codex, VS Code / Copilot, Antigravity, Hermes. Each ships 14 skills, 4 sub-agents and session hooks | [IDE setup](docs/ide-setup.md), [Hermes](docs/hermes.md) |
+| Editor plugins | Claude Code, Codex, VS Code / Copilot, Antigravity, Hermes. Each ships 15 skills, 4 sub-agents and session hooks | [IDE setup](docs/ide-setup.md), [Hermes](docs/hermes.md) |
+| Any other agent | The universal agent rules: one file that teaches any agent when to recall, what to save and how to keep memory clean. Paste it into `AGENTS.md`, `CLAUDE.md`, `.cursorrules` or the agent's system prompt | [Universal agent rules](plugin-src/rules/AGENTS.md) |
 | `slm connect <ide>` | Writes the MCP config for 12 IDEs, including Cursor, Windsurf, Zed, JetBrains, Gemini CLI and Claude Desktop | [IDE setup](docs/ide-setup.md) |
 | MCP | stdio (`slm mcp`) or HTTP at `http://127.0.0.1:8765/mcp/`; profiles from 8 to 103 tools | [MCP tools](docs/mcp-tools.md) |
 | Framework adapters | LangGraph, LangChain, LlamaIndex, CrewAI, AutoGen, Semantic Kernel, Microsoft Agent Framework, Google ADK, OpenAI Agents | [Framework adapters](docs/framework-adapters.md) |
 | Python SDK and HTTP API | `MemoryEngine` in your code; the local REST API | [API reference](docs/api-reference.md) |
 | Auto-capture hooks | `slm hooks install` for Claude Code, `--agent codex` for Codex | [Auto-memory](docs/auto-memory.md) |
-| Web apps (ChatGPT, Claude on the web, Muse, Composio) | Optional Web access, turned on from the dashboard: OAuth sign-in, read or save per app, and a Connected apps page to remove any app at once | [Web access](#web-apps-and-bots-web-access) |
+| Web apps (ChatGPT, Claude on the web, Muse, Composio) | Optional Web access, turned on from the dashboard: OAuth sign-in, read or save per app, and a Connected apps page to remove any app at once. Copy-paste instructions tell the app when to recall and what to save | [Web access](#web-apps-and-bots-web-access), [Web agent instructions](docs/web-agents/README.md) |
 | Cursor-format plugin (Grok Bot, Cursor) | A marketplace-distributed plugin — different from `slm connect cursor` above — that runs on a shared, memory-tight computer with no hooks or dashboard | See below |
 
 Claude Code memory in two commands: `claude plugin marketplace add qualixar/superlocalmemory`, then `claude plugin install superlocalmemory@qualixar`.
@@ -177,7 +178,9 @@ Your laptop keeps an outbound connection to SLM's connection gateway. An app's t
 - Each connection has a free daily allowance of tool calls.
 - SLM itself stays free and works fully without Web access.
 
-[Web access documentation](docs/remote-access/README.md) · [Architecture and boundaries](docs/remote-access/architecture.md) · [Dashboard onboarding](docs/remote-access/onboarding.md)
+Connecting an app gives it the tools, not the judgment to use them well. Paste the [web agent instructions](docs/web-agents/instructions.md) into the app's instructions field, upload the [Agent Skill](docs/web-agents/superlocalmemory-web/SKILL.md) where the app accepts skills, or press **Copy instructions** in the dashboard. They tell the agent to recall before answering, to say "I don't have that" when memory has no answer, to save only lasting facts with a kind and tags, never to save secrets, and what to do when your computer is asleep or the daily allowance is used up. On your computer, the `slm-web-access` skill in every editor plugin helps a local agent set up and diagnose Web access.
+
+[Web access documentation](docs/remote-access/README.md) · [Web agent instructions](docs/web-agents/README.md) · [Architecture and boundaries](docs/remote-access/architecture.md) · [Dashboard onboarding](docs/remote-access/onboarding.md)
 
 ## What developers use it for
 
@@ -354,7 +357,7 @@ Cite the V4 paper with [CITATION.cff](CITATION.cff) or GitHub's "Cite this repos
 
 **Start:** [Getting started](docs/getting-started.md) · [IDE setup](docs/ide-setup.md) · [Linux install](docs/install-linux.md) · [Quick proof](docs/QUICK_PROOF.md) · [Migrating from V2](docs/migration-from-v2.md)
 
-**Use:** [Recall](docs/recall.md) · [Memory kinds](docs/memory-kinds.md) · [Answer check](docs/answer-check.md) · [Auto-memory](docs/auto-memory.md) · [Shared memory](docs/shared-memory.md) · [Optimize](docs/optimize-overview.md)
+**Use:** [Recall](docs/recall.md) · [Memory kinds](docs/memory-kinds.md) · [Answer check](docs/answer-check.md) · [Auto-memory](docs/auto-memory.md) · [Universal agent rules](plugin-src/rules/AGENTS.md) · [Web agent instructions](docs/web-agents/README.md) · [Shared memory](docs/shared-memory.md) · [Optimize](docs/optimize-overview.md)
 
 **Reference:** [CLI](docs/cli-reference.md) · [MCP tools](docs/mcp-tools.md) · [Configuration](docs/configuration.md) · [Errors](docs/errors.md) · [Troubleshooting](docs/troubleshooting.md) · [Distributed deployment](docs/distributed-deployment.md) · [Privacy diagnostics](docs/privacy-diagnostics.md)
 
