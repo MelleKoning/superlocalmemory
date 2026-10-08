@@ -172,11 +172,10 @@ def build_immediate_admission_handler(
         if not content_passes_admission(request.content):
             return []
 
-        import re
         from datetime import UTC, datetime
 
         from superlocalmemory.core.ingest_gate import apply_ingest_gate
-        from superlocalmemory.storage.models import AtomicFact, FactType, MemoryRecord
+        from superlocalmemory.storage.models import MemoryRecord
 
         # A memory is stored exactly as written, credentials included: keeping
         # them is part of what SLM is for. They are stripped only where text
@@ -209,27 +208,12 @@ def build_immediate_admission_handler(
             if request.session_date:
                 fact.observation_date = request.session_date
         else:
-            entities = sorted(
-                {match.group(1) for match in re.finditer(
-                    r"\b([A-Z][a-z]+(?:\s[A-Z][a-z]+){0,3})\b", fact_content,
-                )}
-                | {match.group(1) for match in re.finditer(
-                    r"\b([A-Z]{2,})\b", fact_content,
-                )}
-            )
-            fact = AtomicFact(
-                fact_id=uuid.uuid4().hex[:16],
-                profile_id=request.profile_id,
-                scope=request.scope,
-                shared_with=list(request.shared_with) or None,
-                content=fact_content,
-                fact_type=FactType.EPISODIC,
-                entities=entities,
-                observation_date=observation_date,
-                session_id=request.session_id,
-                confidence=0.7,
-                importance=0.5,
-                created_at=now,
+            from superlocalmemory.core.queryable_fact import queryable_fact
+
+            fact = queryable_fact(
+                fact_content, profile_id=request.profile_id, scope=request.scope,
+                shared_with=request.shared_with, session_id=request.session_id,
+                observation_date=observation_date, created_at=now,
             )
 
         from superlocalmemory.core.kind_assignment import assign_kinds, store_fact_keeping_kind

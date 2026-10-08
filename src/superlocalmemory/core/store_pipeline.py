@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from superlocalmemory.core.hooks import HookRegistry
     from superlocalmemory.storage.database import DatabaseManager
 
+from superlocalmemory.core.receipt_guard import keeps_own_fact
 from superlocalmemory.storage.erasure_fence import is_erasing
 from superlocalmemory.storage.models import (
     AtomicFact,
@@ -910,16 +911,15 @@ def run_store(
                 consolidation_complete = False
                 action = None
 
+            if action is not None and keeps_own_fact(action, is_queryable_promotion, created_ids):
+                action = None  # another memory's duplicate: keep this memory's own fact
             if action is not None:
                 if action.action_type.value == "noop":
-                    # A canonical ingestion projection already exists before
-                    # enrichment. Reconcile it against pre-existing facts and
-                    # remove it when consolidation proves it is a duplicate.
+                    # Same-save duplicate: fold this save's projection into its sibling.
                     target_id = action.existing_fact_id
                     if is_queryable_promotion and target_id:
                         db.delete_fact(fact.fact_id)
-                        # The original promoted fact was deleted; its deferred
-                        # canonical embedding write must not happen.
+                        # Deleted: its deferred canonical embedding write must not happen.
                         _deferred_canonical_embedding = None
                     existing_fact = db.get_fact(target_id) if target_id else None
                     if existing_fact is None:

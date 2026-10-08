@@ -14,6 +14,7 @@ from typing import Any
 
 from superlocalmemory.storage import integrity_census as census
 from superlocalmemory.storage import integrity_obligations as obligations
+from superlocalmemory.storage import own_fact_repair
 
 
 def _has(conn: sqlite3.Connection, table: str) -> bool:
@@ -126,6 +127,7 @@ def plan(conn: sqlite3.Connection, *, foreign_keys: bool = True) -> dict[str, An
         "erased_text": erased_text_leftovers(conn),
         "keyword_index": keyword_index_state(conn),
         "failed_obligations": obligations.census(conn),
+        "memories_without_own_fact": own_fact_repair.census(conn),
     }
 
 

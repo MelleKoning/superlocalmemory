@@ -173,9 +173,16 @@ def _ranked(response) -> list[RankedResult]:
 
 
 def run_retrieval(args: argparse.Namespace) -> dict:
+    from superlocalmemory.evaluation.gold_presence import check_presence
+
     questions = load_gold(Path(args.gold))
-    _use_data_dir(_copy_data_dir(args.data_dir))
+    data_dir = _copy_data_dir(args.data_dir)
+    _use_data_dir(data_dir)
     engine = _build_engine(args.warm_timeout, not args.allow_no_reranker)
+    # Is each labelled answer in this store at all? Checked before any recall,
+    # read only: a missing answer is "answer not stored", never a miss.
+    presence = check_presence(data_dir / "memory.db", questions,
+                              profile_id=str(getattr(engine, "profile_id", "default")))
     from superlocalmemory.core.recall_pipeline import resolve_hot_path_fast
 
     fast = resolve_hot_path_fast(None, engine._config)
@@ -202,19 +209,23 @@ def run_retrieval(args: argparse.Namespace) -> dict:
             ranks[q.qid] = seen_ranks[0]
             if len(set(seen_ranks)) > 1:
                 unstable.append(q.qid)
-            rows.append({
+            row = {
                 "qid": q.qid, "category": q.category, "answerable": q.answerable,
                 "rank": seen_ranks[0], "ranks_over_repeats": seen_ranks,
                 "query_type": response.query_type,
                 "no_confident_match": bool(getattr(response, "no_confident_match", False)),
                 "top": [{"memory_id": r.memory_id, "fact_id": r.fact_id}
-                        for r in results[:5]],
-            })
+                        for r in results[:args.limit]],
+            }
+            if q.qid in presence:
+                row["answer_presence"] = presence[q.qid].as_row()
+            rows.append(row)
     finally:
         engine.close()
     if args.out:
         _write_rows(Path(args.out), rows)
     report = retrieval_report(ranks, questions, latencies)
+    report.update(_presence_blocks(presence, ranks, questions))
     report["repeats"] = args.repeats
     report["rank_changed_between_repeats"] = unstable
     report["incomplete_recalls"] = incomplete_recalls
@@ -225,6 +236,18 @@ def run_retrieval(args: argparse.Namespace) -> dict:
         "no_confident_match": sum(1 for r in unanswerable if r["no_confident_match"]),
     }
     return report
+
+
+def _presence_blocks(presence: dict, ranks: dict, questions) -> dict:
+    """The presence summary, and hit@k over the questions whose answer is stored."""
+    from superlocalmemory.evaluation.gold_presence import NOT_STORED, presence_summary
+
+    stored = [q for q in questions
+              if q.answerable and presence[q.qid].status != NOT_STORED]
+    blocks = {"answer_presence": presence_summary(presence, ranks)}
+    if stored:
+        blocks["stored_only"] = retrieval_report(ranks, stored)["overall"]
+    return blocks
 
 
 # -- judges ----------------------------------------------------------------------
