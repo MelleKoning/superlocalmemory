@@ -30,8 +30,10 @@ connections, one per thread per store file (at most ``MAX_PATHS`` files):
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
+import time
 import weakref
 from collections import OrderedDict
 from collections.abc import Iterator
@@ -39,7 +41,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from superlocalmemory.storage.read_connection_pool import ReadConnectionPool
+from superlocalmemory.storage import read_connection_pool as _rcp
+from superlocalmemory.storage.read_connection_pool import ReadConnectionPool, finish_entry
 
 #: Store files with pooled snapshot connections at once (tests open thousands).
 MAX_PATHS = 8
@@ -132,20 +135,23 @@ def snapshot(path: Path, timeout_ms: int, fresh) -> Iterator[Any]:
             yield conn
         return
     with entry.busy:
-        if entry.closed:
-            with fresh() as conn:
-                yield conn
-            return
-        tracked = _Tracked(entry.conn)
         try:
-            yield tracked
-        except BaseException:
-            pool.forget_current()  # state unknown: never reused
-            raise
-        try:
-            tracked._finish()
-        except sqlite3.Error:
-            pool.forget_current()
+            if entry.closed:
+                with fresh() as conn:
+                    yield conn
+                return
+            tracked = _Tracked(entry.conn)
+            try:
+                yield tracked
+            except BaseException:
+                pool.forget_current()  # state unknown: never reused
+                raise
+            try:
+                tracked._finish()
+            except sqlite3.Error:
+                pool.forget_current()
+        finally:
+            finish_entry(entry)  # closed while in use: its own thread closes it
 
 
 def close_path(path: Path | str) -> None:
@@ -157,11 +163,24 @@ def close_path(path: Path | str) -> None:
 
 
 def close_all() -> None:
+    """Close every pooled snapshot connection, waiting one bounded time in total."""
     with _pools_lock:
         pools = list(_pools.values())
         _pools.clear()
+    deadline = time.monotonic() + _rcp.CLOSE_WAIT_SECONDS
     for pool in pools:
-        pool.close_all()
+        pool.close_all(deadline)
+
+
+def _reset_after_fork() -> None:
+    """In a forked child: the pools reset themselves; the registry lock may be held."""
+    global _pools_lock
+    _pools_lock = threading.Lock()
+    _pools.clear()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_after_fork)
 
 
 def open_count(path: Path | str) -> int:
