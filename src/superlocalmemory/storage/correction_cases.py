@@ -26,6 +26,23 @@ _MAX_FIELD_LENGTH = 128
 #: stands on its own, so undoing the case restores the old fact without
 #: withdrawing the new one (see the successor checks in storage/database.py).
 CALLER_REPLACEMENT_REASON = "replaced_by_caller"
+#: Reason codes of the cases the SAVE PATH files when it only guesses that a new
+#: memory updates an older one (core/store_pipeline._record_correction_candidate):
+#: the temporal check, and every consolidation action ("consolidation_<action>").
+#: Their successor is the memory the caller saved, so an unreviewed, rejected or
+#: rolled-back guess never withholds it (Varun, 2026-10-08: both stay findable
+#: until a person reviews; approving retires the older one).
+TEMPORAL_CANDIDATE_REASON = "temporal_contradiction"
+CONSOLIDATION_CANDIDATE_PREFIX = "consolidation_"
+#: SQL over ``alias``: true when the case's successor is NOT a saved memory, i.e.
+#: its pending review may withhold it. Takes ``SAVED_SUCCESSOR_PARAMS``.
+SAVED_SUCCESSOR_SQL = (
+    "{alias}.reason_code NOT IN (?, ?) "
+    "AND substr({alias}.reason_code, 1, ?) != ?"
+)
+SAVED_SUCCESSOR_PARAMS = (CALLER_REPLACEMENT_REASON, TEMPORAL_CANDIDATE_REASON,
+                          len(CONSOLIDATION_CANDIDATE_PREFIX),
+                          CONSOLIDATION_CANDIDATE_PREFIX)
 
 
 class CorrectionCaseError(RuntimeError):

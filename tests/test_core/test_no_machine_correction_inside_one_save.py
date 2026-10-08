@@ -2,10 +2,11 @@
 # Licensed under AGPL-3.0-or-later - see LICENSE file
 """A save never files a machine correction between two of its own facts.
 
-A pending machine correction withholds its newer fact from recall until a
-person reviews it. On a 22k-fact store 37% of the machine cases paired two
-facts of the SAME save (one memory's sentences consolidated against each
-other), so a memory hid part of itself. A correction of an OLDER memory is
+On a 22k-fact store 37% of the machine cases paired two facts of the SAME save
+(one memory's sentences consolidated against each other), filing a review for a
+memory against itself (and, while a pending machine case still withheld its
+newer fact, hiding part of the memory; it no longer withholds anything, see
+test_a_machine_guess_never_hides_a_save.py). A correction of an OLDER memory is
 still proposed, including one the save's duplicate merged into.
 """
 
