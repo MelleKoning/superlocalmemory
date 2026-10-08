@@ -4,8 +4,11 @@ export interface RelayBinding {
   ownerId: string; connectionId: string; installationId: string; profileId: string;
   deviceDigest: string; deviceExpiresAt: number;
 }
+/** The laptop sends a heartbeat after 20 s without traffic. Silence longer than two
+ * missed heartbeats means it is asleep or its network dropped without closing. */
+export const CONNECTOR_SILENCE_MS = 45000;
 interface StoredState { binding: RelayBinding | null; generation: number; revoked: boolean; }
-interface Attachment { generation: number; connectionId: string; }
+interface Attachment { generation: number; connectionId: string; connectedAt?: number; }
 interface Pending { callerId: string; socket: WebSocket; generation: number; settle: (response: Response) => void; timer: ReturnType<typeof setTimeout>; }
 function failure(status: number, code: string): Response {
   return Response.json({ error: code }, { status, headers: { "Cache-Control": "no-store" } });
@@ -27,6 +30,9 @@ function decodeBody(text: string): Uint8Array<ArrayBuffer> {
 export class RelayDO extends DurableObject {
   private state: StoredState={binding:null,generation:0,revoked:false};
   private pending=new Map<string,Pending>();
+  private heard=new Map<WebSocket,number>();
+  /** Sockets accepted before connection times were recorded count from here. */
+  private readonly startedAt=Date.now();
   constructor(ctx: DurableObjectState,env: Cloudflare.Env) {
     super(ctx,env);
     this.ctx.blockConcurrencyWhile(async()=>{
@@ -93,7 +99,7 @@ export class RelayDO extends DurableObject {
       for(const old of this.ctx.getWebSockets("connector"))this.closeSocket(old,503,"connector_replaced");
       const pair=new WebSocketPair();const [client,server]=Object.values(pair);
       this.ctx.acceptWebSocket(server,["connector"]);
-      server.serializeAttachment({generation:next.generation,connectionId:binding.connectionId} satisfies Attachment);
+      server.serializeAttachment({generation:next.generation,connectionId:binding.connectionId,connectedAt:Date.now()} satisfies Attachment);
       server.send(JSON.stringify({v:1,kind:"ready",generation:next.generation}));
       return new Response(null,{status:101,webSocket:client});
     });
@@ -110,6 +116,7 @@ export class RelayDO extends DurableObject {
     const socket=this.currentSocket();
     if(!socket)return failure(503,"connector_offline");
     if(frame.generation!==this.state.generation)return failure(409,"stale_generation");
+    if(Date.now()-this.lastHeard(socket)>CONNECTOR_SILENCE_MS)return failure(503,"connector_asleep");
     if(this.pending.size>=8)return failure(429,"relay_busy");
     if([...this.pending.values()].some(p=>p.callerId===frame.id))return failure(409,"duplicate_request");
     // Fresh wire nonce even if a caller reuses its ID after timeout. A late reply
@@ -132,6 +139,7 @@ export class RelayDO extends DurableObject {
     if(this.state.revoked||!this.state.binding||this.state.binding.deviceExpiresAt<=Date.now()){this.closeSocket(socket,403,"connection_unavailable");return;}
     const attachment=socket.deserializeAttachment() as Attachment|null;
     if(!attachment||attachment.generation!==this.state.generation||attachment.connectionId!==this.state.binding.connectionId){this.closeSocket(socket,503,"stale_connector");return;}
+    this.heard.set(socket,Date.now());
     const decoded=decodeRelayFrame(typeof message==="string"?message:new Uint8Array(message));
     if(!decoded.ok||decoded.frame.kind!=="response"){this.closeSocket(socket,400,"invalid_connector_frame");return;}
     const frame=decoded.frame;const entry=this.pending.get(frame.id);
@@ -142,6 +150,13 @@ export class RelayDO extends DurableObject {
   }
   webSocketClose(socket: WebSocket): void { this.closeSocket(socket,503,"connector_closed"); }
   webSocketError(socket: WebSocket): void { this.closeSocket(socket,503,"connector_error"); }
+  /** Latest sign of life: an automatic heartbeat reply (kept across hibernation),
+   * a message from the laptop, or the moment the socket connected. */
+  private lastHeard(socket: WebSocket): number {
+    const attachment=socket.deserializeAttachment() as Attachment|null;
+    const heartbeat=this.ctx.getWebSocketAutoResponseTimestamp(socket)?.getTime()??0;
+    return Math.max(heartbeat,this.heard.get(socket)??0,attachment?.connectedAt??this.startedAt);
+  }
   private currentSocket(): WebSocket|null {
     return this.ctx.getWebSockets("connector").find(socket=>{const a=socket.deserializeAttachment() as Attachment|null;return a?.generation===this.state.generation&&a.connectionId===this.state.binding?.connectionId;})??null;
   }
@@ -151,6 +166,7 @@ export class RelayDO extends DurableObject {
   }
   private closeSocket(socket: WebSocket,status: number,code: string): void {
     for(const [id,entry] of this.pending)if(entry.socket===socket)this.finish(id,failure(status,code));
+    this.heard.delete(socket);
     if(socket.readyState===WebSocket.OPEN)socket.close(1000,"connector_closed");
   }
 }

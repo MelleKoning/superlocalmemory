@@ -14,3 +14,7 @@ test('unknown or malformed relay bodies never echo arbitrary text', () => {
   assert.equal(publicRelayCode('connector_closed'), 'origin_unavailable');
   assert.equal(publicRelayCode(null), 'origin_unavailable');
 });
+
+test('a sleeping laptop is reported as asleep to the client', () => {
+  assert.equal(publicRelayCode({ error: 'connector_asleep' }), 'connector_asleep');
+});
