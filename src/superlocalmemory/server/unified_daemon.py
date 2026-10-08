@@ -2920,6 +2920,10 @@ async def lifespan(application: FastAPI):
                     logger.debug("Component re-check failed (non-fatal): %s", exc)
                 _t.sleep(cadence)
 
+        # 4.1.22: the first recalls read rows scattered across a cold store
+        # file (seconds on a 2 GB store); one ordered read takes well under one.
+        from superlocalmemory.storage import store_cache_warm
+        store_cache_warm.start(engine)
         threading.Thread(target=_warmup_embedder, daemon=True, name="embed-warmup").start()
         threading.Thread(target=_warmup_recall, daemon=True, name="recall-warmup").start()
         # v3.8.2: self-heal supersedes the bare vector-store backfill (it calls
