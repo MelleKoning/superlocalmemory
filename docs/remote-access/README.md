@@ -25,6 +25,6 @@ Both paths are intended to work concurrently. Enabling the remote path must pres
 
 ## What local means when remote access is enabled
 
-The canonical memory database stays on the user's machine. Remote tool arguments and results travel through the gateway and the selected AI host. This is a network-access feature, not a promise that memory content never leaves the laptop. The cloud service stores connection and authorization state; it is not a replacement hosted memory database. The laptop and connector must be online for remote calls.
+The canonical memory database stays on the user's machine. Remote tool arguments and results travel through the gateway and the selected AI host. This is a network-access feature: any memory text a remote tool returns is delivered to the AI host you connected, and any text you send in a remote tool call is delivered to your laptop through the gateway. The cloud service stores connection and authorization state; it is not a replacement hosted memory database. The laptop and connector must be online for remote calls.
 
 Hosted database mode is outside this release's approved scope. SLM-Mesh remains trusted-peer coordination; this gateway is not database replication. SLM's Jev answer-check integration is separate from the Jev Decision Layer plugin.
