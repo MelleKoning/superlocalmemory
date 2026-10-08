@@ -87,3 +87,45 @@ def test_each_vector_repair_batch_waits_for_recalls(db) -> None:
     # (writes 3-4) after the recall that arrived during batch one.
     assert store.seen[0] == base and store.seen[2] == base
     assert recall_gate.in_flight() == base
+
+
+def test_an_older_graph_pass_never_deletes_a_newer_passes_rows(db, monkeypatch) -> None:
+    """Pass A reads the graph, stalls; F is stored; pass B runs. A's write
+    must not delete the row B wrote for F."""
+    from superlocalmemory.core import graph_metrics
+
+    def store(name: str) -> str:
+        return db.store_fact(AtomicFact(memory_id=_PARENT, profile_id="default",
+                                        content=f"Fixture pass fact {name}."))
+
+    store("one")
+    store("two")
+    in_compute, release = threading.Event(), threading.Event()
+    real = graph_metrics._networkx_metrics
+    calls: list[int] = []
+
+    def stalled_first(edges, damping):
+        calls.append(1)
+        if len(calls) == 1:
+            in_compute.set()
+            assert release.wait(30)
+        return real(edges, damping)
+
+    monkeypatch.setattr(graph_metrics, "_networkx_metrics", stalled_first)
+    reports: dict[str, object] = {}
+    pass_a = threading.Thread(target=lambda: reports.update(
+        a=graph_metrics.compute_graph_metrics(db, "default")))
+    pass_a.start()
+    assert in_compute.wait(10)
+    fresh = store("stored-between-passes")
+    pass_b = threading.Thread(target=lambda: reports.update(
+        b=graph_metrics.compute_graph_metrics(db, "default")))
+    pass_b.start()
+    pass_b.join(5)  # without one-pass-at-a-time, B finishes here
+    release.set()
+    pass_a.join(30)
+    pass_b.join(30)
+
+    assert reports["a"].error is None and reports["b"].error is None
+    rows = db.execute("SELECT fact_id FROM fact_importance WHERE profile_id='default'")
+    assert fresh in {dict(r)["fact_id"] for r in rows}, "a newer pass's row was deleted"

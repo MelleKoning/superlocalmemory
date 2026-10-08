@@ -85,6 +85,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -450,6 +451,27 @@ def compute_graph_metrics(
     pass that writes nothing and a store with no facts are different events, and
     the previous implementation reported both as ``node_count: 0``.
     """
+    # One pass per profile and store at a time: a pass that read the graph
+    # earlier must not finish after a newer one and delete the rows that pass
+    # wrote for facts stored in between. A second pass waits, then reads afresh.
+    with _pass_lock(db, profile_id):
+        return _compute_graph_metrics(db, profile_id, backend=backend, damping=damping,
+                                      prefer=prefer, isolate=isolate)
+
+
+_PASS_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+_PASS_LOCKS_GUARD = threading.Lock()
+
+
+def _pass_lock(db: Any, profile_id: str) -> threading.Lock:
+    path = getattr(db, "db_path", None) or getattr(db, "_db_path", None) or id(db)
+    key = (str(path), str(profile_id))
+    with _PASS_LOCKS_GUARD:
+        return _PASS_LOCKS.setdefault(key, threading.Lock())
+
+
+def _compute_graph_metrics(db: Any, profile_id: str, *, backend: Any, damping: float,
+                           prefer: str, isolate: bool) -> GraphMetricsReport:
     started = time.monotonic()
     notes: list[str] = []
     if isolate and prefer != "cozo":
