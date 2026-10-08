@@ -136,3 +136,66 @@ def test_only_app_removal_reports_conflict_and_missing_distinctly():
     assert CloudGatewayProvider._removal_error('/owner/apps/revoke',404)=='not_found'
     assert CloudGatewayProvider._removal_error('/owner/apps/revoke',503) is None
     assert CloudGatewayProvider._removal_error('/owner/revoke',409) is None
+
+
+def _record_gateway_traffic(monkeypatch, handler):
+    """Route the provider's real httpx client into an in-memory transport.
+
+    The client is still built by ``CloudGatewayProvider._request`` with its own
+    options; only the wire is replaced, so redirect and timeout behaviour is the
+    production behaviour.
+    """
+    import httpx
+
+    built = []
+    real = httpx.AsyncClient
+
+    class Recorded(real):
+        def __init__(self, *args, **kwargs):
+            built.append(dict(kwargs))
+            super().__init__(*args, transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(httpx, 'AsyncClient', Recorded)
+    return built
+
+
+@pytest.mark.asyncio
+async def test_a_gateway_redirect_is_not_followed_and_the_token_goes_nowhere_else(monkeypatch):
+    import httpx
+
+    seen = []
+
+    def handler(request):
+        seen.append((request.url.host, request.headers.get('authorization')))
+        if request.url.host == 'auth.superlocalmemory.com':
+            return httpx.Response(302, headers={'location': 'https://elsewhere.example/collect'})
+        return httpx.Response(200, json={'ok': True})
+
+    built = _record_gateway_traffic(monkeypatch, handler)
+    with pytest.raises(ValueError, match='remote_gateway_unavailable'):
+        await CloudGatewayProvider._request(
+            '/owner/verify', headers={'Authorization': 'Bearer owner-token', 'DPoP': 'proof'}
+        )
+    assert seen == [('auth.superlocalmemory.com', 'Bearer owner-token')]
+    assert built[0]['follow_redirects'] is False
+    assert built[0]['trust_env'] is False
+    assert 0 < built[0]['timeout'] <= 30
+
+
+@pytest.mark.asyncio
+async def test_the_gateway_client_only_reaches_the_pinned_host_and_known_endpoints(monkeypatch):
+    import httpx
+
+    hosts = []
+
+    def handler(request):
+        hosts.append((request.url.scheme, request.url.host, request.url.path))
+        return httpx.Response(200, json={'ok': True})
+
+    _record_gateway_traffic(monkeypatch, handler)
+    assert await CloudGatewayProvider._request('/owner/verify', headers={}) == {'ok': True}
+    assert hosts == [('https', 'auth.superlocalmemory.com', '/owner/verify')]
+    for bad in ('/owner/other', '//elsewhere.example/owner/verify', 'https://elsewhere.example/'):
+        with pytest.raises(ValueError, match='invalid_gateway_endpoint'):
+            await CloudGatewayProvider._request(bad, headers={})
+    assert len(hosts) == 1

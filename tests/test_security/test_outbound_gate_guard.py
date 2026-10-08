@@ -130,6 +130,23 @@ REVIEWED: dict[tuple[str, str, str], tuple[int, str]] = {
     (_S + "server/unified_daemon.py", "_register_dashboard_routes.v3_auto_detect",
      "httpx.get"):
         (1, "PROBE: is a local Ollama running (GET /api/tags)"),
+    (_S + "remote_connections/gateway_provider.py", "CloudGatewayProvider._request",
+     "httpx.AsyncClient"):
+        (1, "OAUTH: owner enrollment calls to the fixed https://auth.superlocalmemory.com "
+            "host (AUTH constant plus a nine-path allow-list, nothing caller-supplied). "
+            "Bodies are OAuth client registration, PKCE code/refresh exchange and "
+            "connection metadata; no memory text. Not sent through core.outbound_http "
+            "because its credential screen would replace the refresh token and PKCE "
+            "verifier with [redacted] and break the exchange. Instead the client is "
+            "built with follow_redirects=False (a redirect is an error, so the owner "
+            "token never reaches a second origin), trust_env=False (no environment "
+            "proxy) and timeout=10; the response is capped at 64 KiB. "
+            "tests/test_remote_gateway_provider.py pins all of this."),
+    (_S + "remote_connections/origin.py", "CanonicalMcpOrigin.__call__", "httpx.AsyncClient"):
+        (1, "RELAY: not a network call. httpx.ASGITransport hands the request to this "
+            "daemon's own ASGI app in the same process (no socket, no DNS); the base_url "
+            "is a virtual value for the Host header. Redirects are off, trust_env is off, "
+            "and a 3xx is refused as origin_redirect_denied."),
     (_S + "server/legacy_port.py", "start_legacy_redirect._handle_client",
      "asyncio.open_connection"):
         (1, "RELAY: relays the legacy port to the daemon on 127.0.0.1"),
