@@ -613,6 +613,7 @@ def _write(db: Any, profile_id: str, rows: list[tuple[Any, ...]]) -> int:
     with _short_connection(db) as conn:
         _ensure_bridge_column(conn)
     for index in range(0, len(stale), 800):
+        _yield_to_recalls()  # a delete takes the same write lock as an insert
         chunk = stale[index:index + 800]
         placeholders = ",".join("?" for _ in chunk)
         with _short_connection(db) as conn:
