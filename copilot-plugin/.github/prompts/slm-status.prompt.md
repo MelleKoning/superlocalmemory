@@ -1,10 +1,12 @@
 ---
 name: slm-status
 description: Health and optimization stats for SuperLocalMemory — call slm_optimize_stats() for live compression and cache counters (compress_runs, tokens_saved_compress, cache_proxy_hits, cache_proxy_misses, cache_kv_hits, cache_kv_misses); run slm status [--json] for system state (mode, profile, DB size, fact/entity/edge counts) and slm doctor [--json] for preflight including the "Optimize (Surface B)" health line; use together to confirm optimization is actually saving tokens.
-version: "4.1.22"
+version: "4.1.23"
 agent: agent
 tools:
   - slm_optimize_stats
+  - get_status
+  - get_brain_evidence_status
   - Bash
 ---
 
@@ -12,7 +14,7 @@ tools:
 
 ## Purpose
 
-Use this skill to answer: "Is SLM healthy?", "Is compression/caching actually saving tokens?", and "What does the system look like right now?" It covers three surfaces: the MCP stats tool, the `slm status` CLI, and the `slm doctor` preflight.
+Use this skill to answer: "Is SLM healthy?", "Is compression/caching actually saving tokens?", and "What does the system look like right now?" It covers the MCP stats and status tools, the `slm status` CLI, the `slm doctor` preflight, and the store-health commands.
 
 ## Primary MCP Tool: slm_optimize_stats
 
@@ -20,7 +22,7 @@ Use this skill to answer: "Is SLM healthy?", "Is compression/caching actually sa
 slm_optimize_stats() -> dict
 ```
 
-No arguments. Returns counters from the current daemon and MCP process session.
+No arguments. Returns the counters the daemon has persisted.
 
 ### Return dict (all keys always present)
 
@@ -31,16 +33,14 @@ No arguments. Returns counters from the current daemon and MCP process session.
 | `tokens_saved_compress` | int | Cumulative tokens saved by compression (daemon-persisted) |
 | `cache_proxy_hits` | int | Proxy-layer cache hits (daemon-persisted) |
 | `cache_proxy_misses` | int | Proxy-layer cache misses (daemon-persisted) |
-| `cache_kv_hits` | int | MCP KV cache hits — **this MCP process session only**, resets on restart |
-| `cache_kv_misses` | int | MCP KV cache misses — **this MCP process session only**, resets on restart |
+| `cache_kv_hits` | int | Hits on the `slm_cache_get` key-value cache (daemon-persisted) |
+| `cache_kv_misses` | int | Misses on the `slm_cache_get` key-value cache (daemon-persisted) |
 | `ccr_note` | str \| None | Note about CCR entry count (not tracked per-session; see daemon `/api/v1/metrics`) |
 | `note` | str \| None | Scope clarification or error detail |
 
 ### Important scope distinction
 
-`compress_runs`, `tokens_saved_compress`, `cache_proxy_hits`, and `cache_proxy_misses` are **daemon-persisted** — they survive MCP restarts and accumulate over the full install lifetime.
-
-`cache_kv_hits` and `cache_kv_misses` are **in-process counters** — they reset to 0 each time the MCP server starts. Use them to gauge cache effectiveness within the current session only.
+All six counters are **daemon-persisted**: they survive MCP restarts and accumulate over the install's lifetime, so they are totals, not per-session figures. Only if the persisted KV counters cannot be read does the tool fall back to this process's own tally (the `note` field says so). To judge one stretch of work, call `slm_optimize_stats` before and after and subtract.
 
 ### Reading whether optimization is saving tokens
 
@@ -56,7 +56,7 @@ if stats["ok"]:
 
 If `compress_runs` is 0 after several sessions, compression is not being triggered — check daemon config and whether `slm_compress` is being called.
 
-If `cache_kv_hits` is 0 after repeated work, verify key naming consistency (the same key string must be used for set and get).
+If `cache_kv_hits` does not grow after repeated work, verify key naming consistency (the same key string must be used for set and get, by the same agent).
 
 ## Secondary CLI: slm status
 
@@ -66,47 +66,40 @@ slm status [--json] [--verbose]
 
 Reports system-level state — not optimization counters. Canonical fields:
 
-- **mode** — active operation mode (e.g. `local`)
+- **mode** — active operation mode (`a`, `b` or `c`)
+- **provider** — the LLM provider for modes B and C, or `none`
 - **profile** — current memory profile name
-- **DB size** — database file size on disk
-- **fact count** — number of stored memory facts
-- **entity count** — entity graph node count
-- **edge count** — entity graph edge count
+- **db_size_mb**, **db_path**, **base_dir** — where the store is and how big
+- **fact_count**, **entity_count**, **edge_count** — counts for the active profile
+- **version**, **profile_generation**, **projection_queue_depth**, and (daemon running) **saves_waiting** and **unreadable_saves**
 
-`--verbose` / `-v` adds: migration log, daemon port, disabled marker, last version.
+`--verbose` / `-v` adds: the disabled marker, last booted version, and daemon port.
 
-`--json` outputs a machine-readable dict with the same fields — preferred for agent consumption.
-
-Example agent-native invocation:
+`--json` prints the standard envelope `{"success", "command", "version", "data": {...}}`; read the fields above from `data`. Prefer it for agent consumption:
 
 ```bash
 slm status --json
 ```
 
-Typical JSON shape (exact field names depend on runtime; use `--json` and read what arrives):
-
 ```json
-{
-  "mode": "local",
-  "profile": "code",
-  "db_size_mb": 12.4,
-  "facts": 384,
-  "entities": 201,
-  "edges": 519
-}
+{"success":true,"command":"status","version":"...","data":{"mode":"a","provider":"none","profile":"default","db_size_mb":12.4,"fact_count":384,"entity_count":201,"edge_count":519,"profile_generation":0,"projection_queue_depth":0,"saves_waiting":0,"unreadable_saves":0}}
 ```
+
+The MCP equivalent is `get_status(profile_id="")`, which returns the same fields at the top level (it is not part of the smallest `core` tool set). `saves_waiting` above zero means saved memories are durable but still being indexed (searchable within seconds). `unreadable_saves` above zero means that many saves could not be read back with this computer's key and were kept unchanged in the admission journal (the daemon log has their ids); a negative value means the journal did not answer. Status does not report a user role.
 
 Do not rely on the human-readable format for parsing — always use `--json` when the output feeds another tool.
 
 ## Secondary CLI: slm doctor
 
 ```bash
-slm doctor [--json] [--quick]
+slm doctor [--json] [--quick] [--deep] [--fix]
 ```
 
 Preflight check covering dependencies, embedding worker, daemon connectivity, and Surface B health. The **"Optimize (Surface B)"** line confirms whether the compression and cache subsystem initialised correctly.
 
 `--quick` skips the daemon and embedding probes — runs only dependency and config checks; faster but incomplete.
+
+`--deep` reads every database page (`PRAGMA integrity_check`) instead of the structural check; slow on a large store. `--fix` repairs what it can (re-downloads missing models, installs sqlite-vec) before checking, then reports.
 
 `--json` outputs structured results per check — use this in automated health pipelines.
 
@@ -134,7 +127,36 @@ slm optimize savings [--since <days>] [--provider anthropic|openai|gemini] [--js
 
 `--since` defaults to 7 days. `--provider` filters by the target AI provider.
 
-Note: the `slm optimize` subcommands have known pre-existing parse-test failures — if a subcommand errors, use `slm_optimize_stats()` via MCP as the authoritative source.
+`slm_optimize_stats()` via MCP is the same data as `slm optimize savings`; use whichever surface you have.
+
+## Store health and recovery
+
+```bash
+slm db integrity [--pages] [--json]   # read-only, safe while SLM runs
+slm db repair [--json]                # preview of what a repair would do (read-only)
+slm db repair --apply --root <data folder> [--batch-size N] [--pause-ms MS] [--max-seconds S]
+slm db repair --undo <run_id> --root <data folder>
+slm ops list | status | resolve <operation_id> --action retry|force_reconcile|cancel
+slm brain status [--json]             # observation-only Living Brain evidence totals
+slm embedder status                   # progress of an embedding-model switch
+slm models                            # recommended and installed local models
+```
+
+`slm db integrity` answers five separate questions so one cannot hide another:
+page integrity (only with `--pages`), relational integrity (orphan rows, erased
+words still stored), source fidelity (facts withheld from answers or no longer
+saying what their memory said), projection readiness (keyword, vector and date
+search work still owed), and any repair running or last run. It prints counts
+only, never memory text.
+
+`slm db repair` fixes leftover rows, erased-word leftovers, unfinished deletes
+and memories that lost their searchable fact, with receipts and an undo. It
+previews by default; `--apply` and `--undo` insist on `--root` naming the data
+folder you mean, and refuse any other. A repair never brings back anything that
+was erased, deleted or withheld. `slm ops` lists failed, stuck or degraded
+operations and, for an owner or admin, resolves them. The MCP counterpart for
+Living Brain totals is `get_brain_evidence_status(profile_id="")`; it only
+observes and does not change recall, ranking or review.
 
 ## Recommended Health Workflow
 
@@ -142,6 +164,7 @@ Note: the `slm optimize` subcommands have known pre-existing parse-test failures
 2. Call `slm_optimize_stats()` after a batch of work to check token savings.
 3. Run `slm status --json` when you need DB size or memory counts.
 4. If `ok: false` on any MCP tool — check `note` field, then run `slm doctor` to isolate the failure.
+5. If recall seems to miss memories that were saved, run `slm db integrity` before concluding anything.
 
 ## Fail-Open
 
@@ -149,11 +172,9 @@ Note: the `slm optimize` subcommands have known pre-existing parse-test failures
 
 ---
 
-## Profile-aware status (v3.8.0+)
+## Profile-aware status
 
-`slm status --json` reports the currently active profile name in the `profile`
-field. Use this to confirm which workspace is active before starting work on a
-multi-profile setup. To switch the active profile, see `slm-profile`.
+`slm status --json` reports the active profile in `data.profile`. Use it to confirm which workspace is active before starting work on a multi-profile setup. `get_status(profile_id="<name>")` counts another profile without moving the active one. To change the active profile, see `slm-profile`.
 
 ---
 
@@ -166,4 +187,4 @@ multi-profile setup. To switch the active profile, see `slm-profile`.
 
 ---
 
-SuperLocalMemory v4.1.22 · Qualixar · AGPL-3.0-or-later
+SuperLocalMemory v4.1.23 · Qualixar · AGPL-3.0-or-later

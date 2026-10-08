@@ -55,10 +55,17 @@ tiers it will not use. The 18 tools:
 `list_corrections`, `get_memory_summary`, `switch_profile`.
 
 If you are looking at another skill that mentions a tool NOT in this list
-(`build_code_graph`, `mesh_send`, anything governance/compliance-shaped), that
-skill describes a different, larger profile (`code`, `full`, `power`) — it is
-accurate for Claude Code or Codex installs, not for this one, unless someone
-has deliberately reconfigured `SLM_MCP_PROFILE`.
+(`build_code_graph`, `mesh_send`, `report_outcome`, `delete_memory`,
+`set_memory_kind`, anything governance/compliance-shaped), that skill describes
+a different, larger profile (`code`, `full`, `power`) — it is accurate for Claude
+Code or Codex installs, not for this one, unless someone has deliberately
+reconfigured `SLM_MCP_PROFILE`. Skip those steps rather than reporting an error.
+
+Two things the core set does cover that other skills explain: `remember` takes
+`kind` and `replaces` (a newer version of a memory should be saved with
+`replaces=<fact_id>`; see `slm-remember`), and `list_corrections` /
+`review_correction` handle the review of an `update_memory` edit. A bot with
+no one to review should prefer `replaces` over `update_memory`.
 
 ---
 
@@ -91,10 +98,11 @@ has deliberately reconfigured `SLM_MCP_PROFILE`.
 The first `remember`/`recall` on a fresh `SLM_DATA_DIR` has to: resolve
 `uvx`'s pinned `superlocalmemory` package, start the daemon, and warm an
 embedding model (and, unless this is the lite profile, a reranker model) —
-tens of seconds, not milliseconds. A `recall` that comes back marked
-`"incomplete"` or with a channel reporting not-ready in that window is not a
-bug; it means the embedding worker had not finished loading yet. Retry once
-rather than assuming something is broken.
+tens of seconds, not milliseconds. A `recall` whose `channel_status` shows
+`warming` (or `no_embedding`) for some channels in that window is not a bug; it
+means the embedding model had not finished loading yet, and the answer is
+incomplete rather than empty. Retry once rather than assuming something is
+broken.
 
 ---
 
@@ -135,4 +143,4 @@ quality on a shared box.
 
 ---
 
-*SuperLocalMemory v4.1.22 · Qualixar · AGPL-3.0-or-later*
+*SuperLocalMemory v4.1.23 · Qualixar · AGPL-3.0-or-later*

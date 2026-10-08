@@ -65,6 +65,7 @@ EXPECTED_SKILLS = [
     "slm-scope",
     "slm-session",
     "slm-status",
+    "slm-web-access",
 ]
 
 # Core SLM rule keywords that MUST appear in AGENTS.md

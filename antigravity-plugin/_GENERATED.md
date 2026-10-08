@@ -2,7 +2,7 @@
 
 Built by `scripts/build-antigravity-plugin.mjs` from `plugin-src/`. Version stamped from `plugin-src/manifest.json`.
 
-Version: **4.1.22**
+Version: **4.1.23**
 
 Do not edit by hand — regenerate instead.
 
@@ -30,3 +30,4 @@ Do not edit by hand — regenerate instead.
 - `skills/slm-scope/SKILL.md`
 - `skills/slm-session/SKILL.md`
 - `skills/slm-status/SKILL.md`
+- `skills/slm-web-access/SKILL.md`

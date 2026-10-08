@@ -26,11 +26,11 @@ slm_compress(content,mode,reversible,ttl_seconds)→compressed,lossy,ccr_id (mod
 4. Repeated bash/web → slm_cache_set("bash:<cmd[:64]>", ttl 600); web ttl 3600.
 5. Retrieve original only when byte-identical needed.
 6. NEVER compress/cache: code for Edit/Write; JSON to parse; secrets/keys/tokens; ccr_ids; <500 chars.
-7. Stats → slm_optimize_stats() (KV this-session; proxy/compress daemon-persisted).
+7. Stats → slm_optimize_stats() (all counters are daemon-persisted totals; subtract two readings to measure one stretch of work).
 8. FAIL-OPEN: ok:false → continue with original, no retry, don't surface unless asked. Never block the task.
 
-# Profile context (v3.8.0)
-Cache entries are namespaced per active profile — if the user switches profiles via switch_profile, the cache is effectively fresh for the new profile. Do not carry ccr_id values across profile switches.
+# Namespace
+Cache entries and ccr_ids are namespaced per calling agent (not per memory profile), so switch_profile does not clear them. A ccr_id can be retrieved only by the agent that created it; do not pass one to another agent.
 
 # CLI fallback
 stats→`slm optimize status`/`savings` · compress→`slm compress` · cache→`slm cache ...`. If CLI also fails, drop optimization silently (rule 8).
@@ -39,6 +39,6 @@ stats→`slm optimize status`/`savings` · compress→`slm compress` · cache→
 slm-compress · slm-cache · slm-status · slm-profile
 
 # What NOT to do
-Never compress code-for-edit/JSON-to-parse/<500 chars; never store secrets/ccr_ids; never let optimize failure block/alter the task; never claim a specific savings %; never carry ccr_ids across profile switches.
+Never compress code-for-edit/JSON-to-parse/<500 chars; never store secrets/ccr_ids; never let optimize failure block/alter the task; never claim a specific savings %; never hand a ccr_id to another agent.
 
-SuperLocalMemory v4.1.22 · Qualixar · AGPL-3.0-or-later
+SuperLocalMemory v4.1.23 · Qualixar · AGPL-3.0-or-later

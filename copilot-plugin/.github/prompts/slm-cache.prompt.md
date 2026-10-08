@@ -1,7 +1,7 @@
 ---
 name: slm-cache
 description: KV cache for repeated reads — call slm_cache_get(key) first; on a miss do the expensive operation then slm_cache_set(key, value, ttl_seconds) to store it; on a hit use the returned value directly; always fail-open (hit:false on any error, never raises); saves tokens when the same file, query result, or tool output is read more than once in a session.
-version: "4.1.22"
+version: "4.1.23"
 agent: agent
 tools:
   - slm_cache_set
@@ -35,7 +35,7 @@ slm_cache_set(
 | `stored` | bool | `True` when the value was written to the cache |
 | `note` | str \| None | Error detail or `None` on success |
 
-Keys are SHA-256-hashed internally per agent so they do not collide across agents. The raw key string you supply is the only handle you need.
+Keys are SHA-256-hashed internally per agent so they do not collide across agents. The raw key string you supply is the only handle you need. The namespace is the calling agent (`SLM_AGENT_ID`, or the `/mcp/<agent>` path), not the memory profile, so switching profiles does not give you a fresh cache. A caller on another computer gets its own namespace, keyed by its access key, and can never see a local agent's entries.
 
 ## Tool: slm_cache_get
 
@@ -54,7 +54,7 @@ slm_cache_get(
 | `value` | str \| None | The stored value on a hit; `None` on miss |
 | `note` | str \| None | Error detail or `None` |
 
-A miss returns `{"ok": true, "hit": false, "value": null, "note": null}`. `ok: false` means something went wrong internally but the miss behaviour is the same — treat both as a cache miss and proceed with the real fetch.
+`value` is the string you stored. A miss returns `{"ok": true, "hit": false, "value": null, "note": null}`. `ok: false` means something went wrong internally but the miss behaviour is the same — treat both as a cache miss and proceed with the real fetch.
 
 ## Standard Pattern: Cache-Aside
 
@@ -127,7 +127,7 @@ Set `ttl_seconds` to match how long the data remains valid. After expiry `slm_ca
 
 ## Secondary CLI (fallback when MCP is unavailable)
 
-The `slm cache` subcommand exists but has known pre-existing parse-test failures. Prefer the MCP tools above. If you must use CLI:
+Prefer the MCP tools above. If you must use the command line:
 
 ```bash
 slm cache status [--json] [--tenant default]
@@ -137,16 +137,15 @@ slm cache ttl --set <seconds> [--semantic <seconds>] [--json] [--tenant default]
 slm cache semantic on|off [--json] [--tenant default]
 ```
 
-These subcommands control daemon-level cache settings. They do not read or write individual cache entries — use the MCP tools for that.
+These subcommands control daemon-level cache settings and bulk removal. They do not read or write individual entries — use the MCP tools for that. Entries written by `slm_cache_set` carry the tag `mcp-kv`, so `slm cache invalidate --tag mcp-kv` removes them, and `slm cache clear` deletes every entry for the tenant.
 
 ---
 
 ## Related skills
 
 - `slm-compress` — for large content reduction; cache and compress work together
-- `slm-status` — view `cache_kv_hits`/`cache_kv_misses` counters from `slm_optimize_stats`
-- `slm-profile` — cache entries are namespaced per profile; switching profiles gives a fresh cache namespace
+- `slm-status` — view `cache_kv_hits`/`cache_kv_misses` counters (daemon-persisted totals) from `slm_optimize_stats`
 
 ---
 
-SuperLocalMemory v4.1.22 · Qualixar · AGPL-3.0-or-later
+SuperLocalMemory v4.1.23 · Qualixar · AGPL-3.0-or-later

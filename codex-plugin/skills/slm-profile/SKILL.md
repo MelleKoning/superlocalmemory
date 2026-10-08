@@ -1,150 +1,159 @@
 ---
 name: slm-profile
-description: Workspace isolation and runtime profile switching for SuperLocalMemory. Each profile is a fully independent memory namespace — separate facts, code graphs, and tool sets. Use switch_profile (MCP, requires code/full/power profile) to change the active workspace without restarting. Check the active profile with slm status. Required when working across multiple projects, clients, or tenants.
+description: Memory profiles (separate namespaces inside one SuperLocalMemory store) and MCP tool sets (which tools your host sees). Use switch_profile or slm profile switch to change the active memory profile, the profile_id argument to read or write another profile for one call, and SLM_MCP_PROFILE to choose a tool set. Required when working across multiple projects, clients, or tenants.
 when_to_use: |
   - "Switch to my work profile"
-  - "Use the code profile for this session"
   - "What profile am I currently in?"
-  - "I need mesh tools — switch to full profile"
-  - "Load the devops workspace"
+  - "Create a profile for this client"
+  - "Read the work profile once without leaving this one"
+  - "I need mesh or code-graph tools" (a tool-set question, not a profile switch)
+  - "Why can't I see tool X?"
   - Multi-project workflows needing memory isolation
   - Switching between personal and team workspaces
-  - Enabling additional MCP tools by activating a richer profile
-allowed-tools: switch_profile, Bash
+allowed-tools: switch_profile, get_status, Bash
 ---
 
-# slm-profile — Workspace Isolation and Profile Switching
+# slm-profile — Memory Profiles and Tool Sets
 
-A profile is a fully isolated memory workspace. Each profile has its own:
-- Memory facts (nothing bleeds across profiles by default)
-- Code graph index (separate per repo/project)
-- Active MCP tool set (determined by profile tier)
-- Retention policy and decay settings
+Two different things are called "profile" in SuperLocalMemory. Keep them apart.
 
-Profiles are the right tool when you have genuinely separate contexts: a personal
-project, a client engagement, a production vs staging environment.
+- A **memory profile** is a namespace inside one store. It has its own memories,
+  knowledge graph, learned patterns, retention settings and audit trail. A fresh
+  install has one, called `default`. This is what `switch_profile`,
+  `slm profile` and the `profile_id` argument are about.
+- An **MCP tool set** (`SLM_MCP_PROFILE`: `core`, `code`, `full`, `power`,
+  `mesh`) decides which tools the server shows your host. `switch_profile` does
+  not change it.
 
----
-
-## Available profiles and their tool sets
-
-| Profile | Tools | When to use |
-|---------|-------|-------------|
-| `core` | 18 tools — remember, recall, search, session, optimize | Minimal footprint, no code tools |
-| `code` | 38 tools — core + portable Brain evidence + code graph + profile switching + bounded loops + memory-kind management | Default for IDE/coding agents |
-| `full` | 56 tools — code + all memory ops + mesh + bounded loops | Multi-session, team workflows |
-| `power` | 68 tools — full + governance + behavioral tools | Enterprise, admin, audit use cases |
-| `mesh` | 8 tools — mesh coordination only | Lightweight cross-session signalling |
-
-The profile is set at MCP server startup via `SLM_MCP_PROFILE` in the MCP config.
-`switch_profile` lets you change it at runtime without a restart.
+A memory profile organises memory. It is not a security boundary: any local
+caller that can name a profile can read it, unless the user has turned on company
+mode with roles. For memories that must be unreachable from another bot or user,
+use a separate data directory (`SLM_DATA_DIR`) or company mode (`slm-governance`).
 
 ---
 
-## Checking the active profile
+## Memory profiles
 
 ```bash
-slm status --json
+slm profile list [--json]
+slm profile create <name> [--json]
+slm profile switch <name> [--json]
+slm status --json          # data.profile is the active profile
 ```
 
-The `profile` field in the output is the currently active profile name.
-
-Or via MCP (works in any profile):
-
-```bash
-slm status
-```
-
----
-
-## Switching profiles at runtime (v3.8.0+)
-
-`switch_profile` is available in `code`, `full`, and `power` profiles.
+Creating a profile is a CLI action; there is no MCP tool for it. Over MCP:
 
 ```
 switch_profile(
-  profile: str,   # one of: "core", "code", "full", "power", "mesh"
+  profile_id: str,   # the name of an existing profile
 )
 ```
 
-### Example: activate full profile to access mesh tools
+`switch_profile` changes the **active profile**. The change is not private to
+your session: it is written as the machine's active profile, so every later call
+from every session on this machine, and the dashboard, now work in it until
+someone switches again. An unknown name is refused (`Profile '<name>' does not
+exist`); nothing is created. In company mode it also needs a role on the target
+profile. Only switch when the user asks to move; do not switch to peek at
+something.
+
+### Reaching another profile for one call
+
+Most tools take an optional `profile_id`: `remember`, `recall`, `search`,
+`fetch`, `list_recent`, `update_memory`, `delete_memory`, `session_init`,
+`close_session`, `report_outcome`, `report_feedback`, `get_status`,
+`get_memory_summary`, the correction and memory-kind tools, and others. A
+non-empty value serves that one call from that profile (which must already
+exist) and **never moves the active profile**. An empty value means the active
+profile. Prefer this to switching and switching back.
 
 ```
-# You started in code profile but need mesh coordination
-switch_profile(profile="full")
-
-# Now mesh_peers, mesh_send, mesh_inbox, etc. are available
-mesh_peers()
+recall(query="rollout plan", profile_id="work", session_id="<sid>")
+remember(content="...", tags="ops", profile_id="client-acme")
 ```
 
-### Example: switch workspaces
+`forget` and the mesh tools take no `profile_id`; they act on the active profile.
 
-```
-# Switch from personal to work workspace
-switch_profile(profile="work-project")
-```
+### What a profile isolates
 
-Wait — profile names and workspace names are distinct concepts:
-- **Profile tier** (`core`, `code`, `full`, `power`, `mesh`) controls which MCP
-  tools are registered.
-- **Workspace / data directory** (`SLM_DATA_DIR`) controls which memory database
-  is used.
+- `recall` returns only the profile's own memories, plus shared or global ones
+  only when you opt in (see `slm-scope`).
+- `remember` writes to the profile you name or the active one.
+- The code graph is not partitioned by profile: it lives in `code_graph.db` in the data directory.
+- The `slm_cache_*` key-value cache and `slm_compress` recovery store are keyed
+  by the calling agent, not by profile, so switching profiles does not give you
+  a clean cache (see `slm-cache`).
 
-`switch_profile` changes the **tool tier** within the current workspace. To
-switch to a completely different memory database (workspace), you need to change
-`SLM_DATA_DIR` — this requires restarting the MCP server or using a separately
-configured MCP server instance.
+### Separate stores
+
+To keep two bots or two clients completely apart, give each its own
+`SLM_DATA_DIR` in its MCP config. You can run several SLM MCP servers at once,
+named differently (for example `superlocalmemory-personal` and
+`superlocalmemory-work`), each pointed at its own directory.
 
 ---
 
-## Configuring the initial profile
+## MCP tool sets
 
-Set it where your host defines the MCP server's environment — `.mcp.json` (Claude
-Code), `.codex/config.toml` (Codex), or `mcp.cursor.json` (Cursor / Grok Bot):
+| Profile | Tools | What it is |
+|---------|-------|------------|
+| `core` | 18 tools — remember, recall, search, fetch, list_recent, update_memory, forget, session, optimize, corrections, summaries, switch_profile | Smallest set; the Grok Bot / Cursor plugin uses it |
+| `code` | 38 tools — core + portable Brain evidence, report_outcome/report_feedback, 6 code-graph tools, memory kinds, bounded loops | For coding agents that need the graph; no mesh, no `get_status` |
+| `full` | 56 tools — everyday memory, delete_memory, get_status, observe, saved views, learning tools, skills, optimize, kinds, loops, mesh | Same set as the no-profile default |
+| `power` | 68 tools — full + audit_trail, retention, compaction, consistency_check, behavioral and diagnostic tools | Governance and admin work |
+| `mesh` | 8 tools — mesh coordination only | Lightweight cross-session signalling |
+
+A host that sets no profile gets the 56-tool `full` set (this is what the Claude
+Code and Codex plugins do; the Antigravity plugin sets `power`). Two more
+environment variables widen or narrow it: `SLM_MCP_ALL_TOOLS=1` registers every
+tool (103), and `SLM_MCP_TOOLS=remember,recall,...` registers exactly the names
+listed. `SLM_MCP_PROFILE=whole` is also every tool. The code-graph tools beyond
+the six in `code` (such as `update_code_graph`, `list_graph_stats`) and tools
+such as `core_memory` and `settle_session_outcomes` exist only with
+`SLM_MCP_ALL_TOOLS=1`, `whole` or an explicit `SLM_MCP_TOOLS` list. Tools whose
+function is to manage the SLM computer are never available to a remote caller.
+
+The tool set is read when the MCP server starts. To change it, set it in the
+host's MCP config and restart the host; asking the server at runtime does not
+work:
 
 ```json
 "env": {
   "SLM_MCP_PROFILE": "code",
-  "SLM_AGENT_ID": "codex",
-  "SLM_DATA_DIR": "~/.superlocalmemory"
+  "SLM_AGENT_ID": "codex"
 }
 ```
 
-Profile aliases from older versions still resolve: `code20` → `code`,
-`full38` → `full`, `power50` → `power`. Stale configs get a startup warning
-but continue to work.
+`slm connect <ide> --profile <name>` writes that variable into a supported
+host's config. Setting `SLM_MCP_PROFILE` to a name that does not exist stops
+`slm mcp` with a message listing the valid names. Older count-suffixed names
+such as `code20`, `full38` and `power50` still resolve, with a startup warning.
+On an install that already has memories, do not set `SLM_DATA_DIR` in the MCP
+config: it points the host at a different, empty store.
+
+`switch_profile` is in `core`, `code`, `full` and `power`, and in the default
+set. It is not in `mesh`.
 
 ---
 
-## Profile isolation guarantees
+## If a tool is missing
 
-- `recall` returns only memories in the active profile (plus opt-in shared/global
-  facts — see `slm-scope`).
-- `remember` writes to the active profile only unless `scope="shared"/"global"`.
-- Code graph tools (`build_code_graph`, `get_blast_radius`, etc.) index into the
-  active profile's graph store.
-- KV cache entries are namespaced per profile — switching profiles gives you a
-  clean cache.
-
----
-
-## Multiple concurrent profiles
-
-You can run multiple SLM MCP server instances simultaneously, each pointed at a
-different `SLM_DATA_DIR`, to serve different workspaces in the same IDE session.
-Name them differently in your MCP config (e.g. `superlocalmemory-personal` and
-`superlocalmemory-work`) and route tool calls to the appropriate server.
+Check the tool set first (`slm status` does not show it; look at the host's MCP
+config for `SLM_MCP_PROFILE`). Mesh tools need `full`, `power`, `mesh` or the
+default. Code-graph tools need `code` or `SLM_MCP_ALL_TOOLS=1`. Audit and
+retention tools need `power`. `report_outcome` and `report_feedback` need
+anything but `core` or `mesh`.
 
 ---
 
 ## Related skills
 
 - `slm-scope` — opt-in fact sharing across profiles (personal/shared/global)
-- `slm-graph` — code-graph tools available in code/full/power profiles
-- `slm-mesh` — mesh tools available in full/power/mesh profiles
-- `slm-status` — check active profile name and tool inventory
-- `slm-governance` — enterprise role-based access to profiles
+- `slm-graph` — code-graph tools and the tool set they need
+- `slm-mesh` — mesh tools and the tool set they need
+- `slm-status` — check the active profile name
+- `slm-governance` — roles and company mode
 
 ---
 
-*SuperLocalMemory v4.1.22 · Qualixar · AGPL-3.0-or-later*
+*SuperLocalMemory v4.1.23 · Qualixar · AGPL-3.0-or-later*

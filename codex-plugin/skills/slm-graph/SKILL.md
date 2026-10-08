@@ -20,7 +20,7 @@ allowed-tools: build_code_graph, query_graph, get_blast_radius, semantic_search_
 
 # slm-graph — Code Intelligence Skill
 
-Index any repo as a code knowledge graph and answer structural questions about it: callers, callees, impact radius, semantic search, and review context. Requires the `code` MCP profile (set `SLM_MCP_PROFILE=code` in your plugin `.mcp.json`).
+Index any repo as a code knowledge graph and answer structural questions about it: callers, callees, impact radius, semantic search, and review context. These tools are only registered in the `code` MCP tool set (or with `SLM_MCP_ALL_TOOLS=1`); see "Tool set requirement" below.
 
 **Prerequisite rule:** every tool except `build_code_graph` self-guards — if the graph is not built it returns `{"success": false, "error": "Code graph not built. Run build_code_graph first."}`. Always index first.
 
@@ -40,7 +40,7 @@ build_code_graph(
 
 Parses all supported source files, extracts functions/classes/imports, builds the call graph, detects execution flows, and identifies code communities. Replaces any previous index for the same repo.
 
-- `repo_path` — absolute path to the repository root. Must exist.
+- `repo_path` — absolute path to the repository root. Must exist and sit under your home directory; a path outside it is refused with `Invalid repo_path`.
 - `languages` — comma-separated language filter, e.g. `"python,typescript"`. Empty string = index all supported languages.
 - `exclude_patterns` — comma-separated glob patterns to exclude, e.g. `"**/node_modules/**,**/.venv/**"`. Empty = no exclusions.
 
@@ -204,14 +204,14 @@ detect_changes(
 
 Runs `git diff` against `base`, maps the changed hunks to graph nodes, and returns a risk-scored list of changed functions, test gaps, and review priorities. Requires the repo to be a git repository.
 
-- `base` — git ref to diff against. Default `"HEAD~1"` (one commit back). Any valid git ref works: `"main"`, `"v3.6.13"`, a commit SHA, etc.
+- `base` — git ref to diff against. Default `"HEAD~1"` (one commit back). Any valid git ref works: `"main"`, `"v1.4.0"`, a commit SHA, etc.
 
 ```
 # What changed in the last commit?
 detect_changes()
 
 # What changed since the release branch?
-detect_changes(base="release/v3.6.13")
+detect_changes(base="release/1.4")
 
 # What changed relative to main?
 detect_changes(base="main")
@@ -277,16 +277,22 @@ All tools return `{"success": false, "error": "<message>"}` on failure — they 
 | `Repository path does not exist: <path>` | Bad `repo_path` in build | Pass an absolute path that exists |
 | `Git not available or not a git repository: ...` | `detect_changes` needs git | Only works in git repos with git installed |
 | `Invalid pattern '...'` | Wrong `pattern` in `query_graph` | Use one of the 8 valid pattern strings |
-| `No node found matching '<target>'` | Target not in index | Rebuild or check the qualified name via `semantic_search_code` |
+| `No node found matching '<target>'` | Target not in index. Returned as `success: true` with an empty `results` and this `message`, not as an error | Rebuild or check the qualified name via `semantic_search_code` |
+| `Invalid repo_path: ...` | `repo_path` is outside your home directory | Index a repository under your home directory |
 
 If `build_code_graph` returns `files_parsed: 0`, no supported source files were found — check `repo_path` and `exclude_patterns`.
 
 ---
 
-## Profile Requirement
+## Tool set requirement
 
-This skill uses graph tools that are only active under the `code` MCP profile
-(or `full` / `power`). Your plugin `.mcp.json` must include:
+The six tools above are registered only when the MCP server runs the `code` tool
+set, or with `SLM_MCP_ALL_TOOLS=1` / `SLM_MCP_PROFILE=whole`, or when
+`SLM_MCP_TOOLS` names them. They are **not** in `core`, `full`, `power` or the
+no-profile default that the Claude Code and Codex plugins use, so with those
+settings the tools simply do not exist and a call fails as an unknown tool. The
+tool set is read when the server starts: set it in the host's MCP config and
+restart the host.
 
 ```json
 "env": {
@@ -295,21 +301,27 @@ This skill uses graph tools that are only active under the `code` MCP profile
 }
 ```
 
-Without this, the six graph tools are not registered and will appear as unknown
-tools. Run `slm status` to confirm the active profile.
+`switch_profile` does not change the tool set; it changes the active memory
+profile. See `slm-profile`. The `code` set leaves out the mesh and several
+administration tools, so ask the user before changing their tool set.
 
-**Switching profiles at runtime (v3.8.0+):** Use `switch_profile("code")` via
-MCP to activate the code profile in a session that started with a different
-profile. See `slm-profile` for the full profile switching workflow.
+With `SLM_MCP_ALL_TOOLS=1` more graph tools appear: `update_code_graph` (refresh
+for `changed_files` without a full rebuild), `list_graph_stats`,
+`get_architecture_overview`, `list_communities`, `get_community`, `list_flows`,
+`get_flow`, `get_affected_flows`, `find_large_functions`, `enrich_blast_radius`,
+`refactor_preview`, and the code-to-memory tools `link_memory_to_code`,
+`code_memory_search`, `code_entity_history` and `code_stale_check`. The memory
+links need `"bridge_enabled": true` in `code_graph_config.json` and a rebuild.
+All are host-only: a remote caller cannot use them.
 
 ---
 
 ## Related skills
 
-- `slm-profile` — workspace isolation and profile switching (required for code tools)
+- `slm-profile` — memory profiles and the tool sets that decide which tools exist
 - `slm-recall` — retrieve architectural decisions before graph queries
 - `slm-status` — confirm the active profile and graph index health
 
 ---
 
-SuperLocalMemory v4.1.22 · Qualixar · AGPL-3.0-or-later
+SuperLocalMemory v4.1.23 · Qualixar · AGPL-3.0-or-later

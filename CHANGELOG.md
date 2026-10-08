@@ -5,6 +5,73 @@ All notable changes to SuperLocalMemory will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.23] — Your web apps and bots use the same memory, and it stays on your computer
+
+### Added
+
+- **Web access.** ChatGPT, Claude on the web, Claude Code on the web, Muse,
+  Composio and any MCP client that supports remote connections with OAuth can
+  use the memory on your computer. Turn it on from the dashboard's new
+  **Connected apps** page, sign in with GitHub, and choose per app whether it
+  may only read, also save, and use session tools. Your computer keeps one
+  outbound link to SLM's connection gateway; there is no port to open and no
+  tunnel or Cloudflare account to set up. The memory database never leaves the
+  computer, and SLM works fully without Web access. Each connection has a free
+  daily allowance of tool calls.
+- Web access renews its own credentials while your computer is online. If the
+  computer stays offline long enough for access to lapse, the Connected apps
+  page warns before it ends and says what to do after. Once the computer has
+  been silent for 45 seconds, for example asleep, a web app is told at once that
+  it is unavailable. A relayed recall answers inside the relay's time budget,
+  and remote answers are compact JSON with host details redacted.
+- **Connected apps** lists every app that can reach your memory and removes
+  any of them with immediate effect. Memory and local configuration are kept.
+- **Instructions for web agents.** `docs/web-agents/` has a full and a short
+  instruction block and an Agent Skill folder that tell a connected app when to
+  recall, when to say it has no answer, what to save (with kind, tags and an
+  idempotency key) and what to do when your computer is asleep or the daily
+  allowance is used up. The dashboard copies the short block for you.
+- **`slm-web-access` skill** in every editor plugin, so a local agent can help
+  you set up Web access and diagnose a connection.
+- **`slm db repair` brings the two vector indexes back in line with the
+  memories.** It rewrites sqlite-vec rows that no longer match their memory's
+  embedding and removes LanceDB rows for memories that are gone, withheld or
+  soft-deleted; `slm db integrity` reports both counts.
+- **Model advice carries SLM's own measured results**, and a model measured on
+  a small sample is ranked conservatively.
+
+### Changed
+
+- The editor plugins' skills, agents and rules were checked against the
+  current tools and corrected where they had drifted.
+
+### Fixed
+
+- **A save on a fresh store could be lost after the daemon warmed its file
+  cache.** Warming opened and closed the database file inside the daemon,
+  which on SQLite drops the process's locks; it now runs in a child process.
+- Semantic search on LanceDB now covers every tier the canonical search ranks,
+  including cold and archived memories.
+- A rebuilt vector projection leaves out withheld and soft-deleted memories.
+- An erasure also blanks the preview of the erased memory in auto-observe
+  activity events, and `slm db repair` blanks previews that earlier erasures
+  left in activity events.
+- A web app's save or recall is never filed under the session of an agent
+  running on your computer.
+- A second suggestion about the same memory no longer logs a warning on every
+  save.
+- The laptop link no longer fails at start when two parts read its credential
+  at the same time.
+- The `remember` tool is declared additive, so clients do not treat saving as a
+  destructive action.
+
+### Security
+
+- The remote connector's HTTP clients never follow a redirect, and tests pin
+  that the API key cannot be sent to another host.
+- Web access grants are narrowed to the scopes you consented to, for one MCP
+  resource; client registration keeps no diagnostic records.
+
 ## [4.1.22] — Faster recall from the first second, memories that stay findable, deletes you can trust
 
 ### Added

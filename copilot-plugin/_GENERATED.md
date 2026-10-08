@@ -2,7 +2,7 @@
 
 Built by `scripts/build-copilot-plugin.mjs` from the single source in `plugin-src/` (+ `ide/configs/vscode-copilot-mcp.json`, `plugin/CLAUDE.md`). Version stamped from `plugin-src/manifest.json`.
 
-Version: **4.1.22**
+Version: **4.1.23**
 
 | Output | Source |
 |---|---|
@@ -37,6 +37,7 @@ Regenerate: `npm run build:copilot-plugin` (or `node scripts/build-copilot-plugi
 - `.github/prompts/slm-scope.prompt.md`
 - `.github/prompts/slm-session.prompt.md`
 - `.github/prompts/slm-status.prompt.md`
+- `.github/prompts/slm-web-access.prompt.md`
 - `.vscode/mcp.json`
 - `README.md`
 - `scripts/ensure-venv.bat`

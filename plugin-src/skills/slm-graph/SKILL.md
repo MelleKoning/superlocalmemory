@@ -324,4 +324,4 @@ All are host-only: a remote caller cannot use them.
 
 ---
 
-SuperLocalMemory v4.1.22 · Qualixar · AGPL-3.0-or-later
+SuperLocalMemory v4.1.23 · Qualixar · AGPL-3.0-or-later

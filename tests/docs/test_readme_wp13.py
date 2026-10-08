@@ -247,10 +247,11 @@ def test_evidence_safe_positioning_near_hero():
     bench = text.split("## Benchmarks", 1)
     assert len(bench) == 2, "README must keep its Benchmarks section"
     bench_text = bench[1].split("\n## ", 1)[0]
-    assert "published **V3** architecture paper" in bench_text, (
-        "Benchmarks must be identified as the published V3 evidence (LLD AC7)."
+    # The README carries no release numbers, so the evidence is named by its paper.
+    assert "published architecture paper ([arXiv:2603.14588]" in bench_text, (
+        "Benchmarks must be identified as the published paper's evidence (LLD AC7)."
     )
-    assert "They are not a fresh V4 package run." in bench_text, (
+    assert "They are not a fresh run of the current package." in bench_text, (
         "Benchmarks must keep the protocol boundary of the evidence (LLD AC7)."
     )
     assert "comparable only when the subset, answer model and judge match" in bench_text

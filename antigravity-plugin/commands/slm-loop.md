@@ -21,9 +21,11 @@ Procedure:
 2. **State the bounds.** Max iterations, a no-progress window, and any token or
    wall-clock budget, before starting.
 3. **Iterate.** Each lap: propose a change, then run the gate independently.
-   Every lap persists as queryable SLM memory (tag `loop:<name>`); inspect with
-   `slm loop history` and `slm loop show <run_id>`, so the run is auditable and
-   resumable. `slm loop demo` shows the control flow end to end.
+   A command gate (tests, schema, lint) you run yourself; SLM does not execute
+   commands. To wait for a memory another agent will write, use the
+   `slm_loop_run` MCP tool, whose laps persist as queryable SLM memory (tag
+   `loop:<name>`); inspect runs with `slm loop history` and
+   `slm loop show <run_id>`. `slm loop demo` shows the control flow end to end.
 4. **Report the exact terminal status** — `DONE` (gate passed + approved),
    `HALT` (a bound tripped), `PAUSE` (approval pending), `KILLED` (kill switch),
    or `ERROR` (runner/gate failed). Never describe a non-DONE outcome as
