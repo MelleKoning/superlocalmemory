@@ -186,3 +186,14 @@ def test_an_unreadable_tool_answer_is_not_forwarded_as_is() -> None:
     out = remote_tool_policy._redact_call_answer(f"not json {_TB}".encode())
     assert b"/Users/someone" not in out
     assert json.loads(out)["error"]["code"] == -32603
+
+
+def test_a_remote_json_answer_stays_compact() -> None:
+    """Tool answers are compact JSON (no indentation). Re-indenting them after
+    redaction roughly doubled what a remote caller had to download."""
+    payload = {"results": [{"fact_id": "a1", "content": "note", "score": 0.5}], "count": 1}
+    result = {"content": [{"type": "text", "text": json.dumps(payload, separators=(",", ":"))}]}
+    out = remote_redaction.redact_tool_result(result)["content"][0]["text"]
+    assert "\n" not in out
+    assert json.loads(out) == payload
+    assert len(out) == len(json.dumps(payload, separators=(",", ":")))

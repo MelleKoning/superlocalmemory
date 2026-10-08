@@ -149,7 +149,8 @@ def _redact_block_text(text: str, diagnostic: bool) -> str:
     except ValueError:
         return redact_text(text)
     if isinstance(parsed, (dict, list)):
-        return json.dumps(redact_value(parsed, diagnostic=diagnostic), indent=2, default=str)
+        return json.dumps(redact_value(parsed, diagnostic=diagnostic),
+                          separators=(",", ":"), ensure_ascii=False, default=str)
     return redact_text(text)
 
 
