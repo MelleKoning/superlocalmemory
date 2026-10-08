@@ -63,3 +63,42 @@ def test_degree_query_probes_by_source_and_target(tmp_path: Path) -> None:
     assert searches, plan
     # Every probe pins the node id; none walks the whole profile.
     assert all("source_id=?" in step or "target_id=?" in step for step in searches), plan
+
+
+def test_a_facts_edges_are_written_on_one_connection(tmp_path: Path) -> None:
+    """All edges of one new fact commit together, on one connection.
+
+    Per-edge commits opened, configured and closed a connection for every edge
+    (tens per saved fact) while holding the store's write lock. The rows must be
+    the ones edge-by-edge writing produces.
+    """
+    from superlocalmemory.storage.models import AtomicFact, EdgeType, GraphEdge, MemoryRecord
+
+    db = _store(tmp_path)
+    for mid in ["m_n"] + [f"m_o{i}" for i in range(6)]:
+        db.store_memory(MemoryRecord(memory_id=mid, content="parent"))
+    for i in range(6):
+        db.store_fact(AtomicFact(fact_id=f"o{i}", memory_id=f"m_o{i}", content=f"other {i}"))
+    new = AtomicFact(fact_id="n", memory_id="m_n", content="new")
+    db.store_fact(new)
+    builder = GraphBuilder(db)
+    planned = [GraphEdge(profile_id="default", source_id="n", target_id=f"o{i}",
+                         edge_type=EdgeType.ENTITY, weight=1.0) for i in range(6)]
+    builder._build_entity_edges = lambda *_a, **_k: list(planned)  # type: ignore[method-assign]
+    opened: list[int] = []
+    real_connect = db._connect
+
+    def counting_connect(*a, **k):
+        opened.append(1)
+        return real_connect(*a, **k)
+
+    db._connect = counting_connect  # type: ignore[method-assign]
+    try:
+        edges = builder.build_edges(new, "default")
+    finally:
+        db._connect = real_connect  # type: ignore[method-assign]
+    assert len(edges) >= 6
+    assert len(opened) == 1, f"{len(opened)} connections for {len(edges)} edges"
+    stored = {(dict(r)["source_id"], dict(r)["target_id"]) for r in db.execute(
+        "SELECT source_id, target_id FROM graph_edges WHERE source_id = 'n' AND edge_type = 'entity'")}
+    assert stored == {("n", f"o{i}") for i in range(6)}

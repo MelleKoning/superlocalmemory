@@ -83,8 +83,14 @@ class GraphBuilder:
         edges.extend(self._build_semantic_edges(new_fact, profile_id))
         edges.extend(self._build_causal_edges(new_fact, profile_id, hub_cache))
 
-        for edge in edges:
-            self._db.store_edge(edge)
+        # One transaction for the fact's edges: the same statements in the
+        # same order, on one connection. Per-edge commits opened, configured
+        # and closed a connection for every edge (tens per saved fact) while
+        # holding the store's write lock.
+        if edges:
+            with self._db.transaction():
+                for edge in edges:
+                    self._db.store_edge(edge)
 
         if edges:
             logger.debug(
