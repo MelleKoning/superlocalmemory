@@ -20,6 +20,9 @@ left, so an interrupted run is finished by running it again):
    an unfinished erasure of a person or profile is never undone, only counted.
 6. ``obligations`` — failed ledger entries settled by proof
    (integrity_obligations); admin cancellations with a live subject untouched.
+7. ``own_facts`` — memories whose only searchable fact enrichment removed as a
+   near-duplicate of another memory get it back (storage/own_fact_repair);
+   erased or changed memories are held back and counted. Undo hides it again.
 
 Never: drop a constraint, invent a parent, delete history, delete content-
 bearing rows, or delete anything the census did not prove. Every write holds
@@ -345,10 +348,45 @@ class Repair:
                          {"state": "failed"}, {"state": state, "proof": proof}, undoable=True)
         return cls
 
+    def _own_facts(self, stats: RunStats) -> None:
+        """Memories whose own fact enrichment removed (storage/own_fact_repair)."""
+        from superlocalmemory.storage import own_fact_repair as own
+        from superlocalmemory.storage.database import DatabaseManager
+
+        conn = self._connect()
+        try:
+            found, held = own.classify(conn)
+            for reason, n in held.items():
+                stats.add(f"own_facts.held_{reason}", n)
+            db = DatabaseManager(self.db_path)
+            for item in found:
+                if self.limits.max_seconds is not None and (
+                        time.monotonic() - stats.started) > self.limits.max_seconds:
+                    raise _OutOfTime
+                with db.transaction():
+                    fact_id = own.promote(db, conn, item)
+                if fact_id is None:
+                    stats.add("own_facts.not_repaired", 1)
+                    continue
+                with self._held(stats, conn):
+                    # Undo hides the fact again (archived): the row stays, as with
+                    # every other repair, and the memory is back to no visible fact.
+                    receipts.keep_row(conn, stats.run_id, "atomic_facts", json.dumps({
+                        "key": ["fact_id", fact_id], "written": {"archive_status": "live"},
+                        "old": {"archive_status": "archived"}}), kind="update")
+                    receipts.receipt(conn, stats.run_id, "restore_own_fact",
+                                     f"memories:{item.memory_id}",
+                                     "enrichment removed this memory's only searchable fact",
+                                     {"facts": 0}, {"facts": 1, "fact_id": fact_id},
+                                     undoable=True)
+                stats.add("own_facts.restored", 1)
+        finally:
+            conn.close()
+
     # -- public -----------------------------------------------------------
 
     STEPS = ("orphans", "vectors", "erased_text", "keyword_index", "unfinished_deletes",
-             "obligations")
+             "obligations", "own_facts")
 
     def apply(self, run_id: str | None = None) -> dict[str, Any]:
         if not _ONE_RUN.acquire(blocking=False):
