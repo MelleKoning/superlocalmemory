@@ -231,18 +231,25 @@ def test_deadline_refusal_is_never_written_later(tmp_path) -> None:
     journal.close()
 
 
-def test_withdrawal_during_execution_reruns_batch_without_it(tmp_path) -> None:
-    """Cancel before commit: a withdrawn operation is rolled out of its batch."""
+def test_withdrawal_during_execution_reruns_batch_without_it(tmp_path, monkeypatch) -> None:
+    """Cancel before commit: a withdrawn operation is rolled out of its batch.
+
+    The writer already holds this operation, so its caller first waits out the
+    stalled-writer grace (shortened here); still executing after that, it is
+    withdrawn.
+    """
+    grace = 0.1
+    monkeypatch.setattr(journal_writer, "STALLED_WRITER_GRACE_SECONDS", grace)
     writer = _scratch_writer(tmp_path, linger_seconds=0.2)
     deadline = time.monotonic() + 1.0
     slow_runs = 0
 
     def slow(conn):
-        # Still executing when its caller's deadline passes.
+        # Still executing when its caller's deadline and grace have passed.
         nonlocal slow_runs
         slow_runs += 1
         conn.execute("INSERT INTO t VALUES ('slow')")
-        time.sleep(max(0.0, deadline - time.monotonic()) + 0.2)
+        time.sleep(max(0.0, deadline - time.monotonic()) + grace + 0.2)
 
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
