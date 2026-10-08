@@ -16,6 +16,12 @@
 //   POST /api/v3/connections/{id}/apps/{authorization_id}/revoke   {profile_id, expected_version}
 //        200 {revoked:true}   409 {detail:"version_conflict"|"profile_changed"}   503
 //
+// Same app, several approvals: when an app reconnects, the gateway keeps the old
+// approval next to the new one. The list has no client id (the gateway reply is a
+// fixed shape), so an app's identity is its registered name + the host it signs in
+// from, within one connection. The newest approval is current; each older one is
+// marked "Replaced by a newer approval" and can be removed. Nothing is auto-removed.
+//
 // Every app name / host is third-party text: textContent only, never markup.
 (function () {
   'use strict';
@@ -47,6 +53,50 @@
       connectedAt: typeof raw.connected_at_ms === 'number' ? raw.connected_at_ms : null,
       lastUsedAt: typeof raw.last_used_at_ms === 'number' ? raw.last_used_at_ms : null
     };
+  }
+
+  // Same app = same connection + same name + same host (case-insensitive).
+  function identityOf(entry) {
+    return [entry.connectionId, entry.name.toLowerCase(), entry.host.toLowerCase()].join('\u0000');
+  }
+
+  // Marks older approvals of the same app as replaced and puts each one right
+  // after the approval that replaced it. Returns new entries; input is untouched.
+  // An approval with no known connect time, or one tied with the newest, cannot be
+  // proven older, so it is left as an ordinary row rather than wrongly labelled.
+  function arrange(entries) {
+    var groups = {};
+    entries.forEach(function (entry) {
+      if (typeof entry.connectedAt !== 'number' || !(entry.connectedAt > 0)) return;
+      var key = identityOf(entry);
+      var newest = groups[key];
+      if (!newest || entry.connectedAt > newest.connectedAt) groups[key] = entry;
+    });
+    var older = {};
+    var current = entries.map(function (entry) {
+      var key = identityOf(entry);
+      var newest = groups[key];
+      var isOlder = newest && newest !== entry && typeof entry.connectedAt === 'number'
+        && entry.connectedAt > 0 && entry.connectedAt < newest.connectedAt;
+      if (isOlder) {
+        (older[key] = older[key] || []).push(Object.assign({}, entry, { replacedAt: newest.connectedAt }));
+        return null;
+      }
+      var hasOlder = newest === entry && entries.some(function (other) {
+        return other !== entry && identityOf(other) === key
+          && typeof other.connectedAt === 'number' && other.connectedAt > 0 && other.connectedAt < entry.connectedAt;
+      });
+      return Object.assign({}, entry, { replacedAt: null, hasOlder: hasOlder });
+    }).filter(Boolean);
+    var out = [];
+    current.forEach(function (entry) {
+      out.push(entry);
+      var trail = entry.hasOlder ? older[identityOf(entry)] : null;
+      if (trail) {
+        trail.sort(function (a, b) { return b.connectedAt - a.connectedAt; }).forEach(function (old) { out.push(old); });
+      }
+    });
+    return out;
   }
 
   window.odCreateConnectedAppsList = function () {
@@ -101,6 +151,11 @@
       return h('span', { className: 'apps-chip' + (on ? ' is-on' : ''), title: title, text: label });
     }
 
+    function replacedDate(ms) {
+      try { return new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
+      catch (_) { return ui.fullDate(ms); }
+    }
+
     function buildRow(entry) {
       var meta = [];
       var connected = ui.relativeTime(entry.connectedAt);
@@ -122,17 +177,33 @@
       var titleRow = h('div', { className: 'apps-row-title' }, [h('span', { className: 'apps-name', text: entry.name })]);
       if (entry.host) titleRow.appendChild(h('span', { className: 'apps-host', text: entry.host }));
 
+      var replaced = entry.replacedAt !== null && entry.replacedAt !== undefined;
+      if (replaced) {
+        titleRow.appendChild(h('span', {
+          className: 'apps-replaced', 'data-replaced': '',
+          title: ui.fullDate(entry.replacedAt),
+          text: 'Replaced by a newer approval on ' + replacedDate(entry.replacedAt)
+        }));
+      } else if (entry.hasOlder) {
+        titleRow.appendChild(h('span', { className: 'apps-current', text: 'Current' }));
+      }
+
       var remove = h('button', {
         type: 'button', className: 'btn danger sm', text: 'Remove access',
-        'aria-label': 'Remove access for ' + entry.name, 'data-remove-access': ''
+        'aria-label': 'Remove access for ' + entry.name + (replaced ? ' (older approval)' : ''),
+        'data-remove-access': ''
       });
       if (entry.version === null) { remove.disabled = true; remove.title = 'This app cannot be removed from here yet.'; }
       remove.addEventListener('click', function () { askRemove(entry, remove); });
       entry.button = remove;
 
-      var row = h('li', { className: 'apps-row', 'data-authorization-id': entry.authorizationId }, [
+      var rowMain = [titleRow, chips, metaRow];
+      if (replaced) {
+        rowMain.push(h('p', { className: 'apps-replaced-note', text: 'This older approval still works until you remove it.' }));
+      }
+      var row = h('li', { className: 'apps-row' + (replaced ? ' is-replaced' : ''), 'data-authorization-id': entry.authorizationId }, [
         h('div', { className: 'apps-avatar', 'aria-hidden': 'true', text: ui.monogram(entry.name) }),
-        h('div', { className: 'apps-row-main' }, [titleRow, chips, metaRow]),
+        h('div', { className: 'apps-row-main' }, rowMain),
         h('div', { className: 'apps-row-actions' }, [remove])
       ]);
       entry.row = row;
@@ -189,7 +260,7 @@
         entries.sort(function (a, b) {
           return (b.lastUsedAt || 0) - (a.lastUsedAt || 0) || (b.connectedAt || 0) - (a.connectedAt || 0) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
         });
-        state.entries = entries; state.loading = false; state.ready = true; state.loadedAt = Date.now();
+        state.entries = arrange(entries); state.loading = false; state.ready = true; state.loadedAt = Date.now();
         state.error = failed ? 'unavailable' : null;
         if (failed) showNotice('We couldn’t load your connected apps just now. Try again in a moment.', 'error', true);
         else showNotice('');
@@ -206,15 +277,19 @@
     }
 
     function dropEntry(entry) {
-      state.entries = state.entries.filter(function (item) { return item !== entry; });
+      // Re-arrange: if the current approval was removed, the next newest one becomes current.
+      state.entries = arrange(state.entries.filter(function (item) { return item !== entry; }));
       render();
     }
 
     function askRemove(entry, button) {
       if (state.blocked) return;
+      var older = entry.replacedAt !== null && entry.replacedAt !== undefined;
       var dialog = ui.confirmDialog({
-        title: 'Remove access for ' + entry.name + '?',
-        body: entry.name + ' will no longer be able to read or save memories. You can connect it again any time.',
+        title: older ? 'Remove the older approval for ' + entry.name + '?' : 'Remove access for ' + entry.name + '?',
+        body: older
+          ? 'This older approval will stop working. The newer approval for ' + entry.name + ' is not affected.'
+          : entry.name + ' will no longer be able to read or save memories. You can connect it again any time.',
         confirmLabel: 'Remove access',
         cancelLabel: 'Cancel',
         returnFocus: button,
