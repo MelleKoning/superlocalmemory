@@ -41,7 +41,16 @@ _VARIANCE_FLOOR: float = 1e-6
 
 
 class _LanceCandidateSource:
-    """Adapt the promoted Lance projection to the existing candidate contract."""
+    """Adapt the promoted Lance projection to the existing candidate contract.
+
+    It searches every tier. The projection worker puts each fact recall may
+    return into Lance, ``cold`` and ``archived`` included, and the canonical
+    search ranks all of them; the tier column is a copy of the fact's lifecycle
+    taken when it was projected, and nothing refreshes it when the lifecycle
+    later changes. Leaving the backend's default (``active`` and ``warm`` only)
+    in place left a sixth of one real store's memories out of the answer, and
+    filtered the rest on a column that was out of date for two rows in five.
+    """
 
     available = True
 
@@ -51,6 +60,7 @@ class _LanceCandidateSource:
     def search(self, query_embedding: list[float], *, top_k: int, profile_id: str) -> list[tuple[str, float]]:
         return self._backend.similarity_search(
             query_embedding, top_k=top_k, profile_id=profile_id,
+            tier_filter=sorted(self._backend.VALID_TIERS),
         )
 
 
