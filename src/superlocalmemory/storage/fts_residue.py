@@ -21,12 +21,17 @@ Two fixes, both idempotent:
 from __future__ import annotations
 
 import logging
+import sqlite3
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 #: The keyword indexes that hold memory text.
 FTS_TABLES: tuple[str, ...] = ("atomic_facts_fts", "fact_expansion_fts")
+#: FTS5 learned ``secure-delete`` in SQLite 3.42. Older builds (Ubuntu 22.04: 3.37.2)
+#: answer the attempt with a bare "SQL logic error" (GitHub #153).
+SECURE_DELETE_MIN_SQLITE = (3, 42, 0)
+_old_sqlite_reported = False
 
 
 def _run(target: Any, sql: str, params: tuple = ()) -> list:
@@ -50,10 +55,21 @@ def ensure_secure_delete(target: Any) -> dict[str, str]:
     ``target`` is a ``sqlite3.Connection`` or a ``DatabaseManager``. Returns
     ``{table: "on" | "enabled" | "absent" | "unsupported"}``.
     """
+    global _old_sqlite_reported
     state: dict[str, str] = {}
+    old_sqlite = sqlite3.sqlite_version_info < SECURE_DELETE_MIN_SQLITE
     for table in FTS_TABLES:
         if not _exists(target, table):
             state[table] = "absent"
+            continue
+        if old_sqlite:
+            # A known limit with a fallback: ``slm db repair`` purges deleted words.
+            if not _old_sqlite_reported:
+                _old_sqlite_reported = True
+                logger.info("SQLite %s is older than 3.42: deleted words leave the keyword "
+                            "index at the next 'slm db repair' instead of at once",
+                            sqlite3.sqlite_version)
+            state[table] = "unsupported"
             continue
         if secure_delete_on(target, table):
             state[table] = "on"
