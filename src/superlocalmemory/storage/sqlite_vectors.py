@@ -40,13 +40,48 @@ def count_canonical_vectors(conn: sqlite3.Connection, profile_id: str) -> int:
     if not _canonical_vector_table_exists(conn):
         return 0
     load_sqlite_vec_extension(conn)
-    return _validate_canonical_vector_contract(conn, profile_id)
+    # The contract is checked across every row, withheld ones included: a
+    # broken mapping is a broken store whoever may see it. What is COUNTED is
+    # what ``iter_canonical_vectors`` yields, because the parity check holds a
+    # projection's size against this number.
+    _validate_canonical_vector_contract(conn, profile_id)
+    try:
+        return int(
+            conn.execute(
+                "SELECT COUNT(*) FROM embedding_metadata em "
+                "JOIN atomic_facts af ON af.fact_id = em.fact_id "
+                "AND af.profile_id = em.profile_id "
+                "JOIN fact_embeddings fe ON fe.rowid = em.vec_rowid "
+                "AND fe.profile_id = af.profile_id "
+                "WHERE af.profile_id = ?" + _visible_facts(conn),
+                (profile_id,),
+            ).fetchone()[0]
+        )
+    except sqlite3.Error as exc:
+        raise CanonicalVectorError(
+            "canonical vector contract is unreadable; refusing a partial projection"
+        ) from exc
+
+
+def _visible_facts(conn: sqlite3.Connection) -> str:
+    """AND-clause keeping only facts recall may return (alias ``af``).
+
+    The projection worker holds a withheld or soft-deleted fact out of the vector
+    projection, so a projection built from scratch must too. Presence-guarded on
+    the passed connection: a store older than the columns has nothing withheld.
+    """
+    from superlocalmemory.storage.database import visible_fact_clause_for_connection
+
+    return visible_fact_clause_for_connection(conn, prefix="af")
 
 
 def iter_canonical_vectors(
     conn: sqlite3.Connection, profile_id: str
 ) -> Iterator[CanonicalVector]:
-    """Yield supported vec0 rows joined to canonical fact identity and lifecycle."""
+    """Yield supported vec0 rows joined to canonical fact identity and lifecycle.
+
+    Only facts recall may return: withheld and soft-deleted ones are left out.
+    """
     if not _canonical_vector_table_exists(conn):
         return
     load_sqlite_vec_extension(conn)
@@ -59,8 +94,8 @@ def iter_canonical_vectors(
             "JOIN embedding_metadata em ON em.vec_rowid = fe.rowid "
             "JOIN atomic_facts af ON af.fact_id = em.fact_id "
             "AND af.profile_id = em.profile_id "
-            "WHERE af.profile_id = ? AND fe.profile_id = af.profile_id "
-            "ORDER BY fe.rowid",
+            "WHERE af.profile_id = ? AND fe.profile_id = af.profile_id"
+            + _visible_facts(conn) + " ORDER BY fe.rowid",
             (profile_id,),
         )
         for rowid, fact_id, lifecycle, row_profile_id, blob in rows:
