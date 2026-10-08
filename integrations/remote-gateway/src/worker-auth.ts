@@ -1,5 +1,4 @@
 import {anonymousAdmission,type SetupAdmissionEnv} from './anonymous-admission.ts';
-import {registrationDiagnostic} from './dcr-diagnostics.ts';
 import {readAuthorizationBody} from './authorization-body.ts';
 import {OWNER_CONTROL_PATHS,ownerControlFetch} from './owner-control.ts';
 import type {ConnectEnv} from './worker-connect.ts';
@@ -14,7 +13,7 @@ import {escapeHtml,exchangeGithubCode,githubAuthorizationUrl,renderConsentPage,r
 import {tokenHash} from './device-proof.ts';
 import type {BootstrapBinding} from './bootstrap-do.ts';
 import type {AuthProps,Scope} from './contracts.ts';
-export interface AuthWorkerEnv extends AuthorizationEnv,IssuedTokenEnv,ConnectEnv,SetupAdmissionEnv {GITHUB_CLIENT_ID:string;GITHUB_CLIENT_SECRET:string;DEVICE_WRAP_KEY:string;DCR_DIAGNOSTICS?:string;}
+export interface AuthWorkerEnv extends AuthorizationEnv,IssuedTokenEnv,ConnectEnv,SetupAdmissionEnv {GITHUB_CLIENT_ID:string;GITHUB_CLIENT_SECRET:string;DEVICE_WRAP_KEY:string;}
 interface ConsentContext {request:AuthRequest;bootstrapId?:string;ownerId?:string;}
 const LOOPBACK_HOSTS=['127.0.0.1','localhost','[::1]'];
 function response(status:number,error:string):Response{return Response.json({error},{status,headers:{'Cache-Control':'no-store'}});}
@@ -125,16 +124,6 @@ export async function authFetch(request:Request,env:AuthWorkerEnv,ctx:ExecutionC
    const reason=url.searchParams.get('reason')??'';
    return html(renderAuthFailure(known.includes(reason)?reason:'authorization_unavailable',await dashboardReturnUrl(request,env.DEVICE_WRAP_KEY)),new Headers(),undefined,400);
   }
-  if(url.pathname==='/oauth/register'&&request.method==='POST'&&env.DCR_DIAGNOSTICS==='1'){
-   let raw:string;try{raw=await readAuthorizationBody(request,{limit:1048576});}catch{return response(400,'invalid_request');}
-   let metadata:unknown;try{metadata=JSON.parse(raw);}catch{metadata=null;}
-   const copy=new Request(request.url,{method:request.method,headers:request.headers,body:raw});
-   const reply=await issuerProtocol(copy,env,ctx);let outcome:unknown;try{outcome=await reply.clone().json();}catch{outcome=null;}
-   const diagnostic=registrationDiagnostic(metadata,reply.status,outcome);
-   ctx.waitUntil(env.OAUTH_KV.put('slm-dcr-diagnostic:'+Date.now()+':'+crypto.randomUUID(),JSON.stringify(diagnostic),{expirationTtl:600}).catch(()=>{console.warn('dcr_diagnostic_unavailable');}));
-   return reply;
-  }
-
   if(url.pathname==='/authorize'&&request.method==='GET'){
    const parsed=memoryAuthorizationRequest(await authorizationServer.getOAuthApi(env).parseAuthRequest(request));
    if(!parsed)return response(400,'invalid_authorization');
