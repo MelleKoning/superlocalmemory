@@ -1,31 +1,30 @@
 # Profiles
-> SuperLocalMemory V4 Documentation
-> https://superlocalmemory.com | Part of Qualixar
 
 Profiles organize memory contexts inside one installation. Personal facts are
 profile-scoped by default; shared and global recall are opt-in and subject to
 the configured scope policy. Profiles are not an operating-system or tenant
-security boundary.
+security boundary: they all live in one database on one computer.
+
+> **Two things share the word "profile".** A *memory profile* (this page) is a
+> namespace of memories. An *MCP tool profile* (`SLM_MCP_PROFILE`: `core`,
+> `code`, `full`, `power`, `mesh`) decides which tools a client sees. Switching a
+> memory profile never changes the tool set, and the tool set is fixed when the
+> MCP server starts. See [MCP Tools Reference](mcp-tools.md#which-tools-a-client-sees).
 
 ---
 
 ## What Profiles Are
 
-A profile is an isolated memory namespace. Each profile has its own:
-
-- Memories and knowledge graph
-- Learned patterns and behavioral data
-- Trust scores and provenance records
-- Retention policies
-- Audit trail
-
-The supported contract excludes another profile's personal facts. Release
-verification must also prove authorized shared/global inclusion and
-unauthorized, deleted, and archived exclusion across every retrieval surface.
+A profile is a memory namespace. Each profile has its own memories and
+knowledge graph, learned patterns and behavioural data, saved views, and audit
+trail. Every row carries a profile id and queries are filtered by it, so recall
+in one profile does not return another profile's personal memories. Shared and
+global recall are opt-in; see [Shared memory](shared-memory.md).
 
 ## Default Profile
 
-After installation, you have one profile called `default`. All memories go here unless you create and switch to another profile.
+After installation there is one profile called `default`. Every memory goes
+there unless you create and switch to another profile.
 
 ## Managing Profiles
 
@@ -35,24 +34,21 @@ After installation, you have one profile called `default`. All memories go here 
 slm profile list
 ```
 
-Output:
-
 ```
 Profiles:
-  * default     (142 memories, active)
-    work        (89 memories)
-    personal    (34 memories)
-    client-acme (67 memories)
+  - default: default
+  - work: work
+  - client-acme: client-acme
 ```
 
-The `*` marks the active profile.
+`slm profile list --json` returns the same list. `slm status` shows which
+profile is active.
 
 ### Create a profile
 
 ```bash
 slm profile create work
 slm profile create client-acme
-slm profile create personal
 ```
 
 ### Switch profiles
@@ -61,97 +57,73 @@ slm profile create personal
 slm profile switch work
 ```
 
-All subsequent `remember`, `recall`, and auto-memory operations use this profile until you switch again.
-
-From an MCP-connected agent (v3.8.0, `code`/`full`/`power` profiles):
+Switching changes the active profile for the whole installation: the CLI, the
+dashboard and every connected agent use it until you switch again. From an MCP
+client the same switch is the `switch_profile` tool:
 
 ```json
-{ "tool": "switch_profile", "arguments": { "profile": "work" } }
+{ "tool": "switch_profile", "arguments": { "profile_id": "work" } }
 ```
 
-The `switch_profile` MCP tool is available in `core` (18), `code` (38), `full` (56), and `power` (68) — every profile is profile-scoped, so every one of them needs a way to leave the profile it started in. It is not included in `mesh` (8), which is coordination-only. See [MCP Profiles →](../README.md#mcp-memory-server-tool-profiles).
+`switch_profile` is in the `core`, `code`, `full` and `power` tool sets and in
+the default set; it is not in `mesh`, which is coordination only.
+
+### Use another profile for one call
+
+Most memory tools take a `profile_id`. A non-empty value routes that one call to
+the named profile, which must already exist, and leaves the active profile
+alone:
+
+```json
+{ "tool": "remember", "arguments": { "content": "Invoice due on the 5th", "profile_id": "client-acme" } }
+```
+
+An unknown profile id is refused, never created or treated as empty. This is
+how an agent works in a second workspace without moving everyone else.
+
+### Delete a profile
+
+The dashboard's profile list can delete a profile. It cannot delete `default`
+or the active profile. The profile's memories, and everything that makes them
+findable and correctable, move into `default`; nothing is discarded. There is no
+CLI command for it.
 
 ## Use Cases
 
-### Work vs Personal
+### Work and personal
 
 ```bash
-# Morning: switch to work
-slm profile switch work
-# Work memories are captured and recalled all day
-
-# Evening: switch to personal
-slm profile switch personal
-# Personal project memories are now active
+slm profile switch work        # work memories are captured and recalled
+slm profile switch personal    # personal project memories are now active
 ```
 
-### Per-Client Isolation
-
-For consultants and agencies working across multiple clients:
+### One profile per client
 
 ```bash
 slm profile create client-alpha
 slm profile create client-beta
-
-# Working on Alpha's project
-slm profile switch client-alpha
-# Only Alpha's architecture, decisions, and context are available
-
-# Switch to Beta
+slm profile switch client-alpha   # only Alpha's context is recalled
 slm profile switch client-beta
-# Alpha's data is completely invisible
 ```
 
-### Per-Project Isolation
+### One profile for Web access
 
-```bash
-slm profile create mobile-app
-slm profile create backend-api
-slm profile create infrastructure
-```
+A web app connected through [Web access](remote-access/README.md) reaches only
+the profile that was active when you turned Web access on.
 
-### Temporary Profiles
+## Retention and settings
 
-For experiments or short-term work:
-
-```bash
-slm profile create experiment-graphql
-slm profile switch experiment-graphql
-# ... do your experiment ...
-
-# Done — switch back (the profile and its memories remain; profiles have no delete command)
-slm profile switch default
-```
-
-## Profile-Specific Settings
-
-Retention policies are set globally via `slm config set` or the `set_retention_policy`
-MCP tool. To apply a policy after switching to a profile:
-
-```bash
-slm profile switch client-acme
-slm config set retention.default_policy gdpr-30d   # GDPR compliance
-
-slm profile switch internal
-slm config set retention.default_policy indefinite  # Keep internal memories forever
-```
-
-All `remember` and `recall` operations run against the active profile. To work in a
-different profile, switch first with `slm profile switch <name>`, then run your commands.
+Retention is not a per-profile setting. The lifecycle thresholds are changed
+with the `set_retention_policy` MCP tool (`cold_after_days`, `archive_after_days`)
+and apply to the whole installation. See [Compliance](compliance.md) for
+deployment-level retention.
 
 ## How Profiles Work Internally
 
-Each profile stores memories in the same SQLite database but with a profile identifier on every row. Queries are filtered by profile at the database level, ensuring complete isolation.
-
-The entity graph, BM25 index, and all math layer state are also per-profile. Building the graph for one profile does not affect another.
-
-## Limits
-
-- No hard limit on the number of profiles
-- Each profile adds minimal overhead (a few KB for metadata)
-- Performance is determined by per-profile memory count, not total profiles
-- Switching profiles is instant (no data loading required)
+All profiles store memories in the same SQLite database with a profile
+identifier on every row, and queries filter on it. The entity graph is built per
+profile, so building it for one profile does not affect another.
 
 ---
 
-*SuperLocalMemory V4 — Copyright 2026 Varun Pratap Bhardwaj. AGPL-3.0-or-later. Part of Qualixar.*
+*SuperLocalMemory — Copyright 2026 Varun Pratap Bhardwaj. AGPL-3.0-or-later. Part of Qualixar.*

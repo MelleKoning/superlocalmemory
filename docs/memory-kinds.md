@@ -1,7 +1,5 @@
 # Memory Kinds and Standing Rules
 
-> SuperLocalMemory V4 documentation · 4.1.19+
-
 Every memory can say what sort of thing it is. Recall uses that to answer
 "what did we decide" with decisions and "how do I" with how-tos, and confirmed
 rules and decisions are handed to every new agent session.
@@ -62,8 +60,8 @@ particular kind are ranked exactly as before.
 A kind a model suggested (as opposed to one you set with `--kind` or
 confirmed) carries a confidence. Below **`display_min_confidence`**
 (default **0.20**), the suggestion is never shown as the kind itself —
-instead the memory is shown under its old, pre-4.1.19 type (`fact_type`,
-mapped to the nearest kind) if it has one, or as untyped if it does not. A
+instead the memory is shown under its older type (`fact_type`, mapped to the
+nearest kind) if it has one, or as untyped if it does not. A
 suggestion that clears the threshold is still shown as a *suggestion*, not a
 fact, until someone confirms it:
 
@@ -74,18 +72,15 @@ fact, until someone confirms it:
 | `legacy` | the nearest kind from the old `fact_type`, plain | no kind, or confidence < `display_min_confidence` |
 | `untyped` | nothing | no kind and no mappable `fact_type` |
 
-`display_min_confidence` is **one constant, read by every surface that shows
-a kind** — `slm list`, `slm recall` / `slm trace` (plain text and `--json`),
-the MCP tools, the HTTP API, and the dashboard's Answer Check "Try it" panel
-— rather than each one guessing its own cutoff. The single implementation is
-`storage.memory_kinds.kind_fields()`; every caller with a live config reads
-the configured value through `core.kind_query.engine_display_min_confidence`
-and passes it in, so a fact shows the same state everywhere regardless of
-which surface asked for it.
+`display_min_confidence` is one setting, read by every surface that shows a
+kind (`slm list`, `slm recall`, `slm trace`, the MCP tools, the HTTP API and the
+dashboard), so a memory shows the same state everywhere.
 
-It is part of the memory-kind settings (`memory_kinds.json`, alongside
-`backend` and `jev_consent`) rather than a CLI flag today — change it with
-`POST /api/v3/kinds/settings {"display_min_confidence": 0.35}` (0.0–1.0).
+It is stored in `memory_kinds.json` in the data folder, beside `backend` and
+`jev_consent`, rather than as a CLI flag. Change it with the daemon's settings
+endpoint, `POST /api/memory-kinds/settings` with
+`{"display_min_confidence": 0.35}` (0.0 to 1.0), which needs the same
+credential as other settings changes.
 
 ## Managing kinds
 
@@ -99,9 +94,9 @@ It is part of the memory-kind settings (`memory_kinds.json`, alongside
 | `slm kinds set FACT_ID KIND` | Set and confirm one memory's kind |
 
 MCP tools: `set_memory_kind`, `memory_kinds_status`, `review_memory_kinds`,
-`confirm_memory_kinds` (in the `code`, `full`, `power` and `whole` profiles,
-and the default).
+`confirm_memory_kinds` (in the `code`, `full` and `power` tool sets, in `whole`,
+and in the default set; not in `core`).
 
 Classifying with Jev sends memory text online, so it needs its own consent
 (`--jev-consent yes`) on top of the answer-check consent. See
-[answer-check.md](answer-check.md).
+[Answer check](answer-check.md).

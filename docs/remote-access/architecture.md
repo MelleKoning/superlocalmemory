@@ -1,45 +1,83 @@
-# Remote-access architecture
+# Web access architecture
 
-This architecture adds an optional authenticated web connection to [the existing local engine](../ARCHITECTURE.md).
+Web access adds an optional, authenticated web connection to [the existing local
+engine](../ARCHITECTURE.md). Nothing about local use changes when it is off.
 
 ![Web MCP clients use HTTPS and OAuth; Cloudflare checks grants and forwards through an authenticated outbound laptop relay](assets/remote-gateway-boundaries.svg)
 
-## One canonical engine, two access paths
+## One engine, two access paths
 
-Local Claude Code, Codex, CLI, SDK and MCP clients keep their existing entry points and complete local capability set. Optional remote clients reach the existing loopback MCP entry point through a companion connector. Both paths use the same governed admission, write coordination and canonical database. The companion must not open a competing memory-database writer.
+Local Claude Code, Codex, the CLI, SDKs and MCP clients keep their existing entry
+points and their full tool set. A web app reaches the same loopback MCP entry
+point through a companion that runs inside SLM's own Python runtime, so there is
+nothing for you to install. Both paths use the same governed admission, the same
+write coordination and the same canonical database. The companion never opens a
+second writer.
 
 | Component | Responsibility | Boundary |
-| --- | --- | --- |
-| Existing dashboard | Initiate enrollment, display consent and verified state, disconnect | Local installation authentication; no cloud secrets in browser storage |
-| Local enrollment service | Journal explicit opt-in and idempotent operations; load protected credentials; supervise the companion | Namespaced remote state; preserve existing local configuration |
-| Companion connector | Establish authenticated outbound WSS; forward bounded admitted requests to a fixed loopback MCP URL | No caller-selected destination, redirects or unlimited buffering |
-| Public MCP Worker | HTTPS MCP endpoint, token verification, discovery filtering and request routing | Authenticate each request before routing |
-| Authorization service and registry | Bind owner, client, installation, profile, audience, original consent and current policy; enforce remote entitlement and revocation | Server authority; client/UI flags are not proof of permission |
-| Durable Object relay | Retain binding/generation and correlated socket traffic, handle offline/timeout/revoke | Hibernating private relay; no canonical memory database |
-| Existing SLM engine and storage | Memory tools, governed writes, recall, mesh and configured answer checks | Existing local permissions and canonical storage remain authoritative |
+|---|---|---|
+| Dashboard, **Connected apps** | Start enrollment, show consent and state, remove an app, turn Web access off | Local installation authentication; no cloud secrets in browser storage |
+| Local enrollment service | Journal the opt-in and each operation so a retry never duplicates; protect the credential; run the companion | Its own state, separate from the memory database |
+| Companion | Hold an outbound WebSocket to the gateway and forward admitted requests to a fixed loopback MCP URL | No caller-chosen destination, no redirects, bounded buffers |
+| Public MCP endpoint | HTTPS MCP resource, token verification, and listing only the tools the caller may use | Every request is authenticated before routing |
+| Authorization service and registry | Bind owner, app, computer, profile and permissions; enforce expiry and revocation | The server is the authority; a flag in the browser is not permission |
+| Relay | Pair each admitted request with the computer's live connection, with a deadline | Holds no memory database |
+| SLM engine and storage | Memory tools, governed writes, recall | Existing local permissions stay authoritative |
 
-Cloudflare provides an [OAuth provider library for MCP authorization](https://developers.cloudflare.com/agents/model-context-protocol/protocol/authorization/). Public MCP uses HTTPS; WSS is our private outbound laptop transport. These are separate protocol boundaries, not a new public MCP protocol named "MCP 2.0".
+The public side uses HTTPS and OAuth. The link between the gateway and your
+computer is a private outbound WebSocket, which is why no inbound port, DNS
+record or tunnel is needed on your side.
 
-## A remote call
+## A web call
 
-1. The owner opts in from the existing dashboard and binds an installation/profile to a connection.
-2. The AI client completes login and consent. Its grant has an immutable permission ceiling.
-3. The gateway verifies the token, owner/client/audience binding, current grant state and remote entitlement. Effective permissions are the intersection of token scope, original consent and current connection policy.
-4. The gateway validates the MCP request and limits tool discovery to permitted tools. Read-only consent does not authorize writes, corrections, arbitrary local tools or broader profile visibility.
-5. The relay correlates the admitted request with the authenticated connector's current generation and deadline.
-6. The companion forwards the original bounded MCP payload to the fixed loopback endpoint with local installation authentication. Cloud credentials never replace local installation credentials.
-7. The local engine executes through its existing admission and write path. The response returns through the relay to the client.
+1. You turn on Web access in the dashboard for the active profile and choose
+   what apps may do.
+2. The app signs in through GitHub and receives only the permissions you
+   approved. A permission can never exceed that ceiling.
+3. The gateway checks the token, the app, the connection and its current state
+   on every request. The effective permissions are the intersection of the
+   token's scope, the original consent and the connection's current policy.
+4. The gateway accepts only these tools: `recall`, `search`, `fetch` and
+   `get_status` for read; `remember` for save; `session_init`, `close_session`,
+   `report_feedback` and `report_outcome` for session tools. Everything else is
+   refused, and the app's tool list shows only what it may call.
+5. The relay hands the request to your computer's live connection with a
+   25-second deadline. A request body is limited to 1 MiB and a response to 4 MiB.
+   The relay holds at most 8 unanswered requests per computer.
+6. The companion forwards the original request to the local MCP endpoint with
+   the local installation credential. Cloud credentials never replace it.
+7. The engine runs it through its normal admission and write path, and the answer
+   returns the same way.
 
-Loss of a response is not proof a write failed. Reconnect must not automatically replay a possibly completed memory write. Durable idempotency belongs in the composed origin operation contract.
+A lost response is not proof that a write failed, and a reconnect never replays
+a write that may have completed. A save carries an `idempotency_key`, and a
+retry with the same key returns the first result.
 
 ## Data and availability
 
-The database remains local, but remote request and response contents traverse Cloudflare and the AI host. Production logging must exclude memory bodies, credentials and raw tokens. Cloud state contains identity/consent/connection records and operational metadata; protected credential material is governed separately. No hosted copy of the memory database is required.
+Your database stays on your computer, but request and response contents pass
+through the gateway and the AI service you connected. The gateway keeps identity,
+consent and connection records plus operational metadata; it does not keep a copy
+of your memories, and request logging is off by default so memory text and OAuth
+parameters are not recorded.
 
-Laptop sleep, loss of internet or a stopped companion produces remote unavailability. It must never be represented as a successful empty recall. Gateway or entitlement failures affect only remote access. Local SLM remains available independently.
+A sleeping computer, a lost network or a stopped companion makes Web access
+unavailable. The gateway treats the computer as asleep after 45 seconds without
+a heartbeat and answers `connector_asleep`; that is never presented as an empty
+recall. A gateway or sign-in failure affects only Web access.
 
-There is no per-user Cloudflare account, named Tunnel, cloudflared process or DNS record. The provider manages shared endpoint hostnames; users operate the SLM dashboard. Hosted subscriptions are a future remote-service boundary, not a local-core paywall.
+The computer's credential lasts 30 days and is renewed after the halfway point.
+An app's own sign-in slides forward each time it is used and lapses after 30
+days idle. The daily allowance is a count of tool calls per day, reset at
+midnight UTC.
+
+The provider manages the shared endpoint hostnames. You never need a Cloudflare
+account, a named tunnel or `cloudflared`.
 
 ## Visual assets
 
-The [integrated SVG](assets/slm-integrated-architecture.svg), [connection overview SVG](assets/slm-local-and-remote.svg), [mobile SVG](assets/slm-local-and-remote-mobile.svg) and [boundary SVG](assets/remote-gateway-boundaries.svg) are editable documentation source. PNG counterparts are rendered exports, not screenshots of a released service. Update diagrams when the architecture changes; verify the rendered assets against the [acceptance procedures](acceptance.md).
+The [integrated SVG](assets/slm-integrated-architecture.svg), [connection
+overview SVG](assets/slm-local-and-remote.svg), [mobile
+SVG](assets/slm-local-and-remote-mobile.svg) and [boundary
+SVG](assets/remote-gateway-boundaries.svg) are editable source diagrams. The PNG
+files are renders of them.

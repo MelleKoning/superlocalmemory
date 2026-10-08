@@ -1,6 +1,8 @@
 # Cloudflare operator guide
 
-SLM users start web connections from the existing local dashboard. They do not configure Cloudflare, DNS, tunnels or servers. The database and canonical memory engine remain on the user's computer. GitHub sign-in applies to the optional web connection; local CLI, stdio, Codex, Claude Code and mesh do not require a hosted account.
+This page is for whoever runs the SLM gateway, not for people who use SLM. [Web access](README.md) describes what users see.
+
+SLM users start web connections from the dashboard's **Connected apps** page. They do not configure Cloudflare, DNS, tunnels or servers. The database and canonical memory engine remain on the user's computer. GitHub sign-in applies to the optional web connection; local CLI, stdio, Codex, Claude Code and mesh do not require a hosted account.
 
 ## Services
 
@@ -22,7 +24,7 @@ The native owner token has resource `https://auth.superlocalmemory.com/owner` an
 5. Deploy the private authority Worker first, then the auth Worker, the resource Worker and the connector Worker. Cross-Worker Durable Object bindings refer to the authority Worker; the resource validates tokens through the auth service binding.
 6. Put a newly generated 32-byte random hex value into the encrypted **DEVICE_WRAP_KEY** Worker secret using protected input. Do not rotate it during retries: existing encrypted device deliveries depend on it.
 7. In the Cloudflare auth Worker's **Settings → Runtime variables and secrets**, add **GITHUB_CLIENT_SECRET** with **Secret** selected. The operator generates/copies this from GitHub and submits it directly. Never paste it into a chat, repository, `.env` file, screenshot or log.
-8. Verify public HTTPS discovery, the OAuth challenge, DCR and native enrollment before configuring an AI client. A deployed hostname alone does not prove a successful owner or client connection.
+8. Verify public HTTPS discovery, the OAuth challenge, DCR and native enrollment before configuring an AI client. A deployed hostname alone does not prove a successful owner or client connection. Follow [Checking a connection](acceptance.md).
 
 The GitHub client secret belongs to the SLM operator application, not to individual SLM users. Users authorize that application through GitHub.
 
@@ -44,7 +46,7 @@ The auth Worker limits anonymous setup before allocating state. Per-address admi
 
 ## Client setup
 
-First complete the local dashboard connection and wait for **Ready for AI client — GitHub connected**. Then:
+First complete the dashboard connection on the **Connected apps** page and wait for **Web access is on**. Then:
 
 - **Composio:** Add Custom MCP, name **SuperLocalMemory**, server URL `https://mcp.superlocalmemory.com/mcp`, authentication **OAuth**. Complete GitHub sign-in, select the correct laptop/profile connection and approve the requested scopes. Verify its discovered tools and a recall round trip before calling it connected.
 - **Muse:** use the reviewed private adapter and its hosted OAuth connector, rather than assuming a generic custom-MCP screen. Give the exact resource URL and issuer metadata. Verify the real helper supplies PKCE S256, `resource`, state validation and its exact registered callback. Secrets and tokens stay in the hosted connector's secure store, not chat or adapter files.
@@ -53,10 +55,12 @@ Discovery: `https://auth.superlocalmemory.com/.well-known/oauth-authorization-se
 
 ## Capacity and recovery
 
+The free daily allowance is a per-connection count of tool calls per UTC day. The default is set in the registry Worker and an operator can change it with the `DAILY_TOOL_CALL_LIMIT` variable. Users are told only that there is a free daily allowance, never a number.
+
 [SQLite Durable Objects are available on Workers Free](https://developers.cloudflare.com/durable-objects/platform/pricing/). Test within the account's actual Free limits before purchasing anything. Free quota exhaustion can stop operations; a website zone plan and a Workers compute plan are distinct. Count Worker requests, Durable Object RPCs/storage operations and KV operations. A user count is not a capacity unit.
 
 Use hibernating outbound WebSockets, monitor reconnect frequency and measure end-to-end memory latency. Do not cache user memory bodies at the edge. Logs remain disabled by default to avoid recording OAuth query parameters or memory payloads; diagnostic events use bounded, non-secret codes.
 
 Failed provider-grant cleanup persists only grant references in the private `slm-cleanup:` KV retry ledger. Token requests schedule a bounded retry pass, at most once per minute per active isolate. No request traffic means no automatic pass; operator monitoring must detect accumulated cleanup entries. Local and registry revocation remain authoritative even if provider cleanup is temporarily unavailable.
 
-For rollback, use the prior Worker deployment versions and disable web access through the local dashboard. Preserve the named local keys, enrollment cleanup state and existing database until revocation is confirmed. A local database/runtime upgrade has its own backed-up rollback procedure; do not conflate it with gateway rollback.
+For rollback, use the prior Worker deployment versions and turn Web access off on the dashboard's **Connected apps** page. Preserve the named local keys, enrollment cleanup state and existing database until revocation is confirmed. A local database/runtime upgrade has its own backed-up rollback procedure; do not conflate it with gateway rollback.

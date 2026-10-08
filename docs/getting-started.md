@@ -1,17 +1,7 @@
 # Getting Started
-> SuperLocalMemory V4 Documentation
-> https://superlocalmemory.com | Part of Qualixar
 
 Install the CLI, activate the product explicitly, and verify one store/recall
 round trip.
-
-<!-- MKT-M4: orient new Claude users who already have Anthropic's free
-     built-in memory (shipped March 2026) on why SLM still earns a
-     `pip install` + daemon. Three-bullet contrast. -->
-<!-- MKT-M5: one-line framing so expectations match the product shape. -->
-<!-- MKT-L1: reframe the integration surface as MCP-native so every MCP
-     client (LangChain-MCP, LlamaIndex MCP, CrewAI-via-MCP, etc.) is
-     covered, not just the 5 named IDEs. -->
 
 ### Product boundary
 
@@ -19,16 +9,18 @@ SLM is useful when you need a user-operated memory service across configured
 tools:
 
 - **Local core path by default.** Core memory state uses the configured local
-  data root. Optional providers, connectors, backup, model downloads, and
-  skill evolution have separate network behavior and must be enabled or configured.
+  data root. Optional providers, connectors, backup, model downloads, skill
+  evolution and [Web access](remote-access/README.md) have separate network
+  behavior and must be enabled or configured.
 - **Named client configurations.** MCP and CLI surfaces can point multiple
   configured tools at one approved data root. Treat a client as verified only
   when it passes the release integration matrix.
 - **Outcome-aware ranking components.** Explicit feedback and qualified
-  outcomes can inform local ranking. Exposure alone is not a positive signal.
+  outcomes can inform local ranking, which is off unless you enable it with
+  `SLM_RANKING`. Exposure alone is not a positive signal.
 
 SuperLocalMemory is built for **one developer, one laptop, many tools.**
-Team / multi-user memory is a different product (SLM-Mesh).
+Team and multi-user memory is a different product (SLM-Mesh).
 
 **Integration surface:** SLM exposes MCP and CLI contracts. Protocol
 compatibility does not by itself prove install, lifecycle, identity, and
@@ -38,13 +30,14 @@ cross-client behavior for every product that implements MCP.
 
 ## Prerequisites
 
-> **Supported V4 platforms:** Apple Silicon macOS, 64-bit Windows, and 64-bit Linux.
+> **Supported platforms:** Apple Silicon macOS, 64-bit Windows, and 64-bit Linux.
 > Intel Mac and 32-bit Windows are not supported by the patched cryptographic
-> runtime required for V4.
+> runtime SLM requires.
 
 - **Node.js** 18 or later
-- **Python** 3.12 or later — macOS ships 3.9; use `brew install python@3.12` or a version manager.
-  Ubuntu 22.04 users: `sudo add-apt-repository ppa:deadsnakes/ppa && sudo apt install python3.12 python3.12-venv`
+- **Python** 3.12 to 3.14. macOS ships an older Python; use
+  `brew install python@3.12` or a version manager. Ubuntu 22.04 users:
+  `sudo add-apt-repository ppa:deadsnakes/ppa && sudo apt install python3.12 python3.12-venv`
 - An AI coding tool (Claude Code, Cursor, VS Code, Windsurf, or any MCP-compatible IDE)
 
 > **Linux / Ubuntu 22.04:** Install in a venv to avoid system-Python conflicts:
@@ -60,7 +53,12 @@ cross-client behavior for every product that implements MCP.
 npm install -g superlocalmemory
 ```
 
-This installs the `slm` command globally.
+This installs the `slm` command globally and gives it a private Python
+environment inside the package. The package carries every adapter folder
+(Claude Code, Codex, Copilot for VS Code, Hermes and Antigravity) together with
+all the skills, agents, commands and rules, so connecting a host does not need a
+second download. See [IDE Setup](ide-setup.md). Installing does not create a data folder, edit an IDE, start a daemon or
+download a model.
 
 ## Run the Setup Wizard
 
@@ -74,24 +72,37 @@ without changing host configuration; apply only reviewed targets with
 `slm upgrade-hosts --host <host> --apply`. See [Host Integration
 Upgrades](host-upgrades.md).
 
-The wizard walks you through three choices:
+The wizard walks you through these choices:
 
 1. **Pick your mode**
-   - **Mode A** (default) — Local core memory path. Optional downloads, connectors, backups, and explicitly enabled integrations can use the network.
-   - **Mode B** — Local LLM. Uses Ollama on your machine for smarter recall.
-   - **Mode C** — Cloud LLM. Uses OpenAI, Anthropic, or another provider for maximum power.
+   - **Mode A** (Local Guardian, the default) — no language model; the core
+     memory path makes no model-provider call. Optional downloads, connectors,
+     backups and explicitly enabled integrations can still use the network.
+   - **Mode B** (Smart Local) — a model on your machine improves recall:
+     Ollama by default, or any local OpenAI-compatible server.
+   - **Mode C** (Full Power) — your own endpoint or a cloud provider such as
+     OpenAI or Anthropic, for maximum accuracy. A cloud provider needs a key.
 
-2. **Connect your IDE** — The wizard detects installed IDEs and configures them automatically.
+2. **Optional features and models** — the code knowledge graph, the embedding
+   and reranker models, an optional compression model, mesh, ingestion
+   adapters, entity compilation, and skill evolution (off unless you turn it on).
 
-3. **Verify installation** — A quick self-test confirms everything works.
+3. **Verification** — a quick self-test confirms recall works.
+
+4. **Integrations, with your consent** — the wizard asks before installing the
+   Claude Code plugin and hooks, before connecting any other IDE it detects, and
+   before turning on auto-start after login. Run without a terminal, it skips
+   all three; you can do each later with `slm connect <ide>` and `slm serve
+   install`.
 
 On a Mac with Apple Silicon, the wizard also offers to set up [Answer
-check](answer-check.md) — a feature that lets recall say "I don't have
-that" instead of guessing. It defaults to yes; say no and set it up later
-from **Settings → Answer check** in the dashboard. On other platforms, the
-wizard points you to that same settings page for the online option instead.
+check](answer-check.md), which lets recall say "I don't have that" instead of
+guessing. Say no and set it up later from **Settings → Answer check** in the
+dashboard. On other platforms, the wizard points you to that same settings page
+for the online option instead.
 
-> **Tip:** Start with Mode A. You can switch to B or C anytime with `slm mode b` or `slm mode c`.
+> **Tip:** Start with Mode A. You can switch anytime with `slm mode b` or `slm mode c`,
+> then run `slm restart`.
 
 ## Store Your First Memory
 
@@ -102,11 +113,13 @@ slm remember "The project uses PostgreSQL 16 on port 5433, not the default 5432"
 You should see:
 
 ```
-{"success":true,"command":"remember","data":{"operation_id":"<opaque-operation-id>","materialization_state":"queryable","fact_ids":["<queryable-fact-id>"],"note":"queryable now; canonical enrichment pending"}}
+{"success":true,"command":"remember","data":{"fact_ids":["<fact-id>"],"count":1,"operation_id":"<opaque-operation-id>","status":"queryable","materialization_state":"queryable","searchable_by":"wording","note":"stored and searchable by wording; searchable by meaning shortly", ...}}
 ```
 
-The exact identifiers differ on every installation. Use `--sync` if your next
-step requires `complete` rather than the default queryable-first receipt.
+The exact identifiers and a few extra fields differ on every installation. Use `--sync` if your next
+step requires `complete` rather than the default queryable-first receipt. Add
+`--kind rule` or `--kind decision` for something you want loaded at the start of
+later sessions (see [Memory kinds](memory-kinds.md)).
 
 ## Recall a Memory
 
@@ -117,16 +130,16 @@ slm recall "what database port do we use"
 Output:
 
 ```
-[1] The project uses PostgreSQL 16 on port 5433, not the default 5432
-    Relevance: 0.94 | Stored: 2 minutes ago | Profile: default
+  1. [0.94] The project uses PostgreSQL 16 on port 5433, not the default 5432
 ```
 
-The value is query-relative relevance, not answer confidence. By default,
-SLM declares `calibration_status: "uncalibrated"` and `answer_confidence:
-null`; see the [retrieval score contract](retrieval-score-contract.md). Turn
-on [Answer check](answer-check.md) and recall additionally tells you whether
-the top result actually answers your question, not just whether it's
-related.
+The bracketed number is query-relative relevance, not answer confidence. By
+default, SLM declares `calibration_status: "uncalibrated"` and
+`answer_confidence: null`; see the [retrieval score
+contract](retrieval-score-contract.md). Turn on [Answer check](answer-check.md)
+and recall additionally tells you whether the top result actually answers your
+question, not just whether it is related. Narrow a recall by project, kind, tag
+or time with the flags in [Recall](recall.md).
 
 ## Check System Status
 
@@ -134,17 +147,15 @@ related.
 slm status
 ```
 
-This shows:
-
-- Current mode (A, B, or C)
-- Active profile
-- Total memories stored
-- Database location
-- Health of math layers (Fisher, Sheaf, Langevin)
+This shows the current mode, provider, active profile, data folder, database
+path and size, and any saves still being indexed. `slm status --verbose` adds
+the daemon port and the last booted version, `slm health` reports the
+mathematical layers, and `slm doctor` checks dependencies and connectivity. SLM
+also checks your memory store once after each upgrade; see [Troubleshooting](troubleshooting.md#memory-store-check).
 
 ## How It Works With Your IDE
 
-Automation depends on the client plus the hooks/instructions you explicitly
+Automation depends on the client plus the hooks and instructions you explicitly
 enable:
 
 - **Auto-recall** — Supported session hooks can request bounded, untrusted
@@ -152,11 +163,21 @@ enable:
 - **Auto-capture** — Supported observe hooks can submit content to configured
   admission rules.
 
-You can still use `slm remember` and `slm recall` from the terminal whenever you want explicit control.
+You can still use `slm remember` and `slm recall` from the terminal whenever you
+want explicit control.
 
-## Try Bounded Loops (v3.8.0)
+## Use Your Memory From a Web App
 
-A bounded loop runs laps until an independent gate passes — not until the agent claims it is done. Every lap is persisted to your SLM data root, queryable via `slm recall`, and visible on the dashboard.
+If you want an AI app on the internet (ChatGPT, Claude on the web, Composio,
+Muse) to use your memory, open **Connected apps** in the dashboard. It is off
+until you set it up, needs a GitHub sign-in, and works only while this computer
+is on and online. See [Web access](remote-access/README.md).
+
+## Try Bounded Loops
+
+A bounded loop runs laps until an independent gate passes, not until the agent
+claims it is done. Every lap is persisted to your SLM data root, queryable via
+`slm recall`, and visible on the dashboard.
 
 Verify the engine end to end with the built-in demo:
 
@@ -180,7 +201,7 @@ Then recall the stored lap history:
 slm recall "convergence-demo loop"
 ```
 
-For the full parameter set, see [CLI Reference → Bounded Loops](cli-reference.md#bounded-loops) and [MCP Tools Reference → Bounded-Loop Tools](mcp-tools.md#bounded-loop-tools-v380).
+For the full parameter set, see [CLI Reference → Bounded Loops](cli-reference.md#bounded-loops) and [MCP Tools Reference → Bounded-loop tools](mcp-tools.md#bounded-loop-tools).
 
 ## Next Steps
 
@@ -188,12 +209,14 @@ For the full parameter set, see [CLI Reference → Bounded Loops](cli-reference.
 |---------------------|-------|
 | Let recall say "I don't have that" instead of guessing | [Answer Check](answer-check.md) |
 | Set up a specific IDE | [IDE Setup](ide-setup.md) |
+| Use your memory from a web app | [Web access](remote-access/README.md) |
 | Switch modes or providers | [Configuration](configuration.md) |
 | Learn all CLI commands | [CLI Reference](cli-reference.md) |
+| Something is not working | [Troubleshooting](troubleshooting.md) |
 | Migrate from V2 | [Migration from V2](migration-from-v2.md) |
-| Understand how it works | [Architecture](architecture.md) |
+| Understand how it works | [Architecture](ARCHITECTURE.md) |
 | Use SLM from a Python framework | [Framework Adapters](framework-adapters.md) |
 
 ---
 
-*SuperLocalMemory V4 — Copyright 2026 Varun Pratap Bhardwaj. AGPL-3.0-or-later. Part of Qualixar.*
+*SuperLocalMemory — Copyright 2026 Varun Pratap Bhardwaj. AGPL-3.0-or-later. Part of Qualixar.*
