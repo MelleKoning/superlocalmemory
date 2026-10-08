@@ -323,8 +323,8 @@ def test_installed_wheel_two_home_daemon_lifecycle_is_root_local(
         remember_b = _cli(
             python, work_dir, env_b, "remember", content_b, "--json",
         )
-        assert '"success": true' in remember_a.stdout.lower(), remember_a.stdout
-        assert '"success": true' in remember_b.stdout.lower(), remember_b.stdout
+        assert json.loads(remember_a.stdout)["success"] is True, remember_a.stdout
+        assert json.loads(remember_b.stdout)["success"] is True, remember_b.stdout
 
         status_a = _cli(python, work_dir, env_a, "serve", "status")
         status_b = _cli(python, work_dir, env_b, "serve", "status")
@@ -341,7 +341,7 @@ def test_installed_wheel_two_home_daemon_lifecycle_is_root_local(
         owned.append(restarted_a)
         assert restarted_a["pid"] != descriptor_a["pid"]
         assert restarted_a["instance_id"] != descriptor_a["instance_id"]
-        assert '"success": true' in restart_a.stdout.lower(), restart_a.stdout
+        assert json.loads(restart_a.stdout)["success"] is True, restart_a.stdout
         recalled_a = _cli(
             python,
             work_dir,
