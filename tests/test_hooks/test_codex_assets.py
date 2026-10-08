@@ -17,6 +17,7 @@ EXPECTED_SKILLS = {
     "slm-scope",
     "slm-session",
     "slm-status",
+    "slm-web-access",
 }
 
 

@@ -3701,8 +3701,10 @@ def cmd_doctor(args: Namespace) -> None:
                 fix="Claude Code:  claude plugin marketplace add "
                     "qualixar/superlocalmemory  &&  claude plugin install "
                     "superlocalmemory@qualixar     "
-                    "Codex / VS Code: copy codex-plugin/ or copilot-plugin/ "
-                    "from the tag you are on",
+                    "Codex:  slm connect codex  &&  slm codex install     "
+                    "VS Code / Copilot:  slm connect copilot     "
+                    "Hermes, Antigravity and the others: docs/ide-setup.md; the npm "
+                    "package also carries every adapter folder",
             )
         else:
             _stale = {n: v for n, v in _pl.items() if v != _pkg_version}

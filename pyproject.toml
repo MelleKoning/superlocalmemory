@@ -212,11 +212,14 @@ superlocalmemory = ["ui/**/*", "optimize/NOTICE", "contracts/schemas/*.json"]
 "share/superlocalmemory/codex/skills/slm-scope" = ["plugin-src/skills/slm-scope/SKILL.md"]
 "share/superlocalmemory/codex/skills/slm-session" = ["plugin-src/skills/slm-session/SKILL.md"]
 "share/superlocalmemory/codex/skills/slm-status" = ["plugin-src/skills/slm-status/SKILL.md"]
+"share/superlocalmemory/codex/skills/slm-web-access" = ["plugin-src/skills/slm-web-access/SKILL.md"]
 "share/superlocalmemory/codex/agents" = [
     "plugin-src/agents/slm-memory-advisor.md",
     "plugin-src/agents/slm-optimize-advisor.md",
+    "plugin-src/agents/slm-governance-advisor.md",
+    "plugin-src/agents/slm-loop-runner.md",
 ]
-"share/superlocalmemory/portable-kit/rules" = ["plugin-src/rules/AGENTS.md"]
+"share/superlocalmemory/portable-kit/rules" = ["plugin-src/rules/AGENTS.md", "plugin-src/rules/CLAUDE.md.fragment"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

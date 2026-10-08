@@ -22,10 +22,12 @@ SKILLS = (
     "slm-scope",
     "slm-session",
     "slm-status",
+    "slm-web-access",
 )
 
 # Codex subagent files written to ~/.codex/agents (content built by _agent_files()).
-AGENTS = ("slm-memory-advisor.toml", "slm-optimize-advisor.toml")
+AGENTS = ("slm-memory-advisor.toml", "slm-optimize-advisor.toml",
+          "slm-governance-advisor.toml", "slm-loop-runner.toml")
 
 #: Digests of the agent files this installer last wrote, kept beside them.  An
 #: agent file whose current content still matches its recorded digest is ours to
@@ -50,6 +52,16 @@ _FALLBACKS = {
         "compression of large tool output and KV-caching of repeated reads/searches.",
         "Reduce context-window pressure with the Surface-B tools (reversible CCR "
         "compression + a per-agent KV cache); fail-open — never block the task.",
+    ),
+    "slm-governance-advisor.toml": (
+        "Advise on SuperLocalMemory scope, roles, retention and GDPR erasure.",
+        "Keep memories personal unless the user asks to share; never bypass a governance "
+        "control; prefer the least-permissive safe action.",
+    ),
+    "slm-loop-runner.toml": (
+        "Run a task as a bounded loop until an independent gate passes.",
+        "Iterate only until the gate passes or the bound is reached, and report the exact "
+        "terminal status; never report success the gate did not confirm.",
     ),
 }
 
