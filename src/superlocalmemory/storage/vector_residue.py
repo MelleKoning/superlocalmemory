@@ -23,6 +23,7 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +33,16 @@ BATCH = 200
 
 @contextmanager
 def vec_connection(db_path: str | Path) -> Iterator[sqlite3.Connection | None]:
-    """A connection with the vector extension loaded, or None if it cannot be."""
-    conn = sqlite3.connect(str(db_path), timeout=30)
+    """A connection with the vector extension loaded, or None if it cannot be.
+
+    Opens an existing store only (``mode=rw``): a path with no store behind it
+    yields None instead of creating an empty database there."""
+    try:
+        conn = sqlite3.connect(f"file:{quote(str(db_path))}?mode=rw", uri=True, timeout=30)
+    except sqlite3.OperationalError as exc:
+        logger.debug("no store to open at this path: %s", exc)
+        yield None
+        return
     try:
         conn.execute("PRAGMA busy_timeout=30000")
         try:

@@ -82,3 +82,16 @@ def test_delete_rechecks_references_under_the_write_lock(store):
         assert delete_rowids(conn, db_path, referenced) == 0
         assert unreferenced_rowids(conn) == []
     assert _vec_rows(db_path) == 5
+
+
+def test_a_sweep_never_creates_a_store_that_is_not_there(tmp_path):
+    """Maintenance handed a path with no store behind it (a mocked engine in
+    tests, a moved data folder in life) used to create an empty database file
+    there through sqlite3.connect."""
+    from superlocalmemory.storage import vector_residue
+
+    missing = tmp_path / "<MagicMock name='mock.db_path'>"
+    assert vector_residue.sweep_unreferenced_vectors(missing) == 0
+    with vector_residue.vec_connection(missing) as conn:
+        assert conn is None
+    assert list(tmp_path.iterdir()) == []
