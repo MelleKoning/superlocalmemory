@@ -526,3 +526,27 @@ class TestTheProviderMayNameItsSnapshot:
         transport = _check_transport(0.95, 0.05, model=returned)
         ok, _ = check_connection("openrouter", FAKE_KEY, transport=transport)
         assert ok is False, "a threshold measured on one model must not be read as another's"
+
+
+def test_the_stated_rule_settles_a_permission_question_under_jev_as_under_laya(key_store):
+    """Muse audit 2026-10-08, D2: the permission rule is local text logic, so a question
+    one judge answers by it must not abstain under the other. The model's numbers stay."""
+    from superlocalmemory.retrieval import answer_question_forms as forms
+
+    model = JEV_ENDPOINTS["typesafe"][1]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _noul_response(model, {"m0": 0.08, "m1": 0.06})
+
+    transport, _ = _transport(handler)
+    judge = _judge(key_store, transport=transport)
+    docs = _docs("Never publish until the owner explicitly approves the release.",
+                 "The team uses Rust.")
+    verdict = judge.judge("May the agent publish without approval?", docs)
+    assert verdict is not None
+    assert verdict.probabilities == (0.08, 0.06)
+    assert verdict.rule_support == (0,)
+    assert forms.settled_by_rule(verdict.calibration_id)
+    assert not verdict.insufficient
+    plain = judge.judge("what is x?", _docs("doc a", "doc b"))
+    assert plain.rule_support == () and not forms.settled_by_rule(plain.calibration_id)

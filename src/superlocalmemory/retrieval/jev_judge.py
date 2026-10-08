@@ -41,6 +41,7 @@ from superlocalmemory import __version__ as _SLM_VERSION
 from superlocalmemory.core import recall_gate
 from superlocalmemory.core.judge_keys import JudgeKeyStore
 from superlocalmemory.encoding.memory_kind_recipe import KindAnswer, KindRecipe
+from superlocalmemory.retrieval import answer_question_forms as question_forms
 from superlocalmemory.retrieval import jev_kinds
 from superlocalmemory.retrieval.answer_check_status import (
     STATUS_JUDGED,
@@ -311,12 +312,17 @@ class JevSufficiencyJudge:
         probabilities = self._parse_response(raw, body)
         if probabilities is None:
             return JudgeOutcome(None, STATUS_UNAVAILABLE)
+        # The stated-rule check is local text logic, read on this machine's own
+        # rendering (never the redacted copy that was sent): a question Laya
+        # settles by it is settled the same way here (answer_question_forms.py).
+        support = question_forms.rule_support(query, [self._recipe.render(d) for d in docs])
         return JudgeOutcome(SufficiencyVerdict(
             probabilities=probabilities,
             threshold=self._threshold,
-            calibration_id=self._calibration_id,
+            calibration_id=question_forms.calibration_id_for(self._calibration_id, support),
             calibration_status=self._calibration_status,
             backend="jev",
+            rule_support=support,
         ), STATUS_JUDGED)
 
     def _still_chosen(self, *, rerank: bool) -> bool:
