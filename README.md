@@ -70,9 +70,9 @@ Real output from a fresh Mode A install, trimmed. Scores rank; they are not prob
 
 Five minutes: install, setup, recall, cache and compression.
 
-### The dashboard, on real 4.1.21
+### The dashboard
 
-Captured from a 4.1.21 install in Mode A, with Laya running on the Mac and a store of fictional project memories. Nothing is mocked: each verdict, score and timing is what SLM returned.
+Captured from a real install in Mode A, with Laya running on the Mac and a store of fictional project memories. Nothing is mocked: each verdict, score and timing is what SLM returned.
 
 | Memories that answer the question | Memories that do not: "I don't have that" |
 |---|---|
@@ -176,7 +176,7 @@ with it.
 
 ## Architecture
 
-![SuperLocalMemory 4.1.21 architecture: modes, eight-layer pipeline, governance, Scale Engine, SLM-Mesh, bounded loops](docs/assets/slm-4.1.21-architecture.svg)
+![SuperLocalMemory architecture: modes, eight-layer pipeline, governance, Scale Engine, SLM-Mesh, bounded loops](docs/assets/slm-4.1.21-architecture.svg)
 
 *SQLite + sqlite-vec are canonical; CozoDB and LanceDB are parity-gated projections; SLM-Mesh coordinates trusted peers rather than replicating a distributed database; connectors are opt-in.* [Architecture docs](docs/ARCHITECTURE.md).
 
@@ -191,12 +191,13 @@ with it.
 | Standing rules | Confirmed rules (up to 10) and decisions (up to 5) load into every new agent session | [Memory kinds](docs/memory-kinds.md#standing-rules-at-session-start) |
 | Replace and correct | `--replaces <id>` retires an old fact, kept and undoable. Edits go through reviewed corrections with rollback | [Corrections](docs/reviewed-corrections.md) |
 | Time travel | `--as-of`, `--known-as-of`, `--valid-at`, and `--window 7d` or a date range | [Recall](docs/recall.md#time-travel) |
-| Recall filters | `--project`, `--saved-by`, `--about`, `--kind`; applied before the answer check | [Recall](docs/recall.md#narrowing-a-recall) |
-| Project-aware recall | New in 4.1.21: memories from your current project rank first, hiding nothing. `--project` narrows and says when nothing matched | [Recall](docs/recall.md) |
-| Summaries and saved views | New in 4.1.21: `slm summary session`, `day` or `project`, each citing its memory ids; `slm view create "Work log" "what did I ship" --window 7d`, then `slm view run` | [Summaries](docs/recall.md#summaries), [Views](docs/recall.md#saved-views) |
+| Recall filters | `--project`, `--saved-by`, `--about`, `--kind`, and exact tags with `--tag` (repeat it; `--tags-match all` or `any`); applied before the answer check, and an empty result says why | [Recall](docs/recall.md#narrowing-a-recall) |
+| Project-aware recall | Memories from your current project rank first, hiding nothing. `--project` narrows and says when nothing matched | [Recall](docs/recall.md) |
+| Summaries and saved views | `slm summary session`, `day` or `project`, each citing its memory ids; `slm view create "Work log" "what did I ship" --window 7d`, then `slm view run` | [Summaries](docs/recall.md#summaries), [Views](docs/recall.md#saved-views) |
 | Knowledge graph | Entities, aliases, scenes and timelines; Entity Explorer in the dashboard | [Architecture](docs/ARCHITECTURE.md) |
 | Code graph | Index a repo, then ask for blast radius, callers, review context and code search by meaning | [MCP tools](docs/mcp-tools.md) |
-| Modes and providers | A: no model calls. B: a model on this machine (Ollama by default, or another local OpenAI-compatible server). C: your own endpoint or a cloud provider. Multilingual embedders work | [Configuration](docs/configuration.md) |
+| Modes and providers | A: no model calls. B: a model on this machine (Ollama by default, or another local OpenAI-compatible server). C: your own endpoint or a cloud provider. Multilingual embedders work. `slm models` recommends models that fit this computer | [Configuration](docs/configuration.md) |
+| Switch the embedding model | `slm embedder switch MODEL` re-indexes every memory in the background while recall keeps working, then changes over in one step; `status`, `cancel` and `rollback` | [CLI reference](docs/cli-reference.md#embedding-models-and-store-health) |
 
 Recalled text is untrusted evidence: before it reaches a prompt, secrets are redacted, forged boundary markers neutralised and provenance attached, a defence against prompt injection through memory.
 
@@ -264,6 +265,7 @@ All of it fails open. [Optimize](docs/optimize-overview.md), [Proxy setup](docs/
 - **[Dashboard](docs/DASHBOARD-COVERAGE.md):** `slm dashboard`, 16 panes including Answer Check, Brain, Knowledge Graph, Governance, Optimize and Mesh Peers.
 - **Durable writes:** each save moves raw → queryable → enriching → complete with a receipt; a failed step keeps the raw evidence and retries. Saves under heavy load are queued, never refused.
 - **[Operations](docs/troubleshooting.md):** `slm doctor`, `status`, `health`, `restart`, `ops`; stuck operations are listed and resolved.
+- **Store health:** `slm db integrity` reports the store's health; `slm db repair` previews fixes for leftover rows, erased words, unfinished deletes and memories that lost their searchable fact, applies them with `--apply`, and undoes a run with `--undo`. It never brings back anything erased, deleted or withheld. [CLI reference](docs/cli-reference.md#embedding-models-and-store-health)
 
 ## MCP memory server: tool profiles
 
