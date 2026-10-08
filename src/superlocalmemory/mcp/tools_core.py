@@ -107,16 +107,20 @@ def _emit_event(event_type: str, payload: dict | None = None,
         pass
 
 
+# `remember` only adds a memory. The hints are declared explicitly because the
+# MCP default for an unannotated tool is destructiveHint=true. They live in a
+# constant so the decorator stays on one line, which is the form the packaging
+# test's source-level tool-name discovery reads.
+_ADDS_ONLY_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
+)
+
+
 def register_core_tools(server, get_engine: Callable) -> None:
     """Register the 13 core MCP tools on *server*."""
 
-    # Adds a memory; never deletes or overwrites one. Declared explicitly because
-    # the MCP default for an unannotated tool is destructiveHint=true.
-    @server.tool(
-        annotations=ToolAnnotations(
-            readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
-        )
-    )
+    # Adds a memory; never deletes or overwrites one (see _ADDS_ONLY_ANNOTATIONS).
+    @server.tool(annotations=_ADDS_ONLY_ANNOTATIONS)
     @admits(OperationKind.REMEMBER)
     async def remember(
         content: str, tags: str = "", project: str = "",
