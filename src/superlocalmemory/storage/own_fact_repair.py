@@ -19,11 +19,15 @@ repaired — when any of these hold:
 * ``erased``     a tombstone, erasure receipt or erase obligation names the
                  memory, its fact or its profile, or the fact is being erased
                  now (``erasure_fence``): an erased memory never comes back;
-* ``erasure_after_save``  a person/entity erasure ran in its profile after the
+* ``erasure_after_save``  a person/entity or fact erasure ran in its profile after the
                  save (the text may mention who was erased; review by hand);
 * ``changed``    the save record no longer matches the memory (scrubbed, edited,
                  other profile, unfinished), or the text is empty;
-* ``refused``    the save path's own admission or ingest gate would refuse it.
+* ``refused``    the save path's own admission or ingest gate would refuse it;
+* ``withheld``   its own or a sibling's fact (the one it was folded into) is
+                 quarantined: withheld text is never published through it.
+Siblings count for ``erased`` too: an erased sibling means its near-identical
+text was erased. Every check runs again inside the write (``promote``).
 
 Reads ids, states and counts; the text is only handed to the fact builder.
 """
@@ -36,7 +40,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
-HELD = ("unproven", "erased", "erasure_after_save", "changed", "refused")
+HELD = ("unproven", "erased", "withheld", "erasure_after_save", "changed", "refused")
 
 
 @dataclass(frozen=True)
@@ -71,17 +75,19 @@ def _factless(conn: sqlite3.Connection) -> list[tuple]:
         "ORDER BY m.created_at, m.memory_id").fetchall()
 
 
-def _erased(conn: sqlite3.Connection, profile_id: str, memory_id: str,
+def _erased(conn: sqlite3.Connection, profile_id: str, memory_id: str | None,
             fact_ids: list[str]) -> bool:
     from superlocalmemory.storage.erasure_fence import is_erasing
 
-    subjects = [memory_id, *fact_ids]
+    subjects = [s for s in (memory_id, *fact_ids) if s]
+    if not subjects:
+        return False
     marks = ",".join("?" * len(subjects))
     if any(is_erasing(profile_id, f) for f in fact_ids):
         return True
     if _has(conn, "projection_tombstones") and conn.execute(
-            f"SELECT 1 FROM projection_tombstones WHERE memory_id = ? OR fact_id IN ({marks})",  # noqa: S608
-            (memory_id, *subjects)).fetchone():
+            f"SELECT 1 FROM projection_tombstones WHERE memory_id IN ({marks}) "  # noqa: S608
+            f"OR fact_id IN ({marks})", (*subjects, *subjects)).fetchone():
         return True
     if _has(conn, "erasure_receipts") and conn.execute(
             f"SELECT 1 FROM erasure_receipts WHERE subject_id IN ({marks}) OR "  # noqa: S608
@@ -102,8 +108,9 @@ def _erasure_after(conn: sqlite3.Connection, profile_id: str, created_at: str) -
     except ValueError:
         return True  # cannot order it against the erasure: hold it
     return conn.execute(
-        "SELECT 1 FROM erasure_receipts WHERE profile_id = ? AND subject_type = 'entity' "
-        "AND requested_at >= ?", (profile_id, saved - 86400)).fetchone() is not None
+        "SELECT 1 FROM erasure_receipts WHERE profile_id = ? AND subject_type IN "
+        "('entity', 'fact') AND requested_at >= ?",
+        (profile_id, saved - 86400)).fetchone() is not None
 
 
 def _logged_near_duplicate(conn: sqlite3.Connection, profile_id: str,
@@ -126,33 +133,74 @@ def _folded_into_others(conn: sqlite3.Connection, memory_id: str, final_ids: lis
     return all(o is not None and o[0] != memory_id for o in owners)
 
 
-def classify(conn: sqlite3.Connection) -> tuple[list[Candidate], dict[str, int]]:
-    """Memories to repair, and how many were held back for each reason."""
+def _siblings(conn: sqlite3.Connection, profile_id: str, memory_id: str,
+              fact_ids: list[str], final_ids: list[str]) -> list[str]:
+    """The other memories' facts this one was folded into (noop targets + final facts)."""
+    targets: list[str] = []
+    if fact_ids:
+        targets = [str(r[0]) for r in conn.execute(
+            f"SELECT existing_fact_id FROM consolidation_log WHERE profile_id = ? "  # noqa: S608
+            f"AND action_type = 'noop' AND new_fact_id IN ({','.join('?' * len(fact_ids))})",
+            (profile_id, *fact_ids)) if r[0]]
+    for fid in final_ids:
+        owner = conn.execute("SELECT memory_id FROM atomic_facts WHERE fact_id = ?",
+                             (fid,)).fetchone()
+        if owner is None or owner[0] != memory_id:
+            targets.append(fid)
+    return sorted(set(targets))
+
+
+def _withheld(conn: sqlite3.Connection, memory_id: str, siblings: list[str]) -> bool:
+    """Its own or a sibling's fact is quarantined (withheld): never publish that text."""
+    marks = ",".join("?" * len(siblings)) or "NULL"
+    return conn.execute(
+        f"SELECT 1 FROM atomic_facts WHERE quarantined = 1 AND "  # noqa: S608
+        f"(memory_id = ? OR fact_id IN ({marks})) LIMIT 1",
+        (memory_id, *siblings)).fetchone() is not None
+
+
+def _judge(conn: sqlite3.Connection, row: Any) -> tuple[str | None, Candidate | None]:
+    """Why ``row`` (a factless memory) is held back, or the candidate to repair."""
     from superlocalmemory.core.engine_ingestion import content_passes_admission
 
+    memory_id, profile_id, content, metadata_json, created_at = row
+    op_id = str(_meta(metadata_json).get("ingestion_operation_id") or "")
+    op = conn.execute(
+        "SELECT profile_id, state, raw_content, queryable_fact_ids_json, final_fact_ids_json "
+        "FROM ingestion_operations WHERE operation_id = ?", (op_id,)).fetchone() if op_id else None
+    fact_ids = _ids(op[3]) if op else []
+    final_ids = _ids(op[4]) if op else []
+    if not (_logged_near_duplicate(conn, profile_id, fact_ids)
+            or _folded_into_others(conn, memory_id, final_ids)):
+        return "unproven", None  # no proof enrichment removed it: never touched
+    siblings = _siblings(conn, profile_id, memory_id, fact_ids, final_ids)
+    if (_erased(conn, profile_id, memory_id, fact_ids)
+            or _erased(conn, profile_id, None, siblings)):
+        return "erased", None
+    if _withheld(conn, memory_id, siblings):
+        return "withheld", None
+    if _erasure_after(conn, profile_id, created_at):
+        return "erasure_after_save", None
+    if (op[0] != profile_id or op[1] != "complete" or not str(content or "").strip()
+            or op[2] != content or any(conn.execute(
+                "SELECT 1 FROM atomic_facts WHERE fact_id = ?", (f,)).fetchone() is None
+                for f in siblings if f not in final_ids)):
+        return "changed", None  # edited, scrubbed, unfinished, moved, or its sibling deleted
+    if not content_passes_admission(content):
+        return "refused", None
+    return None, Candidate(memory_id, profile_id, op_id, tuple(fact_ids))
+
+
+def classify(conn: sqlite3.Connection) -> tuple[list[Candidate], dict[str, int]]:
+    """Memories to repair, and how many were held back for each reason."""
     found: list[Candidate] = []
     held = dict.fromkeys(HELD, 0)
-    for memory_id, profile_id, content, metadata_json, created_at in _factless(conn):
-        op_id = str(_meta(metadata_json).get("ingestion_operation_id") or "")
-        op = conn.execute(
-            "SELECT profile_id, state, raw_content, queryable_fact_ids_json, final_fact_ids_json "
-            "FROM ingestion_operations WHERE operation_id = ?", (op_id,)).fetchone() if op_id else None
-        fact_ids = _ids(op[3]) if op else []
-        if not (_logged_near_duplicate(conn, profile_id, fact_ids)
-                or _folded_into_others(conn, memory_id, _ids(op[4]) if op else [])):
-            held["unproven"] += 1  # no proof enrichment removed it: never touched
-            continue
-        if _erased(conn, profile_id, memory_id, fact_ids):
-            held["erased"] += 1
-        elif _erasure_after(conn, profile_id, created_at):
-            held["erasure_after_save"] += 1
-        elif (op[0] != profile_id or op[1] != "complete" or not str(content or "").strip()
-              or op[2] != content):
-            held["changed"] += 1
-        elif not content_passes_admission(content):
-            held["refused"] += 1
+    for row in _factless(conn):
+        reason, candidate = _judge(conn, row)
+        if candidate is not None:
+            found.append(candidate)
         else:
-            found.append(Candidate(memory_id, profile_id, op_id, tuple(fact_ids)))
+            held[reason] += 1
     return found, held
 
 
@@ -170,24 +218,50 @@ def census(conn: sqlite3.Connection) -> dict[str, int]:
     return {"to_repair": len(found), **{f"held_{k}": v for k, v in held.items()}}
 
 
-def promote(db: Any, conn: sqlite3.Connection, candidate: Candidate) -> str | None:
-    """Re-promote one queryable fact for ``candidate``; its id, or None if refused.
+class _NothingToCreate(Exception):
+    """Identical words already belong to another memory: roll back, create nothing."""
 
-    Runs inside the caller's write transaction on ``db``. The fact carries the
-    memory's scope, sharing, session, date and kind exactly as its save did.
+
+def promote(db: Any, conn: sqlite3.Connection | None, candidate: Candidate) -> str | None:
+    """Re-promote one queryable fact for ``candidate``; its id, or None if held back.
+
+    Everything is decided again INSIDE one ``BEGIN IMMEDIATE`` write transaction
+    on the connection that writes: the memory is still factless, still proven,
+    nothing about it or its siblings was erased or withheld since it was listed.
+    The immediate lock makes the database the arbiter between processes, so two
+    repairs can never both create the fact. ``conn`` is accepted for callers of
+    the earlier signature and not used. The fact carries the memory's scope,
+    sharing, session, date and kind exactly as its save did.
     """
+    del conn
+    try:
+        with db.raw_connection() as tx:   # the process write lock + its own connection
+            tx.execute("BEGIN IMMEDIATE")
+            return _promote_locked(db, tx, candidate)
+    except _NothingToCreate:
+        return None
+
+
+def _promote_locked(db: Any, tx: sqlite3.Connection, candidate: Candidate) -> str | None:
     from superlocalmemory.core.ingest_gate import apply_ingest_gate
     from superlocalmemory.core.kind_assignment import assign_kinds, store_fact_keeping_kind
     from superlocalmemory.core.queryable_fact import queryable_fact
 
-    row = conn.execute(
+    current = tx.execute(
+        "SELECT m.memory_id, m.profile_id, m.content, m.metadata_json, m.created_at FROM "
+        "memories m WHERE m.memory_id = ? AND m.profile_id = ? AND NOT EXISTS "
+        "(SELECT 1 FROM atomic_facts f WHERE f.memory_id = m.memory_id)",
+        (candidate.memory_id, candidate.profile_id)).fetchone()
+    if current is None:
+        return None  # it has a fact again, or is gone
+    reason, fresh = _judge(tx, tuple(current))
+    if reason is not None or fresh is None or fresh.operation_id != candidate.operation_id:
+        return None
+    row = tx.execute(
         "SELECT m.content, m.scope, m.shared_with, m.session_id, m.session_date, m.created_at, "
         "o.raw_metadata_json, o.source_type, o.trusted_actor_id FROM memories m JOIN "
-        "ingestion_operations o ON o.operation_id = ? WHERE m.memory_id = ? AND NOT EXISTS "
-        "(SELECT 1 FROM atomic_facts f WHERE f.memory_id = m.memory_id)",
+        "ingestion_operations o ON o.operation_id = ? WHERE m.memory_id = ?",
         (candidate.operation_id, candidate.memory_id)).fetchone()
-    if row is None:
-        return None  # it has a fact again, or is gone: nothing to do
     content, scope, shared, session_id, session_date, created_at, raw_meta, source, actor = row
     gate = apply_ingest_gate(content)
     if gate.rejected:
@@ -202,12 +276,14 @@ def promote(db: Any, conn: sqlite3.Connection, candidate: Candidate) -> str | No
     stored = store_fact_keeping_kind(db, fact, metadata=metadata,
                                      request=SimpleNamespace(source_type=source,
                                                              trusted_actor_id=actor))
-    owner = db.execute("SELECT memory_id FROM atomic_facts WHERE fact_id = ?", (stored,))
-    # Identical words already stored for another memory fold onto that fact:
-    # the text stays findable there, and nothing is created here.
-    mine = bool(owner) and str(dict(owner[0])["memory_id"]) == candidate.memory_id
-    if not mine:
-        return None
+    mine = tx.execute("SELECT COUNT(*) FROM atomic_facts WHERE memory_id = ?",
+                      (candidate.memory_id,)).fetchone()[0]
+    owner = tx.execute("SELECT memory_id FROM atomic_facts WHERE fact_id = ?",
+                       (stored,)).fetchone()
+    if mine != 1 or owner is None or owner[0] != candidate.memory_id:
+        # Identical words already stored for another memory folded onto that
+        # fact (and may have touched it): undo all of it, create nothing.
+        raise _NothingToCreate
     _queue_enrichment(db, candidate, stored, content=content, metadata=metadata, source=source,
                       actor=actor, scope=scope or "personal", shared=_ids(shared) if shared else [],
                       session_id=session_id or "", session_date=session_date or "")
