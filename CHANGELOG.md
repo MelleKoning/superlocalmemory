@@ -5,6 +5,117 @@ All notable changes to SuperLocalMemory will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.22] — Faster recall from the first second, memories that stay findable, deletes you can trust
+
+### Added
+
+- **Filter by exact tags.** `recall`, `search`, `list` and `slm recall/list`
+  take a tag filter, over MCP, HTTP and the daemon proxy. A tag filter searches
+  inside the tagged memories and says why a result is empty.
+- **Switch the embedding model without losing recall.** `slm embedder`
+  re-indexes in the background, keeps the previous vectors, gives way to
+  recall while it works, resumes after a crash and can roll back.
+- **Model recommendations for this computer.** A model catalogue with current
+  defaults and each local model's result in SLM's extraction test; the setup
+  wizard offers your installed Ollama models, best first, and `slm models` and
+  the dashboard suggest installed and recommended models.
+- **Every recall says whether its answer was checked**: supported,
+  unsupported or unjudged, and why.
+- **`slm db integrity` and `slm db repair`** show store health in five parts
+  and fix leftover rows, erased words, unfinished deletes and memories that
+  lost their searchable fact, with receipts and undo. A repair never brings
+  back anything that was erased, deleted or withheld.
+- **`slm corrections overtaken`** lists corrections SLM had only proposed
+  itself that a delete, replace or edit overtook; `restore-overtaken` puts one
+  back.
+- Older memories in an upgraded store are classified by kind once, on this
+  device, in the background.
+- SuperLocalMemory installs as a Cursor-format plugin for Grok Bot, with a
+  low-RAM profile for shared bot hosts and two skills for bots sharing one
+  computer.
+
+### Changed
+
+- **Recall is about 2.6 times faster, with the same answers.** On a copy of a
+  real store, typical recall went from 849 ms to 321 ms (slowest 5%: 1.2 s to
+  0.49 s), and on 124 held-out questions from 923 ms to 340 ms (slowest 5%:
+  2.0 s to 0.77 s). Every speed change returns the same top ten memories as
+  before on all 184 test questions.
+- **Fast from the first second after a start, and while you save.** The store
+  is read into memory once at start, graph rankings and stored vectors are
+  prepared in separate background processes, background work yields to a
+  running recall at fine grain, requests no longer open the database to check
+  the login setting, and several slow store queries now use indexes. On a
+  22,000-memory store with the answer check on, a recall every second and a
+  save every half second: recalls slower than 3 s went from 13 of 318 to 7 of
+  297, with none in the first minute after a start (3 before), and saves slower
+  than 1.5 s from 7 of 56 to 1 of 87.
+- **Background enrichment keeps up.** Saved memories finish enrichment while
+  you keep recalling, instead of waiting for a quiet moment that never came:
+  about six times as many per minute under steady recall.
+- **A stated rule answers a yes/no permission question.** "May the agent
+  publish without approval?" is answered by a memory that says "Never publish
+  until the owner approves", with the same answer-check threshold as before;
+  the answer says it came from a rule. A rule about one named thing does not
+  answer a general question.
+- A memory that says it corrects an earlier one keeps that suggestion when the
+  model's check is unsure.
+- Local models copy the extraction prompt's example into your memories no
+  more, and invent fewer dates and numbers (llama3.2: sources with a fact the
+  source did not support went from 36 to 22 of 102; gemma3:4b from 1 to 0;
+  qwen2.5:7b 6 before, 7 now).
+- A fresh install (and CI) starts in Mode A.
+- `slm --json` and MCP tool responses are no longer pretty-printed.
+
+### Fixed
+
+- **A note that looked like an older one no longer loses its searchable fact.**
+  Enrichment deleted a new memory's only fact when it resembled another
+  memory's, so notes that differed only in a number or a declared kind could
+  not be found a moment after saving. `slm db repair` gives existing ones back.
+- **A question that mentions a time like "recently" still finds an older
+  memory it matches**, instead of returning nothing.
+- **A memory you save stays findable while SLM's own guess that it updates an
+  older one waits for review.** Approving the guess retires the older memory;
+  rejecting it keeps both. In one real store this made 406 saved memories
+  findable again; how often the right memory comes first is unchanged.
+- **Saves are not refused when the computer briefly stalls**, and a save
+  acknowledged just before the service was killed is enriched as soon as it
+  restarts.
+- **Deleting and erasing.** Erasing a memory removes its words everywhere
+  (keyword index, journal, event previews, entity summaries, logs, soft-forget
+  copies, vectors kept for a model switch). Erasing a person also erases the
+  memories they corrected, and erasing a whole profile no longer stops partway.
+  A delete refused at the last moment no longer leaves a memory unfindable.
+  Deleting a profile moves its memories to default, still findable, linked and
+  correctable.
+- A save sees the people and things it just added, so it does not create them
+  twice; a cancelled save leaves no trace in recall's lookups.
+- A background computation that times out, or whose service was stopped, no
+  longer keeps running.
+- Two recalls at the same moment are both reranked.
+- Measurements like 2004.6 ms are kept as measurements, never turned into
+  dates.
+- Bounded Loops runs with a node that never ran (an approval or a join) are no
+  longer rejected, and a gate verdict must be a real true or false.
+- The first memory call after a fresh start waits for SLM to finish starting;
+  a tool call no longer waits 60 s when two starts race; stopping a daemon
+  stuck in start-up no longer hangs.
+- Windows: SLM notices a stopped daemon at once, and Codex and Claude Code
+  hooks run SLM's own command.
+- Linux hosts with no GPU install CPU-only torch.
+- The remote listener closes a connection that floods data before its first
+  request; which cached answers get re-checked can no longer be predicted from
+  outside this install.
+- Plugin listings state the tool counts they really serve; the Hermes plugin
+  reaches the new `slm models`, `slm corrections` and `slm embedder` commands.
+
+### Known issues
+
+- On very large stores under heavy saving, a few recalls can still take longer
+  than 3 s while the store is busy committing a large write.
+
+
 ## [4.1.21] — Recall that knows your project, and memories that stay findable
 
 ### Added
