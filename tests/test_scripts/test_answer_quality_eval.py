@@ -170,3 +170,70 @@ class TestMeasuresOnlyACompleteSearch:
         monkeypatch.setattr(tool.time, "sleep", lambda _s: None)
         with pytest.raises(tool.EvalError, match="semantic"):
             tool._wait_until_complete(self._Engine(warming_for=10**9), fast=None, timeout_s=0.05)
+
+
+class TestAnswerNotStoredIsNotAMiss:
+    """G10: a labelled answer missing from the measured store is reported as
+    "answer not stored" with the labelled ids' write dates, not as a miss; and
+    the per-question rows keep every returned id up to --limit (identity gates
+    compare the top 10, not the top 5)."""
+
+    class _Engine:
+        profile_id = "default"
+        _config = None
+
+        def __init__(self, ids: list[str]) -> None:
+            self.ids = ids
+
+        def recall(self, _query, limit=10, **_k):
+            from types import SimpleNamespace
+
+            results = [SimpleNamespace(fact=SimpleNamespace(memory_id=m, fact_id=f"f-{m}"))
+                       for m in self.ids[:limit]]
+            return SimpleNamespace(results=results, query_type="t", incomplete_channels=(),
+                                   reranker_status="applied", no_confident_match=False)
+
+        def close(self) -> None:
+            pass
+
+    def test_presence_is_checked_and_rows_keep_the_top_ten(
+            self, tool, tmp_path, monkeypatch, capsys) -> None:
+        import sqlite3
+
+        import superlocalmemory.core.recall_pipeline as rp
+
+        store = tmp_path / "copy"
+        store.mkdir()
+        conn = sqlite3.connect(store / "memory.db")
+        conn.executescript("""
+            CREATE TABLE memories (memory_id TEXT PRIMARY KEY, profile_id TEXT, created_at TEXT);
+            CREATE TABLE atomic_facts (fact_id TEXT PRIMARY KEY, profile_id TEXT, created_at TEXT);
+            INSERT INTO memories VALUES ('m0', 'default', '2026-08-26 10:00:00');
+            INSERT INTO memories VALUES ('m1', 'default', '2026-09-01 10:00:00');
+        """)
+        conn.commit()
+        conn.close()
+        returned = [f"x{i}" for i in range(11)] + ["m1"]       # m1 lands at rank 12
+        returned[7] = "m0"                                      # m0 at rank 8
+        monkeypatch.setattr(tool, "_owner_roots", lambda: set())
+        monkeypatch.setattr(tool, "_build_engine", lambda *_a: self._Engine(returned))
+        monkeypatch.setattr(tool, "_wait_until_complete", lambda *_a: None)
+        monkeypatch.setattr(rp, "resolve_hot_path_fast", lambda *_a: None)
+        out = tmp_path / "rows.jsonl"
+        gold = _gold(tmp_path, 3, 1)                           # A0 m0, A1 m1, A2 m2 (absent)
+        code = tool.main(["retrieval", "--gold", str(gold), "--data-dir", str(store),
+                          "--limit", "10", "--out", str(out)])
+        assert code == 0
+        report = json.loads(capsys.readouterr().out)
+        assert "answer_presence" in report, "the store was not checked for the answers"
+        presence = report["answer_presence"]
+        assert presence["checked"] == 3 and presence["stored"] == 2
+        assert presence["answer_not_stored"] == ["A2"]
+        assert presence["retrieval_misses"] == ["A1"]
+        assert presence["misses_explained_by_storage"] == ["A2"]
+        assert report["stored_only"]["n"] == 2
+        rows = {r["qid"]: r for r in map(json.loads, out.read_text().splitlines())}
+        assert rows["A0"]["answer_presence"]["earliest_created_at"] == "2026-08-26 10:00:00"
+        assert rows["A2"]["answer_presence"]["status"] == "not_stored"
+        assert "answer_presence" not in rows["U0"]
+        assert len(rows["A0"]["top"]) == 10
