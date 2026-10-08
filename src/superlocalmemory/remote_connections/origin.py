@@ -8,10 +8,13 @@ remote tool policy. Real network listeners retain their existing TLS checks.
 from __future__ import annotations
 
 import base64
+import time
+from collections.abc import Callable, Iterable
 from typing import Any
 
 import httpx
 
+from superlocalmemory.mcp.request_deadline import DEADLINE_HEADER
 from superlocalmemory.remote_connections.codec import (
     MAX_RESPONSE_BYTES,
     RESPONSE_HEADERS,
@@ -23,12 +26,29 @@ from superlocalmemory.remote_connections.credentials import (
     CredentialError,
     _validate,
 )
-from superlocalmemory.remote_connections.session import OriginResponse
+from superlocalmemory.remote_connections.session import OriginResponse, recall_deadline_ms
 from superlocalmemory.server.remote_listener import RemoteListenerASGI
 
 
+def relay_request_headers(
+    pairs: Iterable[Iterable[str]], *, deadline_at_ms: int, now_ms: float,
+) -> dict[str, str]:
+    """The relayed request's headers with this computer's deadline stamped on.
+
+    Any ``x-slm-deadline-ms`` that came with the request, in any letter case,
+    is discarded first: only the laptop knows how much of the relay's time is
+    left, and a remote client must not be able to say otherwise.
+    """
+    headers = {name: value for name, value in pairs if name.lower() != DEADLINE_HEADER}
+    headers[DEADLINE_HEADER] = str(recall_deadline_ms(deadline_at_ms, now_ms))
+    return headers
+
+
 class CanonicalMcpOrigin:
-    def __init__(self, app: Any, *, param_headers: tuple[str, ...] = ()):
+    def __init__(
+        self, app: Any, *, param_headers: tuple[str, ...] = (),
+        clock: Callable[[], float] = time.time,
+    ):
         descriptor = getattr(getattr(app, "state", None), "daemon_descriptor", None)
         port = getattr(descriptor, "port", 8765)
         if type(port) is not int or not 1 <= port <= 65535:
@@ -36,6 +56,7 @@ class CanonicalMcpOrigin:
         self._base_url = f"https://127.0.0.1:{port}"
         self._app = RemoteListenerASGI(app, ("127.0.0.1",))
         self._params = tuple(param_headers)
+        self._clock = clock
 
     async def __call__(self, frame: dict, credential: ConnectorCredential) -> OriginResponse:
         try:
@@ -63,7 +84,9 @@ class CanonicalMcpOrigin:
         # These are virtual transport parameters, never an outbound HTTP URL.
         # Credentials never enter a URL, process argument or public relay frame.
         transport = httpx.ASGITransport(app=bounded_app, raise_app_exceptions=True)
-        headers = dict(request["headers"])
+        headers = relay_request_headers(
+            request["headers"], deadline_at_ms=request["deadlineAt"],
+            now_ms=self._clock() * 1000)
         headers["Authorization"] = "Bearer " + credential.origin_key
         try:
             async with httpx.AsyncClient(

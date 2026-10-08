@@ -4817,6 +4817,10 @@ def _register_daemon_routes(application: FastAPI) -> None:
         # tag filter says why in ``tag_scope``.
         tags: list[str] | None = Query(default=None),
         tags_match: str = "all",
+        # A caller that must answer within a deadline (a relayed call) may ask
+        # for a SHORTER wait before the keyword fallback; it never lengthens
+        # the default. Read leniently: an unusable value is ignored.
+        budget_s: str = "",
     ):
         _update_activity()
         search_query = q or query  # Accept both ?q= and ?query= for compatibility
@@ -4945,7 +4949,11 @@ def _register_daemon_routes(application: FastAPI) -> None:
         include_global, include_shared = enforce_read_scope(include_global, include_shared)
         # Everything from here to the response body is shared with saved views
         # (server/recall_core.py), so a view and this route cannot drift apart.
-        from superlocalmemory.server.recall_core import RecallCall, run_recall
+        from superlocalmemory.server.recall_core import (
+            RecallCall,
+            parse_budget_s,
+            run_recall,
+        )
 
         call = RecallCall(
             query=search_query, limit=limit, session_id=effective_sid,
@@ -4960,6 +4968,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
             skip_answer_check=_skip_check, no_reorder=_check_request == "no_reorder",
             full=full, include_source=include_source,
             include_marker=bool(session_id),
+            budget_s=parse_budget_s(budget_s),
         )
         try:
             return await run_recall(engine, call, app_state=application.state)

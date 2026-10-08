@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -52,6 +53,25 @@ def recall_budget_s() -> float:
         return v if v > 0 else 25.0
     except (TypeError, ValueError):
         return 25.0
+
+
+#: A call budget is never allowed below this: the keyword fallback still has to run.
+RECALL_BUDGET_FLOOR_S = 2.0
+
+
+def parse_budget_s(raw: Any) -> float | None:
+    """A caller's recall budget in seconds, or ``None`` when absent or unusable.
+
+    Only a finite number above zero counts; anything else is ignored so a
+    malformed value can never turn into an error or an unbounded wait.
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) and value > 0 else None
 
 
 def sanitize_json_text(text: str) -> str:
@@ -93,6 +113,22 @@ class RecallCall:
     include_source: bool = False
     include_marker: bool = False
     origin: str = ""
+    #: A per-call budget in seconds. It can only SHORTEN ``recall_budget_s()``
+    #: (see :func:`effective_budget_s`); ``None`` leaves the default untouched.
+    budget_s: float | None = None
+
+
+def effective_budget_s(call: RecallCall) -> float:
+    """The seconds this call may wait before the keyword fallback is served.
+
+    The call's own budget (a relayed call must answer before its relay gives
+    up) can only shorten the default, and never below the floor the fallback
+    query needs. Without one this is exactly ``recall_budget_s()``.
+    """
+    default = recall_budget_s()
+    if call.budget_s is None:
+        return default
+    return min(default, max(call.budget_s, RECALL_BUDGET_FLOOR_S))
 
 
 def _engine_call(engine: Any, call: RecallCall) -> Any:
@@ -192,14 +228,15 @@ async def run_recall(engine: Any, call: RecallCall, *, app_state: Any) -> dict:
         # the loop; only past the generous budget is the keyword answer served.
         loop = asyncio.get_running_loop()
         future = loop.run_in_executor(None, hold.run, _engine_call, engine, call)
-        deadline = loop.time() + recall_budget_s()
+        budget = effective_budget_s(call)
+        deadline = loop.time() + budget
         while not future.done() and loop.time() < deadline:
             await asyncio.sleep(0.05)
         snapshot = get_profile_runtime(app_state).snapshot
         if not future.done():
             future.add_done_callback(lambda f: (f.cancelled() or f.exception()))
             logger.warning("recall: semantic recall exceeded %.0fs budget for %r — "
-                           "serving keyword fallback", recall_budget_s(), call.query[:80])
+                           "serving keyword fallback", budget, call.query[:80])
             # The fallback honours the same facets the primary path was given.
             return recall_keyword_fallback(
                 engine, call.query, call.limit, profile_id=call.profile_id or None,
@@ -216,5 +253,6 @@ async def run_recall(engine: Any, call: RecallCall, *, app_state: Any) -> dict:
         hold.leave()
 
 
-__all__ = ["RECALL_SEMAPHORE", "RecallCall", "recall_budget_s", "run_recall",
+__all__ = ["RECALL_BUDGET_FLOOR_S", "RECALL_SEMAPHORE", "RecallCall",
+           "effective_budget_s", "parse_budget_s", "recall_budget_s", "run_recall",
            "sanitize_json_text"]

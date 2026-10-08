@@ -24,6 +24,19 @@ RELAY_DEADLINE_MS = 25000
 #: deadlineAt is stamped by the relay's clock. Tolerate a laptop clock this far
 #: behind it, but never wait longer than RELAY_DEADLINE_MS.
 CLOCK_SKEW_TOLERANCE_MS = 5000
+#: How long before the relay gives up a recall must already be answering: time for
+#: its keyword fallback query, serialisation and the trip back to the relay.
+RECALL_DEADLINE_MARGIN_MS = 4000
+
+
+def recall_deadline_ms(deadline_at_ms: int, now_ms: float) -> int:
+    """The moment (epoch ms, this computer's clock) a relayed recall must answer by.
+
+    Bounded the same way ``RelaySession`` bounds its own wait: never more than
+    RELAY_DEADLINE_MS from now, whatever the relay's clock said.
+    """
+    remaining = min(deadline_at_ms - now_ms, RELAY_DEADLINE_MS)
+    return int(now_ms + remaining - RECALL_DEADLINE_MARGIN_MS)
 
 
 @dataclass(frozen=True)

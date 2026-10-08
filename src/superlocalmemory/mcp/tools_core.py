@@ -679,6 +679,13 @@ def register_core_tools(server, get_engine: Callable) -> None:
             from superlocalmemory.core.admission import enforce_read_scope
             _incl_global, _incl_shared = enforce_read_scope(include_global, include_shared)
 
+            # A relayed call must answer before its relay gives up: what is left
+            # of the deadline the laptop stamped on this request becomes the
+            # recall's budget. Read here, on the request's own context (the
+            # worker thread below is not it). No deadline -> nothing is sent.
+            from superlocalmemory.mcp.request_deadline import remaining_budget_s
+            _budget_s = remaining_budget_s()
+
             def _recall_via_daemon_pool():
                 pool = choose_pool()
                 return pool.recall(
@@ -711,6 +718,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
                        else {}),
                     **({"tags_match": tags_match.strip()}
                        if (tags_match or "").strip().lower() == "any" else {}),
+                    **({"budget_s": _budget_s} if _budget_s is not None else {}),
                 )
 
             result = await asyncio.to_thread(

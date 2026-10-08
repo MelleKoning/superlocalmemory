@@ -82,6 +82,25 @@ class AgentIDExtractorASGI:
 
     async def __call__(self, scope, receive, send):
         if scope.get("type") == "http":
+            # A relayed request carries how long it may still take; hold it for
+            # this request only (mcp/request_deadline), whatever the path is.
+            from superlocalmemory.mcp.request_deadline import (
+                DEADLINE_HEADER,
+                parse_deadline_header,
+                request_deadline,
+            )
+            wanted = DEADLINE_HEADER.encode("ascii")
+            deadline = next(
+                (parse_deadline_header(v) for k, v in scope.get("headers") or ()
+                 if k.lower() == wanted), None)
+            if deadline is not None:
+                with request_deadline(deadline):
+                    await self._route(scope, receive, send)
+                return
+        await self._route(scope, receive, send)
+
+    async def _route(self, scope, receive, send):
+        if scope.get("type") == "http":
             root_path: str = scope.get("root_path", "")
             full_path: str = scope.get("path", "/")
             # Mount-relative sub-path (what comes AFTER /mcp). When a root_path

@@ -97,6 +97,7 @@ class DaemonPoolProxy:
         tags: "str | list[str] | None" = None,
         tags_match: str = "all",
         project_strict: bool = False,
+        budget_s: float | None = None,
     ) -> dict[str, Any]:
         if self._unavailable:
             return self._unavailable_response()
@@ -152,6 +153,10 @@ class DaemonPoolProxy:
             _params["tags_match"] = "any"
         if as_of:
             _params["as_of"] = as_of
+        # A relayed call's remaining time: sent only when the request carried a
+        # deadline, so every other query string is unchanged.
+        if budget_s is not None:
+            _params["budget_s"] = f"{float(budget_s):.3f}"
         if known_as_of:
             _params["known_as_of"] = known_as_of
         if valid_at:
