@@ -133,7 +133,7 @@ REVIEWED: dict[tuple[str, str, str], tuple[int, str]] = {
     (_S + "remote_connections/gateway_provider.py", "CloudGatewayProvider._request",
      "httpx.AsyncClient"):
         (1, "OAUTH: owner enrollment calls to the fixed https://auth.superlocalmemory.com "
-            "host (AUTH constant plus a nine-path allow-list, nothing caller-supplied). "
+            "host (AUTH constant plus a fixed path allow-list, nothing caller-supplied). "
             "Bodies are OAuth client registration, PKCE code/refresh exchange and "
             "connection metadata; no memory text. Not sent through core.outbound_http "
             "because its credential screen would replace the refresh token and PKCE "

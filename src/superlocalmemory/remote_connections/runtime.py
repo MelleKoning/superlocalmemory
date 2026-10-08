@@ -19,10 +19,17 @@ from superlocalmemory.remote_connections.native_enrollment import (
     PendingEnrollment,
 )
 from superlocalmemory.remote_connections.origin import CanonicalMcpOrigin
+from superlocalmemory.remote_connections.renewal import (
+    RENEWAL_CHECK_S,
+    RENEWAL_RETRY_S,
+    RENEWAL_WINDOW_MS,
+    renewal_delay_s,
+)
 from superlocalmemory.remote_connections.service import RemoteConnectionService
 from superlocalmemory.server.remote_keys import RemoteKeyStore
 
 MCP_URL = "https://mcp.superlocalmemory.com/mcp"
+__all__ = ["NativeConnectionRuntime", "RENEWAL_CHECK_S", "RENEWAL_WINDOW_MS", "renewal_delay_s"]
 
 
 def _connected_app(value: object) -> bool:
@@ -79,6 +86,8 @@ class NativeConnectionRuntime:
         self._epochs: dict[str, int] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._verification_tasks: dict[str, asyncio.Task] = {}
+        self._renewal_tasks: dict[str, asyncio.Task] = {}
+        self._recovery_tasks: dict[str, asyncio.Task] = {}
         #: A transient verify failure (cold engine, network blip) is retried while the
         #: same transport stays up, so the dashboard does not stay wrongly unavailable.
         self._verify_retry_limit = 5
@@ -208,6 +217,8 @@ class NativeConnectionRuntime:
         def state(value: str):
             self._epochs[row.connection_id] = self._epochs.get(row.connection_id, 0) + 1
             self._states[row.connection_id] = value
+            if value == "authorization_required":
+                self._start_recovery(row)
             if value != "transport_ready":
                 self._verified.discard(row.connection_id)
             else:
@@ -221,6 +232,109 @@ class NativeConnectionRuntime:
         companion = Companion(enabled=True, load_credential=load, exchange=exchange, on_state=state)
         self._companions[row.connection_id] = companion
         await companion.start()
+        self._schedule_renewal(row)
+
+    async def renew_credential(self, row: PendingEnrollment, *, recovering: bool = False) -> str:
+        """Replace this connection's laptop credential.
+
+        The link is paused first, so it never dials with a credential the gateway
+        has just retired. Outcomes: renewed, not_due, unavailable, authorization_required.
+        When recovering from a refusal, the link reconnects only with a newer
+        credential, so a refused credential is never retried in a loop."""
+        lock = self._locks.setdefault(row.connection_id, asyncio.Lock())
+        async with lock:
+            await self._current(row)
+            identity = (row.installation_id, row.owner, row.profile, row.connection_id)
+            held = await asyncio.to_thread(self.vault().generation, *identity)
+            latest = await asyncio.to_thread(self.store.by_connection, row.connection_id)
+            if held is None or latest is None or not latest.completed:
+                self._states[row.connection_id] = "authorization_required"
+                return "authorization_required"
+            companion = self._companions.get(row.connection_id)
+            if companion is not None:
+                await companion.stop()
+            outcome = await self._replace_credential(latest, held)
+            if outcome == "renewed" or (outcome != "authorization_required" and not recovering):
+                if companion is not None:
+                    await companion.start()
+            else:
+                self._states[row.connection_id] = "authorization_required"
+            return outcome
+
+    async def _replace_credential(self, latest: PendingEnrollment, held: int) -> str:
+        try:
+            latest = await self.provider.exchange(latest, "")
+            try:
+                delivered = await self.provider.renew(latest, held)
+            except ValueError as error:
+                if not error.args or error.args[0] != "renewal_conflict":
+                    raise
+                # Another renewal already won, or none is due: take what the gateway holds.
+                delivered = await self.provider.provision(latest)
+                if delivered["generation"] <= held:
+                    return "not_due"
+        except ValueError as error:
+            if error.args and error.args[0] == "connection_unavailable":
+                return "authorization_required"
+            return "unavailable"
+        credential = ConnectorCredential(
+            latest.installation_id,
+            latest.owner,
+            latest.profile,
+            latest.connection_id,
+            delivered["generation"],
+            delivered["expires_at_ms"],
+            delivered["device_token"],
+            latest.origin_key,
+            latest.private_key,
+        )
+        await mutate(self.vault().save, credential)
+        await mutate(self.store.save, replace(latest, expires_at_ms=credential.expires_at_ms))
+        return "renewed"
+
+    async def recover(self, row: PendingEnrollment) -> str:
+        """The gateway refused the held credential: it may hold a newer one (a renewal
+        that finished there but was not saved here) or the held one expired."""
+        return await self.renew_credential(row, recovering=True)
+
+    def _start_recovery(self, row: PendingEnrollment) -> None:
+        running = self._recovery_tasks.get(row.connection_id)
+        if running is None or running.done():
+            self._recovery_tasks[row.connection_id] = asyncio.create_task(
+                self._quietly(self.recover(row)), name="slm-remote-recovery"
+            )
+
+    def _schedule_renewal(self, row: PendingEnrollment) -> None:
+        running = self._renewal_tasks.get(row.connection_id)
+        if running is None or running.done():
+            self._renewal_tasks[row.connection_id] = asyncio.create_task(
+                self._quietly(self._renew_when_due(row)), name="slm-remote-renewal"
+            )
+
+    async def _renew_when_due(self, row: PendingEnrollment) -> None:
+        identity = (row.installation_id, row.owner, row.profile, row.connection_id)
+        while True:
+            held = await asyncio.to_thread(self.vault().load, *identity)
+            if held is None:
+                return  # missing or expired: the link's refusal triggers recovery
+            delay = renewal_delay_s(held.expires_at_ms, time.time() * 1000)
+            if delay > 0:
+                await asyncio.sleep(delay)
+                continue
+            outcome = await self.renew_credential(row)
+            if outcome == "authorization_required":
+                return
+            if outcome != "renewed":
+                pause = RENEWAL_RETRY_S if outcome == "unavailable" else RENEWAL_CHECK_S
+                await asyncio.sleep(pause)
+
+    @staticmethod
+    async def _quietly(work) -> None:
+        """A cancelled or removed connection ends its background renewal silently."""
+        try:
+            await work
+        except (ValueError, JournalConflict):
+            return
 
     async def verify(
         self, row: PendingEnrollment, epoch: int | None = None, attempt: int = 0
@@ -399,6 +513,12 @@ class NativeConnectionRuntime:
             task.cancel()
         await asyncio.gather(*self._verification_tasks.values(), return_exceptions=True)
         self._verification_tasks.clear()
+        background = [*self._renewal_tasks.values(), *self._recovery_tasks.values()]
+        for task in background:
+            task.cancel()
+        await asyncio.gather(*background, return_exceptions=True)
+        self._renewal_tasks.clear()
+        self._recovery_tasks.clear()
         for companion in self._companions.values():
             await companion.stop()
         self._companions.clear()

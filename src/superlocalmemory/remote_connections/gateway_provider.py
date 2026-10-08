@@ -52,6 +52,7 @@ class CloudGatewayProvider:
             "/owner/verify",
             "/owner/apps",
             "/owner/apps/revoke",
+            "/owner/renew",
             "/bootstrap/cancel",
         }:
             raise ValueError("invalid_gateway_endpoint")
@@ -61,7 +62,9 @@ class CloudGatewayProvider:
             ) as client:
                 async with client.stream("POST", AUTH + path, **kwargs) as response:
                     if not response.is_success:
-                        distinct = CloudGatewayProvider._removal_error(path, response.status_code)
+                        distinct = CloudGatewayProvider._removal_error(
+                            path, response.status_code
+                        ) or CloudGatewayProvider._renewal_error(path, response.status_code)
                         raise _GatewayAnswer(distinct or "unavailable")
                     chunks, length = [], 0
                     async for chunk in response.aiter_bytes():
@@ -74,7 +77,12 @@ class CloudGatewayProvider:
                         raise ValueError("invalid")
                     return value
         except _GatewayAnswer as answer:
-            if answer.args[0] in {"not_found", "version_conflict"}:
+            if answer.args[0] in {
+                "not_found",
+                "version_conflict",
+                "renewal_conflict",
+                "connection_unavailable",
+            }:
                 raise ValueError(answer.args[0]) from None
             raise ValueError("remote_gateway_unavailable") from None
         except Exception:
@@ -256,6 +264,22 @@ class CloudGatewayProvider:
             "/owner/connections",
             headers={"Authorization": "Bearer " + row.access_token, "DPoP": proof},
         )
+        return self._delivery(row, value)
+
+    async def renew(self, row: PendingEnrollment, expected_generation: int) -> dict:
+        """Replace the laptop credential held at ``expected_generation``."""
+        proof = DeviceSigner(row.private_key).proof(
+            "POST", AUTH + "/owner/renew", token=row.access_token
+        )
+        value = await self._http(
+            "/owner/renew",
+            headers={"Authorization": "Bearer " + row.access_token, "DPoP": proof},
+            json={"expected_generation": expected_generation},
+        )
+        return self._delivery(row, value)
+
+    @staticmethod
+    def _delivery(row: PendingEnrollment, value: dict) -> dict:
         if (
             value.get("connection_id") != row.connection_id
             or value.get("profile_id") != row.profile
@@ -284,6 +308,13 @@ class CloudGatewayProvider:
         return await self._http(
             "/owner/verify", headers={"Authorization": "Bearer " + row.access_token, "DPoP": proof}
         )
+
+    @staticmethod
+    def _renewal_error(path: str, status: int) -> str | None:
+        """409: another renewal won or none is due yet; 403: the connection is gone."""
+        if path != "/owner/renew":
+            return None
+        return {409: "renewal_conflict", 403: "connection_unavailable"}.get(status)
 
     @staticmethod
     def _removal_error(path: str, status: int) -> str | None:

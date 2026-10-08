@@ -223,6 +223,19 @@ class CredentialVault:
             return None
         return ConnectorCredential(**{field: record[field] for field in _FIELDS})
 
+    def generation(
+        self, installation: str, owner: str, profile: str, connection: str
+    ) -> int | None:
+        """The stored generation even after expiry, so an expired credential can be
+        renewed; None when there is no credential or it was revoked."""
+        key = self._key(installation, owner, profile, connection)
+        with self._locked():
+            record = self._get(key)
+        if record is None or record.get("revoked") is True:
+            return None
+        value = record.get("generation")
+        return value if type(value) is int and value >= 1 else None
+
     def revoke(self, installation: str, owner: str, profile: str, connection: str) -> None:
         key = self._key(installation, owner, profile, connection)
         with self._locked():
