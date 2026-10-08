@@ -217,3 +217,62 @@ def test_a_new_erasure_blanks_the_previews_of_a_memory_that_keeps_other_facts(
 
     row = engine._db.execute("SELECT payload FROM memory_events WHERE id = ?", (event_id,))[0]
     assert "content_preview" not in json.loads(dict(row)["payload"])
+
+
+def test_an_erasure_blanks_observe_and_auto_capture_previews_of_the_erased_memory(
+        engine_with_mock_deps):
+    """Observe and auto-capture events name no fact and no operation; they carry
+    the hash of the text they saw, which is the erased memory's source hash.
+    Both shapes are planted exactly as the daemon and the MCP observe tool write
+    them, for an erased memory and for a live one."""
+    import hashlib
+
+    from superlocalmemory.core.mutations import delete_fact_authorized
+
+    engine = engine_with_mock_deps
+    erased_text = "Vellatrix hides the synthetic ledger under the third stair."
+    live_text = "Ombrel feeds the synthetic heron at dawn."
+    erased = _store(engine, erased_text)
+    _store(engine, live_text)
+
+    def digest(text: str) -> str:
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    with engine._db.raw_connection() as conn:
+        ids = {
+            "observed": _event(conn, "memory.observed", {
+                "content_hash": digest(erased_text), "content_preview": erased_text[:120],
+                "buffer_size": 1}),
+            "auto_observe": _event(conn, "memory.captured", {
+                "agent_id": "claude", "category": "decision", "source": "auto-observe",
+                "content_hash": digest(erased_text), "content_preview": erased_text[:80]}),
+            "live_observed": _event(conn, "memory.observed", {
+                "content_hash": digest(live_text), "content_preview": live_text[:120],
+                "buffer_size": 1}),
+        }
+        conn.commit()
+
+    for fact_id in erased.final_fact_ids:
+        assert delete_fact_authorized(engine, fact_id, trusted_actor_id=_actor(),
+                                      source_agent_id="test").get("ok")
+
+    def payload(event_id: int) -> dict:
+        row = engine._db.execute("SELECT payload FROM memory_events WHERE id = ?", (event_id,))[0]
+        return json.loads(dict(row)["payload"])
+
+    assert "content_preview" not in payload(ids["observed"])
+    assert "content_preview" not in payload(ids["auto_observe"])
+    assert payload(ids["auto_observe"])["source"] == "auto-observe"
+    assert payload(ids["live_observed"])["content_preview"].startswith("Ombrel")
+
+
+def test_the_mcp_observe_tool_names_the_text_it_captured_by_hash():
+    """Without the hash an auto-observe event names nothing an erasure can find."""
+    import inspect
+
+    from superlocalmemory.mcp import tools_active
+
+    source = inspect.getsource(tools_active)
+    start = source.index('_emit_event("memory.captured", {')
+    emitted = source[start:source.index("}", start)]
+    assert '"content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest()' in emitted

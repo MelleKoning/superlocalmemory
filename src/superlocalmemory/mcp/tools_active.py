@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import hashlib
 import logging
 import uuid
 from typing import TYPE_CHECKING, Callable
@@ -830,9 +831,12 @@ def register_active_tools(server, get_engine: Callable) -> None:
             )
 
             if stored:
+                # The hash is the stored memory's source hash, so an erasure can
+                # find this event and blank its preview (core/erasure_scrub.py).
                 _emit_event("memory.captured", {
                     "agent_id": agent_id,
                     "category": decision.category,
+                    "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
                     "content_preview": content[:80],
                     "source": "auto-observe",
                 }, source_agent=agent_id)
