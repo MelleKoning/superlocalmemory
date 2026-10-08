@@ -20,7 +20,7 @@ this repository.
 | Hermes | `hermes plugins install 'https://github.com/qualixar/superlocalmemory.git#hermes-plugin'` | Skills, child-agent roles, `/slm` commands |
 | Antigravity (`agy`) | `agy plugin install "$(npm root -g)/superlocalmemory/antigravity-plugin"` | MCP server, skills, agents, hooks |
 | Any other agent | Paste the [universal agent rules](../plugin-src/rules/AGENTS.md) into `AGENTS.md`, `CLAUDE.md`, `.cursorrules` or the system prompt | Memory discipline for any MCP client |
-| Web apps (ChatGPT, Claude on the web, Muse, Composio) | Web access in the dashboard, then the [web agent instructions](web-agents/README.md) | Recall and, if allowed, save through Web access |
+| Web apps (ChatGPT, Claude on the web, Muse, Composio) | Web access in the dashboard, then the [host guides](remote-access/hosts.md) and [web agent instructions](web-agents/README.md) | Recall and, if allowed, save through Web access |
 
 ## The skills
 
@@ -95,7 +95,9 @@ Add the `qualixar` marketplace (`.cursor-plugin/marketplace.json` in this
 repository) in the host's Plugins screen, then add `superlocalmemory`. The MCP
 server starts with `uvx` pinned to the release, with no API key or sign-in. See
 [the README section](../README.md#grok-bot-and-other-cursor-format-plugin-hosts)
-for what bots on one computer share.
+for what bots on one computer share. This plugin keeps its own memory on the Grok Bot
+computer. To reach the memory on your own computer, add Web access as a custom MCP
+server in Grok Bot's Plugins screen ([steps](remote-access/hosts.md#grok-bot)).
 
 ## Hermes
 

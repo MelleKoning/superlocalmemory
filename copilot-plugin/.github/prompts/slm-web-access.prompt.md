@@ -62,6 +62,8 @@ The app also needs to know when to use the tools. Give the owner
 `docs/web-agents/instructions.md` (full and short blocks) or the Agent Skill
 folder `docs/web-agents/superlocalmemory-web/`. The dashboard's **How to add an
 app** panel has a **Copy instructions** button with the short block.
+Exact per-app steps (ChatGPT, ChatGPT dots, Grok Bot, Composio, Muse) are in
+`docs/remote-access/hosts.md`.
 
 ## Renewal
 

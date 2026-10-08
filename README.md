@@ -121,7 +121,7 @@ SLM is part of Qualixar's AI Reliability Engineering work: agent memory that is 
 | Framework adapters | LangGraph, LangChain, LlamaIndex, CrewAI, AutoGen, Semantic Kernel, Microsoft Agent Framework, Google ADK, OpenAI Agents | [Framework adapters](docs/framework-adapters.md) |
 | Python SDK and HTTP API | `MemoryEngine` in your code; the local REST API | [API reference](docs/api-reference.md) |
 | Auto-capture hooks | `slm hooks install` for Claude Code, `--agent codex` for Codex | [Auto-memory](docs/auto-memory.md) |
-| Web apps (ChatGPT, Claude on the web, Muse, Composio) | Optional Web access, turned on from the dashboard: OAuth sign-in, read or save per app, and a Connected apps page to remove any app at once. Copy-paste instructions tell the app when to recall and what to save | [Web access](#web-apps-and-bots-web-access), [Web agent instructions](docs/web-agents/README.md) |
+| Web apps (ChatGPT, Claude on the web, Muse, Composio) | Optional Web access, turned on from the dashboard: OAuth sign-in, read or save per app, and a Connected apps page to remove any app at once. Copy-paste instructions tell the app when to recall and what to save | [Web access](#web-apps-and-bots-web-access), [Host guides](docs/remote-access/hosts.md), [Web agent instructions](docs/web-agents/README.md) |
 | Cursor-format plugin (Grok Bot, Cursor) | A marketplace-distributed plugin — different from `slm connect cursor` above — that runs on a shared, memory-tight computer with no hooks or dashboard | See below |
 
 Claude Code memory in two commands: `claude plugin marketplace add qualixar/superlocalmemory`, then `claude plugin install superlocalmemory@qualixar`.
@@ -135,6 +135,11 @@ plugin works on Grok Bot's shared, memory-constrained computer without any manua
 **Install:** add the `qualixar` marketplace (`.cursor-plugin/marketplace.json` at this repo's
 root) in Grok Bot's Plugins screen, then add `superlocalmemory`. No API key, no sign-in step —
 the server runs locally on the Grok Bot computer, so nothing goes to a memory SaaS.
+If the plugin shows the old "21-tool code profile" description or a `venv/bin/slm: No such file`
+error, Grok Bot's copy of the marketplace is pinned to an old commit: remove the `qualixar`
+marketplace, add it again, and reinstall the plugin. This plugin keeps its own memory on Grok
+Bot's computer; to use the memory on your own computer, add
+[Web access](docs/remote-access/hosts.md#grok-bot) as a custom MCP server instead.
 *(The MCP server starts as `uvx --from superlocalmemory==<version> slm mcp`: a pinned,
 on-PATH command, with `UV_TORCH_BACKEND=cpu` so a GPU-less Linux box never pulls PyTorch's CUDA
 wheel stack. The first start resolves the package once; the first recall downloads the local
@@ -182,7 +187,7 @@ Your laptop keeps an outbound connection to SLM's connection gateway. An app's t
 
 Connecting an app gives it the tools, not the judgment to use them well. Paste the [web agent instructions](docs/web-agents/instructions.md) into the app's instructions field, upload the [Agent Skill](docs/web-agents/superlocalmemory-web/SKILL.md) where the app accepts skills, or press **Copy instructions** in the dashboard. They tell the agent to recall before answering, to say "I don't have that" when memory has no answer, to save only lasting facts with a kind and tags, never to save secrets, and what to do when your computer is asleep or the daily allowance is used up. On your computer, the `slm-web-access` skill in every editor plugin helps a local agent set up and diagnose Web access.
 
-[Web access documentation](docs/remote-access/README.md) · [Web agent instructions](docs/web-agents/README.md) · [Architecture and boundaries](docs/remote-access/architecture.md) · [Dashboard onboarding](docs/remote-access/onboarding.md)
+[Web access documentation](docs/remote-access/README.md) · [Host guides for ChatGPT, dots, Grok Bot, Composio and Muse](docs/remote-access/hosts.md) · [Web agent instructions](docs/web-agents/README.md) · [Architecture and boundaries](docs/remote-access/architecture.md) · [Dashboard onboarding](docs/remote-access/onboarding.md)
 
 ## What developers use it for
 
@@ -363,7 +368,7 @@ Cite the governed-memory paper with [CITATION.cff](CITATION.cff) or GitHub's "Ci
 
 **Reference:** [CLI](docs/cli-reference.md) · [MCP tools](docs/mcp-tools.md) · [Configuration](docs/configuration.md) · [Errors](docs/errors.md) · [Troubleshooting](docs/troubleshooting.md) · [Distributed deployment](docs/distributed-deployment.md) · [Privacy diagnostics](docs/privacy-diagnostics.md)
 
-**Design:** [Architecture](docs/ARCHITECTURE.md) · [Web access](docs/remote-access/README.md) · [Score contract](docs/retrieval-score-contract.md) · [Compliance](docs/compliance.md) · [Benchmarks](docs/benchmarks.md)
+**Design:** [Architecture](docs/ARCHITECTURE.md) · [Web access](docs/remote-access/README.md) · [Web access host guides](docs/remote-access/hosts.md) · [Score contract](docs/retrieval-score-contract.md) · [Compliance](docs/compliance.md) · [Benchmarks](docs/benchmarks.md)
 
 ## Upgrade
 

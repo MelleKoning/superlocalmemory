@@ -93,6 +93,7 @@ Your memory and local setup are not touched, and you can turn it on again.
 ## Documentation map
 
 - [Connect an app](onboarding.md): the dashboard steps and what each state means.
+- [Host guides](hosts.md): exact steps for ChatGPT, ChatGPT dots, Grok Bot, Composio and Muse.
 - [Architecture and trust boundaries](architecture.md): components, data flow and authorization.
 - [Web agents](../web-agents/README.md): copyable instructions for each kind of app.
 - [Operator guide](cloudflare-operations.md): deploying the gateway (for operators, not users).

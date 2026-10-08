@@ -11,7 +11,8 @@ the instructions that close that gap, in three shapes:
 | [superlocalmemory-web/SKILL.md](superlocalmemory-web/SKILL.md) | The app accepts Agent Skills (a folder with a `SKILL.md`). Upload the `superlocalmemory-web` folder as it is. |
 | The **Copy instructions** button | You are in the dashboard. Open **Connected apps**, choose **How to add an app**, and copy the short block straight from there. |
 
-All three carry the same rules, and a test keeps them identical.
+All three carry the same rules, and a test keeps them identical. For the steps to
+connect a particular app first, see the [host guides](../remote-access/hosts.md).
 
 ## What the instructions cover
 
