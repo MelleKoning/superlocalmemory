@@ -72,7 +72,9 @@ async function handle(request:Request,env:ResourceEnv,context:OAuthResourceConte
   }
 }
 const protectedResource=new OAuthResourceServer<ResourceEnv,AuthProps>({
-  resourceMetadata:{resource:RESOURCE,authorization_servers:[ISSUER]},requiredScopes:['slm:read'],
+  // Every scope an app may be granted. Clients request exactly what is advertised, and the consent
+  // page offers saving and session tools, unticked, only when requested; slm:connect is owner-only.
+  resourceMetadata:{resource:RESOURCE,authorization_servers:[ISSUER]},requiredScopes:['slm:read','slm:write','slm:session'],
   validateToken:env=>(resource,token)=>env.AUTH_SERVER.validateToken(resource,token),handler:{fetch:handle},
 });
 export const resourceGateway={
