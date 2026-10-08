@@ -51,6 +51,39 @@ def test_the_cap_follows_this_computer_s_memory(tmp_path: Path, monkeypatch) -> 
     assert store_cache_warm.warm_engine_store(SimpleNamespace(_db=None)) == 0
 
 
+_OPENED_HERE: list[str] = []
+_WATCH: dict[str, str] = {}
+
+
+def _record_opens(event: str, args: tuple) -> None:
+    root = _WATCH.get("root")
+    if root and event == "open" and args and str(args[0]).startswith(root):
+        _OPENED_HERE.append(str(args[0]))
+
+
+def test_warming_never_opens_the_store_inside_the_daemon(tmp_path: Path, monkeypatch) -> None:
+    """The daemon holds SQLite connections to this store. Opening and closing
+    the same files with plain file handles in that process interferes with
+    SQLite's file locks; on a fresh store a save was acknowledged and then lost
+    with "disk I/O error". The read must happen in a separate process, which
+    warms the shared operating-system cache just the same."""
+    import sys
+
+    db = _file(tmp_path / "memory.db", 2 * store_cache_warm.CHUNK + 5)
+    wal = _file(tmp_path / "memory.db-wal", 777)
+    engine = SimpleNamespace(_db=SimpleNamespace(db_path=db))
+    monkeypatch.setattr(store_cache_warm, "total_ram_gb", lambda: 16.0)
+    sys.addaudithook(_record_opens)
+    _OPENED_HERE.clear()
+    _WATCH["root"] = str(tmp_path)
+    try:
+        read = store_cache_warm.warm_engine_store(engine)
+    finally:
+        _WATCH.pop("root", None)
+    assert _OPENED_HERE == []
+    assert read == db.stat().st_size + wal.stat().st_size
+
+
 def test_the_daemon_starts_it() -> None:
     from superlocalmemory.server import unified_daemon
 

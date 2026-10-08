@@ -16,9 +16,11 @@ first minute after a start.
 
 WHAT THIS DOES
 --------------
-One background thread reads ``memory.db`` and its WAL front to back and drops
-the bytes. Nothing is written or changed, so no answer can change. The read
-releases the interpreter lock while it waits on the disk. A store larger than
+One background thread asks a short-lived child process to read ``memory.db``
+and its WAL front to back and drop the bytes. Nothing is written or changed,
+so no answer can change. The daemon itself never opens the store files outside
+SQLite: plain file handles there interfere with SQLite's file locks, and on a
+fresh store that lost an acknowledged save. A store larger than
 a quarter of this computer's memory is not read: the cache could not keep it,
 and it would push out what other programs need. Unknown memory size: nothing
 is read.
@@ -34,12 +36,14 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from superlocalmemory.core.background_process import run_in_child
 from superlocalmemory.core.machine import total_ram_gb
 
 logger = logging.getLogger(__name__)
 
 CHUNK = 8 << 20
 MAX_FRACTION_OF_RAM = 0.25
+WARM_TIMEOUT_SECONDS = 120.0
 
 
 def warm(paths: Iterable[str | Path], *, max_bytes: int) -> int:
@@ -60,15 +64,29 @@ def warm(paths: Iterable[str | Path], *, max_bytes: int) -> int:
     return total
 
 
+def _warm_capped(paths: list[str], max_bytes: int) -> int:
+    """``warm`` with positional arguments, so a child process can run it."""
+    return warm(paths, max_bytes=max_bytes)
+
+
 def warm_engine_store(engine: Any) -> int:
-    """Read the engine's store and WAL, capped by this computer's memory."""
+    """Read the engine's store and WAL, capped by this computer's memory.
+
+    The read runs in a separate process. This process holds SQLite
+    connections to the same files, and opening and closing them here with
+    plain file handles interferes with SQLite's file locks: on a fresh store
+    a save was acknowledged and then lost with "disk I/O error". The page
+    cache is shared, so a read in another process warms it just the same.
+    """
     db_path = getattr(getattr(engine, "_db", None), "db_path", None)
     ram_gb = total_ram_gb()
     if db_path is None or ram_gb <= 0:
         return 0
     started = time.monotonic()
-    read = warm([db_path, f"{db_path}-wal"],
-                max_bytes=int(ram_gb * (1 << 30) * MAX_FRACTION_OF_RAM))
+    read = run_in_child(
+        _warm_capped, [str(db_path), f"{db_path}-wal"],
+        int(ram_gb * (1 << 30) * MAX_FRACTION_OF_RAM), timeout=WARM_TIMEOUT_SECONDS,
+    )
     logger.info("store read into the file cache: %d MB in %.0f ms",
                 read >> 20, (time.monotonic() - started) * 1000.0)
     return read
