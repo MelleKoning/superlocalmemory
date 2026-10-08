@@ -117,7 +117,10 @@ def stop_process(proc: subprocess.Popen | None, *, graceful: bool,
             proc.kill()
             proc.wait(timeout=wait_s)
         except Exception:
-            pass
+            # Still dying (uninterruptible I/O): collect it in the background
+            # so it never stays a zombie, as the recall workers do.
+            from superlocalmemory.retrieval._worker_process import _reap_later
+            _reap_later(proc)
     if close:
         close_pipes(proc)
 
