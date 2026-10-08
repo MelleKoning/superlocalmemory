@@ -153,10 +153,18 @@ class GraphBuilder:
     def _node_degree(self, fact_id: str, profile_id: str, cache: dict[str, int]) -> int:
         """Cached total degree (in + out) for a node."""
         if fact_id not in cache:
+            # The same count as "source = id OR target = id", in three index
+            # lookups: out-edges + in-edges - self-loops (counted in both).
+            # The OR form made SQLite walk every edge of the profile per call
+            # (33 ms warm, 0.8 s cold on a 486k-edge store, many calls per save).
             rows = self._db.execute(
-                "SELECT COUNT(*) as cnt FROM graph_edges "
-                "WHERE profile_id = ? AND (source_id = ? OR target_id = ?)",
-                (profile_id, fact_id, fact_id),
+                "SELECT (SELECT COUNT(*) FROM graph_edges "
+                "WHERE profile_id = ? AND source_id = ?) "
+                "+ (SELECT COUNT(*) FROM graph_edges "
+                "WHERE profile_id = ? AND target_id = ?) "
+                "- (SELECT COUNT(*) FROM graph_edges "
+                "WHERE profile_id = ? AND source_id = ? AND target_id = ?) AS cnt",
+                (profile_id, fact_id, profile_id, fact_id, profile_id, fact_id, fact_id),
             )
             cache[fact_id] = int(dict(rows[0])["cnt"]) if rows else 0
         return cache[fact_id]
