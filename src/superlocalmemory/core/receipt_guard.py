@@ -10,7 +10,8 @@ judged near-duplicates, so the newer memory ended with no fact at all: found
 right after saving, gone a moment later, its number and kind lost.
 
 A near-duplicate verdict against another memory now keeps this memory's own
-fact (the older fact still counts the repeat). A verdict against a fact of the
+fact. The older fact still counts the repeat: the consolidator raised its
+access count when it reached the verdict, before this check. A verdict against a fact of the
 same save is unaffected: that save keeps another fact of its own.
 """
 
