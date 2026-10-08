@@ -548,14 +548,13 @@ class LayaSufficiencyJudge:
             logger.warning("Laya sufficiency judge returned a malformed answer; ignoring it")
             return JudgeOutcome(None, STATUS_UNAVAILABLE)
         self._failures = 0
-        # A permission question may also be settled by an explicit rule; its
-        # verdicts carry that rule's id (retrieval/answer_question_forms.py).
-        ruled = question_forms.applies(query)
+        # A permission question may also be settled by an explicit rule; only a
+        # verdict it settled carries the rule's id (retrieval/answer_question_forms.py).
+        support = question_forms.rule_support(query, rendered)
         return JudgeOutcome(SufficiencyVerdict(
             probabilities, self.threshold,
-            self.calibration_id + ("+" + question_forms.FORMS_ID if ruled else ""),
-            self.calibration_status, self.backend,
-            question_forms.rule_support(query, rendered)), STATUS_JUDGED)
+            question_forms.calibration_id_for(self.calibration_id, support),
+            self.calibration_status, self.backend, support), STATUS_JUDGED)
 
     # -- memory typing (background only) ------------------------------------
 

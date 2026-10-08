@@ -20,6 +20,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from superlocalmemory.retrieval.answer_question_forms import settled_by_rule
 from superlocalmemory.retrieval.answerability import is_supported
 
 _NOT_ANSWERED = (
@@ -28,6 +29,17 @@ _NOT_ANSWERED = (
     "— don't present these as the answer."
 )
 _ANSWERED = "Answer check: likely answered (confidence {confidence:.2f})."
+#: 4.1.22: the verdict an explicit rule settled. The model's own number is kept
+#: and shown as what it is, never as the confidence of the answer.
+RULE_ANSWERED = ("Answer check: answered by a rule stated in your memories "
+                 "(the model's own confidence was {confidence:.2f}).")
+
+
+def answered_line(result_get: Any, confidence: float) -> str:
+    """The line for a checked, supported answer: by a rule, or by the model."""
+    template = RULE_ANSWERED if settled_by_rule(result_get("calibration_id", None)) \
+        else _ANSWERED
+    return template.format(confidence=confidence)
 
 
 def _reader(result: Any):
@@ -51,8 +63,8 @@ def answer_check_line(result: Any) -> str:
     # 4.1.22: "answered" only for a checked answer. ``abstained`` is False on an
     # unchecked recall too, so it alone must never produce this line.
     if not get("abstained", False) and is_supported(result):
-        return _ANSWERED.format(confidence=confidence)
+        return answered_line(get, confidence)
     return ""
 
 
-__all__ = ["answer_check_line"]
+__all__ = ["RULE_ANSWERED", "answer_check_line", "answered_line"]

@@ -25,8 +25,18 @@ two false accepts (a rule about another product, a pair whose order was
 undecided) for one fix. The rule alone added none.
 
 Every other question is judged exactly as before. Changing the rule is a new
-``FORMS_ID``; every verdict on a question the rule reads names it in its
-calibration id.
+``FORMS_ID``.
+
+Calibration identity: the rule's id is appended (``RULE_SUFFIX``) to a verdict's
+calibration id ONLY when the rule settled it (``rule_support`` non-empty). When
+the rule read a question and recognised nothing, the decision is the model's
+probabilities against the model's threshold — the very function the base id
+names, giving the identical verdict — so the base id is the true identity, and
+a verdict that is the same as before carries the same name as before. The
+suffix therefore marks exactly the verdicts a rule decided, which is also how
+every surface tells them apart (``calibration_id`` already reaches all of them;
+``answer_check_reason`` cannot carry it, since it says "reused" for a verdict
+repeated from memory).
 """
 
 from __future__ import annotations
@@ -34,8 +44,9 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
-#: Part of the calibration id of every verdict these forms touched.
+#: Names the rule in the calibration id of every verdict it settled.
 FORMS_ID = "permission-rule-v1"
+RULE_SUFFIX = "+" + FORMS_ID
 
 _GENERIC = (r"(?:we|i|you|they|anyone|anybody|someone|somebody|one|"
             r"the (?:agent|assistant|ai|bot|team|user))")
@@ -148,4 +159,15 @@ def rule_support(question: str, memories: Sequence[str]) -> tuple[int, ...]:
     return tuple(i for i, m in enumerate(memories) if rule_supports(question, m))
 
 
-__all__ = ["FORMS_ID", "applies", "permission_action", "rule_support", "rule_supports"]
+def calibration_id_for(base_id: str, support: Sequence[int]) -> str:
+    """The verdict's calibration id: the rule's suffix only when the rule settled it."""
+    return base_id + RULE_SUFFIX if support else base_id
+
+
+def settled_by_rule(calibration_id: object) -> bool:
+    """Whether a verdict (by its calibration id, on any surface) was settled by the rule."""
+    return isinstance(calibration_id, str) and calibration_id.endswith(RULE_SUFFIX)
+
+
+__all__ = ["FORMS_ID", "RULE_SUFFIX", "applies", "calibration_id_for", "permission_action",
+           "rule_support", "rule_supports", "settled_by_rule"]

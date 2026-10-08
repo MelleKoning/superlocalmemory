@@ -163,6 +163,7 @@ class TestTheJudgeAppliesTheRule:
 
     @pytest.mark.parametrize("question,docs", [
         (A1_Q, A1_DOCS),  # order: not fixed, judged exactly as before
+        (A2_Q, A2_DOCS[1:]),  # the rule read it and settled nothing: the base id
         ("which team owns the billing dashboard", A2_DOCS[1:]),
     ])
     def test_every_other_question_is_one_request_and_an_unchanged_verdict(
