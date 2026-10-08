@@ -333,7 +333,7 @@ def test_editing_a_confirmed_memory_carries_its_kind_once_the_edit_is_applied(la
     # person applies it, its successor is deliberately NOT confirmed (a
     # proposed rule must never be loaded as a standing one) and the original
     # keeps its kind; applying it carries the confirmed kind over. Runs before
-    # enrichment starts competing for the writer (see the report on G01).
+    # enrichment starts competing for the writer.
     fid = lane.saved["procedure"]["fact_ids"][0]
     out = lane.tool("update_memory", fact_id=fid,
                     content=f"Fixture record QK6{RUN}: the code is now C560.")

@@ -336,7 +336,7 @@ class MemoryEngine:
         self._adaptive_learner = AdaptiveLearner(self._db)
 
         # 4.1.19 (L1-15): repair a 4.1.18 downgrade window's fact_type drift on
-        # confirmed kinds (LLD §6.5). 4.1.22: on its own thread, never on the
+        # confirmed kinds. 4.1.22: on its own thread, never on the
         # start-up path - finding those rows reads the whole store (22 s on
         # 2 GB). Its state is on the memory-kinds status; a failure is a
         # warning there, never a failed start (core/kind_reconcile_task.py).

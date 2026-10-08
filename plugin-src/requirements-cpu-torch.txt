@@ -1,4 +1,4 @@
-# CPU-only torch pin for the Linux-no-GPU path (ensure-venv.sh, GB4).
+# CPU-only torch pin for the Linux-no-GPU path (ensure-venv.sh).
 #
 # Installed from https://download.pytorch.org/whl/cpu, which publishes the
 # same public version with a `+cpu` local segment — PEP 440 ignores the local

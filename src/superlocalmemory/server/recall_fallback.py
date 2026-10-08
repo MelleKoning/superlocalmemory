@@ -124,7 +124,7 @@ def _apply_facets(engine, db, pid, candidates, facets
     full recall. This path has no scores, so ``prefer_project`` reorders
     nothing here - its report says how many it would have preferred.
 
-    4.1.22 (G05): ``tags`` is folded into ``narrow``'s own
+    4.1.22: ``tags`` is folded into ``narrow``'s own
     ``matching_fact_ids`` call (it never falls back, so needs no special
     casing there); the 4th return value is its ``tag_scope`` report, built
     from the same ``scoped.kept`` count — no extra narrowing pass."""

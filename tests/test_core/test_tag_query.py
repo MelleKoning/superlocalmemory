@@ -2,7 +2,7 @@
 # Licensed under AGPL-3.0-or-later - see LICENSE file
 # Part of SuperLocalMemory V3 | https://qualixar.com | https://varunpratap.com
 
-"""Exact tag filtering for ``search`` and ``list_recent`` (4.1.22 G05).
+"""Exact tag filtering for ``search`` and ``list_recent`` (4.1.22).
 
 The tagged memory's own words never contain the tag label, so only the
 filter can find it, and it is always placed behind a crowd that an ordinary

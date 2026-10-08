@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar
 # Licensed under AGPL-3.0-or-later — see LICENSE file
-"""GB5 — SLM_RERANKER_ENABLED is a process-only override for the lite
+"""SLM_RERANKER_ENABLED is a process-only override for the lite
 bot-host profile. It must win over the persisted `use_cross_encoder` choice
 when set, leave it alone when unset, and never leak back into config.json
 through a later save() — an env override that silently became a permanent

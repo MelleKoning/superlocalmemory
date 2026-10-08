@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar
 # Licensed under AGPL-3.0-or-later - see LICENSE file
 
-"""M1 (4.1.22, Muse 4.1.21 finding): ``search``, ``fetch`` and ``list_recent``
+"""4.1.22: ``search``, ``fetch`` and ``list_recent``
 called with an explicit but non-existent ``profile_id`` must refuse, exactly
 as ``remember``/``recall`` already do -- not return an empty success.
 

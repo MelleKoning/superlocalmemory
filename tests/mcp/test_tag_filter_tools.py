@@ -2,7 +2,7 @@
 # Licensed under AGPL-3.0-or-later - see LICENSE file
 # Part of SuperLocalMemory V3 | https://qualixar.com | https://varunpratap.com
 
-"""``tags`` / ``tags_match`` on the MCP tools themselves (4.1.22 G05):
+"""``tags`` / ``tags_match`` on the MCP tools themselves (4.1.22):
 ``search`` and ``list_recent`` against a real on-disk store, ``recall``
 forwarding to the daemon pool and returning ``tag_scope``. Synthetic text."""
 

@@ -3,7 +3,7 @@
  * Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar
  * Licensed under AGPL-3.0-or-later - see LICENSE file
  *
- * GB4 — scripts/postinstall.js must not let the npm installer pull PyPI's
+ * scripts/postinstall.js must not let the npm installer pull PyPI's
  * CUDA-tagged `torch` wheel (torch + triton + ~18 nvidia-* packages, ~2.6
  * GiB) onto a CPU-only Linux box. These tests exercise the pure decision
  * functions only — no pip, no network, no real install.

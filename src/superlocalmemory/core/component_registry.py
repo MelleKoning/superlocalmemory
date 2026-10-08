@@ -271,7 +271,7 @@ def probe_reranker_model(config: Any = None) -> Component:
     # `config` is typed ``Any`` and callers (including tests) sometimes pass a
     # lightweight stand-in with a bare ``use_cross_encoder`` attribute instead
     # of a real RetrievalConfig, so prefer the method (which also honours
-    # GB5's SLM_RERANKER_ENABLED override) but fall back to the plain
+    # the SLM_RERANKER_ENABLED override) but fall back to the plain
     # attribute for anything that does not have it.
     enabled = True
     try:
@@ -303,7 +303,7 @@ def probe_reranker_model(config: Any = None) -> Component:
     if not enabled:
         # A cached reranker is still inactive when the operator disabled the
         # channel. The dashboard must describe configured runtime state, not
-        # machine-specific HuggingFace-cache state. GB5: this can be either the
+        # machine-specific HuggingFace-cache state. This can be either the
         # persisted config.json choice or the process-only SLM_RERANKER_ENABLED
         # override — name whichever is actually in force so the two can never
         # be confused with each other.

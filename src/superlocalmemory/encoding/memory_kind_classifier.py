@@ -83,7 +83,7 @@ def decide(model: KindAssignment | None, rules: KindAssignment,
     ``correction`` from Laya or Jev already went through its own cue-and-verify
     check in ``_merge`` before reaching here, so that answer stands; when the
     verify check failed, the model's other choice does NOT replace the
-    correction cue (handoff §9, 4.1.22: "a low-quality model suggestion never
+    correction cue (4.1.22: "a low-quality model suggestion never
     replaces a strong rules cue") - the rules suggestion stands. The Mode
     B/C extraction call never ran that check (L2-11: no extra model call, no
     separate yes/no question) - its own say-so is never enough, so its

@@ -9,7 +9,7 @@ nothing about data roots. The redirect forwards them to the daemon's real
 port. Before 4.1.22 EVERY daemon tried to take 8767 unless
 ``SLM_DISABLE_LEGACY_PORT=1`` — so a second data root (a test, a team store,
 a second profile) started first could capture it and send old clients'
-reads and writes to the wrong store (GB6).
+reads and writes to the wrong store.
 
 Now only a daemon serving the *default* data root takes it: the root a
 process with no environment selection resolves to

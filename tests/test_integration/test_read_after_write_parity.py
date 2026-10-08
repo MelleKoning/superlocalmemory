@@ -11,7 +11,7 @@ global); every filter it declared must find it right after the save answers,
 and must still find the MEMORY once enrichment has replaced the first fact
 with derived ones.
 
-Each save also carries tags (4.1.22 G05): recall, search and list_recent must
+Each save also carries tags (4.1.22): recall, search and list_recent must
 find it by an exact tag filter the same way, although no tag label appears in
 its words.
 

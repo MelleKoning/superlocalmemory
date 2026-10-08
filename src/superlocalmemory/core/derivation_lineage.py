@@ -219,7 +219,7 @@ def _fact_record(base: dict[str, Any], fact_id: str, content: str | None,
         return dict(record, source_status="exact", source_start=start,
                     source_end=start + len(content),
                     source_text_sha256=_content_sha(content)), None
-    # G03: a derived fact must still say what the source said; one that
+    # A derived fact must still say what the source said; one that
     # turns 2004.6 ms into a date is withheld, other doubts are marked.
     from superlocalmemory.core.source_fidelity_guard import judge_fidelity
 

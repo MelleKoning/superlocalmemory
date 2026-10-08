@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar
 # Licensed under AGPL-3.0-or-later — see LICENSE file
-"""GB5 — the real ``init_retrieval`` wiring gate (not just the config method in
+"""The real ``init_retrieval`` wiring gate (not just the config method in
 isolation) must honour SLM_RERANKER_ENABLED, the lite bot-host profile's
 switch for turning the reranker off on a RAM-constrained shared host.
 
@@ -64,7 +64,7 @@ def test_without_the_override_the_persisted_choice_still_wires_it(wired_config_a
 
 def test_env_override_true_cannot_re_enable_a_persisted_false(wired_config_and_store, monkeypatch):
     """The override can turn it off; it can also turn it on over a persisted
-    False — both directions are intentional (GB5: "opt in via env")."""
+    False — both directions are intentional ("opt in via env")."""
     config, store, embedder = wired_config_and_store
     config.retrieval.use_cross_encoder = False
     monkeypatch.setenv("SLM_RERANKER_ENABLED", "true")

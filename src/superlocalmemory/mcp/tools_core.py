@@ -694,7 +694,7 @@ def register_core_tools(server, get_engine: Callable) -> None:
                        if project_strict and (project or "").strip() else {}),
                     # 4.1.19 WP8: the already-validated, normalized kind.
                     **({"kind": _kind} if _kind else {}),
-                    # 4.1.22 (G05): forwarded only when set, same as every
+                    # 4.1.22: forwarded only when set, same as every
                     # other facet above.
                     **({"tags": tags if isinstance(tags, list) else tags.strip()}
                        if (tags if isinstance(tags, list) else (tags or "").strip())

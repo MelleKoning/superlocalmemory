@@ -2,7 +2,7 @@
 # Licensed under AGPL-3.0-or-later - see LICENSE file
 # Part of SuperLocalMemory V3 | https://qualixar.com | https://varunpratap.com
 
-"""What a recall's ``tags`` filter did, in words (4.1.22 G05).
+"""What a recall's ``tags`` filter did, in words (4.1.22).
 
 ``tags`` is a hard filter (``retrieval/facets``): unlike ``project``
 (``retrieval/project_scope``) it never falls back to unfiltered results when
@@ -13,7 +13,7 @@ some memory somewhere does carry it but none of the memories this question's
 other filters and candidates admitted did. Those are different facts about
 the store, and conflating them is the same defect ``project_scope`` exists to
 avoid for projects — "an unmatched exact filter must be distinguishable from
-nothing was ever stored" (4.1.22 M4 handoff, WP10).
+nothing was ever stored" (4.1.22).
 
 This module answers that one question, only when it is needed (``matched``
 is already free — ``retrieval.facets.matching_fact_ids`` computed it as part

@@ -139,7 +139,7 @@ def test_legacy_redirect_targets_the_actual_runtime_port() -> None:
     from superlocalmemory.server import unified_daemon
 
     source = inspect.getsource(unified_daemon.lifespan)
-    # 4.1.22 (GB6): through the default-root ownership rule, still aimed at
+    # 4.1.22: through the default-root ownership rule, still aimed at
     # the port this daemon actually serves, and (4.1.22 polish) reporting its
     # real outcome back through a status dict for /status to read truthfully.
     assert "application.state.daemon_descriptor.port," in source

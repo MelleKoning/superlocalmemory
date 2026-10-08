@@ -67,7 +67,7 @@ VENV_TMP="${CLAUDE_PLUGIN_DATA}/venv.tmp"
 
 # ---------------------------------------------------------------------------
 # Compute sha256 of requirements.txt, and of the CPU-torch pin file when it
-# exists (GB4: a pin bump alone must also trigger a rebuild).
+# exists (a pin bump alone must also trigger a rebuild).
 # (cross-platform: prefer sha256sum, fall back to shasum -a 256)
 # ---------------------------------------------------------------------------
 _sha256_of() {
@@ -127,7 +127,7 @@ python3 -m venv "${VENV_TMP}"
 "${VENV_TMP}/bin/pip" install --upgrade pip --prefer-binary --quiet
 
 # ---------------------------------------------------------------------------
-# GB4: CPU-only torch on CPU-only Linux. Plain PyPI resolution of the
+# CPU-only torch on CPU-only Linux. Plain PyPI resolution of the
 # `torch==X.Y.Z` requirement that requirements.txt pulls in transitively
 # installs the CUDA build on Linux (torch + triton + ~18 nvidia-* packages,
 # about 2.6 GiB) even when there is no GPU to use it. Pre-installing the

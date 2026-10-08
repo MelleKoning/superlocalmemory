@@ -77,7 +77,7 @@ class TestPoolAdapter:
         assert fake.recall_calls == [("hello", 5, "s-1", True)]
 
     def test_pool_recall_forwards_tags_only_when_set(self, monkeypatch):
-        """4.1.22 (G05): tags/tags_match forwarded like project/prefer_project —
+        """4.1.22: tags/tags_match forwarded like project/prefer_project —
         present only when the caller actually asked for them."""
         from superlocalmemory.mcp import _pool_adapter
 

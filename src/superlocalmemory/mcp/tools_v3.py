@@ -372,7 +372,7 @@ def register_v3_tools(server, get_engine: Callable) -> None:
                                                  ("prefer_project", prefer_project),
                                                  ("profile_id", profile_id))
                        if (v or "").strip()},
-                    # 4.1.22 (G05): sent only when set, same as the facets above.
+                    # 4.1.22: sent only when set, same as the facets above.
                     **({"tags": tags if isinstance(tags, list) else tags.strip()}
                        if (tags if isinstance(tags, list) else (tags or "").strip())
                        else {}),

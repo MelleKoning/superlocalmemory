@@ -173,7 +173,7 @@ class TestMeasuresOnlyACompleteSearch:
 
 
 class TestAnswerNotStoredIsNotAMiss:
-    """G10: a labelled answer missing from the measured store is reported as
+    """A labelled answer missing from the measured store is reported as
     "answer not stored" with the labelled ids' write dates, not as a miss; and
     the per-question rows keep every returned id up to --limit (identity gates
     compare the top 10, not the top 5)."""

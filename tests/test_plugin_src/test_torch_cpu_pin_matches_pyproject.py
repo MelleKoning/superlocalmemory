@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar
 # Licensed under AGPL-3.0-or-later — see LICENSE file
-"""GB4 — the CPU-only torch pin must never drift from pyproject.toml.
+"""The CPU-only torch pin must never drift from pyproject.toml.
 
 plugin-src/requirements-cpu-torch.txt names the exact torch version
 ensure-venv.sh (and scripts/postinstall.js) pre-install from the official CPU

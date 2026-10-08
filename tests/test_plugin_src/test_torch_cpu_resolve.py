@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar
 # Licensed under AGPL-3.0-or-later — see LICENSE file
-"""torch-cpu-resolve.sh — decision-logic tests (GB4).
+"""torch-cpu-resolve.sh — decision-logic tests.
 
 No pip, no network, no 2 GiB download: these tests source the script and call
 its two pure functions directly, under a manipulated PATH/env so the branches

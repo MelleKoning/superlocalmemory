@@ -76,7 +76,7 @@ describe('Cursor MCP definition', () => {
     assert.ok(!('SLM_DATA_DIR' in server.env), 'never re-point the store');
   });
 
-  test('GB5: opts into the lite bot-host profile (reranker off, short idle, one embedding worker)', () => {
+  test('opts into the lite bot-host profile (reranker off, short idle, one embedding worker)', () => {
     assert.equal(server.env.SLM_RERANKER_ENABLED, 'false');
     assert.equal(server.env.SLM_RERANKER_IDLE_TIMEOUT, '120');
     assert.equal(server.env.SLM_MAX_EMBEDDING_WORKERS, '1');
@@ -137,7 +137,7 @@ describe('cursorPlan', () => {
     assert.equal(plan.get(path.join(pluginRoot, 'assets', 'logo.svg')), '<svg/>\n');
   });
 
-  test('GB7: fails loudly when a curated skill is missing from the rendered plan', () => {
+  test('fails loudly when a curated skill is missing from the rendered plan', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'slm-cursor-'));
     const pluginRoot = path.join(tmp, 'plugin');
     fs.mkdirSync(path.join(tmp, 'assets', 'branding'), { recursive: true });
@@ -150,7 +150,7 @@ describe('cursorPlan', () => {
     );
   });
 
-  test('GB7: CURSOR_SKILLS is 4-6 skills, the curated bot-host subset', () => {
+  test('CURSOR_SKILLS is 4-6 skills, the curated bot-host subset', () => {
     assert.ok(CURSOR_SKILLS.length >= 4 && CURSOR_SKILLS.length <= 6, CURSOR_SKILLS.length);
     assert.ok(CURSOR_SKILLS.includes('slm-getting-started-bot'));
     assert.ok(CURSOR_SKILLS.includes('slm-bot-memory'));

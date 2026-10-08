@@ -547,7 +547,7 @@ class RecallResponse:
     # fell back to unfiltered results), ``{"prefer": {...}}`` when
     # ``prefer_project`` was. None when neither was. Additive.
     project_scope: dict | None = None
-    # 4.1.22 (G05): what a recall's ``tags`` filter did -
+    # 4.1.22: what a recall's ``tags`` filter did -
     # ``{"tags", "keys", "match", "applied", "matched", "note", "reason"}``.
     # Unlike ``project_scope``, ``applied`` is always True (tags are a hard
     # filter that never falls back); ``reason``/``note`` are only present

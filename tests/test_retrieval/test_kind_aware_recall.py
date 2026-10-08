@@ -329,7 +329,7 @@ def test_a_zero_boost_moves_nothing() -> None:
     assert _ids(apply_kind_awareness(res, "what did we decide", boost=0.0)) == ["a", "d"]
 
 
-# --- 4.1.22 G10: newer confirmed rules, and questions about a current value ---
+# --- 4.1.22: newer confirmed rules, and questions about a current value ---
 
 @pytest.mark.parametrize("query,current", [
     ("What is the recall latency ceiling?", True),

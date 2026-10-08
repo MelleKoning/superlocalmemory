@@ -28,7 +28,7 @@ def system_path_has_slm() -> bool:
 
 
 def requirements_sentinel_digest(plugin_root: Path) -> str:
-    """Mirror ensure-venv.sh's `hash_req` exactly (GB4): sha256(requirements.txt),
+    """Mirror ensure-venv.sh's `hash_req` exactly: sha256(requirements.txt),
     folded with sha256(requirements-cpu-torch.txt) when that file exists, then
     re-hashed once more so the sentinel stays a single opaque token either way.
     A hand test that precomputes the OLD single-file digest silently stops

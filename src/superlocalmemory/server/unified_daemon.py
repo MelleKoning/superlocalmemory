@@ -1093,7 +1093,7 @@ def _facet_kwargs(project: str, saved_by: str, about: str, kind: str | None = No
     fusion, before the answer check — exactly where project/saved_by/about
     already run — so the judge and the caller always see the same memories.
 
-    ``tags`` (4.1.22 G05): a list (repeated ``?tags=``) or a single
+    ``tags`` (4.1.22): a list (repeated ``?tags=``) or a single
     comma-separated string; ``Facets.of`` parses either the same way.
     """
     from superlocalmemory.retrieval.facets import Facets
@@ -3136,7 +3136,7 @@ async def lifespan(application: FastAPI):
     _start_idle_watchdog(idle_timeout)
 
     # Legacy port redirect: only a daemon on the default data root may take
-    # 8767, or a second root could capture old clients (GB6). The status dict
+    # 8767, or a second root could capture old clients. The status dict
     # is the truth for /status's legacy_port field below -- not every daemon
     # that is *entitled* to the port actually binds it (an older daemon can
     # already hold it), so this is updated once the real bind resolves.
@@ -4787,7 +4787,7 @@ def _register_daemon_routes(application: FastAPI) -> None:
         # before any retrieval when it does not parse (never silently
         # ignored). See core.kind_query / retrieval.kind_filter.
         kind: str = "",
-        # 4.1.22 (G05): only memories saved with these exact tags (canonical
+        # 4.1.22: only memories saved with these exact tags (canonical
         # identity - case/whitespace/punctuation handled by
         # core.tag_identity). Repeat ``?tags=`` for a list (a label
         # containing a comma needs this form); a single ``?tags=a,b`` is the

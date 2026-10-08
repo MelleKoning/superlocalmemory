@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar
 # Licensed under AGPL-3.0-or-later - see LICENSE file
 
-"""Project-filtered recall: strict mode, crowding, identity and names (G09).
+"""Project-filtered recall: strict mode, crowding, identity and names.
 
 4.1.21 applied ``project`` only after fusion, like ``kind`` was. With more
 than one channel's width of better matches saved under OTHER projects, the

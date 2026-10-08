@@ -140,7 +140,7 @@ class DaemonPoolProxy:
         # string byte-identical to before this filter existed.
         if (kind or "").strip():
             _params["kind"] = kind.strip()
-        # 4.1.22 (G05): sent only when set. A string is sent as-is (the
+        # 4.1.22: sent only when set. A string is sent as-is (the
         # daemon splits a single ``?tags=a,b`` on the comma); a real list is
         # sent as a REPEATED param (``doseq=True`` below) so a label
         # containing a comma survives the round trip untouched.

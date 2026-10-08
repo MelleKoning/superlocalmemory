@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Varun Pratap Bhardwaj / Qualixar
 # Licensed under AGPL-3.0-or-later - see LICENSE file
-"""4.1.22 G07 erasure and delete integrity, on a real engine and store.
+"""4.1.22 erasure and delete integrity, on a real engine and store.
 
 The daemon-level proof is tests/test_integration/test_erasure_integrity_e2e.py;
 these drive the same functions directly so each behaviour can be reverted and
