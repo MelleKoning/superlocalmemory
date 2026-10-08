@@ -11,6 +11,8 @@ Claude Code, Codex, Cursor and other MCP clients forget what they learned when a
 
 **Every recall is checked before your agent uses it.** A judge decides whether the memories found actually answer the question: **Laya** runs fully on your Mac, and **Jev** runs online on Windows, Linux and macOS. When they don't answer it, SLM says so instead of handing over a confident wrong answer: a hallucination guard for retrieval ([answer check](#answer-check-laya-and-jev)).
 
+**Your bots and web apps can use the same memory.** Local agents connect over MCP, including the Grok Bot plugin on a shared bot computer. ChatGPT, Claude on the web, Muse, Composio and other web MCP clients can reach it through optional [Web access](#web-apps-and-bots-web-access): you sign in once, choose whether each app may only read or also save, and remove any app at once.
+
 In Mode A, core remember and recall make no model-provider call. Anything that sends data out is a choice you make, and the docs say exactly what goes.
 
 [![PyPI](https://img.shields.io/pypi/v/superlocalmemory)](https://pypi.org/project/superlocalmemory/)
@@ -76,13 +78,13 @@ Captured from a real install in Mode A, with Laya running on the Mac and a store
 
 | Memories that answer the question | Memories that do not: "I don't have that" |
 |---|---|
-| ![Answer Check: Laya judges that the memories answer "When is Project Kestrel going live?" with confidence 0.85, in 1.4 s of the 3 s limit](docs/screenshots/dashboard-4.1.21/answer-check-answered.png) | ![Answer Check: for "How much did the Kestrel pilot cost?" Laya finds no memory that answers it and SLM says "I don't have that"](docs/screenshots/dashboard-4.1.21/answer-check-dont-have-that.png) |
+| ![Answer Check: Laya judges that the memories answer "When is Project Kestrel going live?" with confidence 0.85, in 1.4 s of the 3 s limit](docs/screenshots/dashboard/answer-check-answered.png) | ![Answer Check: for "How much did the Kestrel pilot cost?" Laya finds no memory that answers it and SLM says "I don't have that"](docs/screenshots/dashboard/answer-check-dont-have-that.png) |
 
 | Recall Lab: why each memory was chosen | Every memory with its kind and project |
 |---|---|
-| ![Recall Lab: per-channel scores for "what did we decide about the database"](docs/screenshots/dashboard-4.1.21/recall-lab.png) | ![Memories table filtered by kind: decisions, rules, corrections, facts, with the project each belongs to](docs/screenshots/dashboard-4.1.21/memories-kinds-projects.png) |
+| ![Recall Lab: per-channel scores for "what did we decide about the database"](docs/screenshots/dashboard/recall-lab.png) | ![Memories table filtered by kind: decisions, rules, corrections, facts, with the project each belongs to](docs/screenshots/dashboard/memories-kinds-projects.png) |
 
-![Saved views: a saved question that runs the same search your agent uses and shows the memory each result came from](docs/screenshots/dashboard-4.1.21/saved-views.png)
+![Saved views: a saved question that runs the same search your agent uses and shows the memory each result came from](docs/screenshots/dashboard/saved-views.png)
 
 ## Why SuperLocalMemory: the moats
 
@@ -116,6 +118,7 @@ SLM is part of Qualixar's AI Reliability Engineering work: agent memory that is 
 | Framework adapters | LangGraph, LangChain, LlamaIndex, CrewAI, AutoGen, Semantic Kernel, Microsoft Agent Framework, Google ADK, OpenAI Agents | [Framework adapters](docs/framework-adapters.md) |
 | Python SDK and HTTP API | `MemoryEngine` in your code; the local REST API | [API reference](docs/api-reference.md) |
 | Auto-capture hooks | `slm hooks install` for Claude Code, `--agent codex` for Codex | [Auto-memory](docs/auto-memory.md) |
+| Web apps (ChatGPT, Claude on the web, Muse, Composio) | Optional Web access, turned on from the dashboard: OAuth sign-in, read or save per app, and a Connected apps page to remove any app at once | [Web access](#web-apps-and-bots-web-access) |
 | Cursor-format plugin (Grok Bot, Cursor) | A marketplace-distributed plugin — different from `slm connect cursor` above — that runs on a shared, memory-tight computer with no hooks or dashboard | See below |
 
 Claude Code memory in two commands: `claude plugin marketplace add qualixar/superlocalmemory`, then `claude plugin install superlocalmemory@qualixar`.
@@ -162,6 +165,20 @@ without the cross-encoder re-ordering pass. Set `SLM_RERANKER_ENABLED=true` in t
 block to trade that RAM back for ranking precision, or run `slm serve stop` when a bot is done
 with it.
 
+### Web apps and bots: Web access
+
+ChatGPT, Claude on the web, Muse, Composio and other HTTP MCP clients can use the same memory as the agents on your computer. Open the dashboard, turn on **Web access** under **Connected apps**, pick the profile to share, and add an app. The app signs in with OAuth. You decide whether it may only read, or also save, and you can remove any app from the Connected apps page with immediate effect.
+
+Your laptop keeps an outbound connection to SLM's connection gateway. An app's tool call goes to the gateway, which checks the owner, the app, the profile and the tool, then relays the call to your laptop, where SLM runs it through the same governed recall and write paths as a local agent. There is no port to open, no tunnel and no Cloudflare account to set up.
+
+- The memory database stays on your laptop. Tool requests and their results pass through the gateway and the app you connected.
+- The laptop must be online. While it sleeps, apps are told at once that it is unavailable instead of waiting.
+- Access renews itself. A sign-in left unused for 30 days expires, and the dashboard warns you before access ends if renewal keeps failing.
+- Each connection has a free daily allowance of tool calls.
+- SLM itself stays free and works fully without Web access.
+
+[Web access documentation](docs/remote-access/README.md) · [Architecture and boundaries](docs/remote-access/architecture.md) · [Dashboard onboarding](docs/remote-access/onboarding.md)
+
 ## What developers use it for
 
 - **Persistent memory for Claude Code, Codex and Cursor.** Decisions, conventions, fixes and project context carry across sessions and across tools; confirmed rules and decisions load at session start.
@@ -176,20 +193,9 @@ with it.
 
 ## Architecture
 
-<picture>
-  <source media="(max-width: 640px)" srcset="docs/remote-access/assets/slm-local-and-remote-mobile.svg">
-  <img src="docs/remote-access/assets/slm-integrated-architecture.svg" alt="SuperLocalMemory integrated architecture: modes, governed memory, canonical storage, retrieval, Laya/Jev answer checks, mesh, bounded loops, delivery surfaces and optional Cloudflare web connectivity." width="1600">
-</picture>
+![SuperLocalMemory architecture: agents on your computer and optional web apps and bots use one governed memory engine on your machine, with three pillars (governed memory, recall you can trust, answer check by Laya or Jev), modes A/B/C, SQLite storage with parity-gated CozoDB and LanceDB projections, SLM-Mesh and bounded loops, and an outbound Web access path](docs/assets/slm-architecture.svg)
 
-**The free local core stays complete.** npm/PyPI installations, Claude Code, Codex, local MCP tools, SLM-Mesh and configured Laya/Jev answer checks keep their existing paths. SQLite + sqlite-vec remain canonical; CozoDB and LanceDB are parity-gated projections. [Local engine architecture](docs/ARCHITECTURE.md) · [Detailed local pipeline diagram](docs/assets/slm-4.1.21-architecture.svg).
-
-### Optional internet access for web agents
-
-SLM's remote-access architecture connects compatible web MCP clients to the same local memory engine: **web client → authenticated Cloudflare gateway → outbound laptop connector → local SLM**. The existing dashboard manages the connection and its profile/tool permissions. Local Claude Code, Codex and other local clients retain their existing access paths.
-
-Remote access is opt-in. End users do not configure Cloudflare, DNS or tunnel commands. The free local core operates independently of hosted-service accounts and entitlements. The canonical database stays on your machine; remote tool arguments and results pass through the gateway and selected AI host. Your laptop must be online for remote calls.
-
-[Remote-access documentation](docs/remote-access/README.md) · [Architecture and boundaries](docs/remote-access/architecture.md) · [Dashboard onboarding](docs/remote-access/onboarding.md) · [Cloudflare operator guide](docs/remote-access/cloudflare-operations.md) · [Acceptance procedures](docs/remote-access/acceptance.md).
+**The free local core is complete on its own.** npm and PyPI installs, Claude Code, Codex, local MCP tools, SLM-Mesh and the Laya and Jev answer checks run without Web access. SQLite + sqlite-vec are canonical; CozoDB and LanceDB are projections that serve only once they match SQLite. [Local engine architecture](docs/ARCHITECTURE.md) · [Detailed local pipeline diagram](docs/assets/slm-pipeline.svg) · [Web access architecture](docs/remote-access/architecture.md)
 
 ## Everything SLM does
 
@@ -242,7 +248,7 @@ Engineering controls that support a compliance program, not a certification.
 
 **SLM-Mesh** coordinates sessions on one machine, or several machines with a shared secret: `mesh_peers`, `mesh_send`, `mesh_inbox`, `mesh_state`, `mesh_lock`, `mesh_events`, `mesh_status`, `mesh_summary`. Messages route across machines; locks and state are per machine. [Multi-machine](docs/multi-machine.md)
 
-**Bounded loops** end only when an independent gate passes (tests, a linter, a schema, a recall condition), never because the agent says it is done. Runs end DONE, HALT, PAUSE, KILLED or ERROR, with each lap stored under `loop:<name>`. Run `slm loop demo`, the `slm_loop_*` MCP tools or `/slm-loop`; the separate Bounded Loops product can store its finished runs here as read-only evidence. [CLI reference](docs/cli-reference.md#bounded-loops-v380), [Bounded Loops bridge](docs/bounded-loops-bridge.md)
+**Bounded loops** end only when an independent gate passes (tests, a linter, a schema, a recall condition), never because the agent says it is done. Runs end DONE, HALT, PAUSE, KILLED or ERROR, with each lap stored under `loop:<name>`. Run `slm loop demo`, the `slm_loop_*` MCP tools or `/slm-loop`; the separate Bounded Loops product can store its finished runs here as read-only evidence. [CLI reference](docs/cli-reference.md#bounded-loops), [Bounded Loops bridge](docs/bounded-loops-bridge.md)
 
 ### Answer check: Laya and Jev
 
@@ -266,9 +272,9 @@ Only one runs at a time and the online option never turns itself on. Results are
 
 All of it fails open. [Optimize](docs/optimize-overview.md), [Proxy setup](docs/proxy-setup.md)
 
-### Remote access and teams
+### Direct remote access on your own network
 
-`slm remote` serves memory to other computers over TLS only. Each client gets a named key bound to one profile, read-only or read-write, revocable at once. Remote callers authenticate to read and never see this computer's paths or account. [Remote access](docs/distributed-deployment.md#remote-access-over-tls-4120), [Deployment tiers](docs/deployment-tiers.md)
+`slm remote` serves memory to other computers over TLS only. Each client gets a named key bound to one profile, read-only or read-write, revocable at once. Remote callers authenticate to read and never see this computer's paths or account. [Remote access](docs/distributed-deployment.md#remote-access-over-tls), [Deployment tiers](docs/deployment-tiers.md)
 
 ### Scale and operations
 
@@ -308,6 +314,7 @@ What leaves your machine, and when:
 | Memory text | You choose Mode C, a cloud embedder or reranker, an Ollama on another computer, or Jev kind typing (its own consent) |
 | Encrypted backup files | You connect GitHub or Google Drive backup. Files are encrypted before upload |
 | Mesh messages | You configure SLM-Mesh peers |
+| Remote tool requests and their results | You turn on Web access and add an app. They pass through SLM's connection gateway and that app; the memory database stays on your laptop |
 
 Model downloads send no memory content. Credentials in memory text are redacted on every outbound path. Outbound requests never follow redirects, and forwarded-for headers count only from a proxy you name. See [Security policy](SECURITY.md) and [encryption at rest](docs/SECURITY-encryption-at-rest.md).
 
@@ -351,7 +358,7 @@ Cite the V4 paper with [CITATION.cff](CITATION.cff) or GitHub's "Cite this repos
 
 **Reference:** [CLI](docs/cli-reference.md) · [MCP tools](docs/mcp-tools.md) · [Configuration](docs/configuration.md) · [Errors](docs/errors.md) · [Troubleshooting](docs/troubleshooting.md) · [Distributed deployment](docs/distributed-deployment.md) · [Privacy diagnostics](docs/privacy-diagnostics.md)
 
-**Design:** [Architecture](docs/ARCHITECTURE.md) · [Optional remote access](docs/remote-access/README.md) · [Score contract](docs/retrieval-score-contract.md) · [Compliance](docs/compliance.md) · [Benchmarks](docs/benchmarks.md)
+**Design:** [Architecture](docs/ARCHITECTURE.md) · [Web access](docs/remote-access/README.md) · [Score contract](docs/retrieval-score-contract.md) · [Compliance](docs/compliance.md) · [Benchmarks](docs/benchmarks.md)
 
 ## Upgrade
 

@@ -846,7 +846,7 @@ slm evolve --session abc123 --profile work
 
 ---
 
-## Bounded Loops (v3.8.0)
+## Bounded Loops
 
 ### `slm loop demo [--iterations N] [--json]`
 

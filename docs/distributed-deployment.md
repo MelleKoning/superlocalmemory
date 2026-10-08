@@ -33,7 +33,7 @@ Environment=SLM_DAEMON_HOST=0.0.0.0
 
 > **Security:** Host allowlists are DNS-rebinding/origin controls, not
 > authentication. For AI tools on other computers, use SLM's own encrypted
-> remote listener ([Remote access over TLS](#remote-access-over-tls-4120)) rather
+> remote listener ([Remote access over TLS](#remote-access-over-tls)) rather
 > than binding the main daemon to the network. Remote HTTP MCP requires HTTPS
 > and a key; mesh routes require their configured shared secret. Do not expose
 > the daemon directly to the public internet.
@@ -57,7 +57,7 @@ export SLM_MCP_ALLOWED_HOSTS=192.168.50.0/24   # the computers you trust
 
 The dashboard page, its static files and `/health` load without credentials;
 `/mcp` keeps its own check (HTTPS plus a remote key or the API key; see
-[Remote access over TLS](#remote-access-over-tls-4120)). Up to 4.1.19 reads from the LAN needed no
+[Remote access over TLS](#remote-access-over-tls)). Up to 4.1.19 reads from the LAN needed no
 credentials, so a LAN dashboard that worked by IP now needs one of the above —
 usually the `SLM_REMOTE=1` allowlist. A Docker port mapping makes your own
 computer's requests arrive from the bridge address (for example `172.17.0.1`),
@@ -65,7 +65,7 @@ not loopback: allowlist that address or send the API key.
 
 ---
 
-## Remote access over TLS (4.1.20+)
+## Remote access over TLS
 
 The recommended way for AI tools on other computers (Hermes, Claude Code
 `type: http`, `mcp-remote`) to use this SLM. It is off by default. The main

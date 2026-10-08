@@ -180,7 +180,7 @@ Then recall the stored lap history:
 slm recall "convergence-demo loop"
 ```
 
-For the full parameter set, see [CLI Reference → Bounded Loops](cli-reference.md#bounded-loops-v380) and [MCP Tools Reference → Bounded-Loop Tools](mcp-tools.md#bounded-loop-tools-v380).
+For the full parameter set, see [CLI Reference → Bounded Loops](cli-reference.md#bounded-loops) and [MCP Tools Reference → Bounded-Loop Tools](mcp-tools.md#bounded-loop-tools-v380).
 
 ## Next Steps
 
