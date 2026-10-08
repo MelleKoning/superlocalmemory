@@ -74,4 +74,38 @@ def missing_vectors(db: Any, store: Any, profile_id: str,
     return missing
 
 
-__all__ = ["missing_vectors", "profile_ids", "visible_fact_ids"]
+#: Longest one batch waits for in-flight recalls: steady recall traffic slows the
+#: repair but can never stop it (the embedding repair uses the same bound).
+RECALL_YIELD_MAX_SECONDS = 30.0
+
+
+def upsert_missing(db: Any, store: Any, profile_id: str,
+                   missing: list[tuple[str, str, list[float]]], *,
+                   batch: int, pause: float) -> int:
+    """Index ``missing`` in bounded batches; returns how many were written.
+
+    Each batch first waits while a person's recall runs, then takes the store's
+    write lock once, and a short pause after it lets a waiting user write in.
+    """
+    import time
+
+    from superlocalmemory.core import recall_gate
+
+    written = 0
+    for start in range(0, len(missing), max(1, batch)):
+        recall_gate.yield_to_recalls(RECALL_YIELD_MAX_SECONDS)
+        with db._lock:
+            for fact_id, owner, embedding in missing[start:start + max(1, batch)]:
+                try:
+                    if store.upsert(fact_id, owner, embedding):
+                        written += 1
+                except Exception as exc:  # noqa: BLE001 -- one bad vector never stops the repair
+                    logger.warning("VS backfill[%s]: upsert failed for %s: %s",
+                                   profile_id, str(fact_id)[:16], exc)
+        if pause > 0:
+            time.sleep(pause)
+    return written
+
+
+__all__ = ["RECALL_YIELD_MAX_SECONDS", "missing_vectors", "profile_ids",
+           "upsert_missing", "visible_fact_ids"]

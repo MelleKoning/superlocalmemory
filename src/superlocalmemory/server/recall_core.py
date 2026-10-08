@@ -173,22 +173,25 @@ async def run_recall(engine: Any, call: RecallCall, *, app_state: Any) -> dict:
 
     The caller has already authorised the request and checked the profile.
     """
-    from superlocalmemory.core.recall_gate import begin_recall, end_recall
+    from superlocalmemory.core.recall_gate import RecallHold
     from superlocalmemory.server.profile_runtime import get_profile_runtime
     from superlocalmemory.server.recall_fallback import recall_keyword_fallback
 
-    # Marks a recall in flight so the pending materializer pauses.
-    begin_recall()
-    # Deep recalls are gated; fast recalls keep their bounded channels and skip
-    # remote agentic verification, so they do not need the semaphore.
-    if not call.fast:
-        await RECALL_SEMAPHORE.acquire()
+    # Marks a recall in flight so background work pauses. The mark is held
+    # until the engine work this recall started has ended, on every path.
+    hold = RecallHold()
+    acquired = False
     try:
+        # Deep recalls are gated; fast recalls keep their bounded channels and
+        # skip remote agentic verification, so they do not need the semaphore.
+        if not call.fast:
+            await RECALL_SEMAPHORE.acquire()
+            acquired = True
         # v3.8.3: bound the recall so callers never hang on a wedged embedder.
         # Poll the executor future (which cannot be cancelled) without blocking
         # the loop; only past the generous budget is the keyword answer served.
         loop = asyncio.get_running_loop()
-        future = loop.run_in_executor(None, _engine_call, engine, call)
+        future = loop.run_in_executor(None, hold.run, _engine_call, engine, call)
         deadline = loop.time() + recall_budget_s()
         while not future.done() and loop.time() < deadline:
             await asyncio.sleep(0.05)
@@ -205,11 +208,12 @@ async def run_recall(engine: Any, call: RecallCall, *, app_state: Any) -> dict:
             )
         # Reads memory text and serialises: on the executor, never the loop, which
         # every other request (and the next recall's answer) is waiting on.
-        return await loop.run_in_executor(None, _envelope, engine, call, future.result(), snapshot)
+        return await loop.run_in_executor(None, hold.run, _envelope, engine, call,
+                                          future.result(), snapshot)
     finally:
-        if not call.fast:
+        if acquired:
             RECALL_SEMAPHORE.release()
-        end_recall()
+        hold.leave()
 
 
 __all__ = ["RECALL_SEMAPHORE", "RecallCall", "recall_budget_s", "run_recall",

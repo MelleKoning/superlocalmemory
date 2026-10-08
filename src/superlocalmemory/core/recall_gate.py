@@ -42,6 +42,65 @@ def in_flight() -> int:
         return _active
 
 
+class RecallHold:
+    """One recall's place in the in-flight count, held until its work settles.
+
+    The recall's coroutine holds it, and so does each piece of engine work it
+    hands to a thread. The count drops exactly once, when the last holder lets
+    go: a recall answered by the keyword fallback while its engine call still
+    runs keeps counting until that call ends, and a recall cancelled before its
+    work started drops at once. Work that has not started when the coroutine
+    leaves is skipped, because nobody is left to read its answer.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._holders = 1
+        self._owner_gone = False
+        begin_recall()
+
+    def run(self, fn: Callable[..., object], *args: object) -> object:
+        """Run ``fn`` on the calling thread while holding the recall in flight."""
+        with self._lock:
+            if self._owner_gone:
+                return None  # the recall already answered or was cancelled
+            self._holders += 1
+        try:
+            return fn(*args)
+        finally:
+            self._release()
+
+    def leave(self) -> None:
+        """The recall's coroutine is done; work still running keeps the count."""
+        with self._lock:
+            if self._owner_gone:
+                return
+            self._owner_gone = True
+        self._release()
+
+    def _release(self) -> None:
+        with self._lock:
+            self._holders -= 1
+            last = self._holders == 0
+        if last:
+            end_recall()
+
+
+def yield_to_recalls(max_seconds: float = 30.0) -> None:
+    """Wait while any recall is in flight, at most ``max_seconds``.
+
+    For background writers that share the store with recall: steady recall
+    traffic slows them, but can never stop them.
+    """
+    deadline = time.monotonic() + max(0.0, max_seconds)
+    with _condition:
+        while _active > 0:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            _condition.wait(timeout=min(remaining, 0.1))
+
+
 @contextmanager
 def background_work(
     *,

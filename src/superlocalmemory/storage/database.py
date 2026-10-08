@@ -569,6 +569,10 @@ class DatabaseManager:
         try:
             conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
             conn.execute("PRAGMA foreign_keys=ON")
+            if shared:
+                # Reused for plain reads only: a write on it fails loudly
+                # instead of slipping past the single-writer lock.
+                conn.execute("PRAGMA query_only=ON")
             # wal_autocheckpoint is a PER-CONNECTION pragma and is NOT persisted in
             # the database file (unlike journal_mode=WAL).  Setting it only on the
             # short-lived initialisation connection left every working connection
@@ -773,14 +777,15 @@ class DatabaseManager:
             return transaction_conn.execute(sql, params).fetchall()
 
         # Determine if this is a write operation that needs serialisation.
+        from superlocalmemory.storage import read_connection_pool as _rcp
         first_word = sql.strip().upper().split(None, 1)[0] if sql.strip() else ""
-        if first_word in self._DML_PREFIXES:
+        # A WITH clause can introduce a write (WITH ... DELETE): that is a write.
+        if first_word in self._DML_PREFIXES or _rcp.is_write_with(sql):
             with self._lock:
                 return self._execute_one(sql, params)
         else:
             # Read-only path: concurrent reads are safe in WAL mode. A plain
             # read reuses this thread's connection (storage/read_connection_pool).
-            from superlocalmemory.storage import read_connection_pool as _rcp
             pool = getattr(self, "_read_pool", None)
             if pool is not None and _rcp.is_plain_read(sql):
                 return _rcp.execute_read(pool, sql, params, self._execute_one,

@@ -2687,23 +2687,9 @@ async def lifespan(application: FastAPI):
                         _selfheal_os.environ.get("SLM_SELFHEAL_BATCH", "50")))
                     _pause = max(0.0, float(
                         _selfheal_os.environ.get("SLM_SELFHEAL_BATCH_PAUSE_S", "0.05")))
-                    n = 0
-                    for _i in range(0, len(missing), _batch):
-                        _chunk = missing[_i:_i + _batch]
-                        with db._lock:
-                            for _fact_id, _profile_id, _embedding in _chunk:
-                                try:
-                                    if vs.upsert(_fact_id, _profile_id, _embedding):
-                                        n += 1
-                                except Exception as _upsert_exc:
-                                    logger.warning(
-                                        "VS backfill[%s]: upsert failed for %s: %s",
-                                        pid, str(_fact_id)[:16], _upsert_exc,
-                                    )
-                        # Release window: let any waiting user write through
-                        # before grabbing the lock again.
-                        if _pause > 0:
-                            _t.sleep(_pause)
+                    # Each batch also waits while a recall runs (vector_backfill).
+                    from superlocalmemory.server.vector_backfill import upsert_missing
+                    n = upsert_missing(db, vs, pid, missing, batch=_batch, pause=_pause)
                     logger.info(
                         "VS backfill[%s]: repaired %d of %d missing vectors",
                         pid, n, len(missing),

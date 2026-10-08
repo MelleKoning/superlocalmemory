@@ -64,6 +64,24 @@ def readline_with_timeout(stream: Any, timeout_seconds: float) -> str:
     return result_container[0] if result_container else ""
 
 
+def _reap_later(proc: Any) -> None:
+    """Wait for a killed worker on a daemon thread, so it never stays a zombie.
+
+    A worker stuck in uninterruptible I/O dies only when that I/O ends; until
+    then nobody else would collect its exit status. Never raises.
+    """
+    def _wait() -> None:
+        try:
+            proc.wait()
+        except Exception:
+            pass
+
+    try:
+        threading.Thread(target=_wait, name="slm-worker-reaper", daemon=True).start()
+    except Exception:
+        pass
+
+
 def stop_process(proc: Any, timeout: float = 3.0) -> None:
     """Ask one worker process to quit, kill it if it will not, close its pipes."""
     try:
@@ -78,9 +96,12 @@ def stop_process(proc: Any, timeout: float = 3.0) -> None:
         if returncode is None or not isinstance(returncode, int):
             try:
                 proc.kill()
-                proc.wait(timeout=max(0.0, timeout))
             except Exception:
                 pass
+            try:
+                proc.wait(timeout=max(0.0, timeout))
+            except Exception:
+                _reap_later(proc)
     finally:
         # Explicit close prevents TextIOWrapper from flushing a dead
         # child's stdin later from an unraisable object finalizer.
