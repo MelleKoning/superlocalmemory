@@ -195,37 +195,62 @@ def _event_names_live_fact(db: Any, payload: dict) -> bool:
     return _live(db, named)
 
 
+def _previewed_events(db: Any, key: str) -> list[tuple[Any, dict]]:
+    """``(id, payload)`` of events whose payload mentions ``key`` and carries a preview."""
+    found: list[tuple[Any, dict]] = []
+    for row in _rows(db, "SELECT id, payload FROM memory_events WHERE payload LIKE ? "
+                     "AND payload LIKE '%content_preview%'", (f"%{key}%",)):
+        try:
+            payload = json.loads(row["payload"])
+        except (TypeError, ValueError):
+            continue
+        if isinstance(payload, dict) and "content_preview" in payload:
+            found.append((row["id"], payload))
+    return found
+
+
+def _blank_preview(db: Any, event_id: Any, payload: dict) -> None:
+    payload.pop("content_preview", None)
+    db.execute("UPDATE memory_events SET payload = ? WHERE id = ?",
+               (json.dumps(payload), event_id))
+
+
 def _scrub_events(db: Any, fact_id: str, erased_ops: list[dict]) -> int:
-    """Previews in events naming the fact or one of its fully erased operations.
+    """Blank the previews of events that name the fact or its fully erased operations.
+
+    An event that names the erased fact itself loses its preview whatever else
+    it names. A memory keeps its other facts when one is erased, and the
+    preview is the memory's opening words, which may be the erased ones; an
+    edit event's preview is the new version's text, which may be the erased
+    fact. The event stays (ids, path, status, times); the preview is a
+    convenience, not a record. No copy is kept: it would be the erased words.
+
+    An event found only through an erased operation id or source hash keeps
+    the older rule: its preview goes only when no fact it names is still live.
 
     Not filtered by profile: the HTTP event path files every event under
     ``default`` whatever profile the memory is in, so a profile filter missed
     every non-default memory. Fact and operation ids are unique on their own.
     """
-    keys = [fact_id] + [str(op["operation_id"]) for op in erased_ops] + [
-        str(op["source_hash"]) for op in erased_ops if op.get("source_hash")]
-    erased_op_ids = {str(op["operation_id"]) for op in erased_ops}
     scrubbed, seen = 0, set()
+    for event_id, payload in _previewed_events(db, fact_id):
+        seen.add(event_id)
+        _blank_preview(db, event_id, payload)
+        scrubbed += 1
+    erased_op_ids = {str(op["operation_id"]) for op in erased_ops}
+    keys = list(erased_op_ids) + [
+        str(op["source_hash"]) for op in erased_ops if op.get("source_hash")]
     for key in keys:
-        for row in _rows(db, "SELECT id, payload FROM memory_events WHERE payload LIKE ? "
-                         "AND payload LIKE '%content_preview%'", (f"%{key}%",)):
-            if row["id"] in seen:
+        for event_id, payload in _previewed_events(db, key):
+            if event_id in seen:
                 continue
-            seen.add(row["id"])
-            try:
-                payload = json.loads(row["payload"])
-            except (TypeError, ValueError):
-                continue
-            if not isinstance(payload, dict) or "content_preview" not in payload:
-                continue
+            seen.add(event_id)
             op_id = str(payload.get("operation_id") or "")
             if op_id and op_id not in erased_op_ids:
                 continue  # its memory still has a live fact
             if _event_names_live_fact(db, payload):
                 continue
-            payload.pop("content_preview", None)
-            db.execute("UPDATE memory_events SET payload = ? WHERE id = ?",
-                       (json.dumps(payload), row["id"]))
+            _blank_preview(db, event_id, payload)
             scrubbed += 1
     return scrubbed
 
