@@ -1,8 +1,8 @@
 # Multi-Scope (Shared) Memory
 
-> **Status:** opt-in feature, added in **v3.6.15**. **Off by default.** A fresh or
-> unconfigured install behaves exactly like 3.6.14 — every memory is private to its
-> profile and recall never surfaces another profile's data.
+> **Status:** opt-in feature. **Off by default.** A fresh or unconfigured install
+> keeps every memory private to its profile, and recall never surfaces another
+> profile's data.
 
 ## Concepts
 
@@ -55,10 +55,16 @@ slm recall "private note" --no-global --no-shared
 { "query": "deploy freeze", "include_global": true, "include_shared": true }
 ```
 
-### Persistently (config file — for existing users)
+### Persistently
 
-SLM keeps a separate config per mode: `mode_a.json`, `mode_b.json`, `mode_c.json`
-(plus the active `config.json`). Add a `scope` section to the mode(s) you want:
+```bash
+slm config set scope.default_scope personal      # scope assigned to new writes
+slm config set scope.recall_include_global true
+slm config set scope.recall_include_shared true
+```
+
+These write a `scope` section in `config.json`. The dashboard's Settings page has the
+same switches. You can also edit the section by hand:
 
 ```jsonc
 {
@@ -72,7 +78,7 @@ SLM keeps a separate config per mode: `mode_a.json`, `mode_b.json`, `mode_c.json
 ```
 
 Omitting the `scope` section — or any field — keeps the safe defaults
-(`personal` / `false` / `false`), i.e. 3.6.14 behavior. An invalid value (a typo'd
+(`personal` / `false` / `false`). An invalid value (a typo'd
 `default_scope`, a negative weight) is ignored with a warning and falls back to the
 safe default; it will not crash the CLI.
 
@@ -83,7 +89,7 @@ safe default; it will not crash the CLI.
 
 ## Backward compatibility
 
-- All pre-3.6.15 data is `scope='personal'` and recall is unchanged.
+- Memories saved before shared memory existed are `scope='personal'` and recall is unchanged.
 - Per-profile isolation is preserved: another profile's `personal` facts are never
   visible, regardless of the flags.
 - Turning the flags on is purely additive — it can only *add* global/shared rows, never
@@ -91,7 +97,7 @@ safe default; it will not crash the CLI.
 - Every direct read path (`recall`, `search`, `list_recent`, the `slm://recent`
   resource) is private by default; none surface another profile's data unless you opt in.
 
-## Answer check and scope (4.1.18)
+## Answer check and scope
 
 [Answer check](answer-check.md) does not change what a recall is allowed to
 return. It runs after scope filtering, on whichever results a given call's
@@ -99,7 +105,7 @@ return. It runs after scope filtering, on whichever results a given call's
 a separate, wider search of its own. A caller who cannot see a shared or
 global memory will not see it via the answer check either.
 
-## Known limits (v3.6.15)
+## Known limits
 
 - Cognitive-consolidation (CCQ) summary blocks are always `personal` for now; opting a
   CCQ block into shared/global is tracked for a later release.

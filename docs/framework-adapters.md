@@ -1,16 +1,25 @@
 # Framework Adapters
-> SuperLocalMemory V4 Documentation
-> https://superlocalmemory.com | Part of Qualixar
 
-Nine Python packages back their framework's native memory interface with the local SLM data root. Install alongside the target framework; all data stays in the configured data root unless an optional SLM provider, connector, or backup feature is explicitly enabled.
+Nine Python packages back their framework's native memory interface with the local SLM data root. Install each alongside the target framework; all data stays in the configured data root unless an optional SLM provider, connector, or backup feature is explicitly enabled.
 
-**Prerequisites:** SuperLocalMemory V4, Python >=3.12,<3.15, supported Apple Silicon macOS / 64-bit Windows / 64-bit Linux.
+**Prerequisites:** SuperLocalMemory installed in the same environment, Python 3.12 to 3.14, and a supported platform (Apple Silicon macOS, 64-bit Windows, 64-bit Linux).
+
+## Installing an adapter
+
+Three adapters are published on PyPI: LangChain, LlamaIndex and CrewAI. Install them with the `pip install` command shown for each. The other six are not on PyPI yet, so a `pip install <name>` for them fails; install them from the repository folder instead:
+
+```bash
+git clone https://github.com/qualixar/superlocalmemory
+pip install ./superlocalmemory/ide/integrations/langgraph
+```
+
+The folder for each adapter is in the table at the end of this page. The `pip install` line under each of those six headings below is the name the package will have once it is published, and the folder install gives the same package.
 
 ---
 
 ## LangGraph
 
-**Install:** `pip install langgraph-superlocalmemory`  
+**Install:** `pip install ./superlocalmemory/ide/integrations/langgraph` (from a clone of the repository)  
 **Requires:** `langgraph >= 1.0.0`  
 **Implements:** `BaseStore`  
 **Class:** `SuperLocalMemoryStore`
@@ -31,7 +40,7 @@ Drop in as the `store=` argument to `create_react_agent(...)` or `StateGraph(...
 
 ## Semantic Kernel
 
-**Install:** `pip install semantic-kernel-superlocalmemory`  
+**Install:** `pip install ./superlocalmemory/ide/integrations/semantic-kernel` (from a clone of the repository)  
 **Requires:** `semantic-kernel >= 1.34.0`  
 **Implements:** `VectorStore`; `get_collection` returns a `VectorStoreCollection`  
 **Class:** `SuperLocalMemoryVectorStore`
@@ -52,7 +61,7 @@ Written against Semantic Kernel 1.44. Uses the post-1.34 `semantic_kernel.data.v
 
 ## Microsoft Agent Framework
 
-**Install:** `pip install agent-framework-superlocalmemory`  
+**Install:** `pip install ./superlocalmemory/ide/integrations/agent-framework` (from a clone of the repository)  
 **Requires:** `agent-framework-core >= 1.5.0`  
 **Implements:** `ContextProvider` and `HistoryProvider`  
 **Classes:** `SuperLocalMemoryContextProvider`, `SuperLocalMemoryHistoryProvider`
@@ -98,7 +107,7 @@ history.clear()
 ## LlamaIndex
 
 **Install:** `pip install llama-index-storage-chat-store-superlocalmemory`  
-**Requires:** SuperLocalMemory V4 installed in the same virtual environment  
+**Requires:** SuperLocalMemory installed in the same virtual environment  
 **Implements:** `BaseChatStore`  
 **Class:** `SuperLocalMemoryChatStore`
 
@@ -135,7 +144,7 @@ Each `MemoryRecord` is stored as one SLM memory with `session_id = "crewai-rec:<
 
 ## AutoGen
 
-**Install:** `pip install autogen-superlocalmemory`  
+**Install:** `pip install ./superlocalmemory/ide/integrations/autogen` (from a clone of the repository)  
 **Requires:** `autogen-agentchat >= 0.7.5`  
 **Implements:** `Memory` (autogen-core)  
 **Class:** `SuperLocalMemoryMemory`
@@ -156,7 +165,7 @@ result = await mem.query("Ada preferences")
 
 ## Google ADK
 
-**Install:** `pip install google-adk-superlocalmemory`  
+**Install:** `pip install ./superlocalmemory/ide/integrations/google-adk` (from a clone of the repository)  
 **Requires:** `google-adk >= 2.5.0`  
 **Implements:** `BaseMemoryService`  
 **Class:** `SuperLocalMemoryService`
@@ -177,7 +186,7 @@ Implements `add_session_to_memory` (idempotent upsert per session) and `search_m
 
 ## OpenAI Agents
 
-**Install:** `pip install openai-agents-superlocalmemory`  
+**Install:** `pip install ./superlocalmemory/ide/integrations/openai-agents` (from a clone of the repository)  
 **Requires:** `openai-agents >= 0.18.3`  
 **Implements:** `SessionABC`  
 **Class:** `SLMSession`
@@ -197,20 +206,20 @@ Manages the ordered `TResponseInputItem` conversation history for one `session_i
 
 ## All Adapters at a Glance
 
-| Framework | Install name | Interface | Class |
-|-----------|-------------|-----------|-------|
-| LangGraph | `langgraph-superlocalmemory` | `BaseStore` | `SuperLocalMemoryStore` |
-| Semantic Kernel | `semantic-kernel-superlocalmemory` | `VectorStore` | `SuperLocalMemoryVectorStore` |
-| Microsoft Agent Framework | `agent-framework-superlocalmemory` | `ContextProvider` / `HistoryProvider` | `SuperLocalMemoryContextProvider`, `SuperLocalMemoryHistoryProvider` |
-| LangChain | `langchain-superlocalmemory` | `BaseChatMessageHistory` | `SuperLocalMemoryChatMessageHistory` |
-| LlamaIndex | `llama-index-storage-chat-store-superlocalmemory` | `BaseChatStore` | `SuperLocalMemoryChatStore` |
-| CrewAI | `crewai-superlocalmemory` | `StorageBackend` | `SuperLocalMemoryBackend` |
-| AutoGen | `autogen-superlocalmemory` | `Memory` | `SuperLocalMemoryMemory` |
-| Google ADK | `google-adk-superlocalmemory` | `BaseMemoryService` | `SuperLocalMemoryService` |
-| OpenAI Agents | `openai-agents-superlocalmemory` | `SessionABC` | `SLMSession` |
+| Framework | Package | On PyPI | Folder in `ide/integrations/` | Interface | Class |
+|---|---|:---:|---|---|---|
+| LangGraph | `langgraph-superlocalmemory` | no | `langgraph` | `BaseStore` | `SuperLocalMemoryStore` |
+| Semantic Kernel | `semantic-kernel-superlocalmemory` | no | `semantic-kernel` | `VectorStore` | `SuperLocalMemoryVectorStore` |
+| Microsoft Agent Framework | `agent-framework-superlocalmemory` | no | `agent-framework` | `ContextProvider` / `HistoryProvider` | `SuperLocalMemoryContextProvider`, `SuperLocalMemoryHistoryProvider` |
+| LangChain | `langchain-superlocalmemory` | yes | `langchain` | `BaseChatMessageHistory` | `SuperLocalMemoryChatMessageHistory` |
+| LlamaIndex | `llama-index-storage-chat-store-superlocalmemory` | yes | `llamaindex` | `BaseChatStore` | `SuperLocalMemoryChatStore` |
+| CrewAI | `crewai-superlocalmemory` | yes | `crewai` | `StorageBackend` | `SuperLocalMemoryBackend` |
+| AutoGen | `autogen-superlocalmemory` | no | `autogen` | `Memory` | `SuperLocalMemoryMemory` |
+| Google ADK | `google-adk-superlocalmemory` | no | `google-adk` | `BaseMemoryService` | `SuperLocalMemoryService` |
+| OpenAI Agents | `openai-agents-superlocalmemory` | no | `openai-agents` | `SessionABC` | `SLMSession` |
 
-Source is under `ide/integrations/<framework>/` in the repository. Each adapter has its own README with extended usage examples, prerequisites, and scope notes.
+Each adapter folder has its own README with extended usage examples, prerequisites, and scope notes.
 
 ---
 
-*SuperLocalMemory V4 — Copyright 2026 Varun Pratap Bhardwaj. AGPL-3.0-or-later. Part of Qualixar.*
+*SuperLocalMemory — Copyright 2026 Varun Pratap Bhardwaj. AGPL-3.0-or-later. Part of Qualixar.*

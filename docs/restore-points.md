@@ -1,7 +1,5 @@
 # Restore Points and Downgrades
 
-> SuperLocalMemory V4 documentation · 4.1.19+
-
 Every update that changes the memory store first takes a verified copy. Those
 copies are restore points. Copies from the last two updates are kept.
 
@@ -41,7 +39,7 @@ previous release without losing anything:
 ```bash
 slm db prepare-downgrade
 # it names the version to go back to and prints the exact command, for example:
-pipx install --force "superlocalmemory==4.1.19"   # or: npm install -g superlocalmemory@4.1.19
+pipx install --force "superlocalmemory==<version>"   # or: npm install -g superlocalmemory@<version>
 ```
 
 Preparation is allowed only when every change since that version is one the
@@ -52,4 +50,4 @@ The same actions are available over the local HTTP API under `/api/upgrade/`
 (`restore-points`, `restore/preview`, `restore`, `restore/cancel`,
 `prepare-downgrade`, `prepare-downgrade/cancel`). For copies kept off this
 machine, see
-[cloud-backup.md](cloud-backup.md).
+[Cloud backup](cloud-backup.md). A repair started from the dashboard's **Memory store** card takes its own full backup copy first; see [Troubleshooting](troubleshooting.md#memory-store-check).

@@ -1,17 +1,15 @@
 # Auth Write Gate
-> SuperLocalMemory V4 Documentation
-> https://superlocalmemory.com | Part of Qualixar
 
 The SLM daemon protects mutating operations (store, delete, update, config
 writes) through a single authoritative write gate. This page explains what
 credentials the gate accepts, how to enable opt-in API key auth, how to
-rotate the install token, and the context behind the v3.7.6 double-gate fix.
+rotate the install token, and what counts as a loopback caller.
 
 ---
 
 ## Credential Hierarchy
 
-The write gate accepts one of four credentials in priority order:
+The write gate accepts one of these credentials:
 
 | Credential | Who holds it | When it applies |
 |-----------|-------------|-----------------|
@@ -25,7 +23,7 @@ A caller on loopback with no credentials is trusted as the local OS-user
 boundary. This is the default and covers all standard single-machine use.
 
 Read endpoints are open to this computer. Other computers need a key or the
-`SLM_REMOTE` LAN allowlist (4.1.20+).
+`SLM_REMOTE` LAN allowlist.
 
 ---
 
@@ -62,7 +60,7 @@ To require the key even on loopback (shared-host operators), set:
 export SLM_REQUIRE_API_KEY_LOOPBACK=1
 ```
 
-This opt-in flag restores the stricter pre-v3.7.6 posture for operators
+This opt-in flag gives the stricter posture to operators
 running SLM on a multi-user machine. It is a no-op unless an `api_key` file
 is configured.
 
@@ -83,27 +81,19 @@ page load. There are no further arguments.
 
 ---
 
-## v3.7.6 Double-Gate Fix
+## One gate for every write
 
-Before v3.7.6, the write path ran two independent authorization checks:
+The mutation-actor gate is the single authoritative write boundary. It accepts
+the daemon capability, the install token, an API key, a remote key or an
+uncredentialed loopback caller, as listed above. An MCP `remember` that arrives
+through the daemon's own capability, or a dashboard write that carries the
+install token, is therefore not rejected for lacking an API key header even when
+API key auth is on.
 
-1. The mutation-actor gate — which correctly accepted daemon capability,
-   install token, API key, and uncredentialed loopback.
-2. A redundant legacy check that only understood `X-SLM-API-Key`.
-
-When API key auth was enabled, the redundant second gate rejected
-capability-authenticated MCP `remember` calls and install-token dashboard
-writes with `401 "Invalid or missing API key"`. This broke MCP writes from
-Claude Code, Cursor, and other clients that authenticated via capability
-rather than a key header.
-
-**v3.7.6 fix:** The redundant second gate is removed. The mutation-actor gate
-is now the single authoritative write boundary. The four accepted credentials
-above remain unchanged.
-
-**v3.7.8 note:** The `SLM_REQUIRE_API_KEY_LOOPBACK` opt-in was added to
-allow shared-host operators to restore the strict posture selectively, without
-reverting the local-first default.
+[Web access](remote-access/README.md) does not use this gate for the app's own
+sign-in. An app signs in with OAuth at the gateway, and the companion then
+forwards the admitted request to the local MCP endpoint with the local install
+credential. Cloud credentials never replace it.
 
 ---
 
@@ -130,23 +120,13 @@ full LAN setup guide.
 
 ---
 
-## v3.8.4 — IPv4-Mapped Loopback Fix (issue #90)
+## What counts as loopback
 
-**Symptom:** In a container or VM where `SLM_DAEMON_HOST=0.0.0.0`, curl
-commands using `X-Install-Token` fail with `403 Write rejected` even though
-the caller is on the same machine. This affects LXC, Docker, and any
-dual-stack Linux host.
-
-**Root cause:** When the daemon binds to `0.0.0.0`, the OS creates an IPv6
-socket. IPv4 clients connecting to `localhost` are reported to uvicorn as
-`::ffff:127.0.0.1` (IPv4-mapped IPv6 loopback, RFC 4291 §2.5.5.2). The
-auth gate's literal check `("127.0.0.1", "::1", "localhost")` did not
-include this form, so the connection was incorrectly treated as non-loopback
-and the install token was rejected.
-
-**Fix (3.8.4):** The centralized `is_loopback()` helper in
-`server/loopback.py` uses `ipaddress.ip_address(host).is_loopback`, which
-correctly returns `True` for all of:
+When the daemon binds to `0.0.0.0` in a container or VM (LXC, Docker, any
+dual-stack Linux host), IPv4 clients connecting to `localhost` can be reported
+as `::ffff:127.0.0.1`, the IPv4-mapped IPv6 loopback form. SLM treats every
+loopback form as loopback, so the install token works for a caller on the same
+machine:
 
 | Address form | Loopback? |
 |---|---|
@@ -158,7 +138,7 @@ correctly returns `True` for all of:
 | `::ffff:192.168.1.1` | **False** (private, not loopback) |
 | `192.168.1.1` | **False** |
 
-**Security invariants preserved:**
+**Invariants:**
 - The install token is still accepted **only** from loopback addresses.
   `::ffff:192.168.1.1` (IPv4-mapped LAN IP) is not loopback and is rejected.
 - `SLM_REQUIRE_CREDENTIALS=1` still forces credentials on all callers,
@@ -194,12 +174,11 @@ The install token is embedded in the dashboard JavaScript served over HTTP,
 so a LAN observer can read it. It is intentionally restricted to loopback
 peers. Use the API key (`X-SLM-API-Key`) for all container and remote access.
 
-**On SLM 3.8.4+:** If you upgrade to 3.8.4 without changing anything, the
-install token will now work from within the same container over
-`::ffff:127.0.0.1` (dual-stack loopback) when `SLM_REQUIRE_CREDENTIALS` is
-not set. For production deployments with `SLM_DAEMON_HOST=0.0.0.0`, always
-set `SLM_REQUIRE_CREDENTIALS=1` and use the API key.
+Inside the same container the install token works over `::ffff:127.0.0.1`
+(dual-stack loopback) when `SLM_REQUIRE_CREDENTIALS` is not set. For production
+deployments with `SLM_DAEMON_HOST=0.0.0.0`, always set
+`SLM_REQUIRE_CREDENTIALS=1` and use the API key.
 
 ---
 
-*SuperLocalMemory V4 — Copyright 2026 Varun Pratap Bhardwaj. AGPL-3.0-or-later. Part of Qualixar.*
+*SuperLocalMemory — Copyright 2026 Varun Pratap Bhardwaj. AGPL-3.0-or-later. Part of Qualixar.*

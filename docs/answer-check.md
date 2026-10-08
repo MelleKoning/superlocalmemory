@@ -1,6 +1,4 @@
 # Answer Check
-> SuperLocalMemory V4 Documentation
-> https://superlocalmemory.com | Part of Qualixar
 
 Lets your memory say "I don't have that" instead of guessing.
 
@@ -21,7 +19,7 @@ on file. That distinction is the core of AI Reliability Engineering: an
 agent that knows the difference between "found something related" and
 "found the answer" fails safely instead of confidently making things up.
 
-This is new in 4.1.18. Until you choose, it is in its starting state:
+Until you choose, it is in its starting state:
 it uses the on-device check only once an on-device install exists that passed
 its check (set up from the dashboard, or an existing install you pointed it
 at); until then it behaves exactly as Off. It never turns the online option on
@@ -237,10 +235,10 @@ permission when team accounts are on). A data export includes it; erasing a
 profile, or deleting it, erases it too, including from a running daemon.
 "Reset learning data" does not touch it.
 
-Versions before 4.1.20 do not know this history exists. If you go back to one
-and erase or delete a profile there, the profile's checks are erased the next
-time 4.1.20 or later starts, before anything new is saved. The same happens to
-checks made before a profile was deleted and created again under the same name.
+An older SLM does not know this history exists. If you go back to one and erase
+or delete a profile there, the profile's checks are erased the next time a
+current SLM starts, before anything new is saved. The same happens to checks
+made before a profile was deleted and created again under the same name.
 
 To turn the history off, or keep it shorter, set the keys below and restart
 the daemon.
@@ -355,8 +353,8 @@ delete access. Items carry outcomes and timings only.
 `POST /api/v3/recall/trace` (Recall Lab and the tab's Try it panel) also
 returns an `answer_check` block: `status`, `detail`, `judge`, `abstained`,
 `abstention_reason`, `answer_confidence`, `threshold`, `reordered`,
-`retrieval_ms`, `judge_ms`, `total_ms` and `ceiling_ms`. Since 4.1.20 it
-requires read access to the workspace when team accounts are on. MCP and
+`retrieval_ms`, `judge_ms`, `total_ms` and `ceiling_ms`. It requires read
+access to the workspace when team accounts are on. MCP and
 `/recall` responses are unchanged.
 
 ### CLI and MCP output
@@ -445,4 +443,4 @@ Apache License 2.0.
 
 ---
 
-*SuperLocalMemory V4 — Copyright 2026 Varun Pratap Bhardwaj. AGPL-3.0-or-later. Part of Qualixar.*
+*SuperLocalMemory — Copyright 2026 Varun Pratap Bhardwaj. AGPL-3.0-or-later. Part of Qualixar.*

@@ -1,6 +1,4 @@
-# Optimize Overview — v3.8.0
-> SuperLocalMemory V4 Documentation
-> https://superlocalmemory.com | Part of Qualixar
+# Optimize Overview
 
 SLM exposes optimization controls through a proxy plus content explicitly
 routed through MCP tools or a skill. Savings depend on workload, provider,
@@ -11,14 +9,14 @@ cacheability, and compression mode.
 | Surface | Entry point | Proxy required? | Context window | Cache scope |
 |---------|------------|:---------------:|:--------------:|-------------|
 | **A — Proxy** | `slm wrap claude` / `ANTHROPIC_BASE_URL` | Yes | Shrinks (intercepts full context) | Full Claude turn |
-| **B — MCP tools** | 5 tools in applicable MCP profiles | **No** | Does not intercept the primary window | Results you route through SLM |
-| **C — Skill** | `~/.claude/skills/slm-optimize/` | **No** | Depends on agent/tool behavior | Applied only when the agent follows the skill rules |
+| **B — MCP tools** | 5 tools in the `core`, `code`, `full` and `power` tool sets and the default set | **No** | Does not intercept the primary window | Results you route through SLM |
+| **C — Skills** | `slm-cache` and `slm-compress` skills shipped in the SLM plugins | **No** | Depends on agent/tool behavior | Applied only when the agent follows the skill rules |
 
 **Hard constraint:** The primary Claude conversation turn cannot be cached without a proxy. Surfaces B and C cache results you explicitly route through SLM — not the Claude turn itself.
 
-### Surface B: MCP Optimize Tools (v3.6.11)
+### Surface B: MCP Optimize Tools
 
-Five new MCP tools, included in `slm mcp` from v3.6.11+:
+Five MCP tools are served by `slm mcp` and the daemon's `/mcp/` endpoint:
 
 | Tool | What it does |
 |------|-------------|
@@ -32,22 +30,18 @@ The tools are designed to return `ok:False` and preserve the original on
 handled optimization failure. Verify this contract against the frozen artifact
 before relying on it as a fault-containment boundary.
 
-### Surface C: slm-optimize Skill (v3.6.11)
+### Surface C: Skills
 
-An agent-behavior instruction file the agent reads and follows. Install:
-
-```bash
-mkdir -p ~/.claude/skills/slm-optimize
-cp skills/slm-optimize/SKILL.md ~/.claude/skills/slm-optimize/SKILL.md
-```
-
-The skill instructs the agent to compress selected context, cache repeated
-results, and recover originals via `slm_retrieve`. Actual behavior depends on
-the agent following the skill and the selected compression mode.
+The SLM plugins ship `slm-cache` and `slm-compress` skills (and an
+`slm-optimize-advisor` agent) that tell an agent when to compress selected
+context, cache repeated results and recover originals with `slm_retrieve`. They
+are instruction files the agent reads and follows, so what happens depends on the
+agent following them and on the compression mode you chose. See
+[IDE setup](ide-setup.md).
 
 ---
 
-SLM v3.6 **Optimize** is a local-first cost-reduction layer. Surface A sits between your application and your LLM provider, intercepting every API call. Surfaces B/C work at the agent layer with no network interception.
+**Optimize** is a local-first cost-reduction layer. Surface A sits between your application and your LLM provider, intercepting every API call. Surfaces B/C work at the agent layer with no network interception.
 
 | Lever | Mechanism | Saving | Off by default? |
 |-------|-----------|--------|:---------------:|
@@ -55,13 +49,13 @@ SLM v3.6 **Optimize** is a local-first cost-reduction layer. Surface A sits betw
 | **Compress** | Shrink the prompt before sending — **safe = lossless** normalization; **aggressive = LLMLingua-2 prose only** (opt-in) | Safe: small + lossless · Aggressive: large on prose | Safe mode ON, Aggressive OFF |
 | **Align** | Stabilize the prompt prefix to maximize native provider prefix-cache discounts | Lossless extra | ON when compression is ON |
 
-> **v3.6.10:** Cache and Compress are **independent runtime switches** — enable one, both, or neither from the dashboard, applied live with no restart. Compression was rebuilt: the old extractive JSON-string/array/code-body truncation is **removed** (it was lossy); safe mode is now genuinely lossless, and aggressive mode applies LLMLingua-2 to **prose only** — never code, numbers, structured data, instructions, or the current turn.
+> Cache and Compress are **independent runtime switches**: enable one, both, or neither from the dashboard, applied live with no restart. Safe mode is lossless, and aggressive mode applies LLMLingua-2 to **prose only** — never code, numbers, structured data, instructions, or the current turn.
 
-**Memory** (SLM v3.5's existing engine) is a fourth, parallel lever — it shapes *what is in* the prompt (relevant facts); Optimize decides *whether and how* it is sent. They share plumbing (SQLite engine, embedder), **never share data** (separate `llmcache.db`).
+**Memory** (SLM's core engine) is a fourth, parallel lever — it shapes *what is in* the prompt (relevant facts); Optimize decides *whether and how* it is sent. They share plumbing (SQLite engine, embedder), **never share data** (separate `llmcache.db`).
 
 ---
 
-## What's New in v3.6
+## What Optimize Includes
 
 | Feature | What It Does | User Benefit |
 |---------|-------------|--------------|
@@ -70,11 +64,11 @@ SLM v3.6 **Optimize** is a local-first cost-reduction layer. Surface A sits betw
 | **Lossless safe compression** | Whitespace + compact-JSON normalization only — never removes content; code untouched | Small, zero-risk token reduction; provider prefix-cache stays stable |
 | **LLMLingua-2 Prose** (opt-in, aggressive) | Token-classification prose compression (`microsoft/llmlingua-2-xlm-roberta-large-meetingbank`) — prose ONLY, never code/numbers/structured/current-turn | Large savings on prose-heavy workloads |
 | **CCR (Compressed Context Retrieval)** | Pre-compression originals stored, retrievable byte-exact via UUID (best-effort) | Safety net for aggressive prose compression |
-| **Independent runtime toggles** (v3.6.10) | Cache and Compress flip on/off live from the dashboard — no restart | Run cache-only, compress-only, both, or neither, per your workload |
-| **Per-agent MCP attribution** (v3.6.10) | `http://127.0.0.1:8765/mcp/{agent_id}` labels audit attribution; authenticated credentials derive mutation authority | Many clients can use one daemon without treating a path label as identity |
+| **Independent runtime toggles** | Cache and Compress flip on/off live from the dashboard — no restart | Run cache-only, compress-only, both, or neither, per your workload |
+| **Per-agent MCP attribution** | `http://127.0.0.1:8765/mcp/{agent_id}` labels audit attribution; authenticated credentials derive mutation authority | Many clients can use one daemon without treating a path label as identity |
 | **CacheAligner** | Detects volatile tokens in system prompts and reports a stability signal | Provider-specific effect requires measurement |
 | **Interception Proxy** | HTTP proxy on port 8765 serving Anthropic, OpenAI, and Gemini surfaces | Zero-code integration — just set `base_url` |
-| **SDK Wrappers** | `withSLM(OpenAI())` — in-process interception, no network hop | Drop-in for existing SDK code |
+| **SDK Wrappers** | `withSLM(OpenAI())` or `withSLM(Anthropic())` — in-process interception, no network hop | Drop-in for existing SDK code |
 | **Agent Wrapping** | `slm wrap claude` — one command configures base_url and launches the agent | Fastest path to savings |
 | **Savings Dashboard** | Live USD/INR/tokens saved, hit rate, compression ratio, cache size | Real-time cost visibility |
 | **Hot-Reload Config** | UI/CLI writes `optimize.json` — daemon reloads within 2 seconds, no restart | No downtime for config changes |
@@ -152,10 +146,11 @@ slm proxy
 
 **C) SDK adapter (Python):**
 ```python
-from superlocalmemory.optimize.adapters.openai_adapter import withSLM
+from superlocalmemory.optimize.adapters import withSLM
 from openai import OpenAI
 client = withSLM(OpenAI())  # same interface, zero API change
 ```
+`withSLM` also wraps an Anthropic client. A client type it does not recognize passes through unchanged.
 
 ### Step 4: See savings
 
@@ -163,7 +158,7 @@ client = withSLM(OpenAI())  # same interface, zero API change
 slm optimize savings --since 1
 ```
 
-Or open the dashboard: `slm serve` → http://localhost:8765 → **Optimize** tab.
+Or open the dashboard (`slm dashboard`, http://localhost:8765) and choose the **Optimize** tab.
 
 ---
 
@@ -182,7 +177,7 @@ Or open the dashboard: `slm serve` → http://localhost:8765 → **Optimize** ta
 
 ---
 
-## Pricing Model (as of 2026-06-07)
+## Pricing Model
 
 | Provider | Input ($/1M tokens) | Output ($/1M tokens) |
 |----------|:-------------------:|:--------------------:|
@@ -192,7 +187,8 @@ Or open the dashboard: `slm serve` → http://localhost:8765 → **Optimize** ta
 
 - **Cache SKIP** saves both input AND output tokens (whole call avoided)
 - **Compression** saves INPUT tokens only (output not compressed)
-- INR conversion at configurable rate (default: 83.5)
+- INR conversion at a configurable rate (default 83.5)
+- These are the built-in defaults, dated 2026-06-07. They are user-configurable, and the savings report marks them stale once they are more than 90 days old, so check them against your provider's current prices
 
 ---
 
@@ -201,7 +197,7 @@ Or open the dashboard: `slm serve` → http://localhost:8765 → **Optimize** ta
 ```bash
 slm optimize status|on|off|savings [--since N] [--provider P] [--json]
 slm cache    status|clear|invalidate --tag <t>|ttl --set <s> --semantic <s>|semantic on|off
-slm compress status|mode safe|aggressive|prose on|off
+slm compress status|mode safe|aggressive|prose on|off   # code, ccr and align print a notice
 slm proxy    [--port P] [--provider P] [--no-compress] [--semantic]
 slm wrap     <agent> [--list] [--persistent] [--dry-run]
 slm help-optimize [cache|compress|proxy|agents|safety]
@@ -223,26 +219,13 @@ See [optimize-cli.md](optimize-cli.md) for full CLI reference.
 
 ---
 
-## Backward Compatibility
+## Compatibility
 
-v3.6 is a **strict superset** of v3.5:
-
-- **All existing CLI commands work identically** — 17 new commands are additive
-- **All existing MCP tools retain their signatures** — 2 optional read-only tools added
-- **All existing API endpoints are unchanged** — 5 new optimize endpoints
-- **Existing retrieval behavior preserved** — Optimize is OFF by default until enabled
-- **SLM MCP server unchanged** — no changes to memory tools, hooks, or file-injection
-- **`memory.db` untouched** — all optimize data lives in separate `llmcache.db`
-
-**Migration is a single command:**
-```bash
-python -m pip install --upgrade superlocalmemory && slm restart
-```
-
-Run that command only while the SLM virtual environment is active. npm users
-upgrade with `npm update -g superlocalmemory`.
-
-No data loss. No downtime. Zero configuration changes needed.
+Optimize is additive. It does not change the memory tools, hooks or file
+injection, and all of its data lives in a separate `llmcache.db`, so `memory.db`
+is untouched. To upgrade, `npm update -g superlocalmemory`, or inside an activated
+virtual environment `python -m pip install --upgrade superlocalmemory`, then
+`slm restart`.
 
 ---
 

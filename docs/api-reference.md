@@ -1,7 +1,5 @@
 # Python API Reference
 
-> SuperLocalMemory V4 documentation · AGPL-3.0-or-later
-
 The Python API and Python-installed CLI are for applications running inside an
 activated virtual environment. The other primary CLI path is the npm global
 package, which owns its private Python runtime.
@@ -55,10 +53,12 @@ fact_ids = engine.store(
     metadata=None,
     scope="personal",
     shared_with=None,
+    profile_id=None,
 )
 ```
 
-The canonical Python write returns `list[str]` fact IDs. `scope` accepts
+The canonical Python write returns `list[str]` fact IDs. `profile_id` routes this one
+write to a named profile without moving the active one. `scope` accepts
 `personal`, `shared`, or `global`; `shared_with` contains profile IDs allowed to
 read a shared fact. Shared/global recall is opt-in and remains subject to the
 configured scope policy.
@@ -74,16 +74,30 @@ response = engine.recall(
     query,
     profile_id=None,
     mode=None,
-    limit=10,
+    limit=20,
     agent_id="unknown",
     session_id=None,
+    fast=None,
+    *,
     include_global=None,
     include_shared=None,
+    window=None,
+    as_of=None,
+    known_as_of=None,
+    valid_at=None,
+    include_unknown=False,
+    answer_check=None,
+    facets=None,
 )
 ```
 
 `recall` returns a `RecallResponse`, not a list. Iterate `response.results`; the
-stored fact is `result.fact`.
+stored fact is `result.fact`. `profile_id` recalls from a named profile without
+moving the active one. The time arguments behave as in
+[Recall](recall.md#time-travel), and `answer_check` is `"full"` (the default) or
+`"no_reorder"`. The narrowing filters of the CLI and MCP surfaces (`project`, `saved_by`, `about`,
+`kind`, `tags`) reach the engine as one `facets` object
+(`superlocalmemory.retrieval.facets.Facets`).
 
 ## Retrieval Score Contract v2
 
@@ -100,7 +114,8 @@ For one compatibility release, `score` aliases `relevance_score` and
 `confidence` aliases `memory_confidence`. New code should use the explicit
 names.
 
-V3.7 does not publish calibrated answer confidence:
+Without a configured [Answer check](answer-check.md), SLM does not publish
+calibrated answer confidence:
 
 ```python
 assert response.score_contract_version == "2"
@@ -126,12 +141,10 @@ in a deployed configuration.
 
 ## Framework adapters
 
-LangChain and LlamaIndex adapters are package surfaces with their own installed
-artifact contract. Use them only with the exact released adapter documentation
-and compatibility matrix. This page deliberately does not publish generic
-framework snippets: earlier snippets referenced a removed V2 storage API, and
-adapter compatibility must be proven against the frozen V3.7 artifacts before
-it is presented as supported.
+Nine adapter packages back LangGraph, Semantic Kernel, Microsoft Agent Framework,
+LangChain, LlamaIndex, CrewAI, AutoGen, Google ADK and OpenAI Agents memory
+interfaces with SLM. See [Framework Adapters](framework-adapters.md) for the
+classes, requirements and how to install each.
 
 ## HTTP and MCP identity
 

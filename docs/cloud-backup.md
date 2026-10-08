@@ -1,16 +1,15 @@
 # Cloud Backup — Google Drive & GitHub
 
-SuperLocalMemory v3.4.10+ can automatically back up your memory databases to
+SuperLocalMemory can automatically back up your memory databases to
 **Google Drive** and **GitHub**. Credentials are stored in your OS keychain
 (macOS Keychain, Windows Credential Locker, or Linux Secret Service) when
 available. On systems without a keychain (headless Linux, containers without
 Secret Service) they fall back to an owner-only plaintext
 `~/.superlocalmemory/.credentials.json` (`0600`, parent `0700`, atomic write
-via `_atomic_write_creds` in `src/superlocalmemory/infra/cloud_backup.py`) —
-not encrypted. Protect that file and the data root with volume encryption and
+via an atomic write) — not encrypted. Protect that file and the data root with volume encryption and
 owner-only modes; prefer a keychain-capable host when possible.
 
-## Encryption (4.1.19+)
+## Encryption
 
 Every cloud backup file is encrypted on this machine before upload (AES-256-GCM,
 streamed in chunks), so GitHub and Google Drive only store ciphertext. One
@@ -27,7 +26,7 @@ slm backup decrypt FILE -o OUT.db  # turn a downloaded backup into a plain .db f
 Keep the recovery key somewhere safe: without it, a backup cannot be restored
 on another machine. Backups made by earlier releases still restore. Google
 Drive does not rotate old backups, so delete plain-text backups made before
-4.1.19 yourself.
+encryption was introduced yourself.
 
 ## GitHub Backup (Recommended)
 
@@ -218,7 +217,7 @@ offline.
 | `audit_chain.db` | Audit trail, compliance provenance | 0.5 — 2 MB | If present (companion, warning on failure) |
 | `code_graph.db` | Code knowledge graph (if used) | 0.1 — 10 MB | If present (companion) |
 | `pending.db` | Legacy offline spool awaiting canonical M018 replay (when present) | Deployment-specific | If present (companion) |
-| `audit.db` | Legacy audit (pre-v3.4) | — | If present (companion) |
+| `audit.db` | Legacy audit database from older installs | — | If present (companion) |
 
 Production backups use `BackupManager`: independent per-file SQLite
 `sqlite3.backup()` snapshots, one file at a time — **not** a coherent
@@ -230,8 +229,6 @@ primitive captures it as an out-of-manifest companion, but it is not wired to
 these routes). Destination files follow process `umask`; verify `0600`/`0700`
 after copy. For offline whole-root backup/restore: `slm serve stop` first so
 WAL/SHM checkpoint, then copy the complete data-root store set.
-
-`MANAGED_DATABASES` registry: `src/superlocalmemory/infra/backup.py`.
 
 ---
 
@@ -247,15 +244,17 @@ WAL/SHM checkpoint, then copy the complete data-root store set.
   containers) — not encrypted. Keep that file on an encrypted/private volume
   and verify `0600`/`0700` after writes. Provider/reranker keys persisted in
   `~/.superlocalmemory/config.json` are likewise plaintext protected only by
-  atomic `0600` (`core/config.py:SLMConfig.save()`); prefer env
+  atomic `0600` (`config.json`); prefer env
   (`OPENAI_API_KEY` / `SLM_CROSS_ENCODER_API_KEY`) to avoid disk persistence.
 - **Google OAuth tokens** are refresh tokens — they can be revoked from your [Google Account Security page](https://myaccount.google.com/permissions)
 - **GitHub PATs** can be revoked from [GitHub Settings → Tokens](https://github.com/settings/tokens)
 - **Backup destination permissions:** snapshot files follow process `umask`,
   not `0600` inheritance — verify owner-only modes. Use an encrypted/private
   destination for backups/exports (see `docs/SECURITY-encryption-at-rest.md`).
-  No wired whole-root restore route — offline `slm serve stop` + copy is the
-  supported restore path.
+  A cloud backup is restored by downloading it, decrypting it with `slm backup
+  decrypt`, and copying it back with the daemon stopped. For the local copies SLM
+  takes before an update, use `slm db restore` (see
+  [Restore points](restore-points.md)).
 - **No zero-loss claim for the legacy path:** per-file copies have no coherent
   epoch; offline whole-root copy while stopped is the consistent set.
 
@@ -274,6 +273,6 @@ Check the destination status in **Settings** → **Cloud Backup**. Common causes
 - Check that the SLM daemon is running on port 8765
 
 ### Dashboard freezes during sync
-This was fixed in v3.4.10 — syncs now run in a background thread. If you use
-the Python path, activate the SLM virtual environment and run
-`python -m pip install --upgrade superlocalmemory`.
+Syncs run in a background thread and should not block the dashboard. If one does,
+update SLM (`npm update -g superlocalmemory`, or inside the activated virtual
+environment `python -m pip install --upgrade superlocalmemory`) and report it.

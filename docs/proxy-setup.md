@@ -1,5 +1,4 @@
 # Proxy Setup — All CLIs & Editors
-> SuperLocalMemory V4 Documentation
 > https://superlocalmemory.com | Part of Qualixar — AI Reliability Engineering
 
 SLM Optimize Proxy intercepts every LLM API call and applies three cost-reduction levers — cache, compress, and align — before the call reaches the provider. This page shows exactly how to wire it into every supported CLI and editor.
@@ -28,17 +27,15 @@ The proxy runs at `http://127.0.0.1:8765`. It supports three surfaces:
 | **Gemini Native** | Google Gemini generateContent API | `/v1beta/models/*` |
 | **Gemini OpenAI-compat** | Gemini via OpenAI-format JSON | `/v1beta/openai/chat/completions` |
 
-> **v3.6.3 — Cache and compression now fully available for Claude Code, Claude Desktop, and Codex CLI.**
-> The tool-bypass guard that permanently blocked caching for tool-bearing requests has been removed.
-> All three clients are now covered end-to-end: cache fires on every request, streaming responses are
-> accumulated and stored post-stream, and compression runs on every new message batch.
-> The Gemini native surface also gains full cache + compression support in this release.
+> Cache and compression are available for Claude Code, Claude Desktop and Codex CLI. Cache fires on every
+> request, streaming responses are accumulated and stored after the stream, and compression runs on every new
+> message batch. The Gemini native surface has full cache and compression support too.
 
 ---
 
 ## What Gets Cached
 
-Cache fires for **all requests** — including those with tools. As of v3.6.3, the tool-bypass guard that previously blocked caching for Claude Code, Claude Desktop, and Codex CLI has been removed. The proxy caches the full response (including `tool_use` content blocks) and replays it as a proper SSE stream on the next identical call.
+Cache fires for **all requests**, including those with tools. The proxy caches the full response (including `tool_use` content blocks) and replays it as a proper SSE stream on the next identical call.
 
 | Client | Tools present? | Cache fires? | Compress fires? |
 |--------|---------------|:------------:|:---------------:|
@@ -46,17 +43,17 @@ Cache fires for **all requests** — including those with tools. As of v3.6.3, t
 | Node.js `@anthropic-ai/sdk` (no tools) | No | ✓ Yes | ✓ Yes |
 | OpenAI Python/Node SDK (no tools) | No | ✓ Yes | ✓ Yes |
 | Cursor / Windsurf (depends on config) | Sometimes | ✓ Yes | ✓ Yes |
-| **Claude Code CLI** | **Always** | **✓ Yes (v3.6.3)** | ✓ Yes |
-| **Claude Desktop** | **Always** | **✓ Yes (v3.6.3)** | ✓ Yes |
-| **Codex CLI** | **Always** | **✓ Yes (v3.6.3)** | ✓ Yes |
+| **Claude Code CLI** | **Always** | **✓ Yes** | ✓ Yes |
+| **Claude Desktop** | **Always** | **✓ Yes** | ✓ Yes |
+| **Codex CLI** | **Always** | **✓ Yes** | ✓ Yes |
 | AGY / Antigravity (Claude/OpenAI models) | Sometimes | ✓ Yes (if proxiable) | ✓ Yes |
 | AGY / Antigravity (Gemini models) | Sometimes | ⚠ See AGY section | ⚠ See AGY section |
-| Gemini CLI (native) | Rarely | ✓ Yes (v3.6.3) | ✓ Yes |
+| Gemini CLI (native) | Rarely | ✓ Yes | ✓ Yes |
 | Raw `curl` / scripts without tools | No | ✓ Yes | ✓ Yes |
 
 > **How tool-use caching works:** The proxy accumulates the full SSE stream (including all `tool_use` blocks), assembles the complete JSON message, and stores it under the request hash. On a cache hit, it replays the stored JSON as a properly formed SSE stream — emitting `content_block_start` (type `tool_use`), `input_json_delta` chunks, and `message_stop` — exactly as the real API would. The client sees no difference.
 
-> **Turning cache / compression on or off (v3.6.10).** Caching and compression are **independent runtime switches** in the dashboard **Optimize** tab — enable caching only, compression only, both, or neither, applied **live with no restart**. (Starting the proxy itself — `proxy_enabled` — is still a one-time setup that needs a daemon restart.) Equivalent CLI: `slm optimize on|off` (enables/disables cache + compress together); use `slm cache status` to inspect cache state; `slm compress mode safe|aggressive` and `slm compress prose on|off` for compression tuning.
+> **Turning cache / compression on or off.** Caching and compression are **independent runtime switches** in the dashboard **Optimize** tab — enable caching only, compression only, both, or neither, applied **live with no restart**. (Starting the proxy itself — `proxy_enabled` — is still a one-time setup that needs a daemon restart.) Equivalent CLI: `slm optimize on|off` (enables/disables cache + compress together); use `slm cache status` to inspect cache state; `slm compress mode safe|aggressive` and `slm compress prose on|off` for compression tuning.
 
 ---
 
@@ -89,7 +86,7 @@ Add to `~/.claude/settings.json`:
 
 Restart Claude Code. Verify: `echo $ANTHROPIC_BASE_URL` inside a Claude Code bash tool — should print `http://127.0.0.1:8765`.
 
-> **Note:** Claude Code uses streaming and always includes tools. As of v3.6.3, caching and compression are fully active for Claude Code — both tool-bearing and tool-free requests are cached. On a cache hit, the proxy replays the complete SSE stream (including tool_use blocks) without hitting Anthropic's API.
+> **Note:** Claude Code uses streaming and always includes tools. Caching and compression are fully active for Claude Code: both tool-bearing and tool-free requests are cached. On a cache hit, the proxy replays the complete SSE stream (including tool_use blocks) without hitting Anthropic's API.
 
 ---
 
@@ -152,7 +149,7 @@ slm wrap windsurf
 
 ## AGY / Antigravity IDE
 
-**Status as of v3.6.3: partial.** AGY is a compiled Google Cloud Code binary. Binary analysis
+**Status: partial.** AGY is a compiled Google Cloud Code binary. Binary analysis
 shows it routes Claude model calls through **Google Vertex AI** and Gemini model calls through
 the Generative Language API — using its own OAuth token store, not standard env var overrides.
 
@@ -178,8 +175,8 @@ or Claude paths.
 > **⚠ Deprecation notice:** Google is retiring the Gemini CLI on June 19, 2026. Use AGY (Antigravity)
 > as the successor. See the AGY section above for proxy status.
 
-The Gemini CLI reads `GOOGLE_GENAI_BASE_URL`. As of **v3.6.3**, the Gemini native surface (`/v1beta/models/*`)
-has full cache + compression support — no longer pass-through only.
+The Gemini CLI reads `GOOGLE_GENAI_BASE_URL`. The Gemini native surface (`/v1beta/models/*`)
+has full cache and compression support.
 
 ```bash
 GOOGLE_GENAI_BASE_URL=http://127.0.0.1:8765 gemini -p "your prompt"

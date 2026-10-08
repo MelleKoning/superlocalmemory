@@ -1,12 +1,10 @@
 # Distributed Deployment
-> SuperLocalMemory V4 — Multi-machine / LXC / container setup (SLM-Mesh)
-> https://superlocalmemory.com | Part of Qualixar
 
 This guide covers running SLM in distributed environments: multiple containers, LXC hosts, VMs, or any topology where the daemon runs on a different host than the MCP clients.
 
 ---
 
-## Quick start (single host, already works in v3.6.8)
+## Quick start (single host)
 
 ```bash
 npm install -g superlocalmemory
@@ -38,7 +36,7 @@ Environment=SLM_DAEMON_HOST=0.0.0.0
 > and a key; mesh routes require their configured shared secret. Do not expose
 > the daemon directly to the public internet.
 
-### Other computers must sign in (4.1.20+)
+### Other computers must sign in
 
 A request from another computer — including a browser on the LAN opening the
 dashboard by IP — gets `401 remote_auth_required` for anything that carries
@@ -57,9 +55,8 @@ export SLM_MCP_ALLOWED_HOSTS=192.168.50.0/24   # the computers you trust
 
 The dashboard page, its static files and `/health` load without credentials;
 `/mcp` keeps its own check (HTTPS plus a remote key or the API key; see
-[Remote access over TLS](#remote-access-over-tls)). Up to 4.1.19 reads from the LAN needed no
-credentials, so a LAN dashboard that worked by IP now needs one of the above —
-usually the `SLM_REMOTE=1` allowlist. A Docker port mapping makes your own
+[Remote access over TLS](#remote-access-over-tls)). A LAN dashboard opened by IP
+needs one of the above, usually the `SLM_REMOTE=1` allowlist. A Docker port mapping makes your own
 computer's requests arrive from the bridge address (for example `172.17.0.1`),
 not loopback: allowlist that address or send the API key.
 
@@ -127,12 +124,11 @@ never reaches another profile:
   A recall may still pass `include_shared` / `include_global`: it then sees only
   what other profiles shared with the key's profile, or made global.
 
-Keys made before 4.1.20 had no profile. Each is bound once to the profile
-active when 4.1.20 first runs (the daemon at start, or any `slm remote keys`
+Keys made by an older release had no profile. Each is bound once to the profile
+active when the upgrade first runs (the daemon at start, or any `slm remote keys`
 command); `slm remote keys list` says so and marks it `(bound on upgrade)`.
-Until then the key is refused (`remote_key_unbound`). The key file is now
-format 2; an older SLM refuses it (every remote key off) rather than ignore the
-binding. The SLM API key, used as a key, has no stored profile: it reaches only
+Until then the key is refused (`remote_key_unbound`). An older SLM refuses the
+upgraded key file (every remote key off) rather than ignore the binding. The SLM API key, used as a key, has no stored profile: it reaches only
 the profile active at the time of each call.
 
 **What a key holder can read.** A key's holder can read the full text of every
@@ -179,7 +175,7 @@ this computer (`SLM_HOOK_DAEMON_URL` accepts loopback addresses only), and the
 install token, hook token and daemon capability are never accepted on the
 remote listener.
 
-## Host names SLM answers to (4.1.18+)
+## Host names SLM answers to
 
 SLM refuses any request — dashboard, HTTP API or `/mcp` — that is not
 addressed to this computer, so a web page on another site cannot reach it
@@ -195,7 +191,7 @@ SLM_ALLOWED_HOSTS=slm.lan,*.office.lan slm serve start
 Names you already list in `SLM_MCP_ALLOWED_HOSTS` (for example `slm.lan:*`)
 are accepted too, so existing LAN setups keep working unchanged.
 
-## Behind a reverse proxy (4.1.20+)
+## Behind a reverse proxy
 
 SLM decides whether a caller is on this computer from the TCP connection
 alone. It ignores `X-Forwarded-For`, `Forwarded`, `X-Real-IP` and similar
@@ -218,7 +214,7 @@ only. Naming a proxy never makes its callers local.
 > them from a local program. Do not run such a proxy in front of SLM: configure
 > it to send `X-Forwarded-For` (most proxies do by default).
 
-## Opening the HTTP MCP transport to LAN clients (v3.6.9+)
+## Opening the HTTP MCP transport to LAN clients
 
 The `/mcp` endpoint uses MCP's DNS-rebinding protection, which defaults to localhost-only even when the daemon is bound on `0.0.0.0`. Set `SLM_MCP_ALLOWED_HOSTS` to open it:
 
@@ -240,19 +236,19 @@ a private LAN.
 
 Remote HTTP MCP requests must also arrive over HTTPS and present a key (a
 named remote key, or the SLM API key). The allowlist decides which hosts may
-reach the transport; it does not create an authenticated actor. Since 4.1.20,
-MCP from another computer over plain HTTP is refused (`403
+reach the transport; it does not create an authenticated actor. MCP from another
+computer over plain HTTP is refused (`403
 remote_requires_tls`) unless you set `SLM_REMOTE_ALLOW_PLAINTEXT=1`; prefer the
 remote listener below.
 
 ---
 
-## One-switch LAN mode: `SLM_REMOTE=1` (v3.6.12)
+## One-switch LAN mode: `SLM_REMOTE=1`
 
-SLM historically assumes every dashboard browser, MCP client, and API caller is on `127.0.0.1`. That breaks three things when you reach SLM across a LAN (issues #39 / #40):
+SLM historically assumes every dashboard browser, MCP client, and API caller is on `127.0.0.1`. That breaks three things when you reach SLM across a LAN:
 
 1. **The Brain page can't load** from a remote browser — `/internal/token` refuses non-loopback clients, so the dashboard never gets the install token.
-2. **Older stateful MCP clients can return `-32600 Session not found`** when a gateway/hub fails to replay `Mcp-Session-Id`. V4's MCP 2 transport is stateless by default, so this is not the normal V4 path.
+2. **Older stateful MCP clients can return `-32600 Session not found`** when a gateway/hub fails to replay `Mcp-Session-Id`. The MCP transport is stateless by default, so this is not the normal V4 path.
 3. **The dashboard CSRF origin guard** only accepts loopback origins.
 
 `SLM_REMOTE=1` flips all three at once — **default OFF**, so the loopback-only posture is unchanged for local installs. LAN access is still gated by your existing `SLM_MCP_ALLOWED_HOSTS` allowlist:
@@ -280,7 +276,7 @@ What `SLM_REMOTE=1` does:
 > SLM, make it send `X-Forwarded-For`: SLM never treats a forwarded request as
 > local.
 
-### Tuning the dashboard rate limiter (v3.6.12)
+### Tuning the dashboard rate limiter
 
 If you hit `429 Too Many Requests` while debugging over a LAN, raise the limits (defaults: 30 writes / 120 reads per 60s):
 
@@ -339,13 +335,13 @@ container always works against its own local store.
 
 ---
 
-## stdio + HTTP coexistence (v3.6.9+)
+## stdio + HTTP coexistence
 
 `slm mcp` (stdio transport) now reuses the running daemon instead of starting a second one on the same port. If you run `slm mcp` on the same machine as a systemd `slm-http` service, they coexist cleanly — one daemon, many front-ends.
 
 ---
 
-## Per-agent identity over HTTP — `/mcp/{agent_id}` (v3.6.10+)
+## Per-agent identity over HTTP — `/mcp/{agent_id}`
 
 The HTTP MCP endpoint accepts an **agent-id path segment** so that every AI tool
 sharing the one daemon gets its own audit attribution — without spawning a
@@ -386,14 +382,14 @@ Gemini CLI / Codex / Kimi — point each tool's MCP HTTP URL at its own segment
 agent id; pick a stable, lowercase name per tool.
 
 > **Rollout order matters:** point a client at `/mcp/{agent_id}` only after the
-> daemon is running **v3.6.10+** (`slm --version`). An older daemon mounts a bare
+> daemon is running a current release (`slm --version`). An older daemon mounts a bare
 > `/mcp` without the extractor and will not recognise the extra path segment.
 
 ---
 
 ## Complete `SLM_*` environment variable reference
 
-> Generated from source at v3.6.9. **NEW** marks variables added in this release.
+> Read from the source; every variable below is read by the code.
 
 ### Daemon / bind / paths
 
@@ -401,7 +397,7 @@ agent id; pick a stable, lowercase name per tool.
 |----------|---------|---------|
 | `SLM_DAEMON_HOST` | Bind address for the HTTP daemon | `127.0.0.1` |
 | `SLM_HOST` | Alias for `SLM_DAEMON_HOST` | — |
-| `SLM_DAEMON_PORT` | **NEW** Port for the HTTP daemon (**fully wired** as of v3.6.9) | `8765` |
+| `SLM_DAEMON_PORT` | Port for the HTTP daemon  | `8765` |
 | `SLM_DAEMON_IDLE_TIMEOUT` | Seconds of inactivity before auto-shutdown (0 = always-on) | `0` |
 | `SLM_DATA_DIR` | Override the base data directory | `~/.superlocalmemory` |
 | `SLM_HOME` | Alias for `SLM_DATA_DIR` | — |
@@ -418,18 +414,18 @@ agent id; pick a stable, lowercase name per tool.
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `SLM_MCP_EMBEDDED` | Set `1` when running MCP inside the daemon (suppresses warmup threads) | — |
-| `SLM_MCP_ALLOWED_HOSTS` | **NEW** Comma-separated allowlist (`host:port*`, exact IP, CIDR, prefix`*`, or `*`) for HTTP MCP + LAN token/origin/rate-limit (see above) | localhost-only |
-| `SLM_REMOTE_LISTEN` | **NEW (4.1.20)** `HOST:PORT` for the TLS remote listener; overrides `slm remote enable`. Unset and not enabled: no remote listener | — |
-| `SLM_REMOTE_TLS_CERT` / `SLM_REMOTE_TLS_KEY` | **NEW (4.1.20)** Server certificate and private key (PEM) for the remote listener; the key must not be readable by other users | `remote/tls/server.pem`, `server.key` |
-| `SLM_REMOTE_ALLOW_PLAINTEXT` | **NEW (4.1.20)** `1` accepts MCP from other computers over plain HTTP on the main listener (logged). Never applies to the remote listener | — |
-| `SLM_TRUSTED_PROXIES` | **NEW (4.1.20)** Proxies whose `X-Forwarded-For` / `X-Forwarded-Proto` SLM reads (addresses or networks). Unset: forwarding headers are ignored. Never grants local trust | — |
+| `SLM_MCP_ALLOWED_HOSTS` | Comma-separated allowlist (`host:port*`, exact IP, CIDR, prefix`*`, or `*`) for HTTP MCP + LAN token/origin/rate-limit (see above) | localhost-only |
+| `SLM_REMOTE_LISTEN` | `HOST:PORT` for the TLS remote listener; overrides `slm remote enable`. Unset and not enabled: no remote listener | — |
+| `SLM_REMOTE_TLS_CERT` / `SLM_REMOTE_TLS_KEY` | Server certificate and private key (PEM) for the remote listener; the key must not be readable by other users | `remote/tls/server.pem`, `server.key` |
+| `SLM_REMOTE_ALLOW_PLAINTEXT` | `1` accepts MCP from other computers over plain HTTP on the main listener (logged). Never applies to the remote listener | — |
+| `SLM_TRUSTED_PROXIES` | Proxies whose `X-Forwarded-For` / `X-Forwarded-Proto` SLM reads (addresses or networks). Unset: forwarding headers are ignored. Never grants local trust | — |
 | `SLM_REMOTE` | One-switch LAN mode: serves token to allowlisted LAN clients, relaxes origin guard, and exempts LAN from rate limit. It does not change the default stateless MCP transport. Default OFF | — |
-| `SLM_MCP_STATELESS` | Explicitly select stateless MCP transport; stateless is already the V4 default | — |
+| `SLM_MCP_STATELESS` | Explicitly select stateless MCP transport; stateless is already the default | — |
 | `SLM_MCP_STATEFUL` | Set `1` only for a compatibility integration that requires stateful Streamable HTTP | — |
 | `SLM_MCP_TOOLS` | Comma-separated list of MCP tools to expose (default: all) | — |
-| `SLM_RATE_LIMIT_WRITE` | **NEW (v3.6.12)** Max dashboard write requests per window | `30` |
-| `SLM_RATE_LIMIT_READ` | **NEW (v3.6.12)** Max dashboard read requests per window | `120` |
-| `SLM_RATE_LIMIT_WINDOW` | **NEW (v3.6.12)** Rate-limit window in seconds | `60` |
+| `SLM_RATE_LIMIT_WRITE` | Max dashboard write requests per window | `30` |
+| `SLM_RATE_LIMIT_READ` | Max dashboard read requests per window | `120` |
+| `SLM_RATE_LIMIT_WINDOW` | Rate-limit window in seconds | `60` |
 | `SLM_MCP_ALL_TOOLS` | Set `1` to force-enable all tools regardless of mode | — |
 | `SLM_MCP_MESH_TOOLS` | Set `1` to always include mesh tools | — |
 
@@ -443,7 +439,7 @@ agent id; pick a stable, lowercase name per tool.
 | `SLM_MESH_PEER_URL` | Explicit peer URL to register with at startup | — |
 | `SLM_MESH_DISCOVERY` | Discovery mode: `local` / `manual` | `local` |
 
-> **Mesh API auth (v3.6.20):** When `SLM_MESH_SHARED_SECRET` is set, non-loopback callers must authenticate every `/mesh/*` request. The canonical header is `Authorization: Bearer <your-secret>` — this is what `RemoteSyncClient` sends automatically. The legacy `X-Mesh-Secret: <your-secret>` header is also accepted for backwards compatibility.
+> **Mesh API auth:** When `SLM_MESH_SHARED_SECRET` is set, non-loopback callers must authenticate every `/mesh/*` request. The canonical header is `Authorization: Bearer <your-secret>` — this is what `RemoteSyncClient` sends automatically. The legacy `X-Mesh-Secret: <your-secret>` header is also accepted for backwards compatibility.
 >
 > Example: `curl http://192.168.50.144:8765/mesh/status -H "Authorization: Bearer <your-secret>"`
 
@@ -466,14 +462,14 @@ have the `mesh_*` MCP tools and the dashboard **Mesh Peers** tab.
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `SLM_RSS_BUDGET_MB` | **NEW** Global RSS budget for the health monitor watchdog (0 = auto, 40% of RAM) | auto |
+| `SLM_RSS_BUDGET_MB` | Global RSS budget for the health monitor watchdog (0 = auto, 40% of RAM) | auto |
 | `SLM_MAX_WORKER_MB` | Per-worker RSS limit before the per-worker watchdog triggers | `2048` |
 | `SLM_MAX_EMBEDDING_WORKERS` | Max parallel embedding worker processes | `1` |
 | `SLM_EMBED_WORKER_RSS_LIMIT_MB` | RSS limit per embedding worker process | `2500` |
 | `SLM_EMBED_IDLE_TIMEOUT` | Seconds before an idle embedding worker exits | `1800` |
 | `SLM_EMBED_RECYCLE_AFTER` | Recycle embedding worker after N requests | `5000` |
 | `SLM_EMBED_RESPONSE_TIMEOUT` | Timeout (s) for a single embedding request | `180` |
-| `SLM_RERANKER_ENABLED` | **NEW (4.1.22)** Process-only override for whether the cross-encoder reranker runs, regardless of the persisted `retrieval.use_cross_encoder` choice — never written back to config.json. `false`/`0`/`no`/`off` disables it; anything else (including unset) leaves the persisted choice in force | unset |
+| `SLM_RERANKER_ENABLED` | Process-only override for whether the cross-encoder reranker runs, regardless of the persisted `retrieval.use_cross_encoder` choice — never written back to config.json. `false`/`0`/`no`/`off` disables it; anything else (including unset) leaves the persisted choice in force | unset |
 | `SLM_RERANKER_IDLE_TIMEOUT` | Seconds before an idle reranker worker exits | `1800` |
 | `SLM_MIN_AVAILABLE_MEMORY_GB` | Minimum free system RAM before SLM defers heavy operations | `1.0` |
 | `SLM_TRIGRAM_BOOTSTRAP_RAM_MB` | Max RAM for trigram index bootstrap | `512` |
@@ -536,7 +532,7 @@ embedding worker tries ONNX first) and has not been measured here.
 |----------|---------|---------|
 | `SLM_RECALL_NO_FLOOR` | Set `1` to disable the relevance floor (returns all results) | — |
 | `SLM_RECALL_TIMING` | Set `1` to log per-channel recall timing | — |
-| `SLM_RANKING` | Override ranking algorithm: `bandit` / `bm25` / `semantic` | auto |
+| `SLM_RANKING` | Adaptive ranking mode: `off`, `v1`, `v2` or `v2-ensemble`. Unset means `off` | `off` |
 | `SLM_INGEST_NO_GATE` | Set `1` to skip the ingest quality gate | — |
 | `SLM_OBSERVE_DEBOUNCE_SEC` | Debounce window (s) for `observe` auto-capture | `5` |
 | `SLM_TOPIC_SHIFT_LOG` | Set `1` to log topic-shift detection | — |
@@ -552,7 +548,7 @@ embedding worker tries ONNX first) and has not been measured here.
 
 ---
 
-## Health config via config.json (v3.6.9+)
+## Health config via config.json
 
 You can now tune the health monitor via `~/.superlocalmemory/config.json`:
 

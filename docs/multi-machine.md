@@ -1,15 +1,15 @@
-# Multi-Machine Mesh (v3.4.48)
+# Multi-Machine Mesh
 
 **SLM-Mesh** provides authenticated peer coordination across sessions and machines.
 
-SuperLocalMemory v3.4.48 enables two machines on the same LAN to share agent peer lists and route messages cross-machine — zero manual configuration required when mDNS is available.
+SuperLocalMemory lets two machines on the same LAN to share agent peer lists and route messages cross-machine, with no manual configuration when mDNS is available.
 
 ## How It Works
 
 ```
-┌─ Mac M4 (192.168.1.100) ──────────────┐     ┌─ Mac M5 (192.168.1.101) ──────────────┐
+┌─ Computer A (192.168.1.100) ──────────┐     ┌─ Computer B (192.168.1.101) ──────────┐
 │  SLM daemon (:8765)                    │     │  SLM daemon (:8765)                    │
-│  RemoteSyncClient → polls M5 /peers    │◄───►│  RemoteSyncClient → polls M4 /peers    │
+│  RemoteSyncClient → polls B /peers     │◄───►│  RemoteSyncClient → polls A /peers     │
 │                                        │HTTP │                                        │
 │  ┌──────────┐  ┌──────────┐           │     │  ┌──────────┐  ┌──────────┐           │
 │  │  Claude  │  │  Cursor  │           │     │  │  Claude  │  │  iTerm   │           │
@@ -25,14 +25,14 @@ SuperLocalMemory v3.4.48 enables two machines on the same LAN to share agent pee
 
 ## Quick Start
 
-### On M4 (the remote machine — set `SLM_MESH_SHARED_SECRET`)
+### On computer A (the remote machine — set `SLM_MESH_SHARED_SECRET`)
 
 ```bash
 export SLM_MESH_SHARED_SECRET=your-shared-secret-here
-slm serve   # start the SLM daemon
+slm serve start   # start the SLM daemon
 ```
 
-### On M5 (add `SLM_MESH_PEER_URL` to your env/MCP config)
+### On computer B (add `SLM_MESH_PEER_URL` to your env/MCP config)
 
 ```bash
 export SLM_MESH_PEER_URL=http://192.168.1.100:8765
@@ -81,9 +81,9 @@ python -m pip install zeroconf
 
 Run these commands only while the SLM Python virtual environment is active.
 
-## MCP Tools — Unchanged
+## MCP Tools
 
-All 8 MCP tools work identically in multi-machine mode. No agent code changes needed.
+All 8 mesh MCP tools work in multi-machine mode with no agent code changes. The mesh tools are in the `full` and `power` tool sets and in the default set.
 
 | Tool | Multi-Machine Behavior |
 |---|---|
@@ -113,8 +113,8 @@ All 8 MCP tools work identically in multi-machine mode. No agent code changes ne
 ## Troubleshooting
 
 **Remote peers not appearing:**
-1. Confirm `SLM_MESH_PEER_URL` is set on M5.
-2. Check M4's SLM is running: `curl http://192.168.1.100:8765/health`
+1. Confirm `SLM_MESH_PEER_URL` is set on computer B.
+2. Check computer A's SLM is running: `curl http://192.168.1.100:8765/health`
 3. Verify shared secret matches on both machines.
 4. Wait up to 30 seconds for the first sync cycle.
 
@@ -128,8 +128,8 @@ All 8 MCP tools work identically in multi-machine mode. No agent code changes ne
 - Disable with `SLM_MESH_DISCOVERY=off` and use manual `SLM_MESH_PEER_URL` instead.
 
 **Send to remote peer fails:**
-- Verify M4's SLM is reachable from M5: `curl http://192.168.1.100:8765/mesh/status -H 'Authorization: Bearer <secret>'`
-- Check the target peer is listed by M4's `/mesh/peers` endpoint.
+- Verify computer A's SLM is reachable from computer B: `curl http://192.168.1.100:8765/mesh/status -H 'Authorization: Bearer <secret>'`
+- Check the target peer is listed by computer A's `/mesh/peers` endpoint.
 
 ## Non-Goals
 

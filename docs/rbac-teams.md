@@ -1,8 +1,6 @@
 # Teams, Users, and Access Control (RBAC)
-> SuperLocalMemory V4 Documentation
-> https://superlocalmemory.com | Part of Qualixar
 
-V4 includes multi-user access control to SLM (from the 3.8 line). This page covers roles, workspace
+SLM includes multi-user access control. This page covers roles, workspace
 membership, the login gate, and how to operate RBAC from the CLI, API, and
 dashboard.
 
@@ -77,15 +75,15 @@ slm profile switch <name>     # switch active workspace
 slm profile create <name>     # create a new workspace
 ```
 
-Verified in `src/superlocalmemory/cli/main.py`: `profile` accepts only `list | switch | create` (`choices=["list", "switch", "create"]`). There is no `slm profile users …` subcommand. User and membership administration is via the RBAC HTTP API and the dashboard (see below).
+`slm profile` accepts only `list`, `switch` and `create`. There is no `slm profile users` subcommand. User and membership administration is via the RBAC HTTP API and the dashboard (see below).
 
 ### Via dashboard
 
 The **Governance → Access & Users** tab shows the user list for the current workspace. Admins can invite, assign roles, and remove users.
 
-### Via HTTP API (RBAC routes in `src/superlocalmemory/server/routes/rbac.py`)
+### Via HTTP API
 
-All routes are under `/api/rbac/*` and require machine auth (`require_http_mutation_actor`); user/membership/policy admin further requires `MANAGE` (`src/superlocalmemory/server/rbac_enforce.py: require_manage`).
+All routes are under `/api/rbac/*` and require SLM's own credential (see [Auth write gate](auth-write-gate.md)); user, membership and policy administration further requires the `MANAGE` permission.
 
 | Method & Path | Purpose |
 |---|---|
@@ -181,4 +179,4 @@ slm diagnostics export /tmp/audit-report.json
 
 ---
 
-*SuperLocalMemory V4 — Copyright 2026 Varun Pratap Bhardwaj. AGPL-3.0-or-later. Part of Qualixar.*
+*SuperLocalMemory — Copyright 2026 Varun Pratap Bhardwaj. AGPL-3.0-or-later. Part of Qualixar.*

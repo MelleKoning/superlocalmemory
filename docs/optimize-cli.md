@@ -1,14 +1,12 @@
-# Optimize CLI Reference — v3.6
-> SuperLocalMemory V4 Documentation
-> https://superlocalmemory.com | Part of Qualixar
+# Optimize CLI Reference
 
-Complete reference for all SLM v3.6 Optimize CLI commands.
+Complete reference for the SLM Optimize CLI commands.
 
 ---
 
 ## Overview
 
-SLM v3.6 adds 6 new top-level commands under `slm`:
+Optimize adds six top-level commands under `slm`:
 
 ```bash
 slm optimize   ...    # Master Optimize module control
@@ -19,7 +17,7 @@ slm wrap       ...    # Agent activation
 slm help-optimize     # Full developer reference
 ```
 
-All commands accept `--json` for machine-readable output.
+`optimize`, `cache`, `compress` and `proxy` accept `--json` for machine-readable output.
 
 ---
 
@@ -153,7 +151,7 @@ Note: requires embedding model (~500MB). Run `slm warmup` if not already done.
 
 ## `slm compress` — Compression Control
 
-> **v3.6.10:** the old `slm compress code|ccr|align` subcommands are **removed** — the homegrown extractive JSON/code compressor was lossy and has been deleted. Compression is now `status | mode | prose`. Running a removed subcommand prints a short notice explaining the change.
+> `slm compress code`, `ccr` and `align` no longer do anything: the lossy extractive compressor they controlled was removed. Compression is `status | mode | prose`. Running one of the old subcommands prints a short notice.
 
 ### `slm compress status`
 

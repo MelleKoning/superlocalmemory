@@ -1,6 +1,4 @@
 # Scale Engine
-> SuperLocalMemory V4 Documentation
-> https://superlocalmemory.com | Part of Qualixar
 
 The Scale Engine manages optional CozoDB and LanceDB projections of the
 canonical SQLite store. SQLite (and sqlite-vec) remain the authoritative
@@ -21,7 +19,7 @@ You need the Scale Engine when:
 
 - You have CozoDB or LanceDB installed and want SLM to route graph or
   vector queries through them.
-- You upgraded from a pre-v3.7 install that created CozoDB/LanceDB files
+- You upgraded from an older install that created CozoDB/LanceDB files
   under a prior scheme and want SLM to adopt them safely.
 - A failed promotion left the data root in an inconsistent state and you
   need to inspect or roll back.
@@ -43,7 +41,7 @@ retrieval automatically.
 | Action | What it does | Mutates active paths? |
 |--------|-------------|:---------------------:|
 | `status` | Show current lifecycle state, staged projections, and available backups | No |
-| `adopt` | Confirm a detected legacy (pre-v3.7) projection and run the full prepare → verify → promote cycle automatically | Yes (via promote) |
+| `adopt` | Confirm a detected legacy projection and run the full prepare → verify → promote cycle automatically | Yes (via promote) |
 | `prepare` | Build a new staged CozoDB/LanceDB projection from the canonical SQLite data. Output goes to a staging directory | **No** |
 | `verify` | Check that the staged projection matches the canonical store (row counts, vector fingerprints, graph edges). Fails closed if parity is not met | **No** |
 | `promote` | Atomically move the verified staging projection to the active paths. Creates a backup first | Yes |
@@ -65,28 +63,27 @@ backup directories.
 
 ```bash
 slm db scale status
-slm db scale status --json
 ```
 
-Key fields in the output:
+Every `slm db scale` action prints its result as JSON. Key fields in the output of `status`:
 
 - `state` — `local_core` (SQLite only), `prepared`, `verified`, or `promoted`
-- `legacy_projection_candidate` — `true` if pre-v3.7 CozoDB/LanceDB files
+- `legacy_projection_candidate` — `true` if CozoDB/LanceDB files from an older release
   are present and eligible for adoption
 - `stages` — list of in-progress or rejected stage manifests
 - `backups` — list of backup directory names available for rollback
 
 ### `slm db scale adopt`
 
-Adopt a detected legacy (pre-v3.7) projection. Runs prepare → verify →
-promote in one step after confirming the pre-v3.7 files are present. The
+Adopt a detected legacy projection. Runs prepare → verify →
+promote in one step after confirming the older files are present. The
 legacy directories become the rollback copy.
 
 ```bash
 slm db scale adopt
 ```
 
-Use this when upgrading from a pre-v3.7 install that already has CozoDB or
+Use this when upgrading from an older install that already has CozoDB or
 LanceDB files. If `legacy_projection_candidate` is `false`, the command
 returns without making changes.
 
@@ -143,7 +140,7 @@ slm restart
 
 ---
 
-## Typical Upgrade Workflow (pre-v3.7 → v3.7+)
+## Typical Upgrade Workflow
 
 ```bash
 # 1. Check whether legacy files need adoption
@@ -196,7 +193,7 @@ If the daemon is in an inconsistent state after a failed promotion (the
 
 ```bash
 # Inspect state
-slm db scale status --json
+slm db scale status
 
 # Option A: roll back to the last good backup
 slm db scale rollback --backup-id <backup_id>
@@ -213,4 +210,4 @@ remember operations continue without interruption.
 
 ---
 
-*SuperLocalMemory V4 — Copyright 2026 Varun Pratap Bhardwaj. AGPL-3.0-or-later. Part of Qualixar.*
+*SuperLocalMemory — Copyright 2026 Varun Pratap Bhardwaj. AGPL-3.0-or-later. Part of Qualixar.*

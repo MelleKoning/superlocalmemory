@@ -1,34 +1,32 @@
 # Migration from V2
-> SuperLocalMemory V4 Documentation
-> https://superlocalmemory.com | Part of Qualixar
 
-Upgrade from SuperLocalMemory V2 to V3. Verify backup before migrating; see
-rollback caveats below. No `slm migrate --dry-run` exists.
+Upgrade from SuperLocalMemory V2. Verify a backup before migrating; see the
+rollback caveats below. There is no `slm migrate --dry-run`.
 
-> **V4.0.0 additive migrations:** V4.0.0 includes `M038_learning_feedback_channel`
-> (eager, applied at startup on `learning.db`) and `M039_scene_fact_members`
-> (deferred, applied once engine-owned tables exist on `memory.db`). Manual
-> `slm db migrate` is not normally required for V4.0.0 itself. `slm db migrate` is
-> **forward-only** (`status` / `--dry-run` / apply; no `slm db migrate
-> --rollback` and no `slm migrate --rollback` for V4 DBs — see
-> `src/superlocalmemory/cli/db_migrate.py` and
-> `src/superlocalmemory/storage/migration_runner.py`). It refuses to run
-> against a DB written by a newer build and holds back migrations whose
-> dependency did not complete. Schema downgrade is unsupported — to revert a V4
-> upgrade, restore a **verified pre-upgrade complete backup of the whole data
-> root** ( `slm serve stop` first so WAL/SHM checkpoint, then copy all present
-> `*.db` plus `-wal`/`-shm` sidecars and `lance/` if present). The `M039`
-> projection is `scene_fact_members` with **profile-scoped composite**
-> membership (see `src/superlocalmemory/storage/migrations/M039_scene_fact_members.py`).
+> **Schema migrations.** Newer releases add further schema changes on top of the
+> V2 migration. They are additive, apply automatically at startup, and run in
+> order. `slm db migrate --status` shows what has been applied and
+> `slm db migrate --dry-run` previews pending ones without writing. They are
+> **forward-only**: there is no `slm db migrate --rollback`. SLM refuses to run
+> against a database written by a newer build, and holds back a migration whose
+> dependency did not complete.
+>
+> Every update that changes the store first takes a verified copy, so you can go
+> back to it with `slm db restore`, and `slm db prepare-downgrade` readies the
+> store for the previous release when that is safe. See [Restore points and
+> downgrades](restore-points.md). Otherwise, to revert an upgrade, restore a
+> **verified pre-upgrade complete backup of the whole data root**: `slm serve stop`
+> first so the WAL checkpoints, then copy all present `*.db` files with their
+> `-wal` and `-shm` sidecars and `lance/` if present.
 
 ---
 
-## What Changed in V3
+## What Changed Since V2
 
-| Area | V2 | V3 |
+| Area | V2 | Now |
 |------|----|----|
 | **Retrieval** | Single-channel semantic search | Five candidate producers (Semantic + BM25 + Temporal + Spreading-Activation + Hopfield) -> RRF fusion + entity-graph post-fusion enhancement |
-| **Modes** | One mode (cloud required for smart features) | Three modes: A (zero-cloud), B (local LLM), C (cloud LLM) |
+| **Modes** | One mode (cloud required for smart features) | Three modes: A (Local Guardian), B (Smart Local), C (Full Power) |
 | **Math layer** | None | Fisher-Rao similarity, Sheaf consistency, Langevin lifecycle |
 | **Ingestion** | Basic text storage | 11-step pipeline: entities, facts, emotions, beliefs, graph, and more |
 | **Data directory** | `~/.claude-memory/` | `~/.superlocalmemory/` (the migrator attempts a legacy-path symlink; verify it) |
@@ -52,7 +50,7 @@ npm update -g superlocalmemory
 
 ```bash
 slm --version
-# Should show 3.x.x or 4.x.x
+# Prints the installed version
 ```
 
 3. **Preserve both data roots before migration** (do not rely on a live
@@ -69,9 +67,9 @@ ls -la ~/.claude-memory/
 # and verification have completed.
 ```
 
-> No `slm migrate --dry-run` exists for the V2→V3 migrator. For V4 additive
-> DB migrations the inspect command is `slm db migrate --dry-run` (and
-> `slm db migrate --status`), forward-only.
+> No `slm migrate --dry-run` exists for the V2 migrator. For the additive
+> database migrations that follow, the inspect commands are `slm db migrate
+> --dry-run` and `slm db migrate --status`, forward-only.
 
 ## Run the Migration
 
@@ -98,9 +96,7 @@ required by your deployment.
 > single global transaction. Do **not** treat it as globally
 > transactional/zero-loss without a verified pre-upgrade backup.
 
-**V4 migrations after that:** `M038` (adds `learning_feedback.channel` for
-`pattern_miner`) and the deferred `M039` normalized scene/fact projection are
-applied automatically; see header note for DDL details.
+The additive schema migrations that follow are applied automatically at startup.
 
 ## Migration boundaries
 
@@ -111,7 +107,7 @@ history, or every runtime artifact in a customized installation.
 
 ## What Gets Added
 
-The migration adds V3 capabilities to your existing data:
+The migration adds these capabilities to your existing data:
 
 - BM25 token index for keyword search
 - Entity graph nodes and edges
@@ -130,13 +126,13 @@ projection has been materialized until its health/rebuild check succeeds.
 ```bash
 slm status --json
 # or slm status for the text summary
-slm db migrate --status   # shows M038/M039 applied state: see docs/cli-reference.md
+slm db migrate --status   # shows which schema migrations are applied
 ```
 
 Confirm:
 - Configure and verify the intended operating mode; migration does not select one
 - Memory count matches your V2 count (`slm status --json | jq '.data.fact_count'`)
-- `slm db migrate --status` shows expected migrations as applied/verified
+- `slm db migrate --status` shows the expected migrations as applied
 
 ### Try a recall
 
@@ -144,32 +140,32 @@ Confirm:
 slm recall "something you stored in V2"
 ```
 
-Results should match or exceed V2 quality. V3's multi-producer retrieval finds memories that V2's single-channel search might have missed.
+Results should match or exceed V2 quality. Multi-producer retrieval can find memories that V2's single-channel search missed.
 
-### Explore V3 features
+### Explore the new features
 
 ```bash
 slm trace "your query"       # See channel-by-channel breakdown
 slm health                   # Check math layer status
-slm mode b                   # Try local LLM mode (if Ollama installed)
-# Use slm db migrate --status / --dry-run to inspect additive DB migrations
-# (forward-only; no rollback). See `slm ops status` / `slm ops list` for
-# stuck operations after upgrades.
+slm mode b                   # Try Smart Local mode (if Ollama is installed)
+slm db integrity             # read-only store health report
+slm ops status               # stuck or failed operations after an upgrade
 ```
 
 ## Rollback
 
-Rollback of the V2→V3 `slm migrate` is **only** possible while a valid
+Rollback of the V2 `slm migrate` (`slm migrate --rollback`) is **only** possible while a valid
 pre-migration backup still exists and is **not** automatic or retained for
 30 days. There is no automatic 30-day retention or timed deletion — verify the
 backup file before migrating. Re-creating the backup during migration does not
 guarantee a coherent cross-store set on the legacy per-file path
 (`docs/cloud-backup.md`).
 
-Downgrade of a V4 DB (M038/M039) is **unsupported**: there is no
-`slm db migrate --rollback` (and no `slm migrate --rollback` for V4 DBs).
-To revert a V4 upgrade, restore a verified **pre-upgrade complete backup of
-the whole data root** (stop the daemon first — `slm serve stop` — and include
+The additive schema migrations cannot be rolled back with a migrate flag: there is no
+`slm db migrate --rollback`, and `slm migrate --rollback` is for the V2 migrator
+only. To revert, use a restore point (`slm db restore`, see [Restore points and
+downgrades](restore-points.md)) or restore a verified **pre-upgrade complete
+backup of the whole data root** (stop the daemon first — `slm serve stop` — and include
 WAL/SHM sidecars plus `lance/` if present). Copying a live `memory.db` alone
 while the daemon runs is unsafe and does not guarantee a coherent restore set.
 
@@ -204,7 +200,7 @@ Possibly. The V2 migrator copies the database; it does not prove migration of
 separate configuration or credential files. Reconfigure or supply keys through
 environment variables as needed, then test the provider path you use.
 
-**Q: Can I run V2 and V3 side by side?**
+**Q: Can I run V2 and the current version side by side?**
 No. The migration converts your database in place (with backup). No side-by-side.
 
 **Q: What if migration fails halfway?**
@@ -224,4 +220,4 @@ completed target root before deleting any recovery copy.
 
 ---
 
-*SuperLocalMemory V4 — Copyright 2026 Varun Pratap Bhardwaj. AGPL-3.0-or-later. Part of Qualixar.*
+*SuperLocalMemory — Copyright 2026 Varun Pratap Bhardwaj. AGPL-3.0-or-later. Part of Qualixar.*

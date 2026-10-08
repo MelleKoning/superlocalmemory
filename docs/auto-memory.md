@@ -1,14 +1,12 @@
 # Auto-Memory
-> SuperLocalMemory V4 Documentation
-> https://superlocalmemory.com | Part of Qualixar
 
-SuperLocalMemory captures and recalls context automatically. Install it once, then forget about it — your AI assistant gets smarter over time without any manual effort.
+With hooks installed (`slm hooks install`, or the Claude Code and Codex plugins), SuperLocalMemory recalls relevant context at the start of a session and before your prompts, and your assistant can send decisions, bug fixes and preferences to it for capture. Hooks are explicit: nothing is installed until you consent.
 
 ---
 
 ## How Auto-Capture Works
 
-When you work with an AI assistant that has SLM connected, certain types of information are automatically stored as memories:
+When your assistant sends conversation text to SLM's `observe` step (through hooks or the MCP tool), SLM stores three kinds of information as memories:
 
 | What gets captured | Example |
 |-------------------|---------|
@@ -18,10 +16,10 @@ When you work with an AI assistant that has SLM connected, certain types of info
 
 ### What does NOT get captured
 
-- Raw code blocks (too noisy, changes too fast)
-- Casual conversation ("thanks", "sounds good")
-- Repeated content within the configured observation debounce window
-- Content that does not match the enabled decision, bug-fix, or preference admission rules
+- Casual conversation and content that matches none of the decision, bug-fix or preference patterns
+- Repeated content within the observation debounce window
+- A category you turned off (see [Configuration](#configuration))
+- Anything below the minimum confidence
 
 ### How the system decides what to capture
 
@@ -37,7 +35,7 @@ and projector work belong to materialization, not admission.
 
 ## How Auto-Recall Works
 
-Before your AI assistant responds to a question, SLM automatically searches for relevant memories and injects them as context.
+When the recall hooks are installed, SLM searches for relevant memories when a session starts and before your prompts, and injects what it finds as context. Very short acknowledgements ("ok", "thanks") are skipped. MCP clients that do not run hooks get the session-start version through `session_init`.
 
 ### The flow
 
@@ -81,54 +79,56 @@ trusted Cursor, Copilot, or Antigravity rules file.
 ### Auto-recall and Answer check
 
 When [Answer check](answer-check.md) is on (off until an on-device install
-has passed its check) and it decides
-none of the matching memories answer your question, auto-recall injects one
-short line — "SuperLocalMemory: no stored memory answers this." — instead of
-the memory list, so your assistant doesn't quietly present an unrelated
-memory as if it were the answer. Nothing is deleted; the next explicit
-`recall` still returns the full result set, with the same verdict attached
-to it.
+has passed its check), auto-recall puts the verdict above the memories as one
+plain line. If the check decided none of the matching memories answer the
+question, the line says so and tells the assistant to say it does not have the
+answer or to ask, rather than presenting an unrelated memory as the answer.
+The memories themselves are still listed, and the next explicit `recall`
+returns the same full result set with the same verdict.
 
 ## Configuration
 
 ### Toggle auto-capture and auto-recall
 
-In `~/.superlocalmemory/config.json`:
+The dashboard's **Settings** page has switches for auto-capture (enable, capture
+decisions, capture bug fixes) and auto-recall (enable, recall on session start).
+They are stored under `rules` in `~/.superlocalmemory/config.json`:
 
 ```json
 {
-  "auto_capture": true,
-  "auto_recall": true
+  "rules": {
+    "auto_recall": {
+      "enabled": true,
+      "on_session_start": true,
+      "on_every_prompt": false,
+      "max_memories_injected": 10,
+      "relevance_threshold": 0.3
+    },
+    "auto_capture": {
+      "enabled": true,
+      "capture_decisions": true,
+      "capture_bugs": true,
+      "capture_preferences": true,
+      "capture_session_summary": true,
+      "min_confidence": 0.5
+    }
+  }
 }
 ```
 
-Set either to `false` to disable. When disabled, you can still use `slm remember` and `slm recall` manually.
-
-### Adjust recall sensitivity
-
-```json
-{
-  "recall_threshold": 0.3
-}
-```
+The values shown are the defaults. Set `enabled` to `false` to turn either off.
+The MCP tools read these rules: `session_init` honors `enabled`,
+`on_session_start` and `relevance_threshold`, and `observe` honors the capture
+settings. The hook scripts for Claude Code and Codex are installed or removed with
+`slm hooks install` and `slm hooks remove`. When auto-capture or auto-recall is
+off, `slm remember` and `slm recall` still work.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `recall_threshold` | `0.3` | Minimum relevance score (0.0 to 1.0). Lower = more memories, possibly less relevant. Higher = fewer but more precise. |
+| `auto_recall.relevance_threshold` | `0.3` | Minimum relevance (0.0 to 1.0) for `session_init` to include a memory. Lower gives more memories, possibly less relevant |
+| `auto_capture.min_confidence` | `0.5` | Minimum confidence for `observe` to store something. Lower captures more |
 
-> **Recall result count:** The default is 20 results per query (`CANONICAL_RECALL_LIMIT`). Override per-call with the `--limit N` flag (CLI) or the `limit` parameter (MCP `recall` tool). There is no config file key for this default.
-
-### Adjust capture sensitivity
-
-```json
-{
-  "capture_threshold": 0.5
-}
-```
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `capture_threshold` | `0.5` | Minimum information value to auto-capture. Lower = capture more. Higher = capture only high-value statements. |
+> **Recall result count:** The default is 20 results per query. Override per call with the `--limit N` flag (CLI) or the `limit` parameter (MCP `recall` tool). There is no config file key for this default.
 
 ## Manual Override
 
@@ -157,9 +157,9 @@ Manual operations work regardless of auto-capture/auto-recall settings.
 
 SLM's adaptive learning system observes which memories are recalled frequently, which are marked helpful or outdated, and adjusts its behavior:
 
-- **Frequently helpful memories** get higher ranking in future recalls
-- **Memories marked "outdated"** are deprioritized or flagged for review
-- **Usage patterns** inform what types of information to prioritize for capture
+With adaptive ranking enabled, memories that were reported helpful rank higher
+in later recalls. Usage patterns are also kept for the dashboard's Living Brain
+panel.
 
 Learning is driven by **explicit feedback**. Recall itself is deliberately
 read-only — it never opens a database writer, so that a busy recall path cannot
@@ -172,15 +172,18 @@ report_feedback(fact_id="<id>", feedback="irrelevant")   # not useful
 report_feedback(fact_id="<id>", feedback="partial")      # somewhat relevant
 ```
 
-Each call returns `total_signals` and the current `phase`. Adaptive reranking
-activates at 50 signals (phase 2) and the ML ranker at 200 (phase 3).
+Each call returns `total_signals` and the current `phase`. The ranker's phases
+are counted at 50 signals (phase 2) and 200 (phase 3). Adaptive ranking changes
+result order only when you enable it with the `SLM_RANKING` environment variable
+(`v1`, `v2` or `v2-ensemble`); otherwise feedback is recorded but does not
+reorder recall.
 
 You can see what the system has learned in the **Living Brain** panel of the
 dashboard (`slm dashboard`), which reads the same store.
 
 > **Note:** the `slm patterns`, `slm useful` and `slm learning` commands
-> described in some older V2 documentation do not exist in V3. Use
-> `report_feedback` and the dashboard instead.
+> described in some older V2 documentation do not exist. Use `report_feedback`
+> and the dashboard instead.
 
 ## Privacy
 
@@ -203,4 +206,4 @@ Learning feedback stores a pseudonymized grouping key, not the raw query text.
 
 ---
 
-*SuperLocalMemory V4 — Copyright 2026 Varun Pratap Bhardwaj. AGPL-3.0-or-later. Part of Qualixar.*
+*SuperLocalMemory — Copyright 2026 Varun Pratap Bhardwaj. AGPL-3.0-or-later. Part of Qualixar.*

@@ -1,8 +1,6 @@
-# Optimize Configuration — v3.6
-> SuperLocalMemory V4 Documentation
-> https://superlocalmemory.com | Part of Qualixar
+# Optimize Configuration
 
-Reference for all SLM v3.6 Optimize configuration options.
+Reference for all SLM Optimize configuration options.
 
 ---
 
@@ -108,7 +106,7 @@ never touched) — runs whenever compression is enabled, which is the default.
 Layer 2 prose compression requires `compress_mode="aggressive"`,
 `compress_prose=true`, and the optional LLMLingua dependency. The legacy
 `code`, `ccr`, and `align` compression subcommands and their configuration
-fields were removed in v3.6.10; they are not active configuration options.
+fields no longer exist; they are not active configuration options.
 
 ---
 
@@ -119,7 +117,7 @@ Configured at startup via CLI flags, not in `optimize.json`:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--port` | `8765` | Proxy server port |
-| `--provider` | auto-detect | Target provider: `anthropic`, `openai`, `gemini` |
+| `--provider` | `anthropic` | Target provider: `anthropic`, `openai`, `gemini` |
 | `--no-compress` | `false` | Disable compression (cache only) |
 | `--semantic` | `false` | Enable semantic cache on proxy |
 | `--json` | `false` | JSON output |
