@@ -1,10 +1,10 @@
 # Retrieval Score Contract v2
 
 This contract describes runtime result fields, not benchmark accuracy. For the
-published V3 LoCoMo figures carried into V4 (from the V3 paper / V3.7 package) and their protocol disclosures,
+published LoCoMo figures and their protocol disclosures,
 see [Benchmark Evidence](benchmarks.md).
 
-SuperLocalMemory V4 keeps retrieval ordering separate from confidence. A
+SuperLocalMemory keeps retrieval ordering separate from confidence. A
 retrieval score answers “how relevant is this stored fact to this query?” It
 does not answer “how likely is a generated answer to be correct?”
 
@@ -65,7 +65,7 @@ When no result survives the evidence floor, `abstained` is `true` and
 nothing, the reason is `no_candidates`. Neither case involves a judgment about
 the results — there simply were none to judge.
 
-### Answer check (4.1.18)
+### Answer check
 
 When [Answer check](answer-check.md) is turned on (Settings → Answer check —
 off until an on-device install has passed its check), a separate decision

@@ -139,7 +139,7 @@ This reads ECC's observation files from `~/.claude/homunculus/projects/*/observa
 Skill performance tracking is enabled by default when the SLM hook is registered. Zero-LLM, zero-cost. Runs as Step 10 in the consolidation pipeline.
 
 ```bash
-slm status  # Shows hook registration status
+slm hooks status  # Shows hook registration status
 slm consolidate --cognitive  # Trigger manual consolidation
 ```
 
@@ -230,7 +230,7 @@ Three MCP tools are available for programmatic access:
 | `skill_health` | Get health metrics (invocations, error rate, status) for skills |
 | `skill_lineage` | Get evolution lineage tree for a skill |
 
-These tools are registered automatically and available in all supported IDEs.
+These tools are in the `full` and `power` MCP tool sets and in the default set. They are not in `core` or `code`; see [MCP Tools Reference](mcp-tools.md#which-tools-a-client-sees).
 
 ## CLI Commands
 

@@ -1,6 +1,6 @@
 # Installing SuperLocalMemory on Linux
 
-> **V4 Linux support:** SuperLocalMemory V4 supports 64-bit Linux only. Packaging metadata does not hard-block unsupported architectures; unsupported platforms fail at runtime dependency resolution rather than at install metadata.
+> **Linux support:** SuperLocalMemory supports 64-bit Linux only. Packaging metadata does not hard-block unsupported architectures; unsupported platforms fail at runtime dependency resolution rather than at install metadata.
 
 SuperLocalMemory requires Python 3.12–3.14. Installation code and durable memory
 data have separate ownership: installers manage the executable environment;

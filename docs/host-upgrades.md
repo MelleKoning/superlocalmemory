@@ -55,6 +55,14 @@ Then restart the affected host application. Finally verify the local runtime:
 slm doctor
 ```
 
+## Your memory store after an upgrade
+
+An upgrade that changes the memory store first takes a verified copy; see
+[Restore points](restore-points.md). A few minutes after SLM first starts on the
+new version it also checks the store once, read-only, and reports the result in
+the dashboard under **Health → Memory store**, with **Repair now** if anything
+needs fixing. See [Troubleshooting](troubleshooting.md#memory-store-check).
+
 ## First-time setup
 
 For a new machine, use the interactive setup flow instead of the upgrade flow:

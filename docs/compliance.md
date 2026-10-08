@@ -1,6 +1,6 @@
 # Compliance Controls and Limits
 
-> SuperLocalMemory V4 documentation · not legal advice or certification
+> Not legal advice or certification
 
 SuperLocalMemory exposes local storage, scoped recall, erasure mutations,
 provenance, policy hooks, and audit records that can support a compliance
@@ -28,6 +28,8 @@ Use the supported mutation commands for the installed release:
 slm forget "query" --dry-run
 slm forget "query" --yes
 slm delete <fact_id> --yes
+slm gdpr export --profile <name> --output export.json   # subject access / portability
+slm gdpr erase --profile <name> --dry-run              # preview; --yes erases the profile irreversibly
 ```
 
 A complete erasure claim requires proof that deletion propagates through:
@@ -38,7 +40,7 @@ A complete erasure claim requires proof that deletion propagates through:
 - exports, backups, snapshots, logs, queues, and recovery artifacts; and
 - any configured provider, connector, mesh peer, or external system.
 
-The release gate (from V3.7 onward, including V4) includes this lifecycle propagation matrix. Do not delete
+The release gate includes this lifecycle propagation matrix. Do not delete
 only `memory.db` and call the deployment erased: the data root can also contain
 configuration, logs, queues, credentials, models, derived indexes, and optional
 backend state.

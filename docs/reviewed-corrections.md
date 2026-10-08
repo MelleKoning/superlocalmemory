@@ -1,6 +1,6 @@
 # Reviewed corrections
 
-SuperLocalMemory 4.0.5 treats a correction as a reviewed lifecycle rather
+SuperLocalMemory treats a correction as a reviewed lifecycle rather
 than an in-place rewrite. This preserves the exact historical fact while
 preventing an unreviewed replacement from entering current recall.
 
@@ -37,12 +37,12 @@ Event time and system time stay separate. Applying a correction records when
 SLM learned it; `valid_until` changes only when the reviewer supplies an
 independently validated real-world boundary.
 
-## Ranking migration
+## Adaptive ranking
 
-V4.0.5 makes adaptive ranking an explicit operator choice. With no
+Adaptive ranking is an explicit operator choice. With no
 `SLM_RANKING` setting, the optional adaptive ranker is off; normal semantic,
-BM25, temporal, associative, and graph retrieval remain available. To retain
-an enabled adaptive ranking mode, set `SLM_RANKING=v1`, `v2`, or
+BM25, temporal, associative, and graph retrieval remain available. To enable
+adaptive ranking, set `SLM_RANKING=v1`, `v2`, or
 `v2-ensemble` deliberately in the runtime environment. Correction cases,
 BrainTruth observations, and external receipts never become ranking inputs.
 

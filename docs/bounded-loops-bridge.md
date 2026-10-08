@@ -52,7 +52,7 @@ they never enter its recall or ranking logic. Observation writes use the
 bounded learning-db receipt gate and can return a retryable refusal under
 contention rather than delaying a memory answer.
 
-## Answer check and loop gates (4.1.18)
+## Answer check and loop gates
 
 This bridge is unaffected by [Answer check](answer-check.md) — it observes
 Bounded Loops' own graph receipts, not SLM recall. The `slm_loop_run` MCP

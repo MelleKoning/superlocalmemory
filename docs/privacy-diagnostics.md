@@ -18,7 +18,7 @@ The output is deterministic for unchanged counters and is written with owner
 read/write permissions. Inspect it before choosing whether to share it. Running
 the command does not enable recurring reporting or contact a remote service.
 
-## Answer check (4.1.18)
+## Answer check
 
 [Answer check](answer-check.md) is a separate, opt-in feature with its own
 network behavior, off by default:

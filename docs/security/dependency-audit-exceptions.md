@@ -5,10 +5,9 @@ listed below. Each exception must name the transitive dependency path, explain
 why the vulnerable API is not reachable from untrusted input, and be removed
 as soon as a stable patched release is available.
 
-**Status as of 2026-10-02 (4.1.18):** one exception remains, and it has no
-patched release upstream. The PyTorch and setuptools exceptions are retired:
-4.1.18 moves to PyTorch 2.13.0, whose setuptools constraint permits the
-patched 83.0.0 release.
+**Status as of 2026-10-02:** one exception remains, and it has no patched
+release upstream. The PyTorch and setuptools exceptions are retired: SLM pins
+PyTorch 2.13.0, whose setuptools constraint permits the patched 83.0.0 release.
 
 ## GHSA-8mgp-746c-j5xp — NLTK 3.10.3
 
