@@ -361,9 +361,9 @@ class EmbeddingService:
         running background request can delay a newly arrived recall.
         """
         from superlocalmemory.core.recall_gate import (
-            in_flight,
             is_background_work,
-            wait_for_foreground_idle,
+            recalls_needing_embedder,
+            wait_for_embedder_idle,
         )
 
         if not is_background_work():
@@ -371,10 +371,12 @@ class EmbeddingService:
                 yield
             return
 
+        # Only recalls that may still ask for their query embedding hold
+        # background work back; one that has its vector is busy elsewhere.
         while True:
-            wait_for_foreground_idle()
+            wait_for_embedder_idle()
             self._lock.acquire()
-            if in_flight() == 0:
+            if recalls_needing_embedder() == 0:
                 break
             self._lock.release()
         try:
@@ -388,8 +390,8 @@ class EmbeddingService:
             raise ValueError("Cannot embed empty text")
         if self.is_closed:
             return None
-        from superlocalmemory.core.recall_gate import wait_for_foreground_idle
-        wait_for_foreground_idle()
+        from superlocalmemory.core.recall_gate import wait_for_embedder_idle
+        wait_for_embedder_idle()
         if self._config.is_openai_compatible:
             try:
                 vecs = self._openai_compatible_embed_batch([text])
