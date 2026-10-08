@@ -39,7 +39,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
+from superlocalmemory.storage import store_signature
 from superlocalmemory.storage.memory_write import memory_write
 
 logger = logging.getLogger("superlocalmemory.access.rbac")
@@ -136,6 +138,8 @@ class RbacEngine:
 
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = str(db_path)
+        #: key -> (store signature when read, value). See ``get_policy``.
+        self._policy_memo: dict[str, tuple[Any, str]] = {}
 
     # -- connection -------------------------------------------------------
 
@@ -434,14 +438,30 @@ class RbacEngine:
     # -- policy settings --------------------------------------------------
 
     def get_policy(self, key: str, default: str = "") -> str:
+        """The stored value, re-read only when something was committed since.
+
+        Every request asks ``require_login()``. Opening a connection for each
+        ask put a database open on the service's request loop, so one slow open
+        froze every request in flight. A commit by any process changes the
+        store's signature (storage/store_signature), read BEFORE the value, so
+        a changed policy is seen on the very next ask; an unreadable signature
+        means no reuse.
+        """
+        sig = store_signature.of(self._db_path)
+        hit = self._policy_memo.get(key)
+        if sig is not None and hit is not None and hit[0] == sig:
+            return hit[1] if hit[1] is not None else default
         conn = self._conn()
         try:
             row = conn.execute(
                 "SELECT value FROM rbac_settings WHERE key=?", (key,)
             ).fetchone()
-            return row["value"] if row else default
         finally:
             conn.close()
+        value = row["value"] if row else None
+        if sig is not None:
+            self._policy_memo = {**self._policy_memo, key: (sig, value)}
+        return value if value is not None else default
 
     def set_policy(self, key: str, value: str) -> None:
         with memory_write(self._db_path) as conn:
