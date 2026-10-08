@@ -24,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 #: Bumped whenever an entry's numbers or advice change.
-CATALOG_VERSION = "2026-10-07"
+CATALOG_VERSION = "2026-10-08"
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,14 +60,14 @@ def _e(**kw) -> ModelEntry:
 
 LOCAL_LLMS: tuple[ModelEntry, ...] = (
     _e(id="gemma3:4b", role="llm", provider="ollama", label="Gemma 3 4B",
-       size_gb=3.3, min_ram_gb=8, damaged=1, tested=102, recommended=True,
+       size_gb=3.3, min_ram_gb=8, damaged=0, tested=102, recommended=True,
        advice="Most faithful in SLM's extraction test; fewer, fuller facts. "
               "Runs on 8 GB machines."),
     _e(id="qwen2.5:7b", role="llm", provider="ollama", label="Qwen 2.5 7B",
-       size_gb=4.7, min_ram_gb=16, damaged=6, tested=102, recommended=True,
+       size_gb=4.7, min_ram_gb=16, damaged=7, tested=102, recommended=True,
        advice="Fast and faithful; occasionally drops a number. Best with 16 GB."),
     _e(id="llama3.2", role="llm", provider="ollama", label="Llama 3.2 3B",
-       size_gb=2.0, min_ram_gb=4, damaged=36, tested=102,
+       size_gb=2.0, min_ram_gb=4, damaged=22, tested=102,
        advice="Small, but in SLM's test it often invented dates and numbers that were "
               "never said. Use only when nothing larger fits."),
 )
