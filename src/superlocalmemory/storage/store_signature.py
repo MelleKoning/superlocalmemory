@@ -52,7 +52,16 @@ def of(db_path: str | Path | None) -> Signature | None:
 
 
 def of_db(db: Any) -> Signature | None:
-    """``of`` for a DatabaseManager (its ``db_path``)."""
+    """``of`` for a DatabaseManager (its ``db_path``); None inside a transaction.
+
+    A read inside this thread's open transaction sees rows that are not
+    committed: kept under the unchanged signature, a value would hide the
+    save's own new rows from it, and outlive them if it rolled back.
+    """
+    txn = getattr(db, "_txn_state", None)
+    if txn is not None and (getattr(txn, "conn", None) is not None
+                            or getattr(txn, "coordinator_bound", False)):
+        return None
     return of(getattr(db, "db_path", None))
 
 
