@@ -21,6 +21,11 @@ whatever the app is.
 
 Keep this computer awake and online while the app needs your memory.
 
+Every app below needs two things: the connection (the steps in its section)
+and the [setup prompt](../web-agents/setup-prompt.md), which you paste into a
+chat with it once connected. Muse and Grok Bot in particular cannot be
+connected by a button alone.
+
 Two addresses are used below. Both have copy buttons under **Technical
 details** on the Connected apps page.
 
@@ -121,10 +126,12 @@ connected before, authorize it again.
 
 ## After you connect any app
 
-1. In the dashboard, open **Connected apps**, choose **How to add an app**, and
-   press **Copy instructions**. Paste them into the app's instructions field.
-   They tell the app when to recall and what to save. The same text, with a
-   longer version, is in [Web agents](../web-agents/README.md).
+1. Paste the [setup prompt](../web-agents/setup-prompt.md) into a chat with the
+   app. It asks the app to keep the SuperLocalMemory skill permanently, then
+   tests saving and recall and shows the raw results. Connecting gives the app
+   the tools; this prompt tells it when to use them. For an instructions field
+   instead, the dashboard's **Copy instructions** button (Connected apps, How to
+   add an app) copies the short block.
 2. Check that it works. Ask the app to save a sentence with a unique marker,
    such as "Remember that my test marker is plum-4471", then ask it in a new
    chat what your test marker is. A recall that returns the marker means both

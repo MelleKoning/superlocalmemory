@@ -59,3 +59,11 @@ def test_the_kinds_offered_are_real_and_leave_out_correction():
     listed = re.search(r"Pass kind as one of: ([a-z, ]+)\.", _block("Full")).group(1)
     kinds = {kind.strip() for kind in listed.split(",")}
     assert kinds == {k.value for k in MemoryKind} - {"correction"}
+
+
+def test_the_setup_prompt_carries_the_agent_skill_word_for_word():
+    prompt = (ROOT / "docs" / "web-agents" / "setup-prompt.md").read_text()
+    match = re.search(r"BEGIN SKILL\n(.*?)\nEND SKILL\n```", prompt, re.S)
+    assert match, "skill markers missing from setup-prompt.md"
+    assert match.group(1) == SKILL.read_text().rstrip("\n")
+    assert "show me the exact output the tool returned" in prompt
