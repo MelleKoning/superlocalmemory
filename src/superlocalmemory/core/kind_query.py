@@ -2,7 +2,7 @@
 # Licensed under AGPL-3.0-or-later - see LICENSE file
 # Part of SuperLocalMemory V3 | https://qualixar.com | https://varunpratap.com
 
-"""Shared direct-engine reads that take a ``kind`` filter (LLD/WP8 4.1.19).
+"""Shared direct-engine reads that take a ``kind`` filter (4.1.19).
 
 ``list_recent`` (MCP) and ``list`` (CLI) both read straight off
 ``DatabaseManager.get_all_facts`` — no daemon round trip — and ``search``
@@ -78,7 +78,7 @@ def resolve_kind(raw: str | None) -> str | None:
 #: (4.1.19 M3 — this used to be silently hard-coded here too).
 _DEFAULT_DISPLAY_MIN_CONFIDENCE = 0.20
 
-#: 4.1.19 L2-13 / Muse M2: how far ``_windowed_kind_fetch`` will grow its
+#: 4.1.19: how far ``_windowed_kind_fetch`` will grow its
 #: fetch window chasing ``limit`` matches before giving up and reporting
 #: truncation. Bounds the extra work a kind filter can cost on a huge store;
 #: well past this, a caller is better served by a narrower query than by the
@@ -120,7 +120,7 @@ def _windowed_kind_fetch(
     than paginating; that is the honest trade for "no SQL form of the full
     ``kind_fields`` precedence (confirmed / suggested-above-threshold /
     rules' no-confidence suggestion / legacy fact_type mapping) exists",
-    which the WP8 LLD allows this loop to stand in for.
+    which this loop is allowed to stand in for.
     """
     window = min(overfetch_limit(limit), WINDOWED_FETCH_HARD_CAP)
     if window <= 0:
@@ -151,7 +151,7 @@ def list_recent_facts(
     When ``kind`` is set, grows the fetch window (``_windowed_kind_fetch``)
     until ``limit`` matches are found or the pool is exhausted, so an older
     match is never missed just because newer non-matching memories outnumber
-    the old fixed 3x/100 over-fetch window (4.1.19 L2-13 / Muse M2). When it
+    the old fixed 3x/100 over-fetch window (4.1.19). When it
     is not, behaviour is byte-identical to calling ``get_all_facts`` directly.
 
     ``truncated``: pass a list to receive one ``bool`` — ``True`` only when

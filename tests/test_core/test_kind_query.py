@@ -115,7 +115,7 @@ def test_search_kind_filter_keeps_only_matches(db) -> None:
 
 
 def test_list_recent_kind_filter_finds_a_match_beyond_the_old_100_row_cap(db) -> None:
-    """4.1.19 L2-13 / Muse M2: the old implementation over-fetched AT MOST
+    """4.1.19: the old implementation over-fetched AT MOST
     ``overfetch_limit(limit)`` (capped at 100) and never looked further, so
     an older confirmed row pushed past that window by newer non-matching
     memories came back empty even though the limit was never filled and the

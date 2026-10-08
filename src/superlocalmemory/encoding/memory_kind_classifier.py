@@ -26,7 +26,7 @@ Three rules this module exists to keep:
   best model reached 43 %, so the store shows it as suggested and nothing acts
   on it until a person or a caller confirms it.
 
-Called from the background materializer only (WP-4). Even if it were called
+Called from the background materializer only. Even if it were called
 on a recall thread, no model would run: both model clients refuse to ask
 outside ``recall_gate.background_work()``.
 """
@@ -115,7 +115,7 @@ class KindBackend(str, Enum):
 
 
 class KindConfigLike(Protocol):
-    """The fields of ``MemoryKindConfig`` (WP-5) this module reads."""
+    """The fields of ``MemoryKindConfig`` this module reads."""
 
     enabled: bool
     backend: str

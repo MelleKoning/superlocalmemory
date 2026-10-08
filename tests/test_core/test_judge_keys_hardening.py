@@ -66,7 +66,7 @@ def test_anything_else_is_a_clear_key_store_error_that_never_quotes_the_key(stor
 
 
 def test_an_unusable_key_never_reaches_a_request_header(store):
-    """The bytes Muse reproduced: the header must never be built from them."""
+    """The reproduced bytes: the header must never be built from them."""
     store.set_key("typesafe", VALID_KEY)
     _key_file(store).write_text("valid-key-12345678\n injected\n", encoding="ascii")
     with pytest.raises(JudgeKeyStoreError):
