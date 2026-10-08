@@ -32,10 +32,18 @@ async def test_session_requires_ready_and_forwards_opaque_bytes():
     assert decode_frame(sent[0])["status"]==200
     await session.stop()
 
+BAD_HANDSHAKES = {
+    "request_before_ready": lambda: compact(frame()),
+    "ready_with_generation_zero": lambda: '{"v":1,"kind":"ready","generation":0}',
+    "ready_with_unknown_field": lambda: '{"v":1,"kind":"ready","generation":1,"extra":true}',
+}
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("text",[compact(frame()),'{"v":1,"kind":"ready","generation":0}','{"v":1,"kind":"ready","generation":1,"extra":true}'])
-async def test_bad_handshake_closes_without_origin_calls(text):
+@pytest.mark.parametrize("case", sorted(BAD_HANDSHAKES))  # stable ids: frames carry a clock-based deadline
+async def test_bad_handshake_closes_without_origin_calls(case):
     assert RelaySession is not None
+    text = BAD_HANDSHAKES[case]()
     closed=[]
     async def fail(*args):raise AssertionError("must not reach origin")
     session=RelaySession(credential(),exchange=fail,send=fail,close=closed.append)
