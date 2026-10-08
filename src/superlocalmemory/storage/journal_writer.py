@@ -51,6 +51,13 @@ _UNBOUNDED_BUSY_SECONDS = 5.0
 _IDLE_EXIT_SECONDS = 5.0
 #: Seconds a caller refused by a full queue is told to wait before retrying.
 OVERLOAD_RETRY_AFTER_SECONDS = 1
+#: Extra wait, past the caller's deadline, for an operation the journal is NOT
+#: busy with others for: the writer already holds it, or is idle and simply has
+#: not run yet. Its lateness is then this process or machine being stalled
+#: (CPU, memory pressure, a thread holding the interpreter), not contention,
+#: and refusing would turn a save that is milliseconds from durable into "not
+#: saved". After this grace it is withdrawn and refused as before.
+STALLED_WRITER_GRACE_SECONDS = 8.0
 
 
 class AdmissionJournalUnavailable(RuntimeError):
@@ -138,6 +145,8 @@ class GroupCommitWriter:
         self._queue: deque[_Op] = deque()
         self._thread: threading.Thread | None = None
         self._closing = False
+        #: True while the writer is working through a batch (under _cond).
+        self._in_batch = False
         #: Test seams: called with the live batch immediately before COMMIT
         #: (after it was claimed) and immediately after COMMIT (before any
         #: caller is told). Crash tests kill the process from them.
@@ -169,12 +178,27 @@ class GroupCommitWriter:
         if op.done.wait(remaining):
             return
         with self._cond:
-            if op.state in {"queued", "running"}:
-                op.state = "cancelled"
-                op.error = AdmissionJournalUnavailable(_BUSY_MESSAGE)
+            # Busy means queued behind a batch the writer is working on: the
+            # journal really is saturated, so refuse at the caller's deadline.
+            # (A writer blocked by another holder of the journal fails the
+            # operation itself, in _begin, at the same deadline.)
+            busy = self._in_batch and any(queued is op for queued in self._queue)
+            if self._withdraw_locked(op, busy):
                 return
+        if op.state != "committing" and not op.done.wait(STALLED_WRITER_GRACE_SECONDS):
+            with self._cond:
+                if self._withdraw_locked(op, True):
+                    return
         # Claimed for COMMIT: the outcome is decided by the disk, not the clock.
         op.done.wait()
+
+    @staticmethod
+    def _withdraw_locked(op: _Op, withdraw: bool) -> bool:
+        if withdraw and op.state in {"queued", "running"}:
+            op.state = "cancelled"
+            op.error = AdmissionJournalUnavailable(_BUSY_MESSAGE)
+            return True
+        return False
 
     def close(self, timeout: float = 5.0) -> None:
         """Drain queued operations, stop the thread, close the connection."""
@@ -203,6 +227,8 @@ class GroupCommitWriter:
                 if batch is None:
                     return
                 try:
+                    with self._cond:
+                        self._in_batch = True
                     if conn is None:
                         conn = _connect(self._path, timeout=_UNBOUNDED_BUSY_SECONDS)
                         conn.execute("PRAGMA synchronous=FULL")
@@ -214,6 +240,9 @@ class GroupCommitWriter:
                         _safe_rollback(conn)
                         conn.close()
                         conn = None
+                finally:
+                    with self._cond:
+                        self._in_batch = False
         finally:
             if conn is not None:
                 conn.close()

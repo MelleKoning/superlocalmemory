@@ -32,7 +32,9 @@ RED  (tree 2f35ddc — no shared write lock):
 GREEN (after fix):
   * All three PASS — shared lock object, and writers serialised.
   * test_realistic_concurrent_writes PASSES — zero "database is locked"
-    errors under real concurrent load, user store completes in < 2 s.
+    errors under real concurrent load, every write lands, none is retried.
+    It waits while the write lock keeps changing hands (measured turns), not
+    for a fixed number of seconds: a fixed bound measured the disk.
 """
 
 from __future__ import annotations
@@ -45,10 +47,14 @@ from pathlib import Path
 
 import pytest
 
-from superlocalmemory.storage.write_lock import get_write_lock
-from superlocalmemory.storage.database import DatabaseManager
 from superlocalmemory.storage import schema as real_schema
-
+from superlocalmemory.storage.database import DatabaseManager
+from superlocalmemory.storage.write_lock import get_write_lock
+from tests.test_storage._write_lock_probe import (
+    install_timed_lock,
+    remove_timed_lock,
+    wait_for_writers,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -60,6 +66,14 @@ def _fresh_db(tmp_path: Path) -> Path:
     db = DatabaseManager(str(db_path))
     db.initialize(real_schema)
     return db_path
+
+
+def _count_rows(db_path: Path, table: str) -> int:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+    finally:
+        conn.close()
 
 
 def _minimal_schema_conn(db_path: Path) -> sqlite3.Connection:
@@ -167,7 +181,7 @@ def test_vector_store_waits_for_write_lock(tmp_path: Path) -> None:
     with lock:
         t.start()
         time.sleep(HOLD_SEC)
-    lock_released_at = time.monotonic()
+
     t.join(timeout=5.0)
 
     assert upsert_started_at, "upsert thread never recorded start time"
@@ -204,7 +218,7 @@ def test_adapter_sync_waits_for_write_lock(tmp_path: Path) -> None:
     sqlite3.connect() with no lock at all — it would write immediately and
     compete with DatabaseManager's WAL write lock, causing SQLITE_BUSY.
     """
-    from superlocalmemory.hooks.adapter_base import sync_log_record, path_sha256
+    from superlocalmemory.hooks.adapter_base import path_sha256, sync_log_record
 
     db_path = tmp_path / "memory.db"
 
@@ -266,7 +280,7 @@ N_ADAPTER_OPS_PER_THREAD = 30
 N_USER_OPS = 20
 
 
-def test_realistic_concurrent_writes(tmp_path: Path, caplog) -> None:
+def test_realistic_concurrent_writes(tmp_path: Path, caplog, request) -> None:
     """Zero 'database is locked' errors under realistic concurrent write load.
 
     Asserts:
@@ -280,8 +294,12 @@ def test_realistic_concurrent_writes(tmp_path: Path, caplog) -> None:
     import logging
 
     caplog.set_level(logging.DEBUG, logger="superlocalmemory.storage.database")
-    from superlocalmemory.hooks.adapter_base import sync_log_record, path_sha256
+    from superlocalmemory.hooks.adapter_base import path_sha256, sync_log_record
 
+    # Every writer of this path gets the timed lock (installed before the
+    # first DatabaseManager), so the wait below follows measured turns.
+    probe = install_timed_lock(tmp_path / "memory.db")
+    request.addfinalizer(lambda: remove_timed_lock(tmp_path / "memory.db"))
     db_path = _fresh_db(tmp_path)
 
     # Seed required FK parents: profile + memory.
@@ -365,13 +383,19 @@ def test_realistic_concurrent_writes(tmp_path: Path, caplog) -> None:
     for t in adapter_threads:
         t.start()
 
-    user_thread = threading.Thread(target=_user_store_worker, daemon=True)
+    user_thread = threading.Thread(
+        target=_user_store_worker, name="user-store", daemon=True,
+    )
     t_start = time.monotonic()
     user_thread.start()
-    user_thread.join(timeout=10.0)
-    stop_event.set()
-    for t in adapter_threads:
-        t.join(timeout=3.0)
+    # Not a fixed wall-clock join: on a loaded machine 140 serialised commits
+    # can take longer than any fixed bound while every writer is still taking
+    # its turn. Wait as long as the lock keeps changing hands; fail on a stall.
+    try:
+        wait_for_writers([user_thread], probe)
+    finally:
+        stop_event.set()
+    wait_for_writers(adapter_threads, probe)
 
     total_user_time = time.monotonic() - t_start
 
@@ -386,11 +410,14 @@ def test_realistic_concurrent_writes(tmp_path: Path, caplog) -> None:
     assert not adapter_errors, (
         f"Adapter threads raised unexpected errors: {adapter_errors[:3]}"
     )
-    # All user ops must have completed.
+    # All user ops must have completed (wait_for_writers already failed on a
+    # stall, so a shortfall here means a write was dropped, not still queued).
     assert len(user_store_times) == N_USER_OPS, (
-        f"Only {len(user_store_times)}/{N_USER_OPS} user-store ops completed "
-        f"(user_thread may have hung or been killed)."
+        f"Only {len(user_store_times)}/{N_USER_OPS} user-store ops completed."
     )
+    assert _count_rows(db_path, "atomic_facts") == N_USER_OPS
+    # Every adapter wrote too (one upserted row each; they stop with the user).
+    assert _count_rows(db_path, "cross_platform_sync_log") == N_ADAPTER_THREADS
     # The retry loop logs each busy retry before it backs off (0.1 s and up).
     retries = [r.getMessage() for r in caplog.records if "DB busy" in r.getMessage()]
     assert not retries, (
