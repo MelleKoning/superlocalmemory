@@ -529,7 +529,7 @@ class TestTheProviderMayNameItsSnapshot:
 
 
 def test_the_stated_rule_settles_a_permission_question_under_jev_as_under_laya(key_store):
-    """Muse audit 2026-10-08, D2: the permission rule is local text logic, so a question
+    """The permission rule is local text logic, so a question
     one judge answers by it must not abstain under the other. The model's numbers stay."""
     from superlocalmemory.retrieval import answer_question_forms as forms
 

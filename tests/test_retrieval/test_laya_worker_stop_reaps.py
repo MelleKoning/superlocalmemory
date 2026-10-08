@@ -3,7 +3,7 @@
 """A Laya worker that is slow to die after a kill is still collected, never left a zombie.
 
 Same rule as the recall workers (retrieval/_worker_process.py): a bounded wait that
-gives up must hand the killed process to a background reaper (Muse audit 2026-10-08, E1).
+gives up must hand the killed process to a background reaper.
 """
 
 from __future__ import annotations

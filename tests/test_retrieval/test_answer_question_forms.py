@@ -238,9 +238,9 @@ def test_a2_is_fixed_and_a1_unchanged_on_the_pinned_weights(tmp_path, monkeypatc
 
 
 class TestARuleAboutSomethingElseIsNotTheAnswer:
-    """A rule whose action has its own object answers only a question about that object
-    (Muse audit 2026-10-08, D1): "Never publish Atlas without approval" governs Atlas,
-    not whatever "the agent" may publish."""
+    """A rule whose action has its own object answers only a question about that object:
+    "Never publish Atlas without approval" governs Atlas, not whatever "the agent"
+    may publish."""
 
     @pytest.mark.parametrize("memory", [
         "Never publish Atlas without approval.",
@@ -269,7 +269,7 @@ def test_a_passive_rule_has_no_object_to_narrow_it() -> None:
 
 
 def test_one_memory_at_a_time_keeps_a_mix_of_rule_and_model_verdicts() -> None:
-    """Muse audit 2026-10-08, D3: a rule-settled part carries the suffixed id and a
+    """A rule-settled part carries the suffixed id and a
     model-only part the base id; combining them must not drop the verdict."""
     from superlocalmemory.core.answer_check_deferred import _combine
     from superlocalmemory.retrieval.sufficiency import SufficiencyVerdict
