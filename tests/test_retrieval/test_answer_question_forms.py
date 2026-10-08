@@ -266,3 +266,21 @@ class TestARuleAboutSomethingElseIsNotTheAnswer:
 def test_a_passive_rule_has_no_object_to_narrow_it() -> None:
     q = "Can we delete the Vault9 audit logs?"
     assert forms.rule_supports(q, "Vault9 audit logs must never be deleted, archived only.") is True
+
+
+def test_one_memory_at_a_time_keeps_a_mix_of_rule_and_model_verdicts() -> None:
+    """Muse audit 2026-10-08, D3: a rule-settled part carries the suffixed id and a
+    model-only part the base id; combining them must not drop the verdict."""
+    from superlocalmemory.core.answer_check_deferred import _combine
+    from superlocalmemory.retrieval.sufficiency import SufficiencyVerdict
+
+    base = "laya:test@x:sufficiency-v1:top3"
+    ruled = SufficiencyVerdict((0.08,), 0.6, forms.calibration_id_for(base, (0,)),
+                               "calibrated", "laya", (0,))
+    plain = SufficiencyVerdict((0.06,), 0.6, base, "calibrated", "laya", ())
+    combined = _combine([ruled, plain])
+    assert combined is not None
+    assert combined.rule_support == (0,)
+    assert combined.calibration_id == forms.calibration_id_for(base, (0,))
+    assert combined.probabilities == (0.08, 0.06)
+    assert _combine([plain, plain]).calibration_id == base

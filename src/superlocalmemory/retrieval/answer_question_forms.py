@@ -196,10 +196,17 @@ def calibration_id_for(base_id: str, support: Sequence[int]) -> str:
     return base_id + RULE_SUFFIX if support else base_id
 
 
+def base_calibration_id(calibration_id: str) -> str:
+    """The judge's own id, with the rule's suffix (if any) set aside."""
+    if settled_by_rule(calibration_id):
+        return calibration_id[: -len(RULE_SUFFIX)]
+    return calibration_id
+
+
 def settled_by_rule(calibration_id: object) -> bool:
     """Whether a verdict (by its calibration id, on any surface) was settled by the rule."""
     return isinstance(calibration_id, str) and calibration_id.endswith(RULE_SUFFIX)
 
 
-__all__ = ["FORMS_ID", "RULE_SUFFIX", "applies", "calibration_id_for", "permission_action",
-           "rule_support", "rule_supports", "settled_by_rule"]
+__all__ = ["FORMS_ID", "RULE_SUFFIX", "applies", "base_calibration_id", "calibration_id_for",
+           "permission_action", "rule_support", "rule_supports", "settled_by_rule"]
