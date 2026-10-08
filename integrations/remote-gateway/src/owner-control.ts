@@ -3,6 +3,7 @@ import {validateIndexedToken,type IssuerEnv} from './issuer-protocol.ts';
 import {verifyDeviceProof} from './device-proof.ts';
 import {tokenDigest} from './issued-token-protocol.ts';
 import {RELAY_DEADLINE_MS} from './relay-protocol.ts';
+import {DEVICE_CREDENTIAL_TTL_MS,RENEWAL_WINDOW_MS} from './credential-lifetime.ts';
 import {authorizationServer,type AuthorizationEnv,type NativeAuthProps} from './authorization-server.ts';
 import {readAuthorizationBody} from './authorization-body.ts';
 import type {ConnectEnv} from './worker-connect.ts';
@@ -45,7 +46,7 @@ async function removeApp(request:Request,props:NativeAuthProps,env:OwnerControlE
  }
 }
 /** The only owner operations; the auth Worker routes exactly these here. */
-export const OWNER_CONTROL_PATHS:readonly string[]=['/owner/connections','/owner/revoke','/owner/verify','/owner/apps','/owner/apps/revoke'];
+export const OWNER_CONTROL_PATHS:readonly string[]=['/owner/connections','/owner/revoke','/owner/verify','/owner/apps','/owner/apps/revoke','/owner/renew'];
 function result(status:number,value:unknown):Response{return Response.json(value,{status,headers:{'Cache-Control':'no-store'}});}
 function wrapKey(env:OwnerControlEnv):Uint8Array {if(!/^[a-f0-9]{64}$/.test(env.DEVICE_WRAP_KEY))throw new Error('credential_wrap_unavailable');return new Uint8Array(env.DEVICE_WRAP_KEY.match(/../g)!.map(x=>parseInt(x,16)));}
 interface Delivery {device_token:string;expires_at_ms:number;generation:number;}
@@ -56,10 +57,8 @@ async function provision(props:NativeAuthProps,clientId:string,env:OwnerControlE
  if(!row){
   const bootstrap=await env.BOOTSTRAPS.getByName(props.connectionId).get();
   if(!bootstrap||bootstrap.status!=='completed'||bootstrap.ownerId!==props.ownerId||bootstrap.authRequest.clientId!==clientId||bootstrap.installationId!==props.installationId||bootstrap.profileId!==props.profileId)throw new Error('bootstrap_unavailable');
-  const token=crypto.randomUUID().replaceAll('-','')+crypto.randomUUID().replaceAll('-','');const expiresAtMs=Date.now()+30*24*3600*1000;
-  const value:Delivery={device_token:token,expires_at_ms:expiresAtMs,generation:1};
-  const credentialEnvelope=await new CompactEncrypt(new TextEncoder().encode(JSON.stringify(value))).setProtectedHeader({alg:'dir',enc:'A256GCM'}).encrypt(wrapKey(env));
-  const candidate:OwnedConnection={connectionId:props.connectionId,installationId:props.installationId,profileId:props.profileId,host:bootstrap.host,permissions:bootstrap.permissions,credentialEnvelope,deviceDigest:await tokenDigest(token),deviceJkt:props.deviceJkt,deviceExpiresAtMs:expiresAtMs,generation:1,revokedAt:null,cleanupPending:false};
+  const issued=await issueCredential(1,env);
+  const candidate:OwnedConnection={connectionId:props.connectionId,installationId:props.installationId,profileId:props.profileId,host:bootstrap.host,permissions:bootstrap.permissions,credentialEnvelope:issued.credentialEnvelope,deviceDigest:issued.deviceDigest,deviceJkt:props.deviceJkt,deviceExpiresAtMs:issued.deviceExpiresAtMs,generation:1,revokedAt:null,cleanupPending:false};
   try{await owner.addConnection(props.ownerId,props.installationId,props.profileId,clientId,candidate);}catch{
    // A concurrent exact enrollment may have won. Read authoritative identity;
    // other failures stay unavailable, never replace an existing credential.
@@ -68,12 +67,49 @@ async function provision(props:NativeAuthProps,clientId:string,env:OwnerControlE
   row=await owner.getConnection(props.ownerId,props.connectionId);
  }
  if(!row||row.revokedAt!==null||row.installationId!==props.installationId||row.profileId!==props.profileId||row.deviceJkt!==props.deviceJkt)throw new Error('connection_unavailable');
+ // Binding the current credential is idempotent, so provisioning also completes a
+ // renewal that stopped after the owner record changed.
+ await bindCredential(props,row,env);
+ return delivery(row,env);
+}
+async function issueCredential(generation:number,env:OwnerControlEnv):Promise<{credentialEnvelope:string;deviceDigest:string;deviceExpiresAtMs:number}>{
+ const token=crypto.randomUUID().replaceAll('-','')+crypto.randomUUID().replaceAll('-','');const deviceExpiresAtMs=Date.now()+DEVICE_CREDENTIAL_TTL_MS;
+ const value:Delivery={device_token:token,expires_at_ms:deviceExpiresAtMs,generation};
+ const credentialEnvelope=await new CompactEncrypt(new TextEncoder().encode(JSON.stringify(value))).setProtectedHeader({alg:'dir',enc:'A256GCM'}).encrypt(wrapKey(env));
+ return {credentialEnvelope,deviceDigest:await tokenDigest(token),deviceExpiresAtMs};
+}
+async function bindCredential(props:NativeAuthProps,row:OwnedConnection,env:OwnerControlEnv):Promise<void>{
  const registry=env.REGISTRIES.getByName(props.connectionId);const allowedTools=['recall','search','fetch','get_status',...(row.permissions.write?['remember']:[]),...(row.permissions.session?['session_init','close_session','report_feedback','report_outcome']:[])];
  await registry.configure({connectionId:props.connectionId,ownerId:props.ownerId,installationId:props.installationId,profileId:props.profileId,origin:{kind:'relay',installationId:props.installationId,profileId:props.profileId},allowedTools,allowCorrection:false,allowSharedRead:false,allowGlobalRead:false,policyVersion:1,revokedAt:null});
  await env.DEVICES.getByName(row.deviceDigest).configure({ownerId:props.ownerId,connectionId:props.connectionId,installationId:props.installationId,profileId:props.profileId,deviceDigest:row.deviceDigest,deviceJkt:props.deviceJkt,expiresAtMs:row.deviceExpiresAtMs});
  await env.RELAYS.getByName(props.connectionId).configureBinding({ownerId:props.ownerId,connectionId:props.connectionId,installationId:props.installationId,profileId:props.profileId,deviceDigest:row.deviceDigest,deviceExpiresAt:row.deviceExpiresAtMs});
  await registry.provisionAccess(props.ownerId,row.deviceExpiresAtMs);
- return delivery(row,env);
+}
+/** The laptop replaces its credential in the second half of its life. The owner
+ * record changes first, so the old credential stops matching at once; then the
+ * device, relay and access are bound to the new one. */
+async function renew(request:Request,props:NativeAuthProps,env:OwnerControlEnv):Promise<Response>{
+ let body:unknown;
+ try{body=JSON.parse(await readAuthorizationBody(request,{limit:256}));}catch{return result(400,{error:'invalid_request'});}
+ const expected=(body as {expected_generation?:unknown})?.expected_generation;
+ if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).length!==1||!Number.isSafeInteger(expected)||(expected as number)<1)return result(400,{error:'invalid_request'});
+ const owner=env.OWNERS.getByName(props.ownerId);const row=await owner.getConnection(props.ownerId,props.connectionId);
+ if(!row||row.revokedAt!==null||row.installationId!==props.installationId||row.profileId!==props.profileId||row.deviceJkt!==props.deviceJkt)return result(403,{error:'connection_unavailable'});
+ if(row.generation!==expected)return result(409,{error:'version_conflict'});
+ if(row.deviceExpiresAtMs-Date.now()>RENEWAL_WINDOW_MS)return result(409,{error:'renewal_not_due'});
+ const issued=await issueCredential((expected as number)+1,env);
+ let rotated:OwnedConnection;
+ try{rotated=await owner.rotateCredential(props.ownerId,props.connectionId,expected as number,issued);}catch(error){
+  const code=error instanceof Error?error.message:'';
+  if(code==='version_conflict')return result(409,{error:'version_conflict'});
+  if(code==='connection_revoked'||code==='not_found'||code==='owner_mismatch')return result(403,{error:'connection_unavailable'});
+  throw error;
+ }
+ await bindCredential(props,rotated,env);
+ // The owner record no longer matches the old credential, so the connector Worker
+ // already refuses it; retiring its device record as well is housekeeping.
+ await env.DEVICES.getByName(row.deviceDigest).revoke(props.ownerId).catch(()=>undefined);
+ return result(200,{...await delivery(rotated,env),connection_id:props.connectionId,profile_id:props.profileId});
 }
 export async function ownerControlFetch(request:Request,env:OwnerControlEnv,_ctx:ExecutionContext):Promise<Response>{
  const url=new URL(request.url);if(url.origin!=='https://auth.superlocalmemory.com'||!OWNER_CONTROL_PATHS.includes(url.pathname))return result(404,{error:'not_found'});
@@ -91,8 +127,10 @@ export async function ownerControlFetch(request:Request,env:OwnerControlEnv,_ctx
   if(url.pathname==='/owner/apps'||url.pathname==='/owner/apps/revoke'){
    const row=await owner.getConnection(props.ownerId,props.connectionId);
    if(!row||row.revokedAt!==null||row.installationId!==props.installationId||row.profileId!==props.profileId)return result(403,{error:'connection_unavailable'});
-   return url.pathname==='/owner/apps'?connectedApps(props,env):removeApp(request,props,env);
+   return url.pathname==='/owner/apps'?await connectedApps(props,env):await removeApp(request,props,env);
   }
+  // Awaited inside the try, so a failure becomes 503 rather than escaping as a sign-in error.
+  if(url.pathname==='/owner/renew')return await renew(request,props,env);
   if(url.pathname==='/owner/verify'){
    const row=await owner.getConnection(props.ownerId,props.connectionId);
    if(!row||row.revokedAt!==null||row.installationId!==props.installationId||row.profileId!==props.profileId)return result(403,{error:'connection_unavailable'});

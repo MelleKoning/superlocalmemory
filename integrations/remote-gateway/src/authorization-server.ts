@@ -1,4 +1,5 @@
 import {OAuthAuthorizationServer,OAuthError,type TokenExchangeCallbackOptions} from '@cloudflare/workers-oauth-provider';
+import {GRANT_IDLE_TTL_S} from './credential-lifetime.ts';
 import {AUTH_ISSUER,MCP_RESOURCE,OWNER_RESOURCE} from './authorization-policy.ts';
 import type {RegistryDO} from './registry-do.ts';
 import type {OwnerIndexDO} from './owner-index-do.ts';
@@ -48,7 +49,9 @@ export const authorizationServer=new OAuthAuthorizationServer<AuthorizationEnv>(
  authorizeEndpoint:AUTH_ISSUER+'/authorize',tokenEndpoint:AUTH_ISSUER+'/oauth/token',
  clientRegistrationEndpoint:AUTH_ISSUER+'/oauth/register',
  scopesSupported:['slm:read','slm:write','slm:session','slm:connect'],
- accessTokenTTL:3600,refreshTokenTTL:30*24*3600,
+ accessTokenTTL:3600,refreshTokenTTL:GRANT_IDLE_TTL_S,
+ // A grant in use slides forward on every refresh; one left unused for 30 days expires.
+ refreshTokenIdleTTL:GRANT_IDLE_TTL_S,
  clientIdMetadataDocumentEnabled:true,
  tokenExchangeCallback:async options=>{await currentAuthorization(options);},
 });

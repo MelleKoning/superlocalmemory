@@ -57,6 +57,20 @@ export class OwnerIndexDO extends DurableObject<Record<string,unknown>> {
   if(this.state.ownerId!==ownerId)return null;
   const row=this.state.connections.find(x=>x.connectionId===connectionId);return row?structuredClone(row):null;
  }
+ /** Replace a live connection's laptop credential. Exactly one caller holding the
+  * current generation wins; the replaced credential stops matching at once. */
+ async rotateCredential(ownerId:string,connectionId:string,expectedGeneration:number,next:{credentialEnvelope:string;deviceDigest:string;deviceExpiresAtMs:number}):Promise<OwnedConnection>{
+  if(!next||typeof next.credentialEnvelope!=='string'||next.credentialEnvelope.length>8192||!/^[a-f0-9]{64}$/.test(next.deviceDigest)||!Number.isSafeInteger(next.deviceExpiresAtMs)||next.deviceExpiresAtMs<=Date.now())throw new Error('invalid_rotation');
+  const result=await this.ctx.blockConcurrencyWhile(async():Promise<{value:OwnedConnection}|{error:string}>=>{
+   if(this.state.ownerId!==ownerId)return {error:'owner_mismatch'};
+   const row=this.state.connections.find(x=>x.connectionId===connectionId);if(!row)return {error:'not_found'};
+   if(row.revokedAt!==null||this.state.cancelledIds.includes(connectionId))return {error:'connection_revoked'};
+   if(row.generation!==expectedGeneration||!Number.isSafeInteger(expectedGeneration)||expectedGeneration>=Number.MAX_SAFE_INTEGER)return {error:'version_conflict'};
+   if(next.deviceDigest===row.deviceDigest||next.deviceExpiresAtMs<=row.deviceExpiresAtMs)return {error:'invalid_rotation'};
+   const rotated:OwnedConnection={...row,credentialEnvelope:next.credentialEnvelope,deviceDigest:next.deviceDigest,deviceExpiresAtMs:next.deviceExpiresAtMs,generation:row.generation+1};
+   await this.commit({...this.state,connections:this.state.connections.map(x=>x.connectionId===connectionId?rotated:x)});return {value:structuredClone(rotated)};
+  });if('error' in result)throw new Error(result.error);return result.value;
+ }
  async revoke(ownerId:string,connectionId:string,expectedGeneration:number):Promise<number>{
   const result=await this.ctx.blockConcurrencyWhile(async():Promise<{value:number}|{error:string}>=>{
    if(this.state.ownerId!==ownerId)return {error:'owner_mismatch'};

@@ -96,12 +96,16 @@ export class RegistryDO extends DurableObject<Record<string,unknown>> {
       const entitlement={expiresAt,version:expectedVersion+1};await this.commit({...this.state,entitlement});return {value:entitlement.version};
     });
   }
+  /** Access follows the laptop credential. It only ever moves forward: a renewed
+   * credential extends it, and a repeated or older provisioning call changes nothing. */
   async provisionAccess(owner:string,expiresAt:number):Promise<void>{
     if(!Number.isSafeInteger(expiresAt)||expiresAt<=Date.now())throw new Error('invalid_entitlement');
     await this.mutation(async()=>{
       if(this.state.connection?.ownerId!==owner||this.state.connection.revokedAt!==null)return {error:'connection_unavailable'};
-      if(this.state.entitlement.version>0)return this.state.entitlement.expiresAt===expiresAt?{value:undefined}:{error:'entitlement_conflict'};
-      await this.commit({...this.state,entitlement:{version:1,expiresAt}});return {value:undefined};
+      const current=this.state.entitlement;
+      if(current.version>0&&current.expiresAt>=expiresAt)return {value:undefined};
+      if(current.version>=Number.MAX_SAFE_INTEGER)return {error:'version_conflict'};
+      await this.commit({...this.state,entitlement:{version:current.version+1,expiresAt}});return {value:undefined};
     });
   }
   async admit(actor:VerifiedActor,resource:string,request:RequestEnvelope):Promise<PolicyResult>{

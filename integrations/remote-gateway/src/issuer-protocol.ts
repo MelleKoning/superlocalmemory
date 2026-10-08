@@ -46,7 +46,7 @@ export async function issuerProtocol(request:Request,env:IssuerEnv,ctx:Execution
  }
  const body=await response.clone().json() as {access_token?:string;refresh_token?:string};if(!body.access_token)return response;
  const api=authorizationServer.getOAuthApi(env);
- try{const issued=await recordIssuedTokens(body,env,api,refresh?ref!.validUntil:undefined);
+ try{const issued=await recordIssuedTokens(body,env,api);
   if(ref&&(issued.grant.clientId!==ref.clientId||issued.userId!==ref.ownerId||issued.audience!==ref.audience||issued.grant.props.connectionId!==ref.connectionId))throw new Error('binding_mismatch');
   return response;
  }catch{
