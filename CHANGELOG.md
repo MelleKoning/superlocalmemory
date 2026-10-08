@@ -47,11 +47,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A save on a fresh store could be lost after the daemon warmed its file
-  cache.** Warming opened and closed the database file inside the daemon,
-  which on SQLite drops the process's locks; it now runs in a child process.
-- Semantic search on LanceDB now covers every tier the canonical search ranks,
-  including cold and archived memories.
+- **4.1.22 could corrupt `memory.db` or lose saves (GitHub #153).** The start-up
+  cache read opened and closed `memory.db` inside the daemon. SQLite's locks
+  belong to the process, so that close dropped them: another process (a hook,
+  `slm mcp`, `slm doctor`) could then delete the WAL under the running daemon,
+  which logged "database disk image is malformed" or "disk I/O error" and could
+  write stale pages back into the store. The read now runs in a child process.
+  Thanks to @MelleKoning for the detailed report and an independent fix (#154).
+  **If you run 4.1.22, upgrade.** If `slm doctor` then reports a malformed
+  database, list restore points with `slm db restore-points` and go back to the
+  newest one with `slm db restore <id>`; then run `slm db integrity`. Upgrading
+  is the supported path: migrations are forward-only, so going back to an older
+  release needs a backup taken before it.
+- On SQLite older than 3.42 (for example Ubuntu 22.04), every start and every
+  erasure logged "keyword index secure delete not enabled: SQL logic error".
+  That SQLite cannot remove deleted words from the keyword index at once;
+  SLM now says so once at info level, and `slm db repair` removes them.
+- The "Lance semantic projection diverged from SQLite" warning at every start
+  is gone: LanceDB search now covers every tier the canonical search ranks.
+- Semantic search on LanceDB now finds cold and archived memories too.
 - A rebuilt vector projection leaves out withheld and soft-deleted memories.
 - An erasure also blanks the preview of the erased memory in auto-observe
   activity events, and `slm db repair` blanks previews that earlier erasures
