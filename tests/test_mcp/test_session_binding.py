@@ -109,3 +109,36 @@ def test_session_registry_takes_priority_over_synthetic_fallback(
     )
     result = session_binding.resolve_session_id("", agent_id="claude_code")
     assert result == "registry-match"
+
+
+def _host_sessions_present(monkeypatch) -> None:
+    """This computer has a live local session in both places step 2 and 3 look."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "local-claude-session")
+    monkeypatch.setattr(
+        "superlocalmemory.hooks.session_registry.lookup_by_parent",
+        lambda within_seconds=60: "local-parent-session",
+    )
+    monkeypatch.setattr(
+        "superlocalmemory.hooks.session_registry.most_recent_active",
+        lambda agent_type="claude", within_seconds=60: "local-recent-session",
+    )
+
+
+def test_a_remote_caller_never_inherits_a_session_from_this_computer(monkeypatch) -> None:
+    """A web app's save or recall arrives with no session of its own. Filing it
+    under whichever local agent was active in the last minute credited that agent's
+    session with work it never saw (seen live: a Composio save stored under the
+    Claude Code session running on the laptop)."""
+    from superlocalmemory.mcp.remote_caller import remote_caller
+
+    _host_sessions_present(monkeypatch)
+    with remote_caller("web-connection"):
+        assert session_binding.resolve_session_id(
+            "", agent_id="composio", allow_agent_fallback=False) == ""
+        assert session_binding.resolve_session_id(
+            "", agent_id="composio") == "mcp:composio"
+        # What the remote caller says about its own session still wins.
+        assert session_binding.resolve_session_id(
+            "its-own-session", agent_id="composio") == "its-own-session"
+    # A caller on this computer keeps the local ladder.
+    assert session_binding.resolve_session_id("", agent_id="claude") == "local-claude-session"

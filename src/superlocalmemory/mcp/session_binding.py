@@ -72,6 +72,13 @@ def resolve_session_id(
     if explicit and explicit.strip():
         return explicit.strip()
 
+    # Steps 2 and 3 describe sessions on this computer. A caller on another
+    # computer or a web app is not one of them, so it skips straight to step 4.
+    from superlocalmemory.mcp.remote_caller import current_remote_key_id
+
+    if current_remote_key_id() is not None:
+        return f"mcp:{agent_id}" if allow_agent_fallback else ""
+
     for name in SESSION_ENV_VARS:
         value = os.environ.get(name)
         if value and value.strip():
