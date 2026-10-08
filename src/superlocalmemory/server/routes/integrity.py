@@ -40,9 +40,9 @@ def _db_path(request: Request) -> Path:
 
 
 def _manage(request: Request) -> None:
+    from superlocalmemory.access.rbac import Permission
     from superlocalmemory.server import write_identity
     from superlocalmemory.server.rbac_enforce import require_permission
-    from superlocalmemory.access.rbac import Permission
 
     write_identity.require_write_actor(
         request, getattr(request.app.state, "daemon_descriptor", None),
@@ -52,8 +52,8 @@ def _manage(request: Request) -> None:
 
 @router.get("")
 def get_integrity(request: Request, pages: bool = False) -> dict[str, Any]:
-    from superlocalmemory.server.rbac_enforce import require_permission
     from superlocalmemory.access.rbac import Permission
+    from superlocalmemory.server.rbac_enforce import require_permission
     from superlocalmemory.storage.integrity_health import health
 
     require_permission(request, Permission.READ)
@@ -84,3 +84,49 @@ def post_repair(request: Request, body: RepairRequest) -> dict[str, Any]:
         logger.exception("integrity repair failed")
         raise HTTPException(500, detail="repair failed; what finished is receipted, run it "
                                         "again to continue") from None
+
+
+def _store_check_args(request: Request) -> tuple[Path, Path, str]:
+    from superlocalmemory import __version__
+    from superlocalmemory.infra.data_root import canonical_data_root
+
+    return _db_path(request), canonical_data_root(), __version__
+
+
+@router.get("/summary")
+def get_store_check(request: Request) -> dict[str, Any]:
+    """The last store check and repair, for the dashboard. Reads a small file."""
+    from superlocalmemory.access.rbac import Permission
+    from superlocalmemory.server.rbac_enforce import require_permission
+    from superlocalmemory.storage import store_check
+
+    require_permission(request, Permission.READ)
+    return {**store_check.read_state(_store_check_args(request)[1]),
+            "labels": store_check.FINDINGS}
+
+
+@router.post("/check", status_code=202)
+def post_store_check(request: Request) -> dict[str, Any]:
+    """Check the store again in the background. Read-only."""
+    from superlocalmemory.access.rbac import Permission
+    from superlocalmemory.server.rbac_enforce import require_permission
+    from superlocalmemory.storage import store_check
+
+    require_permission(request, Permission.READ)
+    if not store_check.start_check(*_store_check_args(request)):
+        raise HTTPException(409, detail="a check or repair is already running")
+    return {"started": "check"}
+
+
+@router.post("/repair-now", status_code=202)
+def post_store_repair(request: Request) -> dict[str, Any]:
+    """The dashboard's Repair now: backup copy, repair, check again."""
+    from superlocalmemory.storage import store_check
+
+    _manage(request)
+    db_path, root, version = _store_check_args(request)
+    if not store_check.start_repair(db_path, root, version,
+                                    engine=getattr(request.app.state, "engine", None)):
+        raise HTTPException(409, detail="a check or repair is already running")
+    return {"started": "repair"}
+

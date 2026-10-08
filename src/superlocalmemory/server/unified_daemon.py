@@ -2911,6 +2911,16 @@ async def lifespan(application: FastAPI):
         # file (seconds on a 2 GB store); one ordered read takes well under one.
         from superlocalmemory.storage import store_cache_warm
         store_cache_warm.start(engine)
+        # 4.1.23: the first start after an upgrade checks the store, read-only, a few
+        # minutes in; the dashboard's Health page offers the repair.
+        try:
+            from superlocalmemory import __version__ as _slm_version
+            from superlocalmemory.infra.data_root import canonical_data_root
+            from superlocalmemory.storage import store_check
+            store_check.check_after_upgrade(
+                Path(engine._db.db_path), canonical_data_root(), _slm_version)
+        except Exception as exc:  # a check never stops SLM from starting
+            logger.debug("store check after upgrade not scheduled: %s", exc)
         threading.Thread(target=_warmup_embedder, daemon=True, name="embed-warmup").start()
         threading.Thread(target=_warmup_recall, daemon=True, name="recall-warmup").start()
         # v3.8.2: self-heal supersedes the bare vector-store backfill (it calls
