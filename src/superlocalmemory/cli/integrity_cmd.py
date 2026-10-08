@@ -29,8 +29,9 @@ def register_db_integrity_parsers(db_sub: Any) -> None:
                                             "projections, repair (read-only)")
     h.add_argument("--pages", action="store_true", help="Also check every page (slow)")
     h.add_argument("--json", action="store_true", help="machine-readable output")
-    r = db_sub.add_parser("repair", help="Fix orphan rows, erased-text leftovers and settled "
-                                         "obligations, with receipts (preview by default)")
+    r = db_sub.add_parser("repair", help="Fix orphan rows, stale or orphan vectors, erased-text "
+                                         "leftovers and settled obligations, with receipts "
+                                         "(preview by default)")
     r.add_argument("--apply", action="store_true", help="Make the changes the preview lists")
     r.add_argument("--undo", default="", metavar="RUN_ID", help="Put back what a run changed")
     r.add_argument("--root", default="", help="The data folder to change (required to change)")
@@ -78,8 +79,8 @@ def _render_plan(data: dict) -> None:
     for o in data["plan"]["orphans"]:
         if o["rows"]:
             print(f"  {o['action']:6} {o['rows']:>7}  {o['table']} -> {o['parent']}: {o['why']}")
-    for key in ("parentless_facts", "unreachable_vectors", "erased_text", "keyword_index",
-                "failed_obligations"):
+    for key in ("parentless_facts", "unreachable_vectors", "vector_parity", "erased_text",
+                "keyword_index", "failed_obligations"):
         print(f"  {key}: {json.dumps(data['plan'][key], sort_keys=True)}")
     if "summary" in data:
         s = data["summary"]

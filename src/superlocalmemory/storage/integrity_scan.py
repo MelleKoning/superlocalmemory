@@ -117,7 +117,12 @@ def unreachable_vectors(db_path: Any) -> int | None:
         return None if conn is None else len(unreferenced_rowids(conn))
 
 
-def plan(conn: sqlite3.Connection, *, foreign_keys: bool = True) -> dict[str, Any]:
+def plan(conn: sqlite3.Connection, *, foreign_keys: bool = True,
+         lance: Any = None) -> dict[str, Any]:
+    """``lance`` is the running vector projection when the caller has one (the
+    repair inside SLM); otherwise it is found on disk and read, never written."""
+    from superlocalmemory.storage import vector_parity
+
     db_path = conn.execute("PRAGMA database_list").fetchone()[2]
     return {
         "foreign_key_findings": census.foreign_key_findings(conn) if foreign_keys else None,
@@ -128,6 +133,7 @@ def plan(conn: sqlite3.Connection, *, foreign_keys: bool = True) -> dict[str, An
         "keyword_index": keyword_index_state(conn),
         "failed_obligations": obligations.census(conn),
         "memories_without_own_fact": own_fact_repair.census(conn),
+        "vector_parity": vector_parity.census(conn, db_path, lance),
     }
 
 

@@ -104,6 +104,7 @@ def _readiness(conn: sqlite3.Connection, plan: dict) -> dict[str, Any]:
         "facts_without_embedding": _count(
             conn, "SELECT COUNT(*) FROM atomic_facts WHERE embedding IS NULL"),
         "unreachable_vectors": plan["unreachable_vectors"],
+        "vector_parity": plan["vector_parity"],
     }
 
 

@@ -41,6 +41,15 @@ def _lancedb_spec_present() -> bool:
 _LANCEDB_AVAILABLE: bool = _lancedb_spec_present()
 
 
+def _table_fact_ids(table) -> list[str]:
+    """The ``fact_id`` column of a Lance table, without reading the vectors."""
+    count = int(table.count_rows())
+    if count == 0:
+        return []
+    column = table.search().select(["fact_id"]).limit(count).to_arrow().column("fact_id")
+    return [str(v) for v in column.to_pylist()]
+
+
 class LanceDBError(Exception):
     """Base exception for LanceDB backend failures."""
 
@@ -248,6 +257,50 @@ class LanceDBVectorBackend:
     def remove_vector(self, fact_id: str) -> None:
         """Delete one derived vector after its canonical fact is deleted."""
         self._table.delete(self._fact_predicate(fact_id))
+
+    def remove_vectors(self, fact_ids: list[str]) -> int:
+        """Delete many derived vectors in ONE write (one table version, not N).
+
+        Every Lance write adds a version, and a loop of ``remove_vector`` calls
+        is the shape that grew a store to 50,580 versions (GitHub #137).
+        """
+        ids = [str(i) for i in fact_ids]
+        if not ids:
+            return 0
+        literals = ", ".join("'" + i.replace("'", "''") + "'" for i in ids)
+        self._table.delete(f"fact_id IN ({literals})")
+        return len(ids)
+
+    def fact_ids(self) -> list[str]:
+        """Every fact id the projection holds (the id column only)."""
+        return _table_fact_ids(self._table)
+
+    @staticmethod
+    def read_fact_ids(db_path: str) -> list[str] | None:
+        """The ids of an existing projection, opened for reading only.
+
+        Never creates anything: ``lancedb.connect`` makes the directory it is
+        given, so a path with no table on disk returns ``None`` before it is
+        opened. Safe while the daemon is writing (Lance reads a snapshot).
+        """
+        path = Path(db_path)
+        if not (path / "embeddings.lance").exists() or not _lancedb_spec_present():
+            return None
+        import lancedb  # noqa: PLC0415
+
+        db = lancedb.connect(str(path))
+        try:
+            table = db.open_table("embeddings")
+            try:
+                return _table_fact_ids(table)
+            finally:
+                close = getattr(table, "close", None)
+                if callable(close):
+                    close()
+        finally:
+            close = getattr(db, "close", None)
+            if callable(close):
+                close()
 
     # ------------------------------------------------------------------
     # Read Path

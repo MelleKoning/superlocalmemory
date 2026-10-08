@@ -23,6 +23,13 @@ left, so an interrupted run is finished by running it again):
 7. ``own_facts`` — memories whose only searchable fact enrichment removed as a
    near-duplicate of another memory get it back (storage/own_fact_repair);
    erased or changed memories are held back and counted. Undo hides it again.
+8. ``vector_parity`` — the two vector indexes made to say what the memories say
+   (storage/vector_parity): a sqlite-vec row that is not its live memory's own
+   embedding is rewritten from it; a Lance row whose memory is gone, withheld or
+   soft-deleted is removed. No undo copy, by design: a stale vector and a
+   withheld memory's vector are exactly what must not come back. Inside SLM the
+   running Lance projection is used (the daemon stays its only writer); with SLM
+   stopped the projection is opened here, only if the store is promoted to it.
 
 Never: drop a constraint, invent a parent, delete history, delete content-
 bearing rows, or delete anything the census did not prove. Every write holds
@@ -94,13 +101,16 @@ _ONE_RUN = threading.Lock()
 class Repair:
     def __init__(self, db_path: str | Path, *, limits: Limits | None = None,
                  on_batch: Callable[[str, int], None] | None = None,
-                 engine: Any = None) -> None:
+                 engine: Any = None, lance: Any = None) -> None:
         self.db_path = Path(db_path)
         self.limits = limits or Limits()
         self.on_batch = on_batch
         #: The running engine (daemon), needed to rebuild a restored memory's
         #: search entries. None: such memories are counted, not restored.
         self.engine = engine
+        #: The vector projection (anything with ``fact_ids()`` and
+        #: ``remove_vectors(ids)``). None: found as described in ``_lance``.
+        self.lance = lance
 
     # -- plumbing -----------------------------------------------------------
 
@@ -412,10 +422,123 @@ class Repair:
                 "old": {"state": "failed", "next_retry_at": _NEVER_RETRY_AT,
                         "last_error": "own-fact repair undone"}}), kind="update")
 
+    def _lance(self) -> tuple[Any, Callable[[], None] | None]:
+        """``(projection, close)``; the projection is None when there is nothing to fix.
+
+        Inside SLM (an engine is given) only the projection SLM itself runs is
+        used: opening a second writer beside it is never done. Without SLM it is
+        opened here, and only for a store that is promoted to it.
+        """
+        if self.lance is not None:
+            return self.lance, None
+        if self.engine is not None:
+            from superlocalmemory.core.backend_orchestrator import get_orchestrator
+
+            orchestrator = get_orchestrator()
+            return (orchestrator.get_vector_backend() if orchestrator else None), None
+        from superlocalmemory.storage import vector_parity as vp
+
+        if vp.lance_state(self.db_path) != vp.ACTIVE:
+            return None, None
+        from superlocalmemory.vector.lancedb_backend import LanceDBVectorBackend
+
+        backend = LanceDBVectorBackend(str(self.db_path.parent / "lance"))
+        return backend, backend.close
+
+    def _vector_parity(self, stats: RunStats) -> None:
+        """Both vector indexes made to agree with the memories (storage/vector_parity)."""
+        self._parity_stale(stats)
+        self._parity_lance(stats)
+
+    def _parity_stale(self, stats: RunStats) -> None:
+        from superlocalmemory.storage import vector_parity as vp
+        from superlocalmemory.storage.vector_residue import vec_connection
+
+        with vec_connection(self.db_path) as conn:
+            if conn is None:
+                stats.add("vector_parity.skipped_no_extension", 1)
+                return
+            conn.isolation_level = None
+            if vp.reindex_in_progress(conn):
+                stats.add("vector_parity.skipped_model_switch_running", 1)
+                return
+            found = list(vp.scan_index(conn).stale)
+            if not found:
+                return
+            time.sleep(self.limits.confirm_s)  # see _orphans; re-checked in the write too
+            step = self.limits.batch_size
+            for start in range(0, len(found), step):
+                with self._held(stats, conn):
+                    done = vp.rewrite_stale(conn, found[start:start + step])
+                    if done:
+                        receipts.receipt(conn, stats.run_id, "resync_stale_vectors",
+                                         "fact_embeddings",
+                                         "the vector was not the memory's own embedding",
+                                         {"rows": len(done), "fact_ids": done}, {"rows": 0},
+                                         undoable=False)
+                stats.add("vector_parity.stale_rewritten", len(done))
+                if self.on_batch:
+                    self.on_batch("vector_parity.stale", len(done))
+
+    def _parity_lance(self, stats: RunStats) -> None:
+        from superlocalmemory.storage import vector_parity as vp
+
+        close = None
+        conn = self._connect()
+        try:
+            lance, close = self._lance()
+            if lance is None:
+                return
+            orphans = vp.orphan_ids(conn, lance.fact_ids())
+            if not orphans:
+                return
+            time.sleep(self.limits.confirm_s)  # see _orphans; re-checked in the write too
+            step = self.limits.batch_size
+            for start in range(0, len(orphans), step):
+                with self._held(stats, conn):
+                    # The Lance write sits inside the SQLite write lock, so no
+                    # memory can be restored between the check and the delete;
+                    # if the delete fails nothing is receipted.
+                    confirmed = vp.orphan_ids(conn, orphans[start:start + step])
+                    if confirmed:
+                        lance.remove_vectors(confirmed)
+                        receipts.receipt(conn, stats.run_id, "remove_orphan_lance_vectors",
+                                         "lance embeddings",
+                                         "no live, visible memory behind the vector",
+                                         {"rows": len(confirmed), "fact_ids": confirmed},
+                                         {"rows": 0}, undoable=False)
+                stats.add("vector_parity.lance_orphans_removed", len(confirmed))
+                if self.on_batch:
+                    self.on_batch("vector_parity.lance", len(confirmed))
+        except _OutOfTime:
+            raise
+        except Exception as exc:  # noqa: BLE001 - the projection is derived data; the run goes on
+            logger.warning("vector parity: Lance step failed: %s", type(exc).__name__)
+            stats.add("vector_parity.lance_failed", 1)
+        finally:
+            conn.close()
+            if close is not None:
+                try:
+                    close()
+                except Exception:  # noqa: BLE001
+                    logger.debug("closing the Lance projection failed", exc_info=True)
+
     # -- public -----------------------------------------------------------
 
+    def _running_lance(self) -> Any:
+        """The projection a scan may read directly: the injected one, or SLM's own."""
+        if self.lance is not None:
+            return self.lance
+        if self.engine is None:
+            return None  # found on disk, read-only
+        from superlocalmemory.core.backend_orchestrator import get_orchestrator
+
+        orchestrator = get_orchestrator()
+        backend = orchestrator.get_vector_backend() if orchestrator else None
+        return backend if backend is not None else False  # False: SLM runs none; do not look
+
     STEPS = ("orphans", "vectors", "erased_text", "keyword_index", "unfinished_deletes",
-             "obligations", "own_facts")
+             "obligations", "own_facts", "vector_parity")
 
     def apply(self, run_id: str | None = None) -> dict[str, Any]:
         if not _ONE_RUN.acquire(blocking=False):
@@ -434,7 +557,7 @@ class Repair:
             # the only-run lock): the steps are idempotent, this run finishes it.
             conn.execute("UPDATE integrity_repair_runs SET status = 'stopped', finished_at = ? "
                          "WHERE status = 'running'", (time.time(),))
-            before = plan(conn)
+            before = plan(conn, lance=self._running_lance())
             receipts.start_run(conn, stats.run_id)
         finally:
             conn.close()
@@ -452,7 +575,7 @@ class Repair:
         finally:
             conn = self._connect()
             try:
-                after = plan(conn)
+                after = plan(conn, lance=self._running_lance())
                 summary = {
                     "run_id": stats.run_id, "status": status, "done": stats.done,
                     "batches": len(stats.holds_ms),

@@ -921,10 +921,15 @@ Reports the store's health. `--pages` also checks every page (slow).
 ### `slm db repair [--apply] [--undo RUN_ID] --root ROOT`
 
 Without `--apply`, previews what it would fix: leftover rows, erased words that
-remain in an index, deletes that never finished, and memories whose searchable
-fact was removed. `--apply` makes those changes with receipts; `--undo RUN_ID`
-puts back what a run changed. A repair never brings back anything that was
-erased, deleted or withheld.
+remain in an index, deletes that never finished, memories whose searchable
+fact was removed, and vector indexes that no longer match the memories: a
+meaning-search vector that is not its memory's own embedding is rewritten from
+it, and a Lance row whose memory is gone, deleted or withheld is
+removed (Lance is checked only on a store that uses it). `--apply` makes those
+changes with receipts of fact ids and counts; `--undo RUN_ID` puts back what a
+run changed, except the vector and erased-text steps, which keep no copy on
+purpose. A repair never brings back anything that was erased, deleted or
+withheld.
 
 ```bash
 slm db repair --root ~/.superlocalmemory            # preview
