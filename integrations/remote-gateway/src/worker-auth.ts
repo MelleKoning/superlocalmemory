@@ -9,7 +9,7 @@ import type {AuthRequest} from '@cloudflare/workers-oauth-provider';
 import {calculateJwkThumbprint} from 'jose';
 import {authorizationServer,type AuthorizationEnv,type NativeAuthProps} from './authorization-server.ts';
 import {AUTH_ISSUER,MCP_RESOURCE,OWNER_RESOURCE,selectedScopes,validateAuthorizationRequest,memoryAuthorizationRequest,verifyGithubIdentity} from './authorization-policy.ts';
-import {escapeHtml,exchangeGithubCode,githubAuthorizationUrl,renderConsentPage,renderAuthPage,renderAuthFailure,dashboardReturnCookie,dashboardReturnUrl} from './auth-flow.ts';
+import {escapeHtml,exchangeGithubCode,githubAuthorizationUrl,renderConsentPage,renderAuthPage,renderAuthFailure,renderSignInComplete,dashboardReturnCookie,dashboardReturnUrl} from './auth-flow.ts';
 import {tokenHash} from './device-proof.ts';
 import type {BootstrapBinding} from './bootstrap-do.ts';
 import type {AuthProps,Scope} from './contracts.ts';
@@ -61,13 +61,26 @@ async function consentContext(handle:string,env:AuthWorkerEnv):Promise<ConsentCo
  if(!handle||handle.length>512)return null;
  return env.OAUTH_KV.get<ConsentContext>('slm-consent:'+handle,'json');
 }
+// A consent handle is single-use. Keep a short-lived marker once it is used,
+// so a resubmitted page (Back, refresh, second tab) can say the sign-in already
+// finished instead of calling a completed sign-in invalid. Holds no grant data.
+const CONSENT_DONE='slm-consent-done:';
+async function finishConsent(handle:string,env:AuthWorkerEnv):Promise<void>{
+ await env.OAUTH_KV.delete('slm-consent:'+handle);await env.OAUTH_KV.put(CONSENT_DONE+handle,'1',{expirationTtl:3600});
+}
+async function missingConsent(request:Request,handle:string,env:AuthWorkerEnv):Promise<Response>{
+ if(handle&&handle.length<=512&&await env.OAUTH_KV.get(CONSENT_DONE+handle)!==null){
+  return request.headers.get('Accept')?.includes('text/html')?html(renderSignInComplete(),new Headers()):response(409,'sign_in_already_complete');
+ }
+ return interactiveFailure(request,400,'consent_unavailable');
+}
 async function handleConsent(request:Request,env:AuthWorkerEnv):Promise<Response>{
- const fields=await form(request);const handle=fields.get('handle')??'';const context=await consentContext(handle,env);if(!context)return interactiveFailure(request,400,'consent_unavailable');
+ const fields=await form(request);const handle=fields.get('handle')??'';const context=await consentContext(handle,env);if(!context)return missingConsent(request,handle,env);
  const api=authorizationServer.getOAuthApi(env);
- if(fields.get('decision')==='deny'){const denied=await api.denyConsent(request,handle);await env.OAUTH_KV.delete('slm-consent:'+handle);return redirect(denied.redirectTo,denied.headers);}
+ if(fields.get('decision')==='deny'){const denied=await api.denyConsent(request,handle);await finishConsent(handle,env);return redirect(denied.redirectTo,denied.headers);}
  if(fields.get('decision')!=='allow')return response(400,'invalid_decision');
  const scopes=context.request.resource===OWNER_RESOURCE?['slm:connect']:context.request.scope.filter(s=>s==='slm:read'||s==='slm:write'&&fields.get('write')==='yes'||s==='slm:session'&&fields.get('session')==='yes');
- const approved=await api.approveConsent(request,handle,{scope:scopes});await env.OAUTH_KV.delete('slm-consent:'+handle);
+ const approved=await api.approveConsent(request,handle,{scope:scopes});await finishConsent(handle,env);
  const verifier=crypto.randomUUID().replaceAll('-','')+crypto.randomUUID().replaceAll('-','');
  const upstream=await api.beginUpstream(approved.request,{data:{verifier,bootstrapId:context.bootstrapId},headers:approved.headers});
  if(context.request.resource===OWNER_RESOURCE){const receipt=await dashboardReturnCookie(context.request.redirectUri,env.DEVICE_WRAP_KEY);if(receipt)upstream.headers.append('Set-Cookie',receipt);}
@@ -99,15 +112,15 @@ async function githubCallback(request:Request,env:AuthWorkerEnv):Promise<Respons
  return html(renderAuthPage('Choose your SLM connection','<h1>Choose your SLM connection</h1><p>GitHub sign-in is complete. Select the local profile this application may use.</p><form method="post" action="/select"><input type="hidden" name="handle" value="'+escapeHtml(consent.handle)+'"><label>Local profile <select name="connection_id">'+options+'</select></label><div class="actions"><button name="decision" value="allow">Connect</button><button name="decision" value="deny">Cancel</button></div></form><details><summary>Approved permissions</summary><p>'+resumed.request.scope.map(escapeHtml).join(', ')+'</p></details>'),consent.headers,resumed.request.redirectUri);
 }
 async function selectConnection(request:Request,env:AuthWorkerEnv):Promise<Response>{
- const fields=await form(request);const handle=fields.get('handle')??'';const saved=await consentContext(handle,env);if(!saved?.ownerId)return interactiveFailure(request,400,'consent_unavailable');
+ const fields=await form(request);const handle=fields.get('handle')??'';const saved=await consentContext(handle,env);if(!saved?.ownerId)return missingConsent(request,handle,env);
  const api=authorizationServer.getOAuthApi(env);
- if(fields.get('decision')==='deny'){const result=await api.denyConsent(request,handle);await env.OAUTH_KV.delete('slm-consent:'+handle);return redirect(result.redirectTo,result.headers);}
+ if(fields.get('decision')==='deny'){const result=await api.denyConsent(request,handle);await finishConsent(handle,env);return redirect(result.redirectTo,result.headers);}
  if(fields.get('decision')!=='allow')return response(400,'invalid_decision');
  const connectionId=fields.get('connection_id')??'';if(!/^[a-f0-9]{32}$/.test(connectionId))return response(400,'connection_unavailable');
  const connection=await env.OWNERS.getByName(saved.ownerId).getConnection(saved.ownerId,connectionId);
  if(!connection||connection.revokedAt!==null)return response(403,'connection_unavailable');
  const scopes=selectedScopes(saved.request.scope,connection.permissions);if(!scopes.length)return response(403,'insufficient_scope');
- const approved=await api.approveConsent(request,handle,{scope:scopes});await env.OAUTH_KV.delete('slm-consent:'+handle);
+ const approved=await api.approveConsent(request,handle,{scope:scopes});await finishConsent(handle,env);
  if(approved.request.clientId!==saved.request.clientId||approved.request.resource!==MCP_RESOURCE)return response(400,'consent_unavailable');
  const authorizationId=crypto.randomUUID();const props:AuthProps={ownerId:saved.ownerId,authorizationId,connectionId};
  const tools=['recall','search','fetch','get_status',...(scopes.includes('slm:write')?['remember']:[]),...(scopes.includes('slm:session')?['session_init','close_session','report_feedback','report_outcome']:[])];

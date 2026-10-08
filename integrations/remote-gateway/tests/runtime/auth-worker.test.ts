@@ -63,6 +63,15 @@ it('consent page permits the real GitHub redirect and uses nonce-bound SLM styli
  const response=await authFetch(new Request(issuer+'/authorize?'+new URLSearchParams({response_type:'code',client_id:client.client_id,redirect_uri:'https://client.example/callback',resource:'https://mcp.superlocalmemory.com/mcp',scope:'slm:read',state:'synthetic-state',code_challenge:'a'.repeat(43),code_challenge_method:'S256'})),settings,ctx);
  expect(response.headers.get('Referrer-Policy')).toBe('strict-origin');const policy=response.headers.get('Content-Security-Policy')!;expect(policy).toContain("form-action 'self' https://github.com https://client.example");expect(policy).toMatch(/style-src 'nonce-[^']+'/);expect(policy).not.toContain('unsafe-inline');const page=await response.text();expect(page).toContain('Sign in with GitHub');expect(page).toContain('name="referrer" content="strict-origin"');expect(page).toMatch(/<style nonce="[^"]+">/);await waitOnExecutionContext(ctx);
 });
+it('a sign-in that already finished says so when its page is submitted again',async()=>{
+ const settings=configuration();await settings.OAUTH_KV.put('slm-consent-done:finished-handle','1',{expirationTtl:3600});
+ for(const path of ['/consent','/select']){
+  const ctx=createExecutionContext();const response=await authFetch(new Request(issuer+path,{method:'POST',headers:{Origin:issuer,Accept:'text/html','Content-Type':'application/x-www-form-urlencoded'},body:'handle=finished-handle&decision=allow&connection_id='+'a'.repeat(32)}),settings,ctx);
+  expect(response.status).toBe(200);const page=await response.text();expect(page).toContain('This sign-in already finished');expect(page).toContain('close this page');expect(page).not.toContain('no longer valid');
+  const api=await authFetch(new Request(issuer+path,{method:'POST',headers:{Origin:issuer,'Content-Type':'application/x-www-form-urlencoded'},body:'handle=finished-handle&decision=allow'}),settings,ctx);
+  expect(api.status).toBe(409);expect(await api.json()).toEqual({error:'sign_in_already_complete'});await waitOnExecutionContext(ctx);
+ }
+});
 it('expired or consumed browser consent shows recovery instructions instead of raw JSON',async()=>{
  const ctx=createExecutionContext();const response=await authFetch(new Request(issuer+'/consent',{method:'POST',headers:{Origin:issuer,Accept:'text/html','Content-Type':'application/x-www-form-urlencoded'},body:'handle=synthetic&decision=allow'}),configuration(),ctx);
  expect(response.status).toBe(302);const location=new URL(response.headers.get('Location')!);expect(location.pathname).toBe('/sign-in/error');expect(location.searchParams.get('reason')).toBe('consent_unavailable');const recovery=await authFetch(new Request(location),configuration(),ctx);expect(recovery.headers.get('Content-Type')).toContain('text/html');const page=await recovery.text();expect(page).toContain('Return to your SLM dashboard');expect(page).toContain('Restart sign-in');await waitOnExecutionContext(ctx);
