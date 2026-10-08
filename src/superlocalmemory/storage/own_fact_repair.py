@@ -19,7 +19,7 @@ repaired — when any of these hold:
 * ``erased``     a tombstone, erasure receipt or erase obligation names the
                  memory, its fact or its profile, or the fact is being erased
                  now (``erasure_fence``): an erased memory never comes back;
-* ``erasure_after_save``  a person/entity or fact erasure ran in its profile after the
+* ``erasure_after_save``  a person/entity erasure ran in its profile after the
                  save (the text may mention who was erased; review by hand);
 * ``changed``    the save record no longer matches the memory (scrubbed, edited,
                  other profile, unfinished), or the text is empty;
@@ -27,7 +27,10 @@ repaired — when any of these hold:
 * ``withheld``   its own or a sibling's fact (the one it was folded into) is
                  quarantined: withheld text is never published through it.
 Siblings count for ``erased`` too: an erased sibling means its near-identical
-text was erased. Every check runs again inside the write (``promote``).
+text was erased. An unrelated fact erasure elsewhere in the profile does not
+hold a memory back: the repair re-creates a fact only from this memory's own
+stored text, which list/fetch already show. Every check runs again inside the
+write (``promote``).
 
 Reads ids, states and counts; the text is only handed to the fact builder.
 """
@@ -108,8 +111,8 @@ def _erasure_after(conn: sqlite3.Connection, profile_id: str, created_at: str) -
     except ValueError:
         return True  # cannot order it against the erasure: hold it
     return conn.execute(
-        "SELECT 1 FROM erasure_receipts WHERE profile_id = ? AND subject_type IN "
-        "('entity', 'fact') AND requested_at >= ?",
+        "SELECT 1 FROM erasure_receipts WHERE profile_id = ? AND subject_type = 'entity' "
+        "AND requested_at >= ?",
         (profile_id, saved - 86400)).fetchone() is not None
 
 

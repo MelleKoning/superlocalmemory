@@ -177,3 +177,16 @@ def test_crit3_undo_after_enrichment_hides_every_fact_of_the_memory(engine, enri
     assert build_engine_ingestion_command(engine) is not None
     Repair(engine._db.db_path).undo(summary["run_id"])
     assert _live(engine, memory_id) == [], "a derived fact stayed findable after undo"
+
+
+def test_an_unrelated_fact_erasure_in_the_profile_does_not_hold_it_back(engine) -> None:
+    """Re-creating the fact exposes only this memory's own stored text; erasing an
+    unrelated fact elsewhere in the profile says nothing about it."""
+    older = _older(engine)
+    memory_id, _ = _broken(engine, "un", "The harbor relay uses channel 9.", older=older)
+    _erase_fact(engine, "unrelated-fact", "unrelated-memory")
+    with engine._db.raw_connection() as conn:
+        found, held = own.classify(conn)
+    assert [c.memory_id for c in found] == [memory_id], held
+    _repair(engine)
+    assert len(_live(engine, memory_id)) == 1
