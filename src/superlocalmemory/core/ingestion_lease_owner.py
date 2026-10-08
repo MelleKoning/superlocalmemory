@@ -6,9 +6,10 @@ A save is enriched under a lease (900 s, renewed every 30 s while work runs).
 When the service is killed mid-enrichment the lease outlives its owner, and
 the restarted service had to wait out the whole 900 s before it could finish
 that save. The owner token now names the machine (host name, boot and
-process namespace), the process id and the process's start time, so a lease whose owner is provably gone is released at
-once. Anything uncertain — an older token, another machine, a live process,
-a start time that cannot be read — keeps its lease and expires as before.
+process namespace), the process id and the process's start time, so a lease
+whose owner is provably gone is released at once. Anything uncertain — an
+older token, another machine or namespace, a live process, a start time that
+cannot be read — keeps its lease and expires as before.
 
 Token: ``ingestion-worker:<host>:<pid>@<start>:<random>``; ``<host>`` is "unknown" when
 the boot/namespace cannot be read, and such a lease is never released early.
