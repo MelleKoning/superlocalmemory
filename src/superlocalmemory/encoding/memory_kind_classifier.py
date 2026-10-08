@@ -81,7 +81,10 @@ def decide(model: KindAssignment | None, rules: KindAssignment,
     disagrees with a strong cue does not replace it. Where no cue fired, the
     model fills the gap. An agreeing model is kept for its confidence.
     ``correction`` from Laya or Jev already went through its own cue-and-verify
-    check in ``_merge`` before reaching here, so that answer stands. The Mode
+    check in ``_merge`` before reaching here, so that answer stands; when the
+    verify check failed, the model's other choice does NOT replace the
+    correction cue (handoff §9, 4.1.22: "a low-quality model suggestion never
+    replaces a strong rules cue") - the rules suggestion stands. The Mode
     B/C extraction call never ran that check (L2-11: no extra model call, no
     separate yes/no question) - its own say-so is never enough, so its
     ``correction`` is refused here too and the rules suggestion is kept
@@ -93,7 +96,7 @@ def decide(model: KindAssignment | None, rules: KindAssignment,
         return rules
     if model.source not in MODEL_SOURCES or cue is None:
         return model
-    if cue is MemoryKind.CORRECTION or model.kind is cue:
+    if model.kind is cue:
         return model
     return rules
 

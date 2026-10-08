@@ -67,11 +67,16 @@ class TestDecision:
         model = self._model(MemoryKind.DECISION, 0.7)
         assert decide(model, rules, MemoryKind.DECISION) == model
 
-    def test_correction_cue_defers_to_the_verify_check(self) -> None:
+    def test_a_failed_verify_keeps_the_correction_cue(self) -> None:
+        # Handoff §9 (4.1.22): a low-quality model suggestion never replaces a
+        # strong rules cue. The verify check (>= 0.8) can CONFIRM the cue as
+        # the model's correction; when it fails, the rules suggestion stands.
         rules = suggest_by_rules("Correction: the port is 8765, not 8767.", "semantic")
         assert rules.kind is MemoryKind.CORRECTION
         model = self._model(MemoryKind.SEMANTIC)   # verify < 0.8 already applied
-        assert decide(model, rules, MemoryKind.CORRECTION) == model
+        assert decide(model, rules, MemoryKind.CORRECTION) == rules
+        verified = self._model(MemoryKind.CORRECTION)  # verify >= 0.8 in _merge
+        assert decide(verified, rules, MemoryKind.CORRECTION) == verified
 
     def test_rules_and_off_pass_through(self) -> None:
         rules = suggest_by_rules("x", "semantic")
