@@ -63,7 +63,15 @@ _STOP = frozenset((
     "it its this that these those there here any some all just ever also still yet "
     "me my our your their his her them us him she he i we you they it's "
     "please now today tonight").split())
-_SENTENCE = re.compile(r"[^.!?;\n]+")
+#: A sentence with the terminator that ended it ("?" marks a question).
+_SENTENCE = re.compile(r"[^.!?;\n]+[.!?;\n]?")
+#: A sentence that opens like a question even without its "?": an auxiliary or
+#: modal followed by a subject ("Should we ...", "Do we ...", "Is it ...").
+#: "Do not publish" is an imperative, not a question: "not" is no subject.
+_INTERROGATIVE = re.compile(
+    r"^\W*(?:may|can|could|should|shall|would|will|must|is|are|am|was|were|do|does|did|"
+    r"has|have|had)\s+(?:" + _GENERIC[3:-1] + r"|it|he|she|there|this|that|"
+    r"(?:the|a|an|our|your|their|this|that)\s+\w+)\b", re.I)
 _WORD = re.compile(r"[a-z0-9][a-z0-9'-]*")
 _STEM = 5
 
@@ -102,13 +110,19 @@ def _stem(word: str) -> str:
     return word if word.isdigit() else word[:_STEM]
 
 
+def _is_question(sentence: str) -> bool:
+    """A memory sentence that asks rather than states ("Should we never ...?")."""
+    return sentence.rstrip().endswith("?") or _INTERROGATIVE.match(sentence) is not None
+
+
 def rule_supports(question: str, memory: str) -> bool:
     """Whether one memory states the rule that settles a permission question.
 
     All of: the question is a generic-subject permission question; one sentence
     of the memory has a prohibition/permission cue directly governing the asked
-    action (first word of the action, matched on its first five letters); and
-    that sentence carries every other content word of the question.
+    action (first word of the action, matched on its first five letters); that
+    sentence carries every other content word of the question; and it states
+    rather than asks (no "?", no question opening like "Should we ...").
     """
     action = permission_action(question)
     if action is None or not isinstance(memory, str) or len(memory) > _MAX_RULE_CHARS:
@@ -119,7 +133,7 @@ def rule_supports(question: str, memory: str) -> bool:
     verb, rest = _stem(words[0]), {_stem(w) for w in words[1:]}
     governed = re.compile(_CUE + r"\s+(?:\w+\s+){0,2}?" + re.escape(verb) + r"\w*", re.I)
     for sentence in _SENTENCE.findall(memory):
-        if not governed.search(sentence):
+        if _is_question(sentence) or not governed.search(sentence):
             continue
         stems = {_stem(w) for w in _words(sentence)}
         if rest <= stems:

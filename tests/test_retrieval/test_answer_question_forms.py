@@ -121,6 +121,24 @@ class TestThePermissionRule:
     def test_near_misses_are_not_recognised(self, memory) -> None:
         assert forms.rule_supports(A2_Q, memory) is False
 
+    @pytest.mark.parametrize("memory", [
+        "Should we never publish without approval?",                  # a question, '?'
+        "Should we never publish without approval",                   # no '?', still a question
+        "Open point: can we never publish without approval? Ask Rosa.",
+        "Do we never publish without approval",
+        "Is it true that we never publish without approval?",
+    ])
+    def test_a_sentence_that_is_itself_a_question_is_not_a_rule(self, memory) -> None:
+        assert forms.rule_supports(A2_Q, memory) is False
+
+    @pytest.mark.parametrize("memory", [
+        "Do not publish without approval.",            # imperative "Do not", not a question
+        "Never publish without approval! Ask first?",  # the rule sentence ends in '!'
+        "Must not publish without approval",
+    ])
+    def test_an_imperative_rule_is_still_a_rule(self, memory) -> None:
+        assert forms.rule_supports(A2_Q, memory) is True
+
     def test_a_named_entity_must_be_in_the_same_sentence(self) -> None:
         q = "Can we deploy Juniper on a Friday?"
         assert forms.rule_supports(q, "Never deploy Juniper on a Friday.") is True
