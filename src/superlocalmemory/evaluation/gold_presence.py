@@ -49,31 +49,38 @@ def _placeholders(ids: Sequence[str]) -> str:
     return ",".join("?" for _ in ids)
 
 
+#: Ids bound per statement: far below every SQLite build's variable limit.
+_CHUNK = 500
+
+
+def _rows(conn: sqlite3.Connection, table: str, key: str, ids: Sequence[str],
+          profile_id: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for start in range(0, len(ids), _CHUNK):
+        part = ids[start:start + _CHUNK]
+        rows = conn.execute(
+            f"SELECT {key}, created_at FROM {table} "
+            f"WHERE profile_id = ? AND {key} IN ({_placeholders(part)})",
+            (profile_id, *part)).fetchall()
+        out.update({str(r[0]): str(r[1] or "") for r in rows})
+    return out
+
+
 def _memory_rows(conn: sqlite3.Connection, ids: Sequence[str],
                  profile_id: str) -> dict[str, str]:
-    if not ids:
-        return {}
-    rows = conn.execute(
-        f"SELECT memory_id, created_at FROM memories "
-        f"WHERE profile_id = ? AND memory_id IN ({_placeholders(ids)})",
-        (profile_id, *ids)).fetchall()
-    return {str(r[0]): str(r[1] or "") for r in rows}
+    return _rows(conn, "memories", "memory_id", ids, profile_id)
 
 
 def _fact_rows(conn: sqlite3.Connection, ids: Sequence[str],
                profile_id: str) -> dict[str, str]:
-    if not ids:
-        return {}
-    rows = conn.execute(
-        f"SELECT fact_id, created_at FROM atomic_facts "
-        f"WHERE profile_id = ? AND fact_id IN ({_placeholders(ids)})",
-        (profile_id, *ids)).fetchall()
-    return {str(r[0]): str(r[1] or "") for r in rows}
+    return _rows(conn, "atomic_facts", "fact_id", ids, profile_id)
 
 
 def _presence(question: GoldQuestion, memories: Mapping[str, str],
               facts: Mapping[str, str]) -> Presence:
-    labelled = sorted(question.gold_memory_ids) + sorted(question.gold_fact_ids)
+    # One id labelled as both a memory and a fact is one labelled answer.
+    labelled = list(dict.fromkeys(sorted(question.gold_memory_ids)
+                                  + sorted(question.gold_fact_ids)))
     found = {**{m: memories[m] for m in question.gold_memory_ids if m in memories},
              **{f: facts[f] for f in question.gold_fact_ids if f in facts}}
     present = tuple(i for i in labelled if i in found)

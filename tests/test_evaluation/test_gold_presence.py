@@ -103,3 +103,19 @@ class TestSummary:
         assert summary["answer_not_stored"] == ["absent"]
         assert summary["retrieval_misses"] == ["missed"]
         assert summary["misses_explained_by_storage"] == ["absent"]
+
+
+class TestLargeAndOverlappingLabels:
+    def test_more_ids_than_one_statement_may_bind_are_all_checked(self, tmp_path) -> None:
+        db = make_store(tmp_path)
+        many = [f"absent-{i}" for i in range(300_000)] + ["m1"]  # over any build limit
+        result = check_presence(db, [q("big", memories=many)], profile_id="default")
+        assert result["big"].status == PARTIALLY_STORED
+        assert result["big"].present_ids == ("m1",)
+        assert len(result["big"].missing_ids) == 300_000
+
+    def test_an_id_labelled_as_both_memory_and_fact_counts_once(self, tmp_path) -> None:
+        db = make_store(tmp_path)
+        result = check_presence(db, [q("both", memories=["m1"], facts=["m1"])],
+                                profile_id="default")
+        assert result["both"].present_ids == ("m1",)
