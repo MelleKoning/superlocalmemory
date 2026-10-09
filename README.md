@@ -17,7 +17,7 @@ Claude Code, Codex, Cursor, ChatGPT, Grok Bot and other MCP clients share one me
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![Research: 4 arXiv papers](https://img.shields.io/badge/arXiv-4_papers-b31b1b)](#research)
 
-**[Install](https://www.superlocalmemory.com/install)** · **[Product walkthrough](https://www.superlocalmemory.com/demo)** · **[Demo video](https://www.youtube.com/watch?v=PMWW_ypsL60)** · **[CLI proof](docs/QUICK_PROOF.md)** · **[Docs](#documentation)** · **[Release notes](CHANGELOG.md)**
+**[Install](https://www.superlocalmemory.com/install)** · **[Product walkthrough](https://www.superlocalmemory.com/demo)** · **[Demo video](https://www.youtube.com/watch?v=pyAu_vaIYZQ)** · **[CLI proof](docs/QUICK_PROOF.md)** · **[Docs](#documentation)** · **[Release notes](CHANGELOG.md)**
 
 <img src="docs/screenshots/dashboard/answer-check-dont-have-that.png" alt="Answer check in the dashboard: for &quot;How much did the Kestrel pilot cost?&quot; no memory answers it, so SLM says &quot;I don't have that&quot; instead of guessing" width="820">
 
@@ -66,11 +66,11 @@ $ slm recall "which port does staging postgres use"
 
 Real output from a fresh Mode A install, trimmed. Scores rank; they are not probabilities. While the embedding model loads, recall says `Incomplete search`.
 
-### Watch the product walkthrough
+### Watch the product film
 
-[![Watch the SuperLocalMemory demo](https://img.youtube.com/vi/PMWW_ypsL60/hqdefault.jpg)](https://www.youtube.com/watch?v=PMWW_ypsL60)
+[![Watch the SuperLocalMemory demo: Claude Code and Codex sharing one memory](https://img.youtube.com/vi/pyAu_vaIYZQ/maxresdefault.jpg)](https://www.youtube.com/watch?v=pyAu_vaIYZQ)
 
-Five minutes: install, setup, recall, cache and compression.
+Four minutes on a real local install, every dashboard pane: recall, the knowledge graph, the answer check, one memory shared by Claude Code, Codex, Cursor and ChatGPT, SLM Mesh, governance, caching and compression.
 
 ### The dashboard
 
