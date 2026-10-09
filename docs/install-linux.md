@@ -53,9 +53,11 @@ downloads a Python build when no matching one is installed. `slm doctor` checks
 that this interpreter can load the SQLite vector extension. If `slm` is not
 found afterwards, run `uv tool update-shell` and open a new shell.
 
-Upgrade and uninstall through uv as well:
+Upgrade and uninstall through uv as well. Stop the daemon before upgrading so
+it does not keep running on a mix of old and new package files:
 
 ```bash
+slm serve stop
 uv tool upgrade superlocalmemory
 slm restart && slm doctor
 

@@ -98,9 +98,9 @@ slm setup
 slm doctor
 ```
 
-Upgrade with `uv tool upgrade superlocalmemory`, then `slm restart`. The Python
-SDK is not importable from a uv tool environment; use the activated virtual
-environment above for that.
+Upgrade with `slm serve stop`, then `uv tool upgrade superlocalmemory`, then
+`slm restart`. The Python SDK is not importable from a uv tool environment; use
+the activated virtual environment above for that.
 
 ## Repository clone (research and development)
 
